@@ -316,3 +316,42 @@ class MatchingEngine:
         # 市价单剩余部分不挂单，直接丢弃
 
         return trades
+
+    def process_order(self, order: "Order") -> list["Trade"]:
+        """
+        处理订单，执行撮合
+
+        根据订单类型调用对应的撮合函数，并发布成交事件。
+
+        Args:
+            order: 订单对象（限价单或市价单）
+
+        Returns:
+            本次撮合产生的所有成交记录列表（可能为空）
+        """
+        from src.market.orderbook.order import OrderType
+
+        # 根据订单类型调用对应撮合函数
+        if order.order_type == OrderType.LIMIT:
+            trades = self.match_limit_order(order)
+        else:  # OrderType.MARKET
+            trades = self.match_market_order(order)
+
+        # 如果有成交，发布成交事件
+        for trade in trades:
+            event = Event(
+                event_type=EventType.TRADE_EXECUTED,
+                timestamp=trade.timestamp,
+                data={
+                    "trade_id": trade.trade_id,
+                    "price": trade.price,
+                    "quantity": trade.quantity,
+                    "buyer_id": trade.buyer_id,
+                    "seller_id": trade.seller_id,
+                    "buyer_fee": trade.buyer_fee,
+                    "seller_fee": trade.seller_fee,
+                },
+            )
+            self._event_bus.publish(event)
+
+        return trades
