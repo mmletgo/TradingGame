@@ -2,9 +2,9 @@
   "summary": {
     "project_name": "NEAT AI 交易模拟竞技场",
     "total": 92,
-    "completed": 2,
+    "completed": 5,
     "in_progress": 0,
-    "pending": 90,
+    "pending": 87,
     "blocked": 0,
     "current_task": null
   },
@@ -23,21 +23,21 @@
     },
     "F3": {
       "id": "F3",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-29T23:17:10.865002"
     },
     "F4": {
       "id": "F4",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过，实现完成",
+      "updated_at": "2025-12-29T23:19:48.167145"
     },
     "F5": {
       "id": "F5",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-29T23:21:31.418980"
     },
     "F6": {
       "id": "F6",
@@ -615,6 +615,54 @@
       "date": null,
       "timestamp": "2025-12-29T23:07:33.831816",
       "function_id": "F2",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:10:40.109295",
+      "function_id": "F3",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:17:10.865014",
+      "function_id": "F3",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:17:54.386770",
+      "function_id": "F4",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:19:48.167157",
+      "function_id": "F4",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:20:29.827770",
+      "function_id": "F5",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:21:31.418991",
+      "function_id": "F5",
       "action": "status_change",
       "description": "状态从 in_progress 变更为 completed",
       "author": null

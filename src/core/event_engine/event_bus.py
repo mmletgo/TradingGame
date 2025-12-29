@@ -25,3 +25,42 @@ class EventBus:
         if event_type not in self._subscribers:
             self._subscribers[event_type] = []
         self._subscribers[event_type].append(handler)
+
+    def unsubscribe(self, event_type: EventType, handler: Callable[[Event], None]) -> None:
+        """取消订阅指定类型的事件
+
+        Args:
+            event_type: 要取消订阅的事件类型
+            handler: 要移除的事件处理函数
+
+        Note:
+            如果 event_type 未被订阅或 handler 不在订阅列表中，静默处理不报错
+        """
+        if event_type in self._subscribers:
+            try:
+                self._subscribers[event_type].remove(handler)
+            except ValueError:
+                # handler 不在列表中，静默处理
+                pass
+
+    def publish(self, event: Event) -> None:
+        """发布事件，通知所有订阅者
+
+        Args:
+            event: 要发布的事件对象
+
+        Note:
+            如果该事件类型没有订阅者，静默处理不报错
+        """
+        event_type = event.event_type
+        if event_type in self._subscribers:
+            for handler in self._subscribers[event_type]:
+                handler(event)
+
+    def clear(self) -> None:
+        """清除所有订阅
+
+        清空订阅者字典，移除所有事件类型的订阅关系。
+        主要用于系统重置场景，如重新开始训练或单元测试。
+        """
+        self._subscribers.clear()
