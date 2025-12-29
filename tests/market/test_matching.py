@@ -1369,7 +1369,7 @@ def test_process_order_publishes_events():
         quantity=8.0,
     )
 
-    trades = engine.process_order(buy_order)
+    engine.process_order(buy_order)
 
     # 应该发布 1 个成交事件
     assert len(received_events) == 1

@@ -5,6 +5,18 @@
 """
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class AgentType(Enum):
+    """Agent 类型枚举
+
+    定义系统中三种 AI Agent 的类型。
+    """
+
+    RETAIL = "RETAIL"  # 散户
+    WHALE = "WHALE"  # 庄家
+    MARKET_MAKER = "MARKET_MAKER"  # 做市商
 
 
 @dataclass
@@ -25,3 +37,27 @@ class MarketConfig:
     tick_size: float
     lot_size: float
     depth: int
+
+
+@dataclass
+class AgentConfig:
+    """
+    Agent 配置
+
+    定义特定类型 Agent 的交易参数。
+
+    Attributes:
+        count: 数量
+        initial_balance: 初始资产
+        leverage: 杠杆倍数
+        maintenance_margin_rate: 维持保证金率
+        maker_fee_rate: 挂单费率
+        taker_fee_rate: 吃单费率
+    """
+
+    count: int
+    initial_balance: float
+    leverage: float
+    maintenance_margin_rate: float
+    maker_fee_rate: float
+    taker_fee_rate: float
