@@ -1,0 +1,11 @@
+*.pyc
+.pytest_cache/
+__pycache__/
+.env
+.vscode/
+.DS_Store
+.idea/
+node_modules/
+dist/
+build/
+.benchmarks/

@@ -2,24 +2,24 @@
   "summary": {
     "project_name": "NEAT AI 交易模拟竞技场",
     "total": 92,
-    "completed": 0,
-    "in_progress": 1,
-    "pending": 91,
+    "completed": 2,
+    "in_progress": 0,
+    "pending": 90,
     "blocked": 0,
-    "current_task": "F1"
+    "current_task": null
   },
   "tasks": {
     "F1": {
       "id": "F1",
-      "status": "in_progress",
-      "notes": "",
-      "updated_at": "2025-12-29T22:52:47.533030"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-29T22:57:18.191230"
     },
     "F2": {
       "id": "F2",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-29T23:07:33.831806"
     },
     "F3": {
       "id": "F3",
@@ -593,6 +593,30 @@
       "function_id": "F1",
       "action": "status_change",
       "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T22:57:18.191242",
+      "function_id": "F1",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:04:59.807565",
+      "function_id": "F2",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:07:33.831816",
+      "function_id": "F2",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
       "author": null
     }
   ]
