@@ -2,11 +2,11 @@
   "summary": {
     "project_name": "NEAT AI 交易模拟竞技场",
     "total": 92,
-    "completed": 5,
-    "in_progress": 0,
-    "pending": 87,
+    "completed": 7,
+    "in_progress": 1,
+    "pending": 84,
     "blocked": 0,
-    "current_task": null
+    "current_task": "F8"
   },
   "tasks": {
     "F1": {
@@ -41,21 +41,21 @@
     },
     "F6": {
       "id": "F6",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-29T23:25:56.758039"
     },
     "F7": {
       "id": "F7",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-29T23:28:54.422846"
     },
     "F8": {
       "id": "F8",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "in_progress",
+      "notes": "开始实现",
+      "updated_at": "2025-12-29T23:30:00.227844"
     },
     "F9": {
       "id": "F9",
@@ -665,6 +665,38 @@
       "function_id": "F5",
       "action": "status_change",
       "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:25:56.758048",
+      "function_id": "F6",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:27:41.334721",
+      "function_id": "F7",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:28:54.422856",
+      "function_id": "F7",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-29T23:30:00.227855",
+      "function_id": "F8",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
       "author": null
     }
   ]
