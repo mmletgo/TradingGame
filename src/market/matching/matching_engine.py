@@ -213,3 +213,106 @@ class MatchingEngine:
             self._orderbook.add_order(order)
 
         return trades
+
+    def match_market_order(self, order: "Order") -> list["Trade"]:
+        """
+        市价单撮合
+
+        根据价格优先、时间优先的原则，将市价单与对手盘进行撮合。
+        吃掉对手盘直到完全成交或对手盘为空。
+        市价单不会挂在订单簿上，未成交部分直接丢弃。
+
+        Args:
+            order: 市价订单对象
+
+        Returns:
+            本次撮合产生的所有成交记录列表
+        """
+        from src.market.orderbook.order import OrderSide
+        from src.market.matching.trade import Trade
+
+        trades: list[Trade] = []
+        remaining = order.quantity - order.filled_quantity
+
+        while remaining > 0:
+            if order.side == OrderSide.BUY:
+                # 买单吃卖盘
+                best_price = self._orderbook.get_best_ask()
+                if best_price is None:
+                    break  # 卖盘为空，无法继续撮合
+                side_book = self._orderbook.asks
+            else:  # OrderSide.SELL
+                # 卖单吃买盘
+                best_price = self._orderbook.get_best_bid()
+                if best_price is None:
+                    break  # 买盘为空，无法继续撮合
+                side_book = self._orderbook.bids
+
+            # 获取该价格档位
+            if best_price not in side_book:
+                continue
+
+            price_level = side_book[best_price]
+
+            # 遍历该价格档位的订单（按时间优先顺序）
+            for maker_order in list(price_level.orders.values()):
+                if remaining <= 0:
+                    break
+
+                # 计算对手订单剩余数量
+                maker_remaining = maker_order.quantity - maker_order.filled_quantity
+                if maker_remaining <= 0:
+                    continue
+
+                # 计算成交量
+                trade_qty = min(remaining, maker_remaining)
+
+                # 成交价格 = maker订单价格（对手盘价格）
+                trade_price = maker_order.price
+
+                # 确定买卖方和手续费类型
+                # 市价单永远是 taker，对手盘是 maker
+                if order.side == OrderSide.BUY:
+                    buyer_id = order.agent_id
+                    seller_id = maker_order.agent_id
+                    buyer_fee = self.calculate_fee(
+                        buyer_id, trade_price * trade_qty, is_maker=False
+                    )
+                    seller_fee = self.calculate_fee(
+                        seller_id, trade_price * trade_qty, is_maker=True
+                    )
+                else:  # OrderSide.SELL
+                    buyer_id = maker_order.agent_id
+                    seller_id = order.agent_id
+                    buyer_fee = self.calculate_fee(
+                        buyer_id, trade_price * trade_qty, is_maker=True
+                    )
+                    seller_fee = self.calculate_fee(
+                        seller_id, trade_price * trade_qty, is_maker=False
+                    )
+
+                # 创建成交记录
+                trade = Trade(
+                    trade_id=self._next_trade_id,
+                    price=trade_price,
+                    quantity=trade_qty,
+                    buyer_id=buyer_id,
+                    seller_id=seller_id,
+                    buyer_fee=buyer_fee,
+                    seller_fee=seller_fee,
+                )
+                self._next_trade_id += 1
+                trades.append(trade)
+
+                # 更新已成交数量
+                order.filled_quantity += trade_qty
+                maker_order.filled_quantity += trade_qty
+                remaining -= trade_qty
+
+                # 如果 maker 订单完全成交，从订单簿移除
+                if maker_order.filled_quantity >= maker_order.quantity:
+                    self._orderbook.cancel_order(maker_order.order_id)
+
+        # 市价单剩余部分不挂单，直接丢弃
+
+        return trades

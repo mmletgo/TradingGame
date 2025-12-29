@@ -39,7 +39,7 @@ def test_matching_engine_init_subscribes_events():
     )
 
     # 创建引擎应该订阅事件
-    engine = MatchingEngine(event_bus, config)
+    MatchingEngine(event_bus, config)
 
     # 验证事件总线有订阅者（通过发布事件并捕获来验证）
     # 由于我们使用的是占位函数，这里只验证不会报错
@@ -773,7 +773,7 @@ def test_match_limit_order_orderbook_quantity():
         quantity=10.0,
     )
 
-    trades = engine.match_limit_order(buy_order)
+    engine.match_limit_order(buy_order)
 
     # 验证订单簿数量统计正确
     depth = engine._orderbook.get_depth()
@@ -784,3 +784,407 @@ def test_match_limit_order_orderbook_quantity():
 
     # 验证 price_level 的 total_quantity 也是正确的
     assert engine._orderbook.bids[101.0].total_quantity == 7.0
+
+
+# ==================== match_market_order 相关测试 ====================
+
+
+def test_match_market_order_buy_fully_filled():
+    """测试市价买单完全成交"""
+    from src.market.orderbook.order import Order, OrderSide, OrderType
+
+    event_bus = EventBus()
+    config = MarketConfig(
+        initial_price=100.0,
+        tick_size=0.1,
+        lot_size=1.0,
+        depth=100,
+    )
+    engine = MatchingEngine(event_bus, config)
+
+    # 注册费率
+    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)  # 卖方
+    engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)  # 买方（庄家）
+
+    # 挂卖单（卖盘）
+    sell_order = Order(
+        order_id=1,
+        agent_id=1,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.5,
+        quantity=10.0,
+    )
+    engine._orderbook.add_order(sell_order)
+
+    # 市价买单，数量等于卖盘数量
+    market_buy = Order(
+        order_id=2,
+        agent_id=2,
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        price=0.0,  # 市价单价格无意义
+        quantity=10.0,
+    )
+
+    trades = engine.match_market_order(market_buy)
+
+    # 应该产生 1 笔成交
+    assert len(trades) == 1
+    assert trades[0].trade_id == 1
+    assert trades[0].price == 100.5  # 成交价格是卖单价格
+    assert trades[0].quantity == 10.0
+    assert trades[0].buyer_id == 2
+    assert trades[0].seller_id == 1
+    # 买方是 taker（庄家万1），卖方是 maker（散户万2）
+    assert trades[0].buyer_fee == 100.5 * 10.0 * 0.0001
+    assert trades[0].seller_fee == 100.5 * 10.0 * 0.0002
+
+    # 市价买单应该完全成交
+    assert market_buy.filled_quantity == 10.0
+
+    # 卖单应该完全成交，从订单簿移除
+    assert sell_order.order_id not in engine._orderbook.order_map
+    assert engine._orderbook.get_best_ask() is None
+
+    # 市价单不应该挂在订单簿上
+    assert market_buy.order_id not in engine._orderbook.order_map
+
+
+def test_match_market_order_sell_fully_filled():
+    """测试市价卖单完全成交"""
+    from src.market.orderbook.order import Order, OrderSide, OrderType
+
+    event_bus = EventBus()
+    config = MarketConfig(
+        initial_price=100.0,
+        tick_size=0.1,
+        lot_size=1.0,
+        depth=100,
+    )
+    engine = MatchingEngine(event_bus, config)
+
+    # 注册费率
+    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)  # 买方
+    engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)  # 卖方（庄家）
+
+    # 挂买单（买盘）
+    buy_order = Order(
+        order_id=1,
+        agent_id=1,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=99.8,
+        quantity=10.0,
+    )
+    engine._orderbook.add_order(buy_order)
+
+    # 市价卖单
+    market_sell = Order(
+        order_id=2,
+        agent_id=2,
+        side=OrderSide.SELL,
+        order_type=OrderType.MARKET,
+        price=0.0,
+        quantity=10.0,
+    )
+
+    trades = engine.match_market_order(market_sell)
+
+    # 应该产生 1 笔成交
+    assert len(trades) == 1
+    assert trades[0].price == 99.8  # 成交价格是买单价格
+    assert trades[0].quantity == 10.0
+    assert trades[0].buyer_id == 1
+    assert trades[0].seller_id == 2
+    # 买方是 maker（散户万2），卖方是 taker（庄家万1）
+    assert trades[0].buyer_fee == 99.8 * 10.0 * 0.0002
+    assert trades[0].seller_fee == 99.8 * 10.0 * 0.0001
+
+    # 市价卖单应该完全成交
+    assert market_sell.filled_quantity == 10.0
+
+    # 买单应该完全成交，从订单簿移除
+    assert buy_order.order_id not in engine._orderbook.order_map
+    assert engine._orderbook.get_best_bid() is None
+
+    # 市价单不应该挂在订单簿上
+    assert market_sell.order_id not in engine._orderbook.order_map
+
+
+def test_match_market_order_buy_partial_fill():
+    """测试市价买单部分成交（对手盘不足）"""
+    from src.market.orderbook.order import Order, OrderSide, OrderType
+
+    event_bus = EventBus()
+    config = MarketConfig(
+        initial_price=100.0,
+        tick_size=0.1,
+        lot_size=1.0,
+        depth=100,
+    )
+    engine = MatchingEngine(event_bus, config)
+
+    # 注册费率
+    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
+    engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)
+
+    # 挂卖单，数量只有 5.0
+    sell_order = Order(
+        order_id=1,
+        agent_id=1,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.5,
+        quantity=5.0,
+    )
+    engine._orderbook.add_order(sell_order)
+
+    # 市价买单，数量是 10.0，但对手盘只有 5.0
+    market_buy = Order(
+        order_id=2,
+        agent_id=2,
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        price=0.0,
+        quantity=10.0,
+    )
+
+    trades = engine.match_market_order(market_buy)
+
+    # 应该产生 1 笔成交
+    assert len(trades) == 1
+    assert trades[0].quantity == 5.0
+
+    # 市价买单应该只成交了 5.0
+    assert market_buy.filled_quantity == 5.0
+
+    # 卖单应该完全成交，从订单簿移除
+    assert sell_order.order_id not in engine._orderbook.order_map
+    assert engine._orderbook.get_best_ask() is None
+
+    # 市价单不应该挂在订单簿上，剩余部分直接丢弃
+    assert market_buy.order_id not in engine._orderbook.order_map
+
+
+def test_match_market_order_sell_partial_fill():
+    """测试市价卖单部分成交（对手盘不足）"""
+    from src.market.orderbook.order import Order, OrderSide, OrderType
+
+    event_bus = EventBus()
+    config = MarketConfig(
+        initial_price=100.0,
+        tick_size=0.1,
+        lot_size=1.0,
+        depth=100,
+    )
+    engine = MatchingEngine(event_bus, config)
+
+    # 注册费率
+    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
+    engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)
+
+    # 挂买单，数量只有 5.0
+    buy_order = Order(
+        order_id=1,
+        agent_id=1,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=99.8,
+        quantity=5.0,
+    )
+    engine._orderbook.add_order(buy_order)
+
+    # 市价卖单，数量是 10.0，但对手盘只有 5.0
+    market_sell = Order(
+        order_id=2,
+        agent_id=2,
+        side=OrderSide.SELL,
+        order_type=OrderType.MARKET,
+        price=0.0,
+        quantity=10.0,
+    )
+
+    trades = engine.match_market_order(market_sell)
+
+    # 应该产生 1 笔成交
+    assert len(trades) == 1
+    assert trades[0].quantity == 5.0
+
+    # 市价卖单应该只成交了 5.0
+    assert market_sell.filled_quantity == 5.0
+
+    # 买单应该完全成交，从订单簿移除
+    assert buy_order.order_id not in engine._orderbook.order_map
+    assert engine._orderbook.get_best_bid() is None
+
+    # 市价单不应该挂在订单簿上
+    assert market_sell.order_id not in engine._orderbook.order_map
+
+
+def test_match_market_order_empty_orderbook():
+    """测试市价单在空订单簿时不成交"""
+    from src.market.orderbook.order import Order, OrderSide, OrderType
+
+    event_bus = EventBus()
+    config = MarketConfig(
+        initial_price=100.0,
+        tick_size=0.1,
+        lot_size=1.0,
+        depth=100,
+    )
+    engine = MatchingEngine(event_bus, config)
+
+    # 注册费率
+    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
+
+    # 订单簿为空，下市价买单
+    market_buy = Order(
+        order_id=1,
+        agent_id=1,
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        price=0.0,
+        quantity=10.0,
+    )
+
+    trades = engine.match_market_order(market_buy)
+
+    # 不应该有成交
+    assert len(trades) == 0
+
+    # 市价单不应该成交
+    assert market_buy.filled_quantity == 0.0
+
+    # 市价单不应该挂在订单簿上
+    assert market_buy.order_id not in engine._orderbook.order_map
+
+
+def test_match_market_order_multiple_price_levels():
+    """测试市价单跨多个价格档位成交"""
+    from src.market.orderbook.order import Order, OrderSide, OrderType
+
+    event_bus = EventBus()
+    config = MarketConfig(
+        initial_price=100.0,
+        tick_size=0.1,
+        lot_size=1.0,
+        depth=100,
+    )
+    engine = MatchingEngine(event_bus, config)
+
+    # 注册费率
+    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
+    engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)
+
+    # 挂多个价格档位的卖单
+    sell_order1 = Order(
+        order_id=1,
+        agent_id=1,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.5,
+        quantity=3.0,
+    )
+    engine._orderbook.add_order(sell_order1)
+
+    sell_order2 = Order(
+        order_id=2,
+        agent_id=1,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.6,
+        quantity=4.0,
+    )
+    engine._orderbook.add_order(sell_order2)
+
+    sell_order3 = Order(
+        order_id=3,
+        agent_id=1,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.7,
+        quantity=5.0,
+    )
+    engine._orderbook.add_order(sell_order3)
+
+    # 市价买单，数量 10.0，跨越三个价格档位
+    market_buy = Order(
+        order_id=4,
+        agent_id=2,
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        price=0.0,
+        quantity=10.0,
+    )
+
+    trades = engine.match_market_order(market_buy)
+
+    # 应该产生 3 笔成交
+    assert len(trades) == 3
+
+    # 第一笔：100.5 价格成交 3.0
+    assert trades[0].price == 100.5
+    assert trades[0].quantity == 3.0
+
+    # 第二笔：100.6 价格成交 4.0
+    assert trades[1].price == 100.6
+    assert trades[1].quantity == 4.0
+
+    # 第三笔：100.7 价格成交 3.0
+    assert trades[2].price == 100.7
+    assert trades[2].quantity == 3.0
+
+    # 市价买单应该完全成交
+    assert market_buy.filled_quantity == 10.0
+
+    # 卖单 3 应该还剩 2.0
+    assert sell_order3.filled_quantity == 3.0
+    assert 3 in engine._orderbook.order_map  # sell_order3 仍在订单簿中
+    assert engine._orderbook.get_best_ask() == 100.7
+
+
+def test_match_market_order_taker_fee():
+    """测试市价单永远是 taker，支付吃单费率"""
+    from src.market.orderbook.order import Order, OrderSide, OrderType
+
+    event_bus = EventBus()
+    config = MarketConfig(
+        initial_price=100.0,
+        tick_size=0.1,
+        lot_size=1.0,
+        depth=100,
+    )
+    engine = MatchingEngine(event_bus, config)
+
+    # 注册费率
+    engine.register_agent(agent_id=1, maker_rate=0.0, taker_rate=0.0001)  # 做市商
+    engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)  # 庄家
+
+    # 做市商挂卖单（maker）
+    sell_order = Order(
+        order_id=1,
+        agent_id=1,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.5,
+        quantity=10.0,
+    )
+    engine._orderbook.add_order(sell_order)
+
+    # 庄家下市价买单（taker）
+    market_buy = Order(
+        order_id=2,
+        agent_id=2,
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        price=0.0,
+        quantity=10.0,
+    )
+
+    trades = engine.match_market_order(market_buy)
+
+    # 市价单（庄家）是 taker，应该支付吃单费率万1
+    # 挂单方（做市商）是 maker，应该支付挂单费率0
+    assert trades[0].buyer_fee == 100.5 * 10.0 * 0.0001  # 庄家吃单万1
+    assert trades[0].seller_fee == 0.0  # 做市商挂单0

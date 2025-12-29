@@ -2,9 +2,9 @@
   "summary": {
     "project_name": "NEAT AI 交易模拟竞技场",
     "total": 92,
-    "completed": 23,
+    "completed": 24,
     "in_progress": 0,
-    "pending": 69,
+    "pending": 68,
     "blocked": 0,
     "current_task": null
   },
@@ -149,9 +149,9 @@
     },
     "F24": {
       "id": "F24",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过（7个测试用例）",
+      "updated_at": "2025-12-30T01:04:07.293428"
     },
     "F25": {
       "id": "F25",
@@ -967,6 +967,22 @@
       "date": null,
       "timestamp": "2025-12-30T00:55:08.356520",
       "function_id": "F23",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T01:00:53.125570",
+      "function_id": "F24",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T01:04:07.293441",
+      "function_id": "F24",
       "action": "status_change",
       "description": "状态从 in_progress 变更为 completed",
       "author": null
