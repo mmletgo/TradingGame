@@ -185,6 +185,22 @@ cdef class OrderBook:
             return min(self.asks.keys())
         return None
 
+    def get_mid_price(self) -> float | None:
+        """
+        获取中间价
+
+        返回最优买卖价的平均值，无法计算返回 None
+
+        Returns:
+            中间价，如果买盘或卖盘任一为空则返回 None
+        """
+        best_bid = self.get_best_bid()
+        best_ask = self.get_best_ask()
+
+        if best_bid is not None and best_ask is not None:
+            return (best_bid + best_ask) / 2.0
+        return None
+
     def get_depth(self, levels: int = 100) -> dict[str, list[tuple[float, float]]]:
         """
         获取盘口深度

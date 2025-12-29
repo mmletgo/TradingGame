@@ -319,8 +319,8 @@
       "test_file": "tests/market/test_matching.py",
       "signature": "def calculate_fee(self, agent_id: int, amount: float, is_maker: bool) -> float",
       "business_logic": "计算手续费",
-      "code_logic": "根据 Agent 类型和挂单/吃单获取费率，计算手续费",
-      "test_cases": ["散户挂单费", "散户吃单费", "庄家费用", "做市商费用"],
+      "code_logic": "根据 Agent 类型和挂单/吃单获取费率，计算手续费。使用内部缓存 _fee_rates 存储 agent_id -> (maker_rate, taker_rate) 映射，支持 register_agent/unregister_agent 动态管理",
+      "test_cases": ["散户挂单费（万2）", "散户吃单费（万5）", "庄家费用（挂单0，吃单万1）", "做市商费用（挂单0，吃单万1）", "未注册Agent默认费率", "零金额边界", "注册/注销Agent", "多Agent不同费率"],
       "dependencies": [],
       "called_by": ["F23", "F24"],
       "uses": []

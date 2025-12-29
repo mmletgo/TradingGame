@@ -1026,3 +1026,146 @@ def test_get_depth_aggregates_same_price():
     assert len(depth["bids"]) == 2
     assert depth["bids"][0] == (100.0, 30.0)
     assert depth["bids"][1] == (99.5, 15.0)
+
+
+def test_get_mid_price_normal():
+    """测试正常计算中间价"""
+    book = OrderBook()
+    buy_order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=10.0,
+    )
+    sell_order = Order(
+        order_id=2,
+        agent_id=101,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=102.0,
+        quantity=20.0,
+    )
+
+    book.add_order(buy_order)
+    book.add_order(sell_order)
+
+    # 中间价 = (100.0 + 102.0) / 2 = 101.0
+    assert book.get_mid_price() == 101.0
+
+
+def test_get_mid_price_only_bids():
+    """测试只有买盘时返回 None"""
+    book = OrderBook()
+    buy_order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=10.0,
+    )
+
+    book.add_order(buy_order)
+
+    assert book.get_mid_price() is None
+
+
+def test_get_mid_price_only_asks():
+    """测试只有卖盘时返回 None"""
+    book = OrderBook()
+    sell_order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=10.0,
+    )
+
+    book.add_order(sell_order)
+
+    assert book.get_mid_price() is None
+
+
+def test_get_mid_price_empty():
+    """测试空订单簿返回 None"""
+    book = OrderBook()
+
+    assert book.get_mid_price() is None
+
+
+def test_get_mid_price_same_price():
+    """测试买卖价相同时返回该价格"""
+    book = OrderBook()
+    buy_order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=10.0,
+    )
+    sell_order = Order(
+        order_id=2,
+        agent_id=101,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=20.0,
+    )
+
+    book.add_order(buy_order)
+    book.add_order(sell_order)
+
+    # 中间价 = (100.0 + 100.0) / 2 = 100.0
+    assert book.get_mid_price() == 100.0
+
+
+def test_get_mid_price_multiple_levels():
+    """测试多档位时使用最优价计算"""
+    book = OrderBook()
+    # 添加多个买盘档位
+    buy_order1 = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=99.0,
+        quantity=10.0,
+    )
+    buy_order2 = Order(
+        order_id=2,
+        agent_id=101,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=20.0,
+    )
+    # 添加多个卖盘档位
+    sell_order1 = Order(
+        order_id=3,
+        agent_id=102,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=102.0,
+        quantity=15.0,
+    )
+    sell_order2 = Order(
+        order_id=4,
+        agent_id=103,
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=101.0,
+        quantity=25.0,
+    )
+
+    book.add_order(buy_order1)
+    book.add_order(buy_order2)
+    book.add_order(sell_order1)
+    book.add_order(sell_order2)
+
+    # 最优买价 100.0，最优卖价 101.0
+    # 中间价 = (100.0 + 101.0) / 2 = 100.5
+    assert book.get_mid_price() == 100.5
