@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 from src.bio.agents.base import Agent, ActionType
 from src.bio.agents.retail import RetailAgent
+from src.bio.agents.whale import WhaleAgent
 from src.config.config import AgentConfig, AgentType
 from src.core.event_engine.events import Event, EventType
 from src.core.event_engine.event_bus import EventBus
@@ -2481,3 +2482,666 @@ class TestRetailAgentExecuteAction:
         published_events.clear()
         agent.execute_action(ActionType.HOLD, {}, event_bus)
         assert len(published_events) == 0
+
+
+class TestWhaleAgentInit:
+    """测试 WhaleAgent.__init__"""
+
+    def test_create_whale_agent(self):
+        """测试创建庄家 Agent"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 验证属性
+        assert agent.agent_id == 10001
+        assert agent.agent_type == AgentType.WHALE
+        assert agent.brain is mock_brain
+        assert agent.account.agent_id == 10001
+        assert agent.account.agent_type == AgentType.WHALE
+        assert agent.account.balance == 10000000.0
+        assert agent.account.leverage == 10.0
+        assert agent.account.maintenance_margin_rate == 0.05
+        assert agent.account.maker_fee_rate == 0.0
+        assert agent.account.taker_fee_rate == 0.0001
+
+    def test_whale_agent_is_agent(self):
+        """测试 WhaleAgent 是 Agent 的子类"""
+        mock_brain = MagicMock(spec=Brain)
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+        event_bus = EventBus()
+
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 验证是 Agent 的实例
+        assert isinstance(agent, Agent)
+
+    def test_whale_agent_inherits_base_methods(self):
+        """测试 WhaleAgent 继承了基类方法"""
+        mock_brain = MagicMock(spec=Brain)
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+        event_bus = EventBus()
+
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 验证继承了基类方法
+        assert hasattr(agent, "observe")
+        assert hasattr(agent, "decide")
+        assert hasattr(agent, "execute_action")
+        assert hasattr(agent, "get_fitness")
+        assert hasattr(agent, "reset")
+        assert callable(agent.observe)
+        assert callable(agent.decide)
+        assert callable(agent.execute_action)
+        assert callable(agent.get_fitness)
+        assert callable(agent.reset)
+
+    def test_whale_agent_subscribes_to_events(self):
+        """测试庄家 Agent 订阅成交事件"""
+        mock_brain = MagicMock(spec=Brain)
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+        event_bus = EventBus()
+
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 发布成交事件
+        event = Event(
+            event_type=EventType.TRADE_EXECUTED,
+            timestamp=0.0,
+            data={
+                "trade_id": 1,
+                "price": 100.0,
+                "quantity": 100.0,
+                "buyer_id": 10001,
+                "seller_id": 10002,
+                "buyer_fee": 0.0,
+                "seller_fee": 1.0,
+            },
+        )
+        event_bus.publish(event)
+
+        # 验证账户自动更新（通过事件订阅）
+        assert agent.account.position.quantity == 100.0
+        assert agent.account.position.avg_price == 100.0
+        assert agent.account.balance == 10000000.0  # 庄家 maker 费率为 0
+
+
+class TestWhaleAgentGetActionSpace:
+    """测试 WhaleAgent.get_action_space"""
+
+    def test_get_action_space(self):
+        """测试获取庄家动作空间"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 获取动作空间
+        action_space = agent.get_action_space()
+
+        # 验证返回 4 种动作（庄家不能 HOLD，不能单纯撤单）
+        assert len(action_space) == 4
+        assert ActionType.PLACE_BID in action_space
+        assert ActionType.PLACE_ASK in action_space
+        assert ActionType.MARKET_BUY in action_space
+        assert ActionType.MARKET_SELL in action_space
+
+        # 验证动作顺序
+        assert action_space == [
+            ActionType.PLACE_BID,
+            ActionType.PLACE_ASK,
+            ActionType.MARKET_BUY,
+            ActionType.MARKET_SELL,
+        ]
+
+    def test_get_action_space_excludes_hold(self):
+        """测试庄家动作空间不包含 HOLD（庄家绝不不动）"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 获取动作空间
+        action_space = agent.get_action_space()
+
+        # 验证不包含 HOLD
+        assert ActionType.HOLD not in action_space
+
+    def test_get_action_space_excludes_cancel(self):
+        """测试庄家动作空间不包含 CANCEL（庄家不能单纯撤单）"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 获取动作空间
+        action_space = agent.get_action_space()
+
+        # 验证不包含 CANCEL
+        assert ActionType.CANCEL not in action_space
+
+    def test_get_action_space_excludes_clear_position(self):
+        """测试庄家动作空间不包含 CLEAR_POSITION（做市商专用）"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 获取动作空间
+        action_space = agent.get_action_space()
+
+        # 验证不包含 CLEAR_POSITION
+        assert ActionType.CLEAR_POSITION not in action_space
+
+
+class TestWhaleAgentExecuteAction:
+    """测试 WhaleAgent.execute_action"""
+
+    def test_place_bid_with_existing_order(self):
+        """测试有挂单时再挂买单：先撤旧单再挂新单"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 设置已有挂单
+        agent.account.pending_order_id = 12345
+
+        # 执行挂买单
+        action = ActionType.PLACE_BID
+        params = {"price": 99.5, "quantity": 100.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证发布了两个事件：撤单 + 挂单
+        assert len(published_events) == 2
+
+        # 第一个事件是撤单
+        cancel_event = published_events[0]
+        assert cancel_event.event_type == EventType.ORDER_CANCELLED
+        assert cancel_event.data["order_id"] == 12345
+        assert cancel_event.data["agent_id"] == 10001
+
+        # 第二个事件是挂单
+        place_event = published_events[1]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.agent_id == 10001
+        assert order.side.value == OrderSide.BUY
+        assert order.order_type.value == OrderType.LIMIT
+        assert order.price == 99.5
+        assert order.quantity == 100.0
+
+    def test_place_ask_with_existing_order(self):
+        """测试有挂单时再挂卖单：先撤旧单再挂新单"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 设置已有挂单
+        agent.account.pending_order_id = 67890
+
+        # 执行挂卖单
+        action = ActionType.PLACE_ASK
+        params = {"price": 100.5, "quantity": 200.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证发布了两个事件：撤单 + 挂单
+        assert len(published_events) == 2
+
+        # 第一个事件是撤单
+        cancel_event = published_events[0]
+        assert cancel_event.event_type == EventType.ORDER_CANCELLED
+        assert cancel_event.data["order_id"] == 67890
+
+        # 第二个事件是挂单
+        place_event = published_events[1]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.side.value == OrderSide.SELL
+        assert order.price == 100.5
+        assert order.quantity == 200.0
+
+    def test_place_bid_without_existing_order(self):
+        """测试无挂单时挂买单：直接挂单"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 确认没有挂单
+        assert agent.account.pending_order_id is None
+
+        # 执行挂买单
+        action = ActionType.PLACE_BID
+        params = {"price": 99.5, "quantity": 100.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证只发布了一个事件：挂单
+        assert len(published_events) == 1
+
+        # 事件是挂单
+        place_event = published_events[0]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.agent_id == 10001
+        assert order.side.value == OrderSide.BUY
+        assert order.price == 99.5
+        assert order.quantity == 100.0
+
+    def test_market_buy_with_existing_order(self):
+        """测试有挂单时市价买入：先撤旧单再市价买入"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 设置已有挂单
+        agent.account.pending_order_id = 99999
+
+        # 执行市价买入
+        action = ActionType.MARKET_BUY
+        params = {"quantity": 150.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证发布了两个事件：撤单 + 市价单
+        assert len(published_events) == 2
+
+        # 第一个事件是撤单
+        cancel_event = published_events[0]
+        assert cancel_event.event_type == EventType.ORDER_CANCELLED
+        assert cancel_event.data["order_id"] == 99999
+
+        # 第二个事件是市价买单
+        place_event = published_events[1]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.order_type.value == OrderType.MARKET
+        assert order.side.value == OrderSide.BUY
+        assert order.quantity == 150.0
+
+    def test_market_sell_with_existing_order(self):
+        """测试有挂单时市价卖出：先撤旧单再市价卖出"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 设置已有挂单
+        agent.account.pending_order_id = 88888
+
+        # 执行市价卖出
+        action = ActionType.MARKET_SELL
+        params = {"quantity": 250.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证发布了两个事件：撤单 + 市价单
+        assert len(published_events) == 2
+
+        # 第一个事件是撤单
+        cancel_event = published_events[0]
+        assert cancel_event.event_type == EventType.ORDER_CANCELLED
+
+        # 第二个事件是市价卖单
+        place_event = published_events[1]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.order_type.value == OrderType.MARKET
+        assert order.side.value == OrderSide.SELL
+        assert order.quantity == 250.0
+
+    def test_market_buy_without_existing_order(self):
+        """测试无挂单时市价买入：直接市价买入"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 执行市价买入
+        action = ActionType.MARKET_BUY
+        params = {"quantity": 150.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证只发布了一个事件：市价单
+        assert len(published_events) == 1
+        place_event = published_events[0]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.order_type.value == OrderType.MARKET
+        assert order.side.value == OrderSide.BUY
+        assert order.quantity == 150.0
+
+    def test_market_sell_without_existing_order(self):
+        """测试无挂单时市价卖出：直接市价卖出"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建庄家 Agent 配置
+        config = AgentConfig(
+            count=10,
+            initial_balance=10000000.0,
+            leverage=10.0,
+            maintenance_margin_rate=0.05,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0001,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建庄家 Agent
+        agent = WhaleAgent(
+            agent_id=10001,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 执行市价卖出
+        action = ActionType.MARKET_SELL
+        params = {"quantity": 250.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证只发布了一个事件：市价单
+        assert len(published_events) == 1
+        place_event = published_events[0]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.order_type.value == OrderType.MARKET
+        assert order.side.value == OrderSide.SELL
+        assert order.quantity == 250.0

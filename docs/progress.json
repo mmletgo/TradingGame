@@ -2,11 +2,11 @@
   "summary": {
     "project_name": "NEAT AI 交易模拟竞技场",
     "total": 92,
-    "completed": 49,
+    "completed": 52,
     "in_progress": 1,
-    "pending": 42,
+    "pending": 39,
     "blocked": 0,
-    "current_task": "F50"
+    "current_task": "F53"
   },
   "tasks": {
     "F1": {
@@ -305,27 +305,27 @@
     },
     "F50": {
       "id": "F50",
-      "status": "in_progress",
-      "notes": "开始实现 WhaleAgent.__init__ 构造函数",
-      "updated_at": "2025-12-30T16:38:26.612617"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-30T16:40:13.821120"
     },
     "F51": {
       "id": "F51",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-30T16:42:56.905278"
     },
     "F52": {
       "id": "F52",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过，庄家 execute_action 实现完成：移除 CANCEL 动作，下单时若有挂单则先自动撤单再下单",
+      "updated_at": "2025-12-30T16:49:50.791137"
     },
     "F53": {
       "id": "F53",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "in_progress",
+      "notes": "开始实现做市商 Agent 构造函数",
+      "updated_at": "2025-12-30T16:51:46.424050"
     },
     "F54": {
       "id": "F54",
@@ -1423,6 +1423,70 @@
       "date": null,
       "timestamp": "2025-12-30T16:38:26.612627",
       "function_id": "F50",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:40:13.821131",
+      "function_id": "F50",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:41:29.896629",
+      "function_id": "F51",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:42:56.905293",
+      "function_id": "F51",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:43:55.731703",
+      "function_id": "F52",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": "2025-12-30",
+      "timestamp": "2025-12-30T16:50:00.000000",
+      "function_id": "F51",
+      "action": "doc_update",
+      "description": "修改庄家动作空间：移除 CANCEL 动作，庄家不能单纯撤单",
+      "author": "user"
+    },
+    {
+      "date": "2025-12-30",
+      "timestamp": "2025-12-30T16:50:00.000000",
+      "function_id": "F52",
+      "action": "doc_update",
+      "description": "修改庄家 execute_action 逻辑：下单时若有挂单则先自动撤单再下单",
+      "author": "user"
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:49:50.791148",
+      "function_id": "F52",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:51:46.424060",
+      "function_id": "F53",
       "action": "status_change",
       "description": "状态从 pending 变更为 in_progress",
       "author": null
