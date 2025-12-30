@@ -2,11 +2,11 @@
   "summary": {
     "project_name": "NEAT AI 交易模拟竞技场",
     "total": 92,
-    "completed": 46,
+    "completed": 49,
     "in_progress": 1,
-    "pending": 45,
+    "pending": 42,
     "blocked": 0,
-    "current_task": "F47"
+    "current_task": "F50"
   },
   "tasks": {
     "F1": {
@@ -287,27 +287,27 @@
     },
     "F47": {
       "id": "F47",
-      "status": "in_progress",
-      "notes": "",
-      "updated_at": "2025-12-30T16:21:51.425784"
+      "status": "completed",
+      "notes": "测试通过，实现完成",
+      "updated_at": "2025-12-30T16:28:01.199310"
     },
     "F48": {
       "id": "F48",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-30T16:31:47.913962"
     },
     "F49": {
       "id": "F49",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过，实现了散户先撤旧单再挂新单的逻辑",
+      "updated_at": "2025-12-30T16:36:59.024542"
     },
     "F50": {
       "id": "F50",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "in_progress",
+      "notes": "开始实现 WhaleAgent.__init__ 构造函数",
+      "updated_at": "2025-12-30T16:38:26.612617"
     },
     "F51": {
       "id": "F51",
@@ -1375,6 +1375,54 @@
       "date": null,
       "timestamp": "2025-12-30T16:21:51.425801",
       "function_id": "F47",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:28:01.199321",
+      "function_id": "F47",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:30:23.637460",
+      "function_id": "F48",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:31:47.913973",
+      "function_id": "F48",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:33:06.240528",
+      "function_id": "F49",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:36:59.024552",
+      "function_id": "F49",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T16:38:26.612627",
+      "function_id": "F50",
       "action": "status_change",
       "description": "状态从 pending 变更为 in_progress",
       "author": null

@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 from src.bio.agents.base import Agent, ActionType
+from src.bio.agents.retail import RetailAgent
 from src.config.config import AgentConfig, AgentType
 from src.core.event_engine.events import Event, EventType
 from src.core.event_engine.event_bus import EventBus
@@ -2024,3 +2025,459 @@ class TestAgentReset:
         mm_agent.account.balance = 5000000.0
         mm_agent.reset(mm_config)
         assert mm_agent.account.balance == 10000000.0
+
+
+class TestRetailAgentInit:
+    """测试 RetailAgent.__init__"""
+
+    def test_create_retail_agent(self):
+        """测试创建散户 Agent"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建散户 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建散户 Agent
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 验证属性
+        assert agent.agent_id == 1
+        assert agent.agent_type == AgentType.RETAIL
+        assert agent.brain is mock_brain
+        assert agent.account.agent_id == 1
+        assert agent.account.agent_type == AgentType.RETAIL
+        assert agent.account.balance == 10000.0
+        assert agent.account.leverage == 100.0
+        assert agent.account.maintenance_margin_rate == 0.005
+        assert agent.account.maker_fee_rate == 0.0002
+        assert agent.account.taker_fee_rate == 0.0005
+
+    def test_retail_agent_is_agent(self):
+        """测试 RetailAgent 是 Agent 的子类"""
+        from src.bio.agents.base import Agent
+
+        mock_brain = MagicMock(spec=Brain)
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+        event_bus = EventBus()
+
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 验证是 Agent 的实例
+        assert isinstance(agent, Agent)
+
+    def test_retail_agent_inherits_base_methods(self):
+        """测试 RetailAgent 继承了基类方法"""
+        mock_brain = MagicMock(spec=Brain)
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+        event_bus = EventBus()
+
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 验证继承了基类方法
+        assert hasattr(agent, "observe")
+        assert hasattr(agent, "decide")
+        assert hasattr(agent, "execute_action")
+        assert hasattr(agent, "get_fitness")
+        assert hasattr(agent, "reset")
+        assert callable(agent.observe)
+        assert callable(agent.decide)
+        assert callable(agent.execute_action)
+        assert callable(agent.get_fitness)
+        assert callable(agent.reset)
+
+    def test_retail_agent_subscribes_to_events(self):
+        """测试散户 Agent 订阅成交事件"""
+        mock_brain = MagicMock(spec=Brain)
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+        event_bus = EventBus()
+
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 发布成交事件
+        event = Event(
+            event_type=EventType.TRADE_EXECUTED,
+            timestamp=0.0,
+            data={
+                "trade_id": 1,
+                "price": 100.0,
+                "quantity": 10.0,
+                "buyer_id": 1,
+                "seller_id": 2,
+                "buyer_fee": 5.0,
+                "seller_fee": 2.0,
+            },
+        )
+        event_bus.publish(event)
+
+        # 验证账户自动更新（通过事件订阅）
+        assert agent.account.position.quantity == 10.0
+        assert agent.account.position.avg_price == 100.0
+        assert agent.account.balance == 9995.0  # 10000 - 5
+
+
+class TestRetailAgentGetActionSpace:
+    """测试 RetailAgent.get_action_space"""
+
+    def test_get_action_space(self):
+        """测试获取动作空间"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建散户 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建散户 Agent
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 获取动作空间
+        action_space = agent.get_action_space()
+
+        # 验证返回 6 种动作
+        assert len(action_space) == 6
+        assert ActionType.HOLD in action_space
+        assert ActionType.PLACE_BID in action_space
+        assert ActionType.PLACE_ASK in action_space
+        assert ActionType.CANCEL in action_space
+        assert ActionType.MARKET_BUY in action_space
+        assert ActionType.MARKET_SELL in action_space
+
+        # 验证动作顺序
+        assert action_space == [
+            ActionType.HOLD,
+            ActionType.PLACE_BID,
+            ActionType.PLACE_ASK,
+            ActionType.CANCEL,
+            ActionType.MARKET_BUY,
+            ActionType.MARKET_SELL,
+        ]
+
+    def test_get_action_space_excludes_clear_position(self):
+        """测试动作空间不包含 CLEAR_POSITION（做市商专用）"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建散户 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建散户 Agent
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 获取动作空间
+        action_space = agent.get_action_space()
+
+        # 验证不包含 CLEAR_POSITION
+        assert ActionType.CLEAR_POSITION not in action_space
+
+
+class TestRetailAgentExecuteAction:
+    """测试 RetailAgent.execute_action"""
+
+    def test_place_bid_with_existing_order(self):
+        """测试有挂单时再挂买单：先撤旧单再挂新单"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建散户 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建散户 Agent
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 设置已有挂单
+        agent.account.pending_order_id = 12345
+
+        # 执行挂买单
+        action = ActionType.PLACE_BID
+        params = {"price": 99.5, "quantity": 10.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证发布了两个事件：撤单 + 挂单
+        assert len(published_events) == 2
+
+        # 第一个事件是撤单
+        cancel_event = published_events[0]
+        assert cancel_event.event_type == EventType.ORDER_CANCELLED
+        assert cancel_event.data["order_id"] == 12345
+        assert cancel_event.data["agent_id"] == 1
+
+        # 第二个事件是挂单
+        place_event = published_events[1]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.agent_id == 1
+        assert order.side.value == OrderSide.BUY
+        assert order.order_type.value == OrderType.LIMIT
+        assert order.price == 99.5
+        assert order.quantity == 10.0
+
+    def test_place_ask_with_existing_order(self):
+        """测试有挂单时再挂卖单：先撤旧单再挂新单"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建散户 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建散户 Agent
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 设置已有挂单
+        agent.account.pending_order_id = 67890
+
+        # 执行挂卖单
+        action = ActionType.PLACE_ASK
+        params = {"price": 100.5, "quantity": 20.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证发布了两个事件：撤单 + 挂单
+        assert len(published_events) == 2
+
+        # 第一个事件是撤单
+        cancel_event = published_events[0]
+        assert cancel_event.event_type == EventType.ORDER_CANCELLED
+        assert cancel_event.data["order_id"] == 67890
+
+        # 第二个事件是挂单
+        place_event = published_events[1]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.side.value == OrderSide.SELL
+        assert order.price == 100.5
+        assert order.quantity == 20.0
+
+    def test_place_bid_without_existing_order(self):
+        """测试无挂单时挂买单：直接挂单"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建散户 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建散户 Agent
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 确认没有挂单
+        assert agent.account.pending_order_id is None
+
+        # 执行挂买单
+        action = ActionType.PLACE_BID
+        params = {"price": 99.5, "quantity": 10.0}
+        agent.execute_action(action, params, event_bus)
+
+        # 验证只发布了一个事件：挂单
+        assert len(published_events) == 1
+
+        # 事件是挂单
+        place_event = published_events[0]
+        assert place_event.event_type == EventType.ORDER_PLACED
+        order = place_event.data["order"]
+        assert order.agent_id == 1
+        assert order.side.value == OrderSide.BUY
+        assert order.price == 99.5
+        assert order.quantity == 10.0
+
+    def test_execute_other_actions(self):
+        """测试其他动作（CANCEL, MARKET_BUY, MARKET_SELL, HOLD）使用父类实现"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建散户 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线并订阅事件
+        event_bus = EventBus()
+        published_events: list = []
+
+        def capture_event(event: Event) -> None:
+            published_events.append(event)
+
+        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
+        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
+
+        # 创建散户 Agent
+        agent = RetailAgent(
+            agent_id=1,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 测试 MARKET_BUY
+        published_events.clear()
+        agent.execute_action(ActionType.MARKET_BUY, {"quantity": 15.0}, event_bus)
+        assert len(published_events) == 1
+        assert published_events[0].event_type == EventType.ORDER_PLACED
+        assert published_events[0].data["order"].order_type.value == OrderType.MARKET
+
+        # 测试 MARKET_SELL
+        published_events.clear()
+        agent.execute_action(ActionType.MARKET_SELL, {"quantity": 25.0}, event_bus)
+        assert len(published_events) == 1
+        assert published_events[0].event_type == EventType.ORDER_PLACED
+
+        # 测试 CANCEL
+        agent.account.pending_order_id = 12345
+        published_events.clear()
+        agent.execute_action(ActionType.CANCEL, {}, event_bus)
+        assert len(published_events) == 1
+        assert published_events[0].event_type == EventType.ORDER_CANCELLED
+
+        # 测试 HOLD
+        published_events.clear()
+        agent.execute_action(ActionType.HOLD, {}, event_bus)
+        assert len(published_events) == 0
