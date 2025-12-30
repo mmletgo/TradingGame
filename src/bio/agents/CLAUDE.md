@@ -48,22 +48,31 @@ Agent 基类，提供通用属性和方法。
 处理成交事件。由于已使用定向发送机制，事件必然与本 Agent 相关，无需过滤。
 
 #### `observe(market_state: NormalizedMarketState, orderbook: OrderBook) -> list[float]`
-从预计算的市场状态构建神经网络输入：
+从预计算的市场状态构建神经网络输入。使用 `np.concatenate` 一次性拼接所有数组，避免多次 `tolist()` 和 `list.extend()` 操作，减少内存拷贝和 Python 循环开销：
 1. 买盘数据 - 200 个（100档 x 2：价格归一化 + 数量）
 2. 卖盘数据 - 200 个（100档 x 2：价格归一化 + 数量）
 3. 成交数据 - 200 个（100笔价格 + 100笔数量带方向）
 4. 持仓信息 - 4 个（持仓归一化、均价归一化、余额归一化、净值归一化）
 5. 挂单信息 - 散户/庄家 3 个，做市商 30 个（见下方说明）
 
-#### `_get_position_inputs(mid_price: float) -> list[float]`
-获取持仓信息输入（4 个值）。
+#### `_get_position_inputs(mid_price: float) -> np.ndarray`
+获取持仓信息输入（4 个值），返回 NumPy 数组以支持高效拼接。
 
-#### `_get_pending_order_inputs(mid_price: float, orderbook: OrderBook) -> list[float]`
-获取挂单信息输入。基类返回 3 个值（单挂单），做市商重写返回 30 个值（5 买单 + 5 卖单，每单 3 个值）。
+#### `_get_pending_order_inputs(mid_price: float, orderbook: OrderBook) -> np.ndarray`
+获取挂单信息输入，返回 NumPy 数组。基类返回 3 个值（单挂单），做市商重写返回 30 个值（5 买单 + 5 卖单，每单 3 个值）。做市商实现使用预分配数组 `np.zeros(30)` 避免动态扩展。
 
 **做市商挂单信息（30 个值）：**
 - 买单 5 个位置 x 3 = 15（价格归一化、数量、有效标志）
 - 卖单 5 个位置 x 3 = 15（价格归一化、数量、有效标志）
+
+#### `_fill_order_inputs(inputs, order_ids, offset, mid_price, orderbook) -> None` (做市商私有)
+填充订单输入数组的辅助方法。将指定订单列表的信息填充到输入数组的指定偏移位置。
+
+#### `_cancel_all_orders(event_bus) -> None` (做市商私有)
+撤销做市商所有买卖挂单，清空 `bid_order_ids` 和 `ask_order_ids` 列表。
+
+#### `_place_quote_orders(orders, side, order_ids, event_bus) -> None` (做市商私有)
+挂限价单并记录订单ID到指定列表。被 `execute_action` 的 QUOTE 动作调用。
 
 #### `decide(market_state: NormalizedMarketState, orderbook: OrderBook) -> tuple[ActionType, dict[str, Any]]`
 决策下一步动作。如果已被强平（`is_liquidated=True`），直接返回 HOLD。否则接收预计算的市场状态，调用 `observe` 获取神经网络输入，前向传播得到输出，解析为动作类型和参数。
@@ -73,8 +82,14 @@ Agent 基类，提供通用属性和方法。
 - 输出[7]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
 - 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
 
+#### `_place_limit_order(side: OrderSide, price: float, quantity: float, event_bus: EventBus) -> None`
+创建并发布限价单的私有辅助方法。被 `execute_action` 中的 PLACE_BID 和 PLACE_ASK 动作调用。
+
+#### `_place_market_order(side: OrderSide, quantity: float, event_bus: EventBus) -> None`
+创建并发布市价单的私有辅助方法。被 `execute_action` 中的 MARKET_BUY、MARKET_SELL 和 CLEAR_POSITION 动作调用。
+
 #### `execute_action(action, params, event_bus) -> None`
-执行动作。如果已被强平（`is_liquidated=True`），不执行任何动作直接返回。否则根据动作类型发布订单事件到事件总线。
+执行动作。如果已被强平（`is_liquidated=True`），不执行任何动作直接返回。否则根据动作类型调用 `_place_limit_order` 或 `_place_market_order` 发布订单事件到事件总线。
 
 #### `reset(config: AgentConfig) -> None`
 重置 Agent 状态。使用 `unsubscribe_with_id` 取消订阅，重置账户，然后重新订阅，并将 `is_liquidated` 重置为 False。

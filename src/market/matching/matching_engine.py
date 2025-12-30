@@ -4,7 +4,14 @@
 负责订单撮合的核心逻辑，管理订单簿，处理订单提交、撤销和撮合。
 """
 
+from typing import TYPE_CHECKING, Callable
+
 from src.config.config import MarketConfig
+
+if TYPE_CHECKING:
+    from src.market.orderbook.order import Order, OrderSide
+    from src.market.matching.trade import Trade
+
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
 from src.core.log_engine.logger import get_logger
@@ -118,18 +125,23 @@ class MatchingEngine:
         rate = maker_rate if is_maker else taker_rate
         return amount * rate
 
-    def match_limit_order(self, order: "Order") -> list["Trade"]:
+    def _match_orders(
+        self,
+        order: "Order",
+        price_check: Callable[[float, float, "OrderSide"], bool] | None = None,
+    ) -> tuple[list["Trade"], float]:
         """
-        限价单撮合
+        通用撮合逻辑
 
-        根据价格优先、时间优先的原则，将限价单与对手盘进行撮合。
-        无法完全成交的剩余部分挂在订单簿上。
+        根据价格优先、时间优先的原则，将订单与对手盘进行撮合。
 
         Args:
-            order: 限价订单对象
+            order: 订单对象
+            price_check: 价格检查函数，接收 (order_price, best_price, order_side)，返回是否可以继续撮合
+                        如果为 None，则不进行价格检查（市价单行为）
 
         Returns:
-            本次撮合产生的所有成交记录列表
+            (trades, remaining): 成交列表和剩余数量
         """
         from src.market.orderbook.order import OrderSide
         from src.market.matching.trade import Trade
@@ -141,14 +153,20 @@ class MatchingEngine:
             if order.side == OrderSide.BUY:
                 # 买单与卖盘撮合
                 best_price = self._orderbook.get_best_ask()
-                if best_price is None or order.price < best_price:
-                    break  # 无法撮合，价格不满足
+                if best_price is None:
+                    break  # 对手盘为空
+                # 价格检查（限价单需要检查，市价单不检查）
+                if price_check is not None and not price_check(order.price, best_price, order.side):
+                    break
                 side_book = self._orderbook.asks
             else:  # OrderSide.SELL
                 # 卖单与买盘撮合
                 best_price = self._orderbook.get_best_bid()
-                if best_price is None or order.price > best_price:
-                    break  # 无法撮合，价格不满足
+                if best_price is None:
+                    break  # 对手盘为空
+                # 价格检查（限价单需要检查，市价单不检查）
+                if price_check is not None and not price_check(order.price, best_price, order.side):
+                    break
                 side_book = self._orderbook.bids
 
             # 获取该价格档位
@@ -173,16 +191,15 @@ class MatchingEngine:
                 trade_price = maker_order.price
 
                 # 确定买卖方和手续费类型
+                # 新订单是 taker，对手盘是 maker
                 if order.side == OrderSide.BUY:
                     buyer_id = order.agent_id
                     seller_id = maker_order.agent_id
-                    # 新订单是 taker，对手盘是 maker
                     buyer_fee = self.calculate_fee(buyer_id, trade_price * trade_qty, is_maker=False)
                     seller_fee = self.calculate_fee(seller_id, trade_price * trade_qty, is_maker=True)
                 else:  # OrderSide.SELL
                     buyer_id = maker_order.agent_id
                     seller_id = order.agent_id
-                    # 对手盘是 maker，新订单是 taker
                     buyer_fee = self.calculate_fee(buyer_id, trade_price * trade_qty, is_maker=True)
                     seller_fee = self.calculate_fee(seller_id, trade_price * trade_qty, is_maker=False)
 
@@ -213,6 +230,32 @@ class MatchingEngine:
             if best_price not in side_book:
                 continue  # 档位已空，继续下一个价格
 
+        return trades, remaining
+
+    def match_limit_order(self, order: "Order") -> list["Trade"]:
+        """
+        限价单撮合
+
+        根据价格优先、时间优先的原则，将限价单与对手盘进行撮合。
+        无法完全成交的剩余部分挂在订单簿上。
+
+        Args:
+            order: 限价订单对象
+
+        Returns:
+            本次撮合产生的所有成交记录列表
+        """
+        from src.market.orderbook.order import OrderSide
+
+        def limit_price_check(order_price: float, best_price: float, side: "OrderSide") -> bool:
+            """限价单价格检查：买单价格 >= 卖一价，卖单价格 <= 买一价"""
+            if side == OrderSide.BUY:
+                return order_price >= best_price
+            else:
+                return order_price <= best_price
+
+        trades, remaining = self._match_orders(order, limit_price_check)
+
         # 如果有剩余数量，挂在订单簿上
         if remaining > 0:
             # 更新订单数量为剩余数量，重置已成交数量（新挂单状态）
@@ -236,94 +279,8 @@ class MatchingEngine:
         Returns:
             本次撮合产生的所有成交记录列表
         """
-        from src.market.orderbook.order import OrderSide
-        from src.market.matching.trade import Trade
-
-        trades: list[Trade] = []
-        remaining = order.quantity - order.filled_quantity
-
-        while remaining > 0:
-            if order.side == OrderSide.BUY:
-                # 买单吃卖盘
-                best_price = self._orderbook.get_best_ask()
-                if best_price is None:
-                    break  # 卖盘为空，无法继续撮合
-                side_book = self._orderbook.asks
-            else:  # OrderSide.SELL
-                # 卖单吃买盘
-                best_price = self._orderbook.get_best_bid()
-                if best_price is None:
-                    break  # 买盘为空，无法继续撮合
-                side_book = self._orderbook.bids
-
-            # 获取该价格档位
-            if best_price not in side_book:
-                continue
-
-            price_level = side_book[best_price]
-
-            # 遍历该价格档位的订单（按时间优先顺序）
-            for maker_order in list(price_level.orders.values()):
-                if remaining <= 0:
-                    break
-
-                # 计算对手订单剩余数量
-                maker_remaining = maker_order.quantity - maker_order.filled_quantity
-                if maker_remaining <= 0:
-                    continue
-
-                # 计算成交量
-                trade_qty = min(remaining, maker_remaining)
-
-                # 成交价格 = maker订单价格（对手盘价格）
-                trade_price = maker_order.price
-
-                # 确定买卖方和手续费类型
-                # 市价单永远是 taker，对手盘是 maker
-                if order.side == OrderSide.BUY:
-                    buyer_id = order.agent_id
-                    seller_id = maker_order.agent_id
-                    buyer_fee = self.calculate_fee(
-                        buyer_id, trade_price * trade_qty, is_maker=False
-                    )
-                    seller_fee = self.calculate_fee(
-                        seller_id, trade_price * trade_qty, is_maker=True
-                    )
-                else:  # OrderSide.SELL
-                    buyer_id = maker_order.agent_id
-                    seller_id = order.agent_id
-                    buyer_fee = self.calculate_fee(
-                        buyer_id, trade_price * trade_qty, is_maker=True
-                    )
-                    seller_fee = self.calculate_fee(
-                        seller_id, trade_price * trade_qty, is_maker=False
-                    )
-
-                # 创建成交记录
-                trade = Trade(
-                    trade_id=self._next_trade_id,
-                    price=trade_price,
-                    quantity=trade_qty,
-                    buyer_id=buyer_id,
-                    seller_id=seller_id,
-                    buyer_fee=buyer_fee,
-                    seller_fee=seller_fee,
-                    is_buyer_taker=(order.side == OrderSide.BUY),
-                )
-                self._next_trade_id += 1
-                trades.append(trade)
-
-                # 更新已成交数量
-                order.filled_quantity += trade_qty
-                maker_order.filled_quantity += trade_qty
-                remaining -= trade_qty
-
-                # 如果 maker 订单完全成交，从订单簿移除
-                if maker_order.filled_quantity >= maker_order.quantity:
-                    self._orderbook.cancel_order(maker_order.order_id)
-
-        # 市价单剩余部分不挂单，直接丢弃
-
+        # 市价单不检查价格，price_check 为 None
+        trades, _ = self._match_orders(order, None)
         return trades
 
     def process_order(self, order: "Order") -> list["Trade"]:

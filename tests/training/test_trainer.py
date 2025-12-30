@@ -114,7 +114,7 @@ class TestTrainerInit:
         """初始化时最近成交列表为空"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
-        assert trainer.recent_trades == []
+        assert len(trainer.recent_trades) == 0
 
 
 class TestTrainerSetup:
@@ -361,6 +361,9 @@ class TestTrainerRunTick:
         mock_engine = MagicMock()
         mock_orderbook = MagicMock()
         mock_orderbook.last_price = 100.0
+        mock_orderbook.tick_size = 0.1
+        mock_orderbook.get_mid_price.return_value = 100.0
+        mock_orderbook.get_depth.return_value = {"bids": [], "asks": []}
         mock_engine._orderbook = mock_orderbook
         mock_matching_engine_class.return_value = mock_engine
 
@@ -392,6 +395,9 @@ class TestTrainerRunTick:
         mock_engine = MagicMock()
         mock_orderbook = MagicMock()
         mock_orderbook.last_price = 100.0
+        mock_orderbook.tick_size = 0.1
+        mock_orderbook.get_mid_price.return_value = 100.0
+        mock_orderbook.get_depth.return_value = {"bids": [], "asks": []}
         mock_engine._orderbook = mock_orderbook
         mock_matching_engine_class.return_value = mock_engine
 
@@ -452,9 +458,12 @@ class TestTrainerRunEpisode:
         mock_engine = MagicMock()
         mock_orderbook = MagicMock()
         mock_orderbook.last_price = 100.0
+        mock_orderbook.tick_size = 0.1
         mock_orderbook.bids = {}
         mock_orderbook.asks = {}
         mock_orderbook.order_map = {}
+        mock_orderbook.get_mid_price.return_value = 100.0
+        mock_orderbook.get_depth.return_value = {"bids": [], "asks": []}
         mock_engine._orderbook = mock_orderbook
         mock_matching_engine_class.return_value = mock_engine
 
@@ -487,9 +496,12 @@ class TestTrainerRunEpisode:
         mock_engine = MagicMock()
         mock_orderbook = MagicMock()
         mock_orderbook.last_price = 100.0
+        mock_orderbook.tick_size = 0.1
         mock_orderbook.bids = {}
         mock_orderbook.asks = {}
         mock_orderbook.order_map = {}
+        mock_orderbook.get_mid_price.return_value = 100.0
+        mock_orderbook.get_depth.return_value = {"bids": [], "asks": []}
         mock_engine._orderbook = mock_orderbook
         mock_matching_engine_class.return_value = mock_engine
 
@@ -599,9 +611,12 @@ class TestTrainerTrain:
         mock_engine = MagicMock()
         mock_orderbook = MagicMock()
         mock_orderbook.last_price = 100.0
+        mock_orderbook.tick_size = 0.1
         mock_orderbook.bids = {}
         mock_orderbook.asks = {}
         mock_orderbook.order_map = {}
+        mock_orderbook.get_mid_price.return_value = 100.0
+        mock_orderbook.get_depth.return_value = {"bids": [], "asks": []}
         mock_engine._orderbook = mock_orderbook
         mock_matching_engine_class.return_value = mock_engine
 
@@ -639,9 +654,12 @@ class TestTrainerTrain:
         mock_engine = MagicMock()
         mock_orderbook = MagicMock()
         mock_orderbook.last_price = 100.0
+        mock_orderbook.tick_size = 0.1
         mock_orderbook.bids = {}
         mock_orderbook.asks = {}
         mock_orderbook.order_map = {}
+        mock_orderbook.get_mid_price.return_value = 100.0
+        mock_orderbook.get_depth.return_value = {"bids": [], "asks": []}
         mock_engine._orderbook = mock_orderbook
         mock_matching_engine_class.return_value = mock_engine
 

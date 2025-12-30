@@ -44,11 +44,16 @@
 #### `calculate_fee(agent_id: int, amount: float, is_maker: bool) -> float`
 计算手续费。未注册的 Agent 使用默认散户费率。
 
+#### `_match_orders(order: Order, price_check: Callable | None) -> tuple[list[Trade], float]`
+通用撮合逻辑（私有方法）。根据价格优先、时间优先原则与对手盘进行撮合。
+- `price_check`: 价格检查函数，接收 `(order_price, best_price, order_side)`，返回是否可以继续撮合。为 `None` 时不进行价格检查（市价单行为）。
+- 返回值: `(trades, remaining)` - 成交列表和剩余数量。
+
 #### `match_limit_order(order: Order) -> list[Trade]`
-限价单撮合。价格优先、时间优先原则，未成交部分挂在订单簿上。
+限价单撮合。内部调用 `_match_orders` 并传入价格检查函数（买单价格 >= 卖一价，卖单价格 <= 买一价），未成交部分挂在订单簿上。
 
 #### `match_market_order(order: Order) -> list[Trade]`
-市价单撮合。吃对手盘直到完全成交或对手盘为空，未成交部分直接丢弃。
+市价单撮合。内部调用 `_match_orders` 且不进行价格检查，吃对手盘直到完全成交或对手盘为空，未成交部分直接丢弃。
 
 #### `process_order(order: Order) -> list[Trade]`
 处理订单入口，根据订单类型调用对应撮合函数，并发布成交事件。

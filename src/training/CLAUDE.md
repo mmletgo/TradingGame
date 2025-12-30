@@ -43,12 +43,21 @@
 **关键方法：**
 - `setup()` - 初始化训练环境
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
+- `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
+- `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->散户）
 - `_on_liquidation()` - 处理强平事件，提交市价单平仓并标记 Agent 已被强平
-- `_mark_agent_liquidated()` - 标记指定 Agent 已被强平，本轮 episode 禁用
-- `run_tick()` - 执行单个 tick（按做市商->庄家->散户顺序）
+- `_mark_agent_liquidated()` - 通过映射表 O(1) 查找并标记 Agent 已被强平
+- `_compute_normalized_market_state()` - 向量化计算归一化市场状态
+- `run_tick()` - 执行单个 tick，使用预构建的执行顺序列表
 - `run_episode()` - 运行完整 episode（重置、运行、进化）
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
+
+**性能优化：**
+- 使用 `deque(maxlen=100)` 自动管理成交记录，避免列表切片开销
+- 使用 `agent_map` 映射表实现 O(1) Agent 查找
+- 使用 `agent_execution_order` 预构建执行顺序，合并决策/执行和强平检查循环
+- 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
 
 ## 训练流程
 
@@ -57,6 +66,7 @@
    - 创建撮合引擎
    - 订阅成交和强平事件
    - 注册所有 Agent 的费率到撮合引擎
+   - 构建 Agent 映射表和执行顺序
    - 做市商建立初始流动性
 
 2. **Episode 循环** (`run_episode`)
@@ -64,12 +74,15 @@
    - 重置市场状态
    - 运行 episode_length 个 tick
    - 各种群进化
-   - 进化后重新注册新 Agent 的费率
+   - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
 3. **Tick 执行** (`run_tick`)
    - 发布 TICK_START 事件
-   - 按顺序执行：做市商 -> 庄家 -> 散户
-   - 检查强平条件（被强平的 Agent 会被标记，本轮 episode 禁用）
+   - 向量化计算归一化市场状态
+   - 使用预构建的执行顺序列表遍历所有 Agent：
+     - 决策（传入市场状态和订单簿）
+     - 执行动作
+     - 检查强平条件
    - 发布 TICK_END 事件
 
 ## 强平机制

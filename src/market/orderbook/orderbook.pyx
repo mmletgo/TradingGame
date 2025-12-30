@@ -8,6 +8,8 @@
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+from sortedcontainers import SortedDict
+
 from src.market.orderbook.order import OrderSide
 
 if TYPE_CHECKING:
@@ -78,8 +80,8 @@ cdef class OrderBook:
     维护买卖盘价格档位，支持 O(1) 订单查找。
     """
 
-    cdef public dict bids  # 买盘: price -> PriceLevel
-    cdef public dict asks  # 卖盘: price -> PriceLevel
+    cdef public object bids  # 买盘: SortedDict[price -> PriceLevel]，升序排列
+    cdef public object asks  # 卖盘: SortedDict[price -> PriceLevel]，升序排列
     cdef public dict order_map  # order_id -> Order
     cdef public double last_price
     cdef public double tick_size
@@ -91,8 +93,8 @@ cdef class OrderBook:
         Args:
             tick_size: 最小变动单位
         """
-        self.bids = {}  # 买盘
-        self.asks = {}  # 卖盘
+        self.bids = SortedDict()  # 买盘，升序排列，最大键在末尾
+        self.asks = SortedDict()  # 卖盘，升序排列，最小键在开头
         self.order_map = {}  # 订单ID映射
         self.last_price = 0.0  # 最新价
         self.tick_size = tick_size
@@ -163,26 +165,28 @@ cdef class OrderBook:
         """
         获取最优买价
 
-        返回买盘最高价，无买单返回 None
+        返回买盘最高价，无买单返回 None。
+        使用 SortedDict.peekitem(-1) 获取最大键，时间复杂度 O(1)。
 
         Returns:
             买盘最高价格，如果买盘为空则返回 None
         """
         if self.bids:
-            return max(self.bids.keys())
+            return self.bids.peekitem(-1)[0]
         return None
 
     def get_best_ask(self) -> float | None:
         """
         获取最优卖价
 
-        返回卖盘最低价，无卖单返回 None
+        返回卖盘最低价，无卖单返回 None。
+        使用 SortedDict.peekitem(0) 获取最小键，时间复杂度 O(1)。
 
         Returns:
             卖盘最低价格，如果卖盘为空则返回 None
         """
         if self.asks:
-            return min(self.asks.keys())
+            return self.asks.peekitem(0)[0]
         return None
 
     def get_mid_price(self) -> float | None:
@@ -206,6 +210,7 @@ cdef class OrderBook:
         获取盘口深度
 
         返回买卖各 N 档的价格和数量。买盘从高到低，卖盘从低到高。
+        利用 SortedDict 已排序特性，避免每次调用都排序，时间复杂度从 O(n log n) 降为 O(levels)。
 
         Args:
             levels: 获取的档位数，默认 100
@@ -214,12 +219,17 @@ cdef class OrderBook:
             {"bids": [(price, quantity), ...], "asks": [(price, quantity), ...]}
             买盘按价格降序排列，卖盘按价格升序排列
         """
-        # 买盘：按价格从高到低排序，取前 levels 档
-        bid_prices = sorted(self.bids.keys(), reverse=True)[:levels]
+        # 买盘：SortedDict 升序排列，取最后 levels 个并反转得到降序
+        # 使用切片获取最后 levels 个键，然后反转
+        bid_keys = self.bids.keys()
+        bid_count = len(bid_keys)
+        start_idx = max(0, bid_count - levels)
+        bid_prices = list(bid_keys[start_idx:])[::-1]  # 反转为降序
         bids = [(price, self.bids[price].get_volume()) for price in bid_prices]
 
-        # 卖盘：按价格从低到高排序，取前 levels 档
-        ask_prices = sorted(self.asks.keys())[:levels]
+        # 卖盘：SortedDict 升序排列，直接取前 levels 个
+        ask_keys = self.asks.keys()
+        ask_prices = list(ask_keys[:levels])
         asks = [(price, self.asks[price].get_volume()) for price in ask_prices]
 
         return {"bids": bids, "asks": asks}
@@ -229,12 +239,13 @@ cdef class OrderBook:
         清空订单簿
 
         清空所有买卖盘和订单映射，可选地重置最新价。
+        重新初始化 SortedDict 以确保完全清空。
 
         Args:
             reset_price: 重置后的最新价，如果为 None 则保持当前值
         """
-        self.bids.clear()
-        self.asks.clear()
+        self.bids = SortedDict()
+        self.asks = SortedDict()
         self.order_map.clear()
         if reset_price is not None:
             self.last_price = reset_price

@@ -5,13 +5,17 @@
 
 import pickle
 import time
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from src.bio.agents.base import AgentType
+
+if TYPE_CHECKING:
+    from src.bio.agents.base import Agent
 from src.config.config import Config
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
@@ -48,7 +52,9 @@ class Trainer:
     episode: int
     is_running: bool
     is_paused: bool
-    recent_trades: list[Trade]
+    recent_trades: deque[Trade]
+    agent_map: dict[int, "Agent"]
+    agent_execution_order: list["Agent"]
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -67,7 +73,9 @@ class Trainer:
 
         self.populations = {}
         self.matching_engine = None
-        self.recent_trades = []
+        self.recent_trades = deque(maxlen=100)
+        self.agent_map = {}
+        self.agent_execution_order = []
 
     def setup(self) -> None:
         """初始化训练环境
@@ -92,6 +100,10 @@ class Trainer:
         # 注册所有 Agent 的费率
         self._register_all_agents()
 
+        # 构建 Agent 映射表和执行顺序
+        self._build_agent_map()
+        self._build_execution_order()
+
         # 初始化市场（做市商先行动）
         self._init_market()
 
@@ -115,6 +127,21 @@ class Trainer:
                     agent_config.taker_fee_rate,
                 )
 
+    def _build_agent_map(self) -> None:
+        """构建 Agent ID 到 Agent 对象的映射表"""
+        self.agent_map.clear()
+        for population in self.populations.values():
+            for agent in population.agents:
+                self.agent_map[agent.agent_id] = agent
+
+    def _build_execution_order(self) -> None:
+        """构建 Agent 执行顺序列表（做市商 -> 庄家 -> 散户）"""
+        self.agent_execution_order.clear()
+        for agent_type in [AgentType.MARKET_MAKER, AgentType.WHALE, AgentType.RETAIL]:
+            population = self.populations.get(agent_type)
+            if population:
+                self.agent_execution_order.extend(population.agents)
+
     def _on_trade(self, event: Event) -> None:
         """处理成交事件，记录最近成交
 
@@ -132,10 +159,8 @@ class Trainer:
             seller_fee=data.get("seller_fee", 0.0),
             is_buyer_taker=data.get("is_buyer_taker", True),
         )
+        # deque(maxlen=100) 自动丢弃旧数据
         self.recent_trades.append(trade)
-        # 保留最近 100 笔
-        if len(self.recent_trades) > 100:
-            self.recent_trades = self.recent_trades[-100:]
 
     def _on_liquidation(self, event: Event) -> None:
         """处理强平事件，提交市价单平仓"""
@@ -163,13 +188,10 @@ class Trainer:
         Args:
             agent_id: 被强平的 Agent ID
         """
-        for population in self.populations.values():
-            for agent in population.agents:
-                if agent.agent_id == agent_id:
-                    if not agent.is_liquidated:
-                        agent.is_liquidated = True
-                        self.logger.info(f"Agent {agent_id} 已被强平，本轮 episode 禁用")
-                    return
+        agent = self.agent_map.get(agent_id)
+        if agent and not agent.is_liquidated:
+            agent.is_liquidated = True
+            self.logger.info(f"Agent {agent_id} 已被强平，本轮 episode 禁用")
 
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
         """预计算归一化的公共市场数据
@@ -191,26 +213,42 @@ class Trainer:
         tick_size = orderbook.tick_size
         depth = orderbook.get_depth(levels=100)
 
-        # 归一化买盘：100档 × 2 = 200
+        # 向量化买盘：100档 × 2 = 200
         bid_data = np.zeros(200, dtype=np.float32)
-        for i, (price, qty) in enumerate(depth["bids"]):
-            bid_data[i * 2] = (price - mid_price) / mid_price if mid_price > 0 else 0
-            bid_data[i * 2 + 1] = qty
+        bids = depth["bids"]
+        if bids:
+            bid_prices = np.array([p for p, _ in bids], dtype=np.float32)
+            bid_qtys = np.array([q for _, q in bids], dtype=np.float32)
+            n = len(bids)
+            if mid_price > 0:
+                bid_data[0 : n * 2 : 2] = (bid_prices - mid_price) / mid_price
+            bid_data[1 : n * 2 : 2] = bid_qtys
 
-        # 归一化卖盘：100档 × 2 = 200
+        # 向量化卖盘：100档 × 2 = 200
         ask_data = np.zeros(200, dtype=np.float32)
-        for i, (price, qty) in enumerate(depth["asks"]):
-            ask_data[i * 2] = (price - mid_price) / mid_price if mid_price > 0 else 0
-            ask_data[i * 2 + 1] = qty
+        asks = depth["asks"]
+        if asks:
+            ask_prices = np.array([p for p, _ in asks], dtype=np.float32)
+            ask_qtys = np.array([q for _, q in asks], dtype=np.float32)
+            n = len(asks)
+            if mid_price > 0:
+                ask_data[0 : n * 2 : 2] = (ask_prices - mid_price) / mid_price
+            ask_data[1 : n * 2 : 2] = ask_qtys
 
-        # 归一化成交：100笔（数量带方向：正=taker买入，负=taker卖出）
+        # 向量化成交：100笔（数量带方向：正=taker买入，负=taker卖出）
         trade_prices = np.zeros(100, dtype=np.float32)
         trade_quantities = np.zeros(100, dtype=np.float32)
-
-        for i, trade in enumerate(self.recent_trades[:100]):
-            trade_prices[i] = (trade.price - mid_price) / mid_price if mid_price > 0 else 0
-            # 用正负表示方向：正数=taker买入，负数=taker卖出
-            trade_quantities[i] = trade.quantity if trade.is_buyer_taker else -trade.quantity
+        trades = list(self.recent_trades)  # deque 转换为 list
+        if trades:
+            prices = np.array([t.price for t in trades], dtype=np.float32)
+            qtys = np.array(
+                [t.quantity if t.is_buyer_taker else -t.quantity for t in trades],
+                dtype=np.float32,
+            )
+            n = len(trades)
+            if mid_price > 0:
+                trade_prices[:n] = (prices - mid_price) / mid_price
+            trade_quantities[:n] = qtys
 
         return NormalizedMarketState(
             mid_price=mid_price,
@@ -280,23 +318,17 @@ class Trainer:
 
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
-
-        # 按顺序执行：做市商->庄家->散户
-        for agent_type in [AgentType.MARKET_MAKER, AgentType.WHALE, AgentType.RETAIL]:
-            population = self.populations.get(agent_type)
-            if population:
-                for agent in population.agents:
-                    # 决策（传入预计算的市场状态和订单簿）
-                    action, params = agent.decide(market_state, orderbook)
-                    # 执行
-                    agent.execute_action(action, params, self.event_bus)
-
-        # 检查强平
         current_price = orderbook.last_price
-        for population in self.populations.values():
-            for agent in population.agents:
-                if agent.account.check_liquidation(current_price):
-                    agent.account.liquidate(current_price, self.event_bus)
+
+        # 使用预构建的执行顺序列表，合并决策/执行和强平检查
+        for agent in self.agent_execution_order:
+            # 决策（传入预计算的市场状态和订单簿）
+            action, params = agent.decide(market_state, orderbook)
+            # 执行
+            agent.execute_action(action, params, self.event_bus)
+            # 检查强平
+            if agent.account.check_liquidation(current_price):
+                agent.account.liquidate(current_price, self.event_bus)
 
         # 发布 TICK_END 事件
         self.event_bus.publish(
@@ -338,8 +370,10 @@ class Trainer:
             for population in self.populations.values():
                 population.evolve(current_price)
 
-            # 进化后重新注册新 Agent 的费率
+            # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
             self._register_all_agents()
+            self._build_agent_map()
+            self._build_execution_order()
 
             self.logger.info(f"Episode {self.episode} 完成，tick={self.tick}")
 
@@ -434,8 +468,10 @@ class Trainer:
                 genomes = list(pop.neat_pop.population.items())
                 pop.agents = pop.create_agents(genomes, self.event_bus)
 
-        # 注册恢复的 Agent 费率
+        # 注册恢复的 Agent 费率，重建映射表和执行顺序
         self._register_all_agents()
+        self._build_agent_map()
+        self._build_execution_order()
 
         self.logger.info(f"检查点已加载: {path}")
 

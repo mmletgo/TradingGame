@@ -3,10 +3,11 @@
 本模块定义 Agent 基类，是所有 AI Agent（散户、庄家、做市商）的父类。
 """
 
-import hashlib
 import time
 from enum import Enum
 from typing import Any
+
+import numpy as np
 
 from src.config.config import AgentConfig, AgentType
 from src.core.event_engine.events import Event, EventType
@@ -52,6 +53,7 @@ class Agent:
     brain: Brain
     account: Account
     is_liquidated: bool
+    _order_counter: int
 
     def __init__(
         self,
@@ -83,6 +85,9 @@ class Agent:
 
         # 初始化强平标志
         self.is_liquidated = False
+
+        # 初始化订单计数器
+        self._order_counter = 0
 
     def _on_trade_event(self, event: Event) -> None:
         """处理成交事件（已定向发送，无需过滤）
@@ -117,28 +122,18 @@ class Agent:
         Returns:
             神经网络输入向量
         """
-        inputs: list[float] = []
+        # 使用 NumPy concatenate 一次性拼接所有数组，避免多次 tolist() 和 list.extend()
+        inputs = np.concatenate([
+            market_state.bid_data,           # 买盘 - 200 个
+            market_state.ask_data,           # 卖盘 - 200 个
+            market_state.trade_prices,       # 成交价格 - 100 个
+            market_state.trade_quantities,   # 成交数量（带方向）- 100 个
+            self._get_position_inputs(market_state.mid_price),           # 持仓信息 - 4 个
+            self._get_pending_order_inputs(market_state.mid_price, orderbook),  # 挂单信息 - 3 个（子类可重写）
+        ])
+        return inputs.tolist()  # 只做一次 tolist 转换
 
-        # 1. 买盘（直接使用预计算值）- 200 个
-        inputs.extend(market_state.bid_data.tolist())
-
-        # 2. 卖盘（直接使用预计算值）- 200 个
-        inputs.extend(market_state.ask_data.tolist())
-
-        # 3. 成交（价格 + 数量带方向）- 200 个
-        # 数量正负表示方向：正=taker买入，负=taker卖出
-        inputs.extend(market_state.trade_prices.tolist())
-        inputs.extend(market_state.trade_quantities.tolist())
-
-        # 4. 持仓信息 - 4 个
-        inputs.extend(self._get_position_inputs(market_state.mid_price))
-
-        # 5. 挂单信息 - 3 个（子类可重写）
-        inputs.extend(self._get_pending_order_inputs(market_state.mid_price, orderbook))
-
-        return inputs
-
-    def _get_position_inputs(self, mid_price: float) -> list[float]:
+    def _get_position_inputs(self, mid_price: float) -> np.ndarray:
         """获取持仓信息输入（4 个值）
 
         Args:
@@ -147,8 +142,6 @@ class Agent:
         Returns:
             持仓信息输入向量 [持仓归一化, 均价归一化, 余额归一化, 净值归一化]
         """
-        inputs: list[float] = []
-
         # 持仓价值归一化
         equity = self.account.get_equity(mid_price)
         position_value = abs(self.account.position.quantity) * mid_price
@@ -156,27 +149,23 @@ class Agent:
             position_norm = position_value / (equity * self.account.leverage)
         else:
             position_norm = 0.0
-        inputs.append(position_norm)
 
         # 持仓均价归一化
         if self.account.position.quantity == 0:
-            inputs.append(0.0)
+            avg_price_norm = 0.0
         else:
-            avg_price_norm = (self.account.position.avg_price - mid_price) / mid_price if mid_price > 0 else 0
-            inputs.append(avg_price_norm)
+            avg_price_norm = (self.account.position.avg_price - mid_price) / mid_price if mid_price > 0 else 0.0
 
         # 余额归一化
         initial_balance = self.account.initial_balance
-        balance_norm = self.account.balance / initial_balance if initial_balance > 0 else 0
-        inputs.append(balance_norm)
+        balance_norm = self.account.balance / initial_balance if initial_balance > 0 else 0.0
 
         # 净值归一化
-        equity_norm = equity / initial_balance if initial_balance > 0 else 0
-        inputs.append(equity_norm)
+        equity_norm = equity / initial_balance if initial_balance > 0 else 0.0
 
-        return inputs
+        return np.array([position_norm, avg_price_norm, balance_norm, equity_norm], dtype=np.float64)
 
-    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> list[float]:
+    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> np.ndarray:
         """获取挂单信息输入（3 个值：价格归一化、数量、方向）
 
         子类可重写此方法以支持不同的挂单格式。
@@ -190,15 +179,15 @@ class Agent:
         """
         pending_id = self.account.pending_order_id
         if pending_id is None:
-            return [0.0, 0.0, 0.0]
+            return np.array([0.0, 0.0, 0.0], dtype=np.float64)
 
         order = orderbook.order_map.get(pending_id)
         if order is None:
-            return [0.0, 0.0, 0.0]
+            return np.array([0.0, 0.0, 0.0], dtype=np.float64)
 
-        price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0
+        price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0.0
         direction = 1.0 if order.side == OrderSide.BUY else -1.0
-        return [price_norm, float(order.quantity), direction]
+        return np.array([price_norm, float(order.quantity), direction], dtype=np.float64)
 
     def decide(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> tuple[ActionType, dict[str, Any]]:
         """决策下一步动作（接收预计算的市场状态）
@@ -325,6 +314,47 @@ class Agent:
 
         return quantity
 
+    def _place_limit_order(self, side: OrderSide, price: float, quantity: float, event_bus: EventBus) -> None:
+        """创建并发布限价单
+
+        Args:
+            side: 订单方向（买/卖）
+            price: 价格
+            quantity: 数量
+            event_bus: 事件总线
+        """
+        order_id = self._generate_order_id()
+        order = Order(
+            order_id=order_id,
+            agent_id=self.agent_id,
+            side=side,
+            order_type=OrderType.LIMIT,
+            price=price,
+            quantity=quantity,
+        )
+        event = Event(EventType.ORDER_PLACED, time.time(), {"order": order})
+        event_bus.publish(event)
+
+    def _place_market_order(self, side: OrderSide, quantity: float, event_bus: EventBus) -> None:
+        """创建并发布市价单
+
+        Args:
+            side: 订单方向（买/卖）
+            quantity: 数量
+            event_bus: 事件总线
+        """
+        order_id = self._generate_order_id()
+        order = Order(
+            order_id=order_id,
+            agent_id=self.agent_id,
+            side=side,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=quantity,
+        )
+        event = Event(EventType.ORDER_PLACED, time.time(), {"order": order})
+        event_bus.publish(event)
+
     def execute_action(self, action: ActionType, params: dict[str, Any], event_bus: EventBus) -> None:
         """执行动作
 
@@ -339,140 +369,53 @@ class Agent:
                 - CLEAR_POSITION/HOLD: {}
             event_bus: 事件总线
         """
-        # 如果已被强平，不执行任何动作
         if self.is_liquidated:
             return
 
         if action == ActionType.HOLD:
-            # 不动：不做任何操作
             return
 
-        timestamp = time.time()
-
         if action == ActionType.PLACE_BID:
-            # 挂买单：创建限价买单
-            price = params["price"]
-            quantity = params["quantity"]
-            order_id = self._generate_order_id()
-            order = Order(
-                order_id=order_id,
-                agent_id=self.agent_id,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                price=price,
-                quantity=quantity,
-            )
-            event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-            event_bus.publish(event)
+            self._place_limit_order(OrderSide.BUY, params["price"], params["quantity"], event_bus)
 
         elif action == ActionType.PLACE_ASK:
-            # 挂卖单：创建限价卖单
-            price = params["price"]
-            quantity = params["quantity"]
-            order_id = self._generate_order_id()
-            order = Order(
-                order_id=order_id,
-                agent_id=self.agent_id,
-                side=OrderSide.SELL,
-                order_type=OrderType.LIMIT,
-                price=price,
-                quantity=quantity,
-            )
-            event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-            event_bus.publish(event)
+            self._place_limit_order(OrderSide.SELL, params["price"], params["quantity"], event_bus)
 
         elif action == ActionType.CANCEL:
-            # 撤单：从参数中获取订单ID，或使用账户的 pending_order_id
-            order_id = params.get("order_id")
-            if order_id is None:
-                order_id = self.account.pending_order_id
-
+            order_id = params.get("order_id") or self.account.pending_order_id
             if order_id is not None:
                 event = Event(
                     EventType.ORDER_CANCELLED,
-                    timestamp,
+                    time.time(),
                     {"order_id": order_id, "agent_id": self.agent_id},
                 )
                 event_bus.publish(event)
 
         elif action == ActionType.MARKET_BUY:
-            # 市价买入：创建市价买单
-            quantity = params["quantity"]
-            order_id = self._generate_order_id()
-            order = Order(
-                order_id=order_id,
-                agent_id=self.agent_id,
-                side=OrderSide.BUY,
-                order_type=OrderType.MARKET,
-                price=0.0,  # 市价单价格无意义
-                quantity=quantity,
-            )
-            event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-            event_bus.publish(event)
+            self._place_market_order(OrderSide.BUY, params["quantity"], event_bus)
 
         elif action == ActionType.MARKET_SELL:
-            # 市价卖出：创建市价卖单
-            quantity = params["quantity"]
-            order_id = self._generate_order_id()
-            order = Order(
-                order_id=order_id,
-                agent_id=self.agent_id,
-                side=OrderSide.SELL,
-                order_type=OrderType.MARKET,
-                price=0.0,  # 市价单价格无意义
-                quantity=quantity,
-            )
-            event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-            event_bus.publish(event)
+            self._place_market_order(OrderSide.SELL, params["quantity"], event_bus)
 
         elif action == ActionType.CLEAR_POSITION:
-            # 清仓：根据持仓方向发布市价单
             position_qty = self.account.position.quantity
-
             if position_qty > 0:
-                # 有多仓，市价卖出平仓
-                order_id = self._generate_order_id()
-                order = Order(
-                    order_id=order_id,
-                    agent_id=self.agent_id,
-                    side=OrderSide.SELL,
-                    order_type=OrderType.MARKET,
-                    price=0.0,
-                    quantity=position_qty,
-                )
-                event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-                event_bus.publish(event)
-
+                self._place_market_order(OrderSide.SELL, position_qty, event_bus)
             elif position_qty < 0:
-                # 有空仓，市价买入平仓
-                order_id = self._generate_order_id()
-                order = Order(
-                    order_id=order_id,
-                    agent_id=self.agent_id,
-                    side=OrderSide.BUY,
-                    order_type=OrderType.MARKET,
-                    price=0.0,
-                    quantity=abs(position_qty),
-                )
-                event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-                event_bus.publish(event)
-
-            # 持仓为0时不做任何操作
+                self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
 
     def _generate_order_id(self) -> int:
         """生成唯一订单ID
 
-        使用 agent_id 和纳秒级时间戳进行哈希处理，确保多 Agent 并发时的唯一性。
+        使用 agent_id 和递增计数器组合，确保多 Agent 时的唯一性。
+        比 MD5 哈希更高效，适合高频交易场景。
 
         Returns:
             唯一的订单ID（正整数）
         """
-        # 使用 MD5 哈希 agent_id 和纳秒时间戳的组合
-        data = f"{self.agent_id}:{time.time_ns()}".encode()
-        hash_bytes = hashlib.md5(data).digest()
-        # 取前 8 字节转为整数（确保为正数）
-        order_id = int.from_bytes(hash_bytes[:8], byteorder="big", signed=False)
-        return order_id
+        self._order_counter += 1
+        # 组合 agent_id 和计数器：agent_id 占高 32 位，计数器占低 32 位
+        return (self.agent_id << 32) | self._order_counter
 
     def reset(self, config: AgentConfig) -> None:
         """重置 Agent 状态
@@ -493,3 +436,6 @@ class Agent:
 
         # 重置强平标志
         self.is_liquidated = False
+
+        # 重置订单计数器
+        self._order_counter = 0

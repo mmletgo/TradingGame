@@ -6,6 +6,8 @@
 import time
 from typing import Any
 
+import numpy as np
+
 from src.bio.agents.base import Agent, ActionType
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType
@@ -66,7 +68,34 @@ class MarketMakerAgent(Agent):
         """
         return [ActionType.QUOTE, ActionType.CLEAR_POSITION]
 
-    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> list[float]:
+    def _fill_order_inputs(
+        self,
+        inputs: np.ndarray,
+        order_ids: list[int],
+        offset: int,
+        mid_price: float,
+        orderbook: OrderBook,
+    ) -> None:
+        """填充订单输入数组
+
+        Args:
+            inputs: 输入数组（将被修改）
+            order_ids: 订单ID列表
+            offset: 在数组中的起始偏移量
+            mid_price: 中间价（用于价格归一化）
+            orderbook: 订单簿（用于查询订单详情）
+        """
+        for i in range(5):
+            if i < len(order_ids):
+                order = orderbook.order_map.get(order_ids[i])
+                if order is not None:
+                    price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0.0
+                    idx = offset + i * 3
+                    inputs[idx] = price_norm
+                    inputs[idx + 1] = float(order.quantity)
+                    inputs[idx + 2] = 1.0
+
+    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> np.ndarray:
         """获取做市商挂单信息（30 个值）
 
         买单 5 个位置 x 3 = 15
@@ -78,32 +107,11 @@ class MarketMakerAgent(Agent):
             orderbook: 订单簿（用于查询订单详情）
 
         Returns:
-            30 个浮点数的列表
+            30 个浮点数的 NumPy 数组
         """
-        inputs: list[float] = []
-
-        # 买单（5 个位置）
-        for i in range(5):
-            if i < len(self.bid_order_ids):
-                order_id = self.bid_order_ids[i]
-                order = orderbook.order_map.get(order_id)
-                if order is not None:
-                    price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0
-                    inputs.extend([price_norm, float(order.quantity), 1.0])
-                    continue
-            inputs.extend([0.0, 0.0, 0.0])
-
-        # 卖单（5 个位置）
-        for i in range(5):
-            if i < len(self.ask_order_ids):
-                order_id = self.ask_order_ids[i]
-                order = orderbook.order_map.get(order_id)
-                if order is not None:
-                    price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0
-                    inputs.extend([price_norm, float(order.quantity), 1.0])
-                    continue
-            inputs.extend([0.0, 0.0, 0.0])
-
+        inputs = np.zeros(30, dtype=np.float64)
+        self._fill_order_inputs(inputs, self.bid_order_ids, 0, mid_price, orderbook)
+        self._fill_order_inputs(inputs, self.ask_order_ids, 15, mid_price, orderbook)
         return inputs
 
     def decide(
@@ -230,6 +238,53 @@ class MarketMakerAgent(Agent):
 
         return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 
+    def _cancel_all_orders(self, event_bus: EventBus) -> None:
+        """撤销所有挂单
+
+        Args:
+            event_bus: 事件总线
+        """
+        timestamp = time.time()
+        for order_id in self.bid_order_ids + self.ask_order_ids:
+            event = Event(
+                EventType.ORDER_CANCELLED,
+                timestamp,
+                {"order_id": order_id, "agent_id": self.agent_id},
+            )
+            event_bus.publish(event)
+        self.bid_order_ids.clear()
+        self.ask_order_ids.clear()
+
+    def _place_quote_orders(
+        self,
+        orders: list[dict[str, float]],
+        side: OrderSide,
+        order_ids: list[int],
+        event_bus: EventBus,
+    ) -> None:
+        """挂限价单并记录订单ID
+
+        Args:
+            orders: 订单列表，每个订单包含 price 和 quantity
+            side: 订单方向（买/卖）
+            order_ids: 用于存储订单ID的列表（将被修改）
+            event_bus: 事件总线
+        """
+        timestamp = time.time()
+        for order_spec in orders:
+            order_id = self._generate_order_id()
+            order = Order(
+                order_id=order_id,
+                agent_id=self.agent_id,
+                side=side,
+                order_type=OrderType.LIMIT,
+                price=order_spec["price"],
+                quantity=order_spec["quantity"],
+            )
+            event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
+            event_bus.publish(event)
+            order_ids.append(order_id)
+
     def execute_action(
         self, action: ActionType, params: dict[str, Any], event_bus: EventBus
     ) -> None:
@@ -247,123 +302,22 @@ class MarketMakerAgent(Agent):
                 - CLEAR_POSITION: {}
             event_bus: 事件总线
         """
-        # 如果已被强平，不执行任何动作
         if self.is_liquidated:
             return
 
-        timestamp = time.time()
-
         if action == ActionType.QUOTE:
-            # 1. 先撤掉所有旧挂单
-            for order_id in self.bid_order_ids:
-                cancel_event = Event(
-                    EventType.ORDER_CANCELLED,
-                    timestamp,
-                    {"order_id": order_id, "agent_id": self.agent_id},
-                )
-                event_bus.publish(cancel_event)
-
-            for order_id in self.ask_order_ids:
-                cancel_event = Event(
-                    EventType.ORDER_CANCELLED,
-                    timestamp,
-                    {"order_id": order_id, "agent_id": self.agent_id},
-                )
-                event_bus.publish(cancel_event)
-
-            # 清空挂单列表
-            self.bid_order_ids.clear()
-            self.ask_order_ids.clear()
-
-            # 2. 挂新的双边订单
-            bid_orders = params.get("bid_orders", [])
-            ask_orders = params.get("ask_orders", [])
-
-            # 挂买单
-            for order_spec in bid_orders:
-                price = order_spec["price"]
-                quantity = order_spec["quantity"]
-                order_id = self._generate_order_id()
-                order = Order(
-                    order_id=order_id,
-                    agent_id=self.agent_id,
-                    side=OrderSide.BUY,
-                    order_type=OrderType.LIMIT,
-                    price=price,
-                    quantity=quantity,
-                )
-                place_event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-                event_bus.publish(place_event)
-                self.bid_order_ids.append(order_id)
-
-            # 挂卖单
-            for order_spec in ask_orders:
-                price = order_spec["price"]
-                quantity = order_spec["quantity"]
-                order_id = self._generate_order_id()
-                order = Order(
-                    order_id=order_id,
-                    agent_id=self.agent_id,
-                    side=OrderSide.SELL,
-                    order_type=OrderType.LIMIT,
-                    price=price,
-                    quantity=quantity,
-                )
-                place_event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-                event_bus.publish(place_event)
-                self.ask_order_ids.append(order_id)
+            self._cancel_all_orders(event_bus)
+            self._place_quote_orders(
+                params.get("bid_orders", []), OrderSide.BUY, self.bid_order_ids, event_bus
+            )
+            self._place_quote_orders(
+                params.get("ask_orders", []), OrderSide.SELL, self.ask_order_ids, event_bus
+            )
 
         elif action == ActionType.CLEAR_POSITION:
-            # 1. 先撤掉所有挂单
-            for order_id in self.bid_order_ids:
-                cancel_event = Event(
-                    EventType.ORDER_CANCELLED,
-                    timestamp,
-                    {"order_id": order_id, "agent_id": self.agent_id},
-                )
-                event_bus.publish(cancel_event)
-
-            for order_id in self.ask_order_ids:
-                cancel_event = Event(
-                    EventType.ORDER_CANCELLED,
-                    timestamp,
-                    {"order_id": order_id, "agent_id": self.agent_id},
-                )
-                event_bus.publish(cancel_event)
-
-            # 清空挂单列表
-            self.bid_order_ids.clear()
-            self.ask_order_ids.clear()
-
-            # 2. 根据持仓方向市价平仓
+            self._cancel_all_orders(event_bus)
             position_qty = self.account.position.quantity
-
             if position_qty > 0:
-                # 有多仓，市价卖出平仓
-                order_id = self._generate_order_id()
-                order = Order(
-                    order_id=order_id,
-                    agent_id=self.agent_id,
-                    side=OrderSide.SELL,
-                    order_type=OrderType.MARKET,
-                    price=0.0,
-                    quantity=position_qty,
-                )
-                event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-                event_bus.publish(event)
-
+                self._place_market_order(OrderSide.SELL, position_qty, event_bus)
             elif position_qty < 0:
-                # 有空仓，市价买入平仓
-                order_id = self._generate_order_id()
-                order = Order(
-                    order_id=order_id,
-                    agent_id=self.agent_id,
-                    side=OrderSide.BUY,
-                    order_type=OrderType.MARKET,
-                    price=0.0,
-                    quantity=abs(position_qty),
-                )
-                event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
-                event_bus.publish(event)
-
-            # 持仓为0时不做任何操作
+                self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
