@@ -53,12 +53,28 @@ class MatchingEngine:
         self._logger.info("撮合引擎初始化完成")
 
     def _handle_order_placed(self, event: Event) -> None:
-        """处理订单提交事件（占位）"""
-        pass
+        """处理订单提交事件
+
+        从事件中获取订单对象，调用 process_order 进行撮合。
+
+        Args:
+            event: 订单提交事件，data 中包含 "order" 字段
+        """
+        order = event.data.get("order")
+        if order is not None:
+            self.process_order(order)
 
     def _handle_order_cancelled(self, event: Event) -> None:
-        """处理订单撤销事件（占位）"""
-        pass
+        """处理订单撤销事件
+
+        从事件中获取订单ID，从订单簿中撤销该订单。
+
+        Args:
+            event: 订单撤销事件，data 中包含 "order_id" 字段
+        """
+        order_id = event.data.get("order_id")
+        if order_id is not None:
+            self._orderbook.cancel_order(order_id)
 
     def register_agent(self, agent_id: int, maker_rate: float, taker_rate: float) -> None:
         """

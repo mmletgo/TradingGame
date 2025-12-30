@@ -89,10 +89,31 @@ class Trainer:
         # 订阅强平事件
         self.event_bus.subscribe(EventType.LIQUIDATION, self._on_liquidation)
 
+        # 注册所有 Agent 的费率
+        self._register_all_agents()
+
         # 初始化市场（做市商先行动）
         self._init_market()
 
         self.logger.info("训练环境初始化完成")
+
+    def _register_all_agents(self) -> None:
+        """注册所有 Agent 的费率到撮合引擎
+
+        遍历所有种群的 Agent，将其费率信息注册到撮合引擎。
+        应在 setup() 后和 evolve() 后调用。
+        """
+        if not self.matching_engine:
+            return
+
+        for agent_type, population in self.populations.items():
+            agent_config = population.agent_config
+            for agent in population.agents:
+                self.matching_engine.register_agent(
+                    agent.agent_id,
+                    agent_config.maker_fee_rate,
+                    agent_config.taker_fee_rate,
+                )
 
     def _on_trade(self, event: Event) -> None:
         """处理成交事件，记录最近成交
@@ -109,6 +130,7 @@ class Trainer:
             seller_id=data.get("seller_id", 0),
             buyer_fee=data.get("buyer_fee", 0.0),
             seller_fee=data.get("seller_fee", 0.0),
+            is_buyer_taker=data.get("is_buyer_taker", True),
         )
         self.recent_trades.append(trade)
         # 保留最近 100 笔
@@ -299,6 +321,9 @@ class Trainer:
             for population in self.populations.values():
                 population.evolve(current_price)
 
+            # 进化后重新注册新 Agent 的费率
+            self._register_all_agents()
+
             self.logger.info(f"Episode {self.episode} 完成，tick={self.tick}")
 
     def train(
@@ -391,6 +416,9 @@ class Trainer:
                 # 重建 agents
                 genomes = list(pop.neat_pop.population.items())
                 pop.agents = pop.create_agents(genomes, self.event_bus)
+
+        # 注册恢复的 Agent 费率
+        self._register_all_agents()
 
         self.logger.info(f"检查点已加载: {path}")
 

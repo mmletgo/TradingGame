@@ -42,6 +42,7 @@
 
 **关键方法：**
 - `setup()` - 初始化训练环境
+- `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `run_tick()` - 执行单个 tick（按做市商->庄家->散户顺序）
 - `run_episode()` - 运行完整 episode（重置、运行、进化）
 - `train()` - 主训练循环
@@ -53,6 +54,7 @@
    - 创建三个种群（散户/庄家/做市商）
    - 创建撮合引擎
    - 订阅成交和强平事件
+   - 注册所有 Agent 的费率到撮合引擎
    - 做市商建立初始流动性
 
 2. **Episode 循环** (`run_episode`)
@@ -60,6 +62,7 @@
    - 重置市场状态
    - 运行 episode_length 个 tick
    - 各种群进化
+   - 进化后重新注册新 Agent 的费率
 
 3. **Tick 执行** (`run_tick`)
    - 发布 TICK_START 事件
