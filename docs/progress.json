@@ -2,11 +2,11 @@
   "summary": {
     "project_name": "NEAT AI 交易模拟竞技场",
     "total": 92,
-    "completed": 36,
+    "completed": 40,
     "in_progress": 1,
-    "pending": 55,
+    "pending": 51,
     "blocked": 0,
-    "current_task": "F37"
+    "current_task": "F41"
   },
   "tasks": {
     "F1": {
@@ -227,33 +227,33 @@
     },
     "F37": {
       "id": "F37",
-      "status": "in_progress",
-      "notes": "开始实现 Brain.__init__ 方法",
-      "updated_at": "2025-12-30T14:43:38.603483"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-30T14:48:12.267420"
     },
     "F38": {
       "id": "F38",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-30T14:51:03.730053"
     },
     "F39": {
       "id": "F39",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "实现完成，测试通过",
+      "updated_at": "2025-12-30T14:55:55.220281"
     },
     "F40": {
       "id": "F40",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "completed",
+      "notes": "测试通过",
+      "updated_at": "2025-12-30T15:11:51.823697"
     },
     "F41": {
       "id": "F41",
-      "status": "pending",
-      "notes": "",
-      "updated_at": "2025-12-29T12:00:00"
+      "status": "in_progress",
+      "notes": "开始实现 Agent 基类的初始化方法",
+      "updated_at": "2025-12-30T15:12:44.630713"
     },
     "F42": {
       "id": "F42",
@@ -1191,6 +1191,70 @@
       "date": null,
       "timestamp": "2025-12-30T14:43:38.603492",
       "function_id": "F37",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T14:48:12.267431",
+      "function_id": "F37",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T14:48:46.263449",
+      "function_id": "F38",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T14:51:03.730064",
+      "function_id": "F38",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T14:52:20.659983",
+      "function_id": "F39",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T14:55:55.220291",
+      "function_id": "F39",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T15:05:02.515628",
+      "function_id": "F40",
+      "action": "status_change",
+      "description": "状态从 pending 变更为 in_progress",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T15:11:51.823708",
+      "function_id": "F40",
+      "action": "status_change",
+      "description": "状态从 in_progress 变更为 completed",
+      "author": null
+    },
+    {
+      "date": null,
+      "timestamp": "2025-12-30T15:12:44.630723",
+      "function_id": "F41",
       "action": "status_change",
       "description": "状态从 pending 变更为 in_progress",
       "author": null
