@@ -61,3 +61,59 @@ class AgentConfig:
     maintenance_margin_rate: float
     maker_fee_rate: float
     taker_fee_rate: float
+
+
+@dataclass
+class TrainingConfig:
+    """
+    训练配置
+
+    定义 NEAT 进化训练的参数。
+
+    Attributes:
+        episode_length: 每个 episode 的 tick 数量（默认 1000）
+        checkpoint_interval: 检查点间隔（episode 数）
+        neat_config_path: NEAT 配置文件路径
+    """
+
+    episode_length: int
+    checkpoint_interval: int
+    neat_config_path: str
+
+
+@dataclass
+class DemoConfig:
+    """
+    演示配置
+
+    定义 WebUI 演示的参数。
+
+    Attributes:
+        host: 服务器地址
+        port: 服务器端口
+        tick_interval: tick 间隔（毫秒）
+    """
+
+    host: str
+    port: int
+    tick_interval: int
+
+
+@dataclass
+class Config:
+    """
+    全局配置
+
+    汇总所有配置项。
+
+    Attributes:
+        market: 市场配置
+        agents: Agent 配置（按类型）
+        training: 训练配置
+        demo: 演示配置
+    """
+
+    market: MarketConfig
+    agents: dict[AgentType, AgentConfig]
+    training: TrainingConfig
+    demo: DemoConfig

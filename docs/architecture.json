@@ -330,13 +330,11 @@
       "file": "src/config/config.py",
       "description": "训练配置",
       "fields": [
-        {"name": "elimination_interval", "type": "int", "description": "淘汰间隔（tick）"},
-        {"name": "elimination_rate", "type": "float", "description": "淘汰比例"},
-        {"name": "reproduction_rate", "type": "float", "description": "繁殖比例"},
+        {"name": "episode_length", "type": "int", "description": "每个 episode 的 tick 数量"},
         {"name": "checkpoint_interval", "type": "int", "description": "检查点间隔"},
         {"name": "neat_config_path", "type": "str", "description": "NEAT 配置文件路径"}
       ],
-      "used_by": ["F60", "F61", "F68", "F89"]
+      "used_by": ["F66", "F67", "F68", "F89"]
     }
   ]
 }

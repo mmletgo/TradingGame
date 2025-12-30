@@ -49,7 +49,7 @@
       "code_logic": "遍历该事件类型的所有处理函数并依次调用",
       "test_cases": ["正常发布", "无订阅者时发布", "多订阅者接收"],
       "dependencies": [],
-      "called_by": ["F22", "F35", "F44", "F60", "F61", "F65"],
+      "called_by": ["F22", "F35", "F44", "F65"],
       "uses": ["Event"]
     },
     {
@@ -517,7 +517,7 @@
       "code_logic": "类方法，调用构造函数",
       "test_cases": ["从基因组创建"],
       "dependencies": ["F37"],
-      "called_by": ["F57", "F61"],
+      "called_by": ["F57"],
       "uses": ["Brain"]
     },
     {
@@ -582,7 +582,7 @@
       "code_logic": "返回账户净值",
       "test_cases": ["计算适应度"],
       "dependencies": ["F31"],
-      "called_by": ["F58"],
+      "called_by": ["F58", "F59"],
       "uses": ["Account"]
     },
     {
@@ -595,7 +595,7 @@
       "code_logic": "重置账户余额、持仓、挂单",
       "test_cases": ["重置后状态正确"],
       "dependencies": ["F5"],
-      "called_by": ["F66"],
+      "called_by": ["F60"],
       "uses": ["AgentConfig"]
     },
     {
@@ -738,7 +738,7 @@
       "code_logic": "遍历基因组，创建 Brain 和对应类型的 Agent",
       "test_cases": ["创建多个 Agent"],
       "dependencies": ["F40", "F47", "F50", "F53"],
-      "called_by": ["F56", "F61"],
+      "called_by": ["F56", "F59"],
       "uses": ["Agent", "Brain", "EventBus"]
     },
     {
@@ -751,7 +751,7 @@
       "code_logic": "计算每个 Agent 的适应度并排序",
       "test_cases": ["评估种群"],
       "dependencies": ["F45"],
-      "called_by": ["F60"],
+      "called_by": ["F59"],
       "uses": ["Agent"]
     },
     {
@@ -759,39 +759,26 @@
       "name": "Population.evolve",
       "file": "src/training/population.py",
       "test_file": "tests/training/test_population.py",
-      "signature": "def evolve(self) -> None",
+      "signature": "def evolve(self, current_price: float) -> None",
       "business_logic": "进化种群",
-      "code_logic": "调用 NEAT 种群的 run 方法进行一代进化",
-      "test_cases": ["进化一代"],
-      "dependencies": ["F39"],
+      "code_logic": "为每个 Agent 的基因组设置适应度，调用 NEAT 种群的 run 方法进行一代进化，用新基因组创建新 Agent",
+      "test_cases": ["进化一代", "适应度正确设置", "新 Agent 创建"],
+      "dependencies": ["F39", "F45", "F57"],
       "called_by": ["F66"],
       "uses": []
     },
     {
       "id": "F60",
-      "name": "Population.eliminate_bottom",
+      "name": "Population.reset_agents",
       "file": "src/training/population.py",
       "test_file": "tests/training/test_population.py",
-      "signature": "def eliminate_bottom(self, rate: float, current_price: float, event_bus: EventBus) -> list[Agent]",
-      "business_logic": "淘汰末尾 Agent",
-      "code_logic": "按适应度排序，淘汰末尾比例，发布淘汰事件",
-      "test_cases": ["淘汰20%"],
-      "dependencies": ["F4", "F58"],
-      "called_by": ["F65"],
-      "uses": ["EventBus", "Agent"]
-    },
-    {
-      "id": "F61",
-      "name": "Population.reproduce_top",
-      "file": "src/training/population.py",
-      "test_file": "tests/training/test_population.py",
-      "signature": "def reproduce_top(self, rate: float, count: int, event_bus: EventBus) -> list[Agent]",
-      "business_logic": "繁殖顶部 Agent",
-      "code_logic": "从前 N% 的基因组变异产生新 Agent，发布繁殖事件",
-      "test_cases": ["繁殖补充"],
-      "dependencies": ["F4", "F40", "F57"],
-      "called_by": ["F65"],
-      "uses": ["EventBus", "Agent", "Brain"]
+      "signature": "def reset_agents(self) -> None",
+      "business_logic": "重置所有 Agent 状态",
+      "code_logic": "遍历所有 Agent，调用其 reset 方法重置账户和持仓",
+      "test_cases": ["重置后所有 Agent 状态正确"],
+      "dependencies": ["F46"],
+      "called_by": ["F66"],
+      "uses": ["Agent"]
     },
     {
       "id": "F62",
@@ -839,9 +826,9 @@
       "test_file": "tests/training/test_trainer.py",
       "signature": "def run_tick(self) -> None",
       "business_logic": "执行一个 tick",
-      "code_logic": "做市商→庄家→散户依次决策执行，检查强平，淘汰繁殖",
-      "test_cases": ["正常 tick", "有强平", "有淘汰"],
-      "dependencies": ["F4", "F34", "F35", "F43", "F44", "F60", "F61"],
+      "code_logic": "做市商→庄家→散户依次决策执行，检查强平",
+      "test_cases": ["正常 tick", "有强平"],
+      "dependencies": ["F4", "F34", "F35", "F43", "F44"],
       "called_by": ["F66"],
       "uses": ["Agent", "EventBus"]
     },
@@ -854,7 +841,7 @@
       "business_logic": "运行一个训练回合",
       "code_logic": "循环执行 tick，回合结束后进化",
       "test_cases": ["运行回合"],
-      "dependencies": ["F46", "F59", "F65"],
+      "dependencies": ["F59", "F60", "F65"],
       "called_by": ["F67"],
       "uses": []
     },
@@ -1269,14 +1256,13 @@
     "F56": ["F7", "F57"],
     "F57": ["F40", "F47", "F50", "F53"],
     "F58": ["F45"],
-    "F59": ["F39"],
-    "F60": ["F4", "F58"],
-    "F61": ["F4", "F40", "F57"],
+    "F59": ["F39", "F45", "F57"],
+    "F60": ["F46"],
     "F62": ["F45"],
     "F63": ["F2", "F7"],
     "F64": ["F1", "F21", "F56"],
-    "F65": ["F4", "F34", "F35", "F43", "F44", "F60", "F61"],
-    "F66": ["F46", "F59", "F65"],
+    "F65": ["F4", "F34", "F35", "F43", "F44"],
+    "F66": ["F59", "F60", "F65"],
     "F67": ["F64", "F66", "F68"],
     "F68": ["F39"],
     "F69": ["F64"],
@@ -1318,7 +1304,7 @@
     "F47", "F48", "F49",
     "F50", "F51", "F52",
     "F53", "F54", "F55", "F93",
-    "F56", "F57", "F58", "F59", "F60", "F61", "F62",
+    "F56", "F57", "F58", "F59", "F60", "F62",
     "F63", "F64", "F65", "F66", "F67", "F68", "F69",
     "F70", "F71", "F72", "F73", "F74", "F75", "F76",
     "F77", "F78", "F79", "F80", "F81", "F82", "F83",
