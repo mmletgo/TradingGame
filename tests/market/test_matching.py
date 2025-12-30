@@ -1323,14 +1323,18 @@ def test_process_order_no_trade():
 
 
 def test_process_order_publishes_events():
-    """测试处理订单时发布成交事件"""
+    """测试处理订单时发布成交事件（定向发送给买卖双方）"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
     # 用于记录收到的事件
-    received_events = []
+    received_events_buyer: list[Event] = []
+    received_events_seller: list[Event] = []
 
-    def event_handler(event: Event) -> None:
-        received_events.append(event)
+    def event_handler_buyer(event: Event) -> None:
+        received_events_buyer.append(event)
+
+    def event_handler_seller(event: Event) -> None:
+        received_events_seller.append(event)
 
     event_bus = EventBus()
     config = MarketConfig(
@@ -1345,8 +1349,9 @@ def test_process_order_publishes_events():
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
     engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)
 
-    # 订阅成交事件
-    event_bus.subscribe(EventType.TRADE_EXECUTED, event_handler)
+    # 使用 subscribe_with_id 订阅成交事件（模拟买卖双方 Agent）
+    event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, event_handler_seller)  # agent_id=1 是卖方
+    event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 2, event_handler_buyer)   # agent_id=2 是买方
 
     # 挂卖单
     sell_order = Order(
@@ -1371,14 +1376,17 @@ def test_process_order_publishes_events():
 
     engine.process_order(buy_order)
 
-    # 应该发布 1 个成交事件
-    assert len(received_events) == 1
-    assert received_events[0].event_type == EventType.TRADE_EXECUTED
-    assert received_events[0].data["trade_id"] == 1
-    assert received_events[0].data["price"] == 100.5
-    assert received_events[0].data["quantity"] == 8.0
-    assert received_events[0].data["buyer_id"] == 2
-    assert received_events[0].data["seller_id"] == 1
+    # 买卖双方都应该收到 1 个成交事件
+    assert len(received_events_buyer) == 1
+    assert len(received_events_seller) == 1
+    # 验证是同一个事件
+    assert received_events_buyer[0].event_type == EventType.TRADE_EXECUTED
+    assert received_events_seller[0].event_type == EventType.TRADE_EXECUTED
+    assert received_events_buyer[0].data["trade_id"] == 1
+    assert received_events_buyer[0].data["price"] == 100.5
+    assert received_events_buyer[0].data["quantity"] == 8.0
+    assert received_events_buyer[0].data["buyer_id"] == 2
+    assert received_events_buyer[0].data["seller_id"] == 1
 
 
 def test_process_order_multiple_trades():

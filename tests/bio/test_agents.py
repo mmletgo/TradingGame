@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import numpy as np
+
 from src.bio.agents.base import Agent, ActionType
 from src.bio.agents.retail import RetailAgent
 from src.bio.agents.whale import WhaleAgent
@@ -13,6 +15,21 @@ from src.bio.brain.brain import Brain
 from src.market.orderbook.order import OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
 from src.market.matching.trade import Trade
+from src.market.market_state import NormalizedMarketState
+
+
+def create_mock_market_state(mid_price: float = 100.0, tick_size: float = 0.1) -> NormalizedMarketState:
+    """创建测试用的 NormalizedMarketState"""
+    return NormalizedMarketState(
+        mid_price=mid_price,
+        tick_size=tick_size,
+        bid_data=np.zeros(200, dtype=np.float32),
+        ask_data=np.zeros(200, dtype=np.float32),
+        trade_prices=np.zeros(100, dtype=np.float32),
+        trade_quantities=np.zeros(100, dtype=np.float32),
+        trade_buyer_ids=[],
+        trade_seller_ids=[],
+    )
 
 
 class TestAgentInit:
@@ -242,8 +259,11 @@ class TestAgentOnTradeEvent:
         # 已实现盈亏 = 50 * (110 - 100) = 500
         assert abs(agent.account.position.realized_pnl - 500.0) < 0.01
 
-    def test_on_irrelevant_trade_event(self):
-        """测试处理不相关的成交事件"""
+    def test_targeted_event_delivery(self):
+        """测试定向事件发送（无关事件不会发送给 Agent）
+
+        现在使用 subscribe_with_id 和 target_ids，无关事件根本不会发送给 Agent。
+        """
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -269,7 +289,11 @@ class TestAgentOnTradeEvent:
             event_bus=event_bus,
         )
 
-        # 创建不相关的成交事件（agent_id=2 和 agent_id=3 成交）
+        # 验证 Agent 使用 subscribe_with_id 订阅了事件
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        # 创建定向发送给其他 Agent 的成交事件
         event = Event(
             event_type=EventType.TRADE_EXECUTED,
             timestamp=0.0,
@@ -282,21 +306,22 @@ class TestAgentOnTradeEvent:
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
             },
+            target_ids={2, 3},  # 只发送给 agent_id=2 和 agent_id=3
         )
 
         # 记录初始账户状态
         initial_balance = agent.account.balance
         initial_quantity = agent.account.position.quantity
 
-        # 处理事件
-        agent._on_trade_event(event)
+        # 发布事件
+        event_bus.publish(event)
 
-        # 验证账户未更新
+        # 验证账户未更新（事件未发送给 agent_id=1）
         assert agent.account.balance == initial_balance
         assert agent.account.position.quantity == initial_quantity
 
-    def test_event_subscription(self):
-        """测试事件订阅"""
+    def test_event_subscription_with_id(self):
+        """测试使用 subscribe_with_id 订阅事件"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -322,7 +347,11 @@ class TestAgentOnTradeEvent:
             event_bus=event_bus,
         )
 
-        # 发布买入成交事件
+        # 验证使用 subscribe_with_id 订阅
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        # 发布定向成交事件
         event = Event(
             event_type=EventType.TRADE_EXECUTED,
             timestamp=0.0,
@@ -335,6 +364,7 @@ class TestAgentOnTradeEvent:
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
             },
+            target_ids={1, 2},  # 发送给参与成交的双方
         )
 
         # 发布事件
@@ -350,168 +380,7 @@ class TestAgentObserve:
     """测试 Agent.observe"""
 
     def test_observe_normal(self):
-        """测试正常观察市场状态"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 创建订单簿（需要先编译 Cython 模块）
-        # 使用 mock 对象模拟 OrderBook
-        from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
-        orderbook.last_price = 100.0
-
-        # 添加一些买卖盘
-        from src.market.orderbook.order import Order, OrderSide, OrderType
-        for i in range(5):
-            # 买盘（从 99.9 开始递减）
-            bid_order = Order(
-                order_id=i * 2,
-                agent_id=10 + i,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                price=100.0 - (i + 1) * 0.1,  # 99.9, 99.8, ...
-                quantity=10.0 + i,
-            )
-            orderbook.add_order(bid_order)
-            # 卖盘（从 100.1 开始递增）
-            ask_order = Order(
-                order_id=i * 2 + 1,
-                agent_id=20 + i,
-                side=OrderSide.SELL,
-                order_type=OrderType.LIMIT,
-                price=100.0 + (i + 1) * 0.1,  # 100.1, 100.2, ...
-                quantity=10.0 + i,
-            )
-            orderbook.add_order(ask_order)
-
-        # 创建成交记录
-        from src.market.matching.trade import Trade
-        trades = [
-            Trade(
-                trade_id=1,
-                price=99.9,
-                quantity=10.0,
-                buyer_id=1,  # 本 Agent 是买方
-                seller_id=2,
-                buyer_fee=0.5,
-                seller_fee=0.2,
-            ),
-            Trade(
-                trade_id=2,
-                price=100.1,
-                quantity=5.0,
-                buyer_id=3,
-                seller_id=1,  # 本 Agent 是卖方
-                buyer_fee=0.25,
-                seller_fee=0.0,
-            ),
-            Trade(
-                trade_id=3,
-                price=100.0,
-                quantity=8.0,
-                buyer_id=4,
-                seller_id=5,  # 无关成交
-                buyer_fee=0.4,
-                seller_fee=0.16,
-            ),
-        ]
-
-        # 设置一些持仓
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 50.0, 100.0)
-
-        # 调用 observe
-        inputs = agent.observe(orderbook, trades)
-
-        # 验证输入向量长度
-        # 5档买盘 * 2 + 5档卖盘 * 2 + 3笔成交 * 3 + 4个自身状态
-        expected_length = 5 * 2 + 5 * 2 + 3 * 3 + 4
-        assert len(inputs) == expected_length
-
-        # 验证买盘价格归一化（第一个买盘 99.9，mid_price 约 100）
-        assert inputs[0] < 0  # 价格低于中间价，归一化为负
-
-        # 验证第一个成交的买卖方向（本 Agent 是买方，应为 1.0）
-        bid_start_idx = 5 * 2 + 5 * 2  # 跳过订单簿深度数据
-        assert inputs[bid_start_idx + 2] == 1.0  # 第一笔成交，本 Agent 是买方
-
-        # 验证第二个成交的买卖方向（本 Agent 是卖方，应为 -1.0）
-        assert inputs[bid_start_idx + 5] == -1.0  # 第二笔成交，本 Agent 是卖方
-
-        # 验证第三个成交的买卖方向（无关，应为 0.0）
-        assert inputs[bid_start_idx + 8] == 0.0  # 第三笔成交，无关
-
-    def test_observe_empty_orderbook(self):
-        """测试空订单簿观察"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 创建空订单簿
-        from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
-        orderbook.last_price = 100.0
-
-        # 空成交记录
-        trades: list = []
-
-        # 调用 observe
-        inputs = agent.observe(orderbook, trades)
-
-        # 验证输入向量长度（只有4个自身状态）
-        assert len(inputs) == 4
-
-        # 验证持仓状态
-        assert inputs[0] == 0.0  # 持仓数量归一化
-        assert inputs[1] == 0.0  # 持仓均价归一化
-        assert inputs[2] == 1.0  # 余额归一化（10000/10000 = 1.0）
-        assert inputs[3] == 1.0  # 净值归一化（10000/10000 = 1.0）
-
-    def test_observe_empty_trades(self):
-        """测试空成交记录观察"""
+        """测试正常观察市场状态（使用 NormalizedMarketState）"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -542,29 +411,150 @@ class TestAgentObserve:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 添加一些买卖盘
-        from src.market.orderbook.order import Order, OrderSide, OrderType
-        for i in range(3):
-            bid_order = Order(
-                order_id=i * 2,
-                agent_id=10 + i,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                price=100.0 - i * 0.1,
-                quantity=10.0,
-            )
-            orderbook.add_order(bid_order)
+        # 创建 NormalizedMarketState
+        market_state = NormalizedMarketState(
+            mid_price=100.0,
+            tick_size=0.1,
+            bid_data=np.array([0.1, 10.0] * 100, dtype=np.float32),  # 100档买盘
+            ask_data=np.array([-0.1, 10.0] * 100, dtype=np.float32),  # 100档卖盘
+            trade_prices=np.zeros(100, dtype=np.float32),
+            trade_quantities=np.zeros(100, dtype=np.float32),
+            trade_buyer_ids=[1, 3, 4],  # 本 Agent 是第一笔成交的买方
+            trade_seller_ids=[2, 1, 5],  # 本 Agent 是第二笔成交的卖方
+        )
+        # 设置前三笔成交
+        market_state.trade_prices[0] = -0.001  # 99.9 归一化
+        market_state.trade_prices[1] = 0.001   # 100.1 归一化
+        market_state.trade_prices[2] = 0.0     # 100.0 归一化
+        market_state.trade_quantities[0] = 10.0
+        market_state.trade_quantities[1] = 5.0
+        market_state.trade_quantities[2] = 8.0
 
-        # 空成交记录
-        trades: list = []
+        # 设置一些持仓
+        from src.market.orderbook.order import OrderSide
+        agent.account.position.update(OrderSide.BUY, 50.0, 100.0)
 
         # 调用 observe
-        inputs = agent.observe(orderbook, trades)
+        inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        # 3档买盘 * 2 + 0档卖盘 * 2 + 0笔成交 * 3 + 4个自身状态
-        expected_length = 3 * 2 + 0 + 0 + 4
+        # 200 买盘 + 200 卖盘 + 300 成交 + 4 持仓 + 3 挂单
+        expected_length = 200 + 200 + 300 + 4 + 3
         assert len(inputs) == expected_length
+
+        # 验证第一个成交的买卖方向（本 Agent 是买方，应为 1.0）
+        trade_start_idx = 200 + 200  # 跳过订单簿深度数据
+        assert inputs[trade_start_idx + 2] == 1.0  # 第一笔成交，本 Agent 是买方
+
+        # 验证第二个成交的买卖方向（本 Agent 是卖方，应为 -1.0）
+        assert inputs[trade_start_idx + 5] == -1.0  # 第二笔成交，本 Agent 是卖方
+
+        # 验证第三个成交的买卖方向（无关，应为 0.0）
+        assert inputs[trade_start_idx + 8] == 0.0  # 第三笔成交，无关
+
+    def test_observe_empty_market_state(self):
+        """测试空市场状态观察"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建 Agent
+        agent = Agent(
+            agent_id=1,
+            agent_type=AgentType.RETAIL,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 创建空订单簿
+        from src.market.orderbook.orderbook import OrderBook
+        orderbook = OrderBook(tick_size=0.1)
+        orderbook.last_price = 100.0
+
+        # 创建空市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+
+        # 调用 observe
+        inputs = agent.observe(market_state, orderbook)
+
+        # 验证输入向量长度（固定长度）
+        # 200 买盘 + 200 卖盘 + 300 成交 + 4 持仓 + 3 挂单
+        expected_length = 200 + 200 + 300 + 4 + 3
+        assert len(inputs) == expected_length
+
+        # 验证持仓状态（在末尾附近）
+        position_start_idx = 200 + 200 + 300
+        assert inputs[position_start_idx + 0] == 0.0  # 持仓归一化
+        assert inputs[position_start_idx + 1] == 0.0  # 持仓均价归一化
+        assert inputs[position_start_idx + 2] == 1.0  # 余额归一化（10000/10000 = 1.0）
+        assert inputs[position_start_idx + 3] == 1.0  # 净值归一化（10000/10000 = 1.0）
+
+    def test_observe_with_position(self):
+        """测试有持仓时的观察"""
+        # 创建 mock Brain
+        mock_brain = MagicMock(spec=Brain)
+
+        # 创建 Agent 配置
+        config = AgentConfig(
+            count=10000,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        )
+
+        # 创建事件总线
+        event_bus = EventBus()
+
+        # 创建 Agent
+        agent = Agent(
+            agent_id=1,
+            agent_type=AgentType.RETAIL,
+            brain=mock_brain,
+            config=config,
+            event_bus=event_bus,
+        )
+
+        # 创建订单簿
+        from src.market.orderbook.orderbook import OrderBook
+        orderbook = OrderBook(tick_size=0.1)
+        orderbook.last_price = 100.0
+
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+
+        # 设置持仓
+        from src.market.orderbook.order import OrderSide
+        agent.account.position.update(OrderSide.BUY, 100.0, 100.0)
+
+        # 调用 observe
+        inputs = agent.observe(market_state, orderbook)
+
+        # 验证输入向量长度
+        expected_length = 200 + 200 + 300 + 4 + 3
+        assert len(inputs) == expected_length
+
+        # 验证持仓数据（在持仓部分）
+        position_start_idx = 200 + 200 + 300
+        # 持仓归一化 = position_value / (equity * leverage)
+        # position_value = 100 * 100 = 10000
+        # equity = 10000 (balance)
+        # 持仓归一化 = 10000 / (10000 * 100) = 0.01
+        assert abs(inputs[position_start_idx + 0] - 0.01) < 0.01
 
 
 class TestAgentDecide:
@@ -604,11 +594,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.HOLD
@@ -650,11 +640,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.PLACE_BID
@@ -701,11 +691,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.PLACE_ASK
@@ -751,11 +741,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.CANCEL
@@ -796,11 +786,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.MARKET_BUY
@@ -843,11 +833,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.MARKET_SELL
@@ -890,11 +880,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.CLEAR_POSITION
@@ -905,7 +895,7 @@ class TestAgentDecide:
         """测试神经网络输出维度不足时抛出异常"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：只有 3 个值，少于 7 个
+        # 设置神经网络输出：只有 3 个值，少于 9 个
         mock_brain.forward.return_value = [0.1, 0.2, 0.3]
 
         # 创建 Agent 配置
@@ -935,12 +925,12 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide 应该抛出异常
         try:
-            agent.decide(orderbook, trades)
+            agent.decide(market_state, orderbook)
             assert False, "应该抛出 ValueError"
         except ValueError as e:
             assert "神经网络输出维度不足" in str(e)
@@ -983,11 +973,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.MARKET_SELL
@@ -1032,11 +1022,11 @@ class TestAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
-        # 空成交记录
-        trades: list = []
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
 
         # 调用 decide
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证动作类型
         assert action == ActionType.PLACE_BID
@@ -1907,7 +1897,7 @@ class TestAgentReset:
         assert agent.event_bus is original_event_bus
 
     def test_reset_reestablishes_event_subscription(self):
-        """测试重置后重新建立事件订阅"""
+        """测试重置后重新建立事件订阅（使用 subscribe_with_id）"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -1933,6 +1923,10 @@ class TestAgentReset:
             event_bus=event_bus,
         )
 
+        # 验证初始订阅使用 _subscriber_ids
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
         # 重置
         new_config = AgentConfig(
             count=10000,
@@ -1944,7 +1938,11 @@ class TestAgentReset:
         )
         agent.reset(new_config)
 
-        # 验证事件订阅仍然有效（发布成交事件应能触发账户更新）
+        # 验证重置后仍在 _subscriber_ids 中
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        # 验证事件订阅仍然有效（发布定向成交事件应能触发账户更新）
         event = Event(
             event_type=EventType.TRADE_EXECUTED,
             timestamp=0.0,
@@ -1957,6 +1955,7 @@ class TestAgentReset:
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
             },
+            target_ids={1, 2},  # 定向发送给参与成交的双方
         )
         event_bus.publish(event)
 
@@ -2130,7 +2129,7 @@ class TestRetailAgentInit:
         assert callable(agent.reset)
 
     def test_retail_agent_subscribes_to_events(self):
-        """测试散户 Agent 订阅成交事件"""
+        """测试散户 Agent 订阅成交事件（使用 subscribe_with_id）"""
         mock_brain = MagicMock(spec=Brain)
         config = AgentConfig(
             count=10000,
@@ -2149,7 +2148,11 @@ class TestRetailAgentInit:
             event_bus=event_bus,
         )
 
-        # 发布成交事件
+        # 验证使用 subscribe_with_id 订阅
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        # 发布定向成交事件
         event = Event(
             event_type=EventType.TRADE_EXECUTED,
             timestamp=0.0,
@@ -2162,6 +2165,7 @@ class TestRetailAgentInit:
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
             },
+            target_ids={1, 2},  # 定向发送给参与成交的双方
         )
         event_bus.publish(event)
 
@@ -2584,7 +2588,7 @@ class TestWhaleAgentInit:
         assert callable(agent.reset)
 
     def test_whale_agent_subscribes_to_events(self):
-        """测试庄家 Agent 订阅成交事件"""
+        """测试庄家 Agent 订阅成交事件（使用 subscribe_with_id）"""
         mock_brain = MagicMock(spec=Brain)
         config = AgentConfig(
             count=10,
@@ -2603,7 +2607,11 @@ class TestWhaleAgentInit:
             event_bus=event_bus,
         )
 
-        # 发布成交事件
+        # 验证使用 subscribe_with_id 订阅
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 10001 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        # 发布定向成交事件
         event = Event(
             event_type=EventType.TRADE_EXECUTED,
             timestamp=0.0,
@@ -2616,6 +2624,7 @@ class TestWhaleAgentInit:
                 "buyer_fee": 0.0,
                 "seller_fee": 1.0,
             },
+            target_ids={10001, 10002},  # 定向发送给参与成交的双方
         )
         event_bus.publish(event)
 
@@ -3255,7 +3264,7 @@ class TestMarketMakerAgentInit:
         assert callable(agent.reset)
 
     def test_market_maker_agent_subscribes_to_events(self):
-        """测试做市商 Agent 订阅成交事件"""
+        """测试做市商 Agent 订阅成交事件（使用 subscribe_with_id）"""
         mock_brain = MagicMock(spec=Brain)
         config = AgentConfig(
             count=100,
@@ -3274,7 +3283,11 @@ class TestMarketMakerAgentInit:
             event_bus=event_bus,
         )
 
-        # 发布成交事件
+        # 验证使用 subscribe_with_id 订阅
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 10011 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        # 发布定向成交事件
         event = Event(
             event_type=EventType.TRADE_EXECUTED,
             timestamp=0.0,
@@ -3287,6 +3300,7 @@ class TestMarketMakerAgentInit:
                 "buyer_fee": 0.0,
                 "seller_fee": 0.5,
             },
+            target_ids={10011, 10012},  # 定向发送给参与成交的双方
         )
         event_bus.publish(event)
 
@@ -3760,9 +3774,11 @@ class TestMarketMakerAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+
         # 调用 decide
-        trades: list = []
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证返回了 QUOTE 动作
         assert action == ActionType.QUOTE
@@ -3773,9 +3789,7 @@ class TestMarketMakerAgentDecide:
         assert len(params["ask_orders"]) == 5
 
         # 验证所有买单价格低于 mid_price
-        mid_price = orderbook.get_mid_price()
-        if mid_price is None:
-            mid_price = orderbook.last_price
+        mid_price = market_state.mid_price
         for order in params["bid_orders"]:
             assert order["price"] < mid_price
             assert order["quantity"] > 0
@@ -3817,9 +3831,11 @@ class TestMarketMakerAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+
         # 调用 decide
-        trades: list = []
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证返回了 CLEAR_POSITION 动作
         assert action == ActionType.CLEAR_POSITION
@@ -3856,10 +3872,12 @@ class TestMarketMakerAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+
         # 调用 decide 应该抛出异常
-        trades: list = []
         try:
-            agent.decide(orderbook, trades)
+            agent.decide(market_state, orderbook)
             assert False, "应该抛出 ValueError"
         except ValueError as e:
             assert "神经网络输出维度不足" in str(e)
@@ -3911,9 +3929,11 @@ class TestMarketMakerAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+
         # 调用 decide
-        trades: list = []
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证返回了 QUOTE 动作
         assert action == ActionType.QUOTE
@@ -3976,9 +3996,11 @@ class TestMarketMakerAgentDecide:
         orderbook = OrderBook(tick_size=0.1)
         orderbook.last_price = 100.0
 
+        # 创建市场状态
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+
         # 调用 decide
-        trades: list = []
-        action, params = agent.decide(orderbook, trades)
+        action, params = agent.decide(market_state, orderbook)
 
         # 验证返回了 QUOTE 动作
         assert action == ActionType.QUOTE
@@ -3989,9 +4011,7 @@ class TestMarketMakerAgentDecide:
 
         # 计算总数量
         # 由于所有数量权重相等，每个订单应该占总购买力的 1/10
-        mid_price = orderbook.get_mid_price()
-        if mid_price is None:
-            mid_price = orderbook.last_price
+        mid_price = market_state.mid_price
         equity = agent.account.get_equity(mid_price)
 
         total_bid_value = sum(o["price"] * o["quantity"] for o in params["bid_orders"])

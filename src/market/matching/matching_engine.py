@@ -337,7 +337,7 @@ class MatchingEngine:
         else:  # OrderType.MARKET
             trades = self.match_market_order(order)
 
-        # 如果有成交，发布成交事件
+        # 如果有成交，发布成交事件（定向发送给买卖双方）
         for trade in trades:
             event = Event(
                 event_type=EventType.TRADE_EXECUTED,
@@ -351,6 +351,7 @@ class MatchingEngine:
                     "buyer_fee": trade.buyer_fee,
                     "seller_fee": trade.seller_fee,
                 },
+                target_ids={trade.buyer_id, trade.seller_id},
             )
             self._event_bus.publish(event)
 

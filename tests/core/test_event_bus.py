@@ -292,3 +292,273 @@ class TestEventBusClear:
         event_bus.subscribe(EventType.TICK_END, handler)
         assert len(event_bus._subscribers) == 1
         assert EventType.TICK_END in event_bus._subscribers
+
+
+class TestEventBusSubscribeWithId:
+    """测试 EventBus.subscribe_with_id"""
+
+    def test_subscribe_with_id_normal(self) -> None:
+        """测试带 ID 正常订阅"""
+        event_bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler)
+
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+        assert event_bus._subscriber_ids[EventType.TRADE_EXECUTED][1] is handler
+
+    def test_subscribe_with_id_multiple_agents(self) -> None:
+        """测试多个 Agent 订阅同一事件类型"""
+        event_bus = EventBus()
+
+        def handler1(event: Event) -> None:
+            pass
+
+        def handler2(event: Event) -> None:
+            pass
+
+        def handler3(event: Event) -> None:
+            pass
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler1)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 2, handler2)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 3, handler3)
+
+        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
+        assert len(event_bus._subscriber_ids[EventType.TRADE_EXECUTED]) == 3
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+        assert 2 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+        assert 3 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+    def test_subscribe_with_id_replaces_handler(self) -> None:
+        """测试同一 ID 重复订阅会替换 handler"""
+        event_bus = EventBus()
+
+        def handler1(event: Event) -> None:
+            pass
+
+        def handler2(event: Event) -> None:
+            pass
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler1)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler2)
+
+        assert len(event_bus._subscriber_ids[EventType.TRADE_EXECUTED]) == 1
+        assert event_bus._subscriber_ids[EventType.TRADE_EXECUTED][1] is handler2
+
+
+class TestEventBusUnsubscribeWithId:
+    """测试 EventBus.unsubscribe_with_id"""
+
+    def test_unsubscribe_with_id_normal(self) -> None:
+        """测试带 ID 正常取消订阅"""
+        event_bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler)
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        event_bus.unsubscribe_with_id(EventType.TRADE_EXECUTED, 1)
+        assert 1 not in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+    def test_unsubscribe_with_id_non_existent_id(self) -> None:
+        """测试取消不存在的 ID 订阅"""
+        event_bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler)
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+        # 取消不存在的 ID，应静默处理
+        event_bus.unsubscribe_with_id(EventType.TRADE_EXECUTED, 999)
+        # 原有订阅不受影响
+        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
+
+    def test_unsubscribe_with_id_non_existent_event_type(self) -> None:
+        """测试取消未订阅的事件类型"""
+        event_bus = EventBus()
+
+        # 取消未订阅的事件类型，应静默处理不报错
+        event_bus.unsubscribe_with_id(EventType.TRADE_EXECUTED, 1)
+        assert EventType.TRADE_EXECUTED not in event_bus._subscriber_ids
+
+
+class TestEventBusPublishTargeted:
+    """测试 EventBus.publish 定向发送"""
+
+    def test_publish_targeted_normal(self) -> None:
+        """测试定向发送事件"""
+        event_bus = EventBus()
+        received_events_1: list[Event] = []
+        received_events_2: list[Event] = []
+        received_events_3: list[Event] = []
+
+        def handler1(event: Event) -> None:
+            received_events_1.append(event)
+
+        def handler2(event: Event) -> None:
+            received_events_2.append(event)
+
+        def handler3(event: Event) -> None:
+            received_events_3.append(event)
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler1)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 2, handler2)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 3, handler3)
+
+        # 定向发送给 ID 1 和 2
+        event = Event(
+            event_type=EventType.TRADE_EXECUTED,
+            timestamp=100.0,
+            data={"trade_id": 1},
+            target_ids={1, 2},
+        )
+        event_bus.publish(event)
+
+        # 只有 ID 1 和 2 收到事件
+        assert len(received_events_1) == 1
+        assert len(received_events_2) == 1
+        assert len(received_events_3) == 0
+
+    def test_publish_targeted_to_nonexistent(self) -> None:
+        """测试发送给不存在的 ID"""
+        event_bus = EventBus()
+        received_events: list[Event] = []
+
+        def handler(event: Event) -> None:
+            received_events.append(event)
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler)
+
+        # 定向发送给不存在的 ID
+        event = Event(
+            event_type=EventType.TRADE_EXECUTED,
+            timestamp=100.0,
+            data={"trade_id": 1},
+            target_ids={999, 1000},  # 不存在的 ID
+        )
+        event_bus.publish(event)
+
+        # 没有人收到事件
+        assert len(received_events) == 0
+
+    def test_publish_targeted_partial_existence(self) -> None:
+        """测试定向发送给部分存在的 ID"""
+        event_bus = EventBus()
+        received_events_1: list[Event] = []
+        received_events_2: list[Event] = []
+
+        def handler1(event: Event) -> None:
+            received_events_1.append(event)
+
+        def handler2(event: Event) -> None:
+            received_events_2.append(event)
+
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler1)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 2, handler2)
+
+        # 定向发送给 ID 1 和 999（不存在）
+        event = Event(
+            event_type=EventType.TRADE_EXECUTED,
+            timestamp=100.0,
+            data={"trade_id": 1},
+            target_ids={1, 999},
+        )
+        event_bus.publish(event)
+
+        # 只有 ID 1 收到事件
+        assert len(received_events_1) == 1
+        assert len(received_events_2) == 0
+
+    def test_publish_broadcast_does_not_use_subscriber_ids(self) -> None:
+        """测试广播发送不使用 _subscriber_ids"""
+        event_bus = EventBus()
+        received_subscriber: list[Event] = []
+        received_subscriber_id: list[Event] = []
+
+        def broadcast_handler(event: Event) -> None:
+            received_subscriber.append(event)
+
+        def targeted_handler(event: Event) -> None:
+            received_subscriber_id.append(event)
+
+        # 使用两种不同的订阅方式
+        event_bus.subscribe(EventType.TRADE_EXECUTED, broadcast_handler)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, targeted_handler)
+
+        # 广播发送（target_ids=None）
+        event = Event(
+            event_type=EventType.TRADE_EXECUTED,
+            timestamp=100.0,
+            data={"trade_id": 1},
+        )
+        event_bus.publish(event)
+
+        # 只有 _subscribers 中的 handler 收到事件
+        assert len(received_subscriber) == 1
+        assert len(received_subscriber_id) == 0
+
+    def test_publish_targeted_uses_subscriber_ids(self) -> None:
+        """测试定向发送使用 _subscriber_ids"""
+        event_bus = EventBus()
+        received_subscriber: list[Event] = []
+        received_subscriber_id: list[Event] = []
+
+        def broadcast_handler(event: Event) -> None:
+            received_subscriber.append(event)
+
+        def targeted_handler(event: Event) -> None:
+            received_subscriber_id.append(event)
+
+        # 使用两种不同的订阅方式
+        event_bus.subscribe(EventType.TRADE_EXECUTED, broadcast_handler)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, targeted_handler)
+
+        # 定向发送（target_ids={1}）
+        event = Event(
+            event_type=EventType.TRADE_EXECUTED,
+            timestamp=100.0,
+            data={"trade_id": 1},
+            target_ids={1},
+        )
+        event_bus.publish(event)
+
+        # 只有 _subscriber_ids 中的 handler 收到事件
+        assert len(received_subscriber) == 0
+        assert len(received_subscriber_id) == 1
+
+
+class TestEventBusClearWithSubscriberIds:
+    """测试 EventBus.clear 同时清除 _subscriber_ids"""
+
+    def test_clear_clears_subscriber_ids(self) -> None:
+        """测试 clear 同时清除 _subscriber_ids"""
+        event_bus = EventBus()
+
+        def handler1(event: Event) -> None:
+            pass
+
+        def handler2(event: Event) -> None:
+            pass
+
+        # 添加两种订阅
+        event_bus.subscribe(EventType.TICK_START, handler1)
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, handler2)
+
+        assert len(event_bus._subscribers) == 1
+        assert len(event_bus._subscriber_ids) == 1
+
+        # 清除所有订阅
+        event_bus.clear()
+
+        assert len(event_bus._subscribers) == 0
+        assert len(event_bus._subscriber_ids) == 0
+        assert EventType.TICK_START not in event_bus._subscribers
+        assert EventType.TRADE_EXECUTED not in event_bus._subscriber_ids
