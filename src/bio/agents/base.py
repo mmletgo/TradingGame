@@ -14,6 +14,7 @@ from src.core.event_engine.event_bus import EventBus
 from src.bio.brain.brain import Brain
 from src.market.account.account import Account
 from src.market.matching.trade import Trade
+from src.market.market_state import NormalizedMarketState
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
 
@@ -76,108 +77,84 @@ class Agent:
         self.account = Account(agent_id, agent_type, config)
         self.event_bus = event_bus
 
-        # 订阅成交事件，用于更新账户
-        event_bus.subscribe(EventType.TRADE_EXECUTED, self._on_trade_event)
+        # 使用带 ID 的订阅，支持定向发送
+        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, agent_id, self._on_trade_event)
 
     def _on_trade_event(self, event: Event) -> None:
-        """处理成交事件
-
-        当交易执行时，检查是否与当前 Agent 相关，如果是则更新账户。
+        """处理成交事件（已定向发送，无需过滤）
 
         Args:
             event: 成交事件，包含 trade_id, price, quantity, buyer_id, seller_id,
                    buyer_fee, seller_fee 等字段
         """
-        # 检查是否与当前 Agent 相关
-        buyer_id = event.data["buyer_id"]
-        seller_id = event.data["seller_id"]
-
-        if buyer_id != self.agent_id and seller_id != self.agent_id:
-            # 不是本 Agent 的成交，忽略
-            return
-
         # 从事件数据构建 Trade 对象
         trade = Trade(
             trade_id=event.data["trade_id"],
             price=event.data["price"],
             quantity=event.data["quantity"],
-            buyer_id=buyer_id,
-            seller_id=seller_id,
+            buyer_id=event.data["buyer_id"],
+            seller_id=event.data["seller_id"],
             buyer_fee=event.data["buyer_fee"],
             seller_fee=event.data["seller_fee"],
+            timestamp=event.timestamp,
         )
 
-        # 判断是买方还是卖方
-        is_buyer = buyer_id == self.agent_id
-
-        # 更新账户
+        is_buyer = event.data["buyer_id"] == self.agent_id
         self.account.on_trade(trade, is_buyer)
 
-    def observe(self, orderbook: OrderBook, recent_trades: list[Trade]) -> list[float]:
-        """观察市场状态，生成神经网络输入
-
-        输入包括上下100档订单簿的价格和数量、最近100笔成交、agent自身的持仓数量、余额信息。
+    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> list[float]:
+        """从预计算的市场状态构建神经网络输入
 
         Args:
-            orderbook: 订单簿对象
-            recent_trades: 最近成交记录列表
+            market_state: 预计算的归一化市场数据
+            orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            归一化后的神经网络输入向量
+            神经网络输入向量
         """
         inputs: list[float] = []
 
-        # 1. 获取参考价格（使用中间价或最新价）
-        mid_price = orderbook.get_mid_price()
-        if mid_price is None:
-            mid_price = orderbook.last_price
-        if mid_price == 0:
-            mid_price = 100.0  # 默认参考价格
+        # 1. 买盘（直接使用预计算值）- 200 个
+        inputs.extend(market_state.bid_data.tolist())
 
-        # 2. 订单簿深度数据（上下100档，每档2个值：价格+数量）
-        depth = orderbook.get_depth(levels=100)
+        # 2. 卖盘（直接使用预计算值）- 200 个
+        inputs.extend(market_state.ask_data.tolist())
 
-        # 买盘：价格归一化（相对于 mid_price），数量保持原值
-        for price, qty in depth["bids"]:
-            price_norm = (price - mid_price) / mid_price if mid_price > 0 else 0
-            inputs.append(price_norm)
-            inputs.append(qty)
-        # 补齐缺失的买盘档位（填充 0）
-        for _ in range(100 - len(depth["bids"])):
-            inputs.append(0.0)
-            inputs.append(0.0)
-
-        # 卖盘：价格归一化（相对于 mid_price），数量保持原值
-        for price, qty in depth["asks"]:
-            price_norm = (price - mid_price) / mid_price if mid_price > 0 else 0
-            inputs.append(price_norm)
-            inputs.append(qty)
-        # 补齐缺失的卖盘档位（填充 0）
-        for _ in range(100 - len(depth["asks"])):
-            inputs.append(0.0)
-            inputs.append(0.0)
-
-        # 3. 最近100笔成交记录（每笔3个值：价格归一化+数量+买卖方向）
-        trades_to_process = recent_trades[:100]
-        for trade in trades_to_process:
-            price_norm = (trade.price - mid_price) / mid_price if mid_price > 0 else 0
-            inputs.append(price_norm)
-            inputs.append(trade.quantity)
-            # 1.0 表示本 Agent 是买方，-1.0 表示是卖方，0.0 表示无关
-            if trade.buyer_id == self.agent_id:
-                inputs.append(1.0)
-            elif trade.seller_id == self.agent_id:
-                inputs.append(-1.0)
+        # 3. 成交（补充方向信息）- 300 个
+        for i in range(100):
+            inputs.append(float(market_state.trade_prices[i]))
+            inputs.append(float(market_state.trade_quantities[i]))
+            # 方向：本 Agent 是买方(1)/卖方(-1)/无关(0)
+            if i < len(market_state.trade_buyer_ids):
+                if market_state.trade_buyer_ids[i] == self.agent_id:
+                    inputs.append(1.0)
+                elif market_state.trade_seller_ids[i] == self.agent_id:
+                    inputs.append(-1.0)
+                else:
+                    inputs.append(0.0)
             else:
                 inputs.append(0.0)
-        # 补齐缺失的成交记录（填充 0）
-        for _ in range(100 - len(trades_to_process)):
-            inputs.append(0.0)
-            inputs.append(0.0)
-            inputs.append(0.0)
 
-        # 4. 自身持仓和余额信息
-        # 持仓价值归一化：持仓价值 / (净值 * 杠杆倍率)
+        # 4. 持仓信息 - 4 个
+        inputs.extend(self._get_position_inputs(market_state.mid_price))
+
+        # 5. 挂单信息 - 3 个（子类可重写）
+        inputs.extend(self._get_pending_order_inputs(market_state.mid_price, orderbook))
+
+        return inputs
+
+    def _get_position_inputs(self, mid_price: float) -> list[float]:
+        """获取持仓信息输入（4 个值）
+
+        Args:
+            mid_price: 中间价
+
+        Returns:
+            持仓信息输入向量 [持仓归一化, 均价归一化, 余额归一化, 净值归一化]
+        """
+        inputs: list[float] = []
+
+        # 持仓价值归一化
         equity = self.account.get_equity(mid_price)
         position_value = abs(self.account.position.quantity) * mid_price
         if equity > 0 and self.account.leverage > 0:
@@ -186,14 +163,14 @@ class Agent:
             position_norm = 0.0
         inputs.append(position_norm)
 
-        # 持仓均价归一化（空持仓时为 0）
+        # 持仓均价归一化
         if self.account.position.quantity == 0:
             inputs.append(0.0)
         else:
             avg_price_norm = (self.account.position.avg_price - mid_price) / mid_price if mid_price > 0 else 0
             inputs.append(avg_price_norm)
 
-        # 余额归一化（相对于初始余额的倍数）
+        # 余额归一化
         initial_balance = self.account.initial_balance
         balance_norm = self.account.balance / initial_balance if initial_balance > 0 else 0
         inputs.append(balance_norm)
@@ -204,8 +181,32 @@ class Agent:
 
         return inputs
 
-    def decide(self, orderbook: OrderBook, recent_trades: list[Trade]) -> tuple[ActionType, dict[str, Any]]:
-        """决策下一步动作
+    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> list[float]:
+        """获取挂单信息输入（3 个值：价格归一化、数量、方向）
+
+        子类可重写此方法以支持不同的挂单格式。
+
+        Args:
+            mid_price: 中间价
+            orderbook: 订单簿
+
+        Returns:
+            挂单信息输入向量 [价格归一化, 数量, 方向]
+        """
+        pending_id = self.account.pending_order_id
+        if pending_id is None:
+            return [0.0, 0.0, 0.0]
+
+        order = orderbook.order_map.get(pending_id)
+        if order is None:
+            return [0.0, 0.0, 0.0]
+
+        price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0
+        direction = 1.0 if order.side == OrderSide.BUY else -1.0
+        return [price_norm, float(order.quantity), direction]
+
+    def decide(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> tuple[ActionType, dict[str, Any]]:
+        """决策下一步动作（接收预计算的市场状态）
 
         观察市场状态，通过神经网络前向传播，解析输出为动作类型和参数。
 
@@ -215,8 +216,8 @@ class Agent:
         - 输出[8]: 数量比例（归一化值，0 到 1，相对于可用购买力）
 
         Args:
-            orderbook: 订单簿对象
-            recent_trades: 最近成交记录列表
+            market_state: 预计算的归一化市场数据
+            orderbook: 订单簿
 
         Returns:
             (动作类型, 动作参数字典)
@@ -225,7 +226,7 @@ class Agent:
             - CANCEL/CLEAR_POSITION/HOLD: {}
         """
         # 1. 观察市场，获取神经网络输入
-        inputs = self.observe(orderbook, recent_trades)
+        inputs = self.observe(market_state, orderbook)
 
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
@@ -245,21 +246,21 @@ class Agent:
         quantity_ratio_norm = max(-1.0, min(1.0, outputs[8]))  # 限制在 [-1, 1]
 
         # 获取参考价格
-        mid_price = orderbook.get_mid_price()
-        if mid_price is None:
-            mid_price = orderbook.last_price
+        mid_price = market_state.mid_price
         if mid_price == 0:
             mid_price = 100.0
 
         # 映射数量比例到 [0.1, 1.0]
         quantity_ratio = 0.1 + (quantity_ratio_norm + 1) * 0.45  # -1→0.1, 0→0.55, 1→1.0
 
+        # 获取 tick_size
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+
         # 根据动作类型计算参数
         params: dict[str, Any] = {}
 
         if action == ActionType.PLACE_BID:
             # 挂买单：价格由神经网络决定（相对 mid_price 的偏移）
-            tick_size = orderbook.tick_size if orderbook.tick_size > 0 else 0.1
             price_offset_ticks = price_offset_norm * 100  # ±100 ticks
             params["price"] = mid_price + price_offset_ticks * tick_size
             # 数量由神经网络决定
@@ -267,7 +268,6 @@ class Agent:
 
         elif action == ActionType.PLACE_ASK:
             # 挂卖单：价格由神经网络决定（相对 mid_price 的偏移）
-            tick_size = orderbook.tick_size if orderbook.tick_size > 0 else 0.1
             price_offset_ticks = price_offset_norm * 100  # ±100 ticks
             params["price"] = mid_price + price_offset_ticks * tick_size
             # 数量由神经网络决定
@@ -493,9 +493,11 @@ class Agent:
         Args:
             config: 新的 Agent 配置对象，用于初始化账户
         """
-        # 清除事件订阅
-        self.event_bus.clear()
+        # 取消带 ID 的订阅
+        self.event_bus.unsubscribe_with_id(EventType.TRADE_EXECUTED, self.agent_id)
+
         # 重置账户状态（余额、持仓、挂单ID、杠杆、费率等）
         self.account = Account(self.agent_id, self.agent_type, config)
+
         # 重新订阅成交事件
-        self.event_bus.subscribe(EventType.TRADE_EXECUTED, self._on_trade_event)
+        self.event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, self.agent_id, self._on_trade_event)

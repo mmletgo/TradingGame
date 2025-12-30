@@ -44,6 +44,7 @@ class Trade:
         seller_id: int,
         buyer_fee: float,
         seller_fee: float,
+        timestamp: float | None = None,
     ) -> None:
         """
         创建成交记录
@@ -56,6 +57,7 @@ class Trade:
             seller_id: 卖方Agent ID
             buyer_fee: 买方手续费
             seller_fee: 卖方手续费
+            timestamp: 成交时间戳（可选，默认使用当前时间）
         """
         self.trade_id = trade_id
         self.price = price
@@ -64,4 +66,4 @@ class Trade:
         self.seller_id = seller_id
         self.buyer_fee = buyer_fee
         self.seller_fee = seller_fee
-        self.timestamp = time.time()
+        self.timestamp = timestamp if timestamp is not None else time.time()

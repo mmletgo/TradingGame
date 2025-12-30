@@ -9,11 +9,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from src.bio.agents.base import AgentType
 from src.config.config import Config
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
 from src.core.log_engine.logger import get_logger
+from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
@@ -129,6 +132,61 @@ class Trainer:
             )
             self.matching_engine.process_order(order)
 
+    def _compute_normalized_market_state(self) -> NormalizedMarketState:
+        """预计算归一化的公共市场数据
+
+        在每个 tick 开始时调用，避免每个 Agent 重复计算相同的归一化数据。
+
+        Returns:
+            NormalizedMarketState: 归一化后的市场状态
+        """
+        orderbook = self.matching_engine._orderbook
+
+        # 获取参考价格
+        mid_price = orderbook.get_mid_price()
+        if mid_price is None:
+            mid_price = orderbook.last_price
+        if mid_price == 0:
+            mid_price = 100.0
+
+        tick_size = orderbook.tick_size
+        depth = orderbook.get_depth(levels=100)
+
+        # 归一化买盘：100档 × 2 = 200
+        bid_data = np.zeros(200, dtype=np.float32)
+        for i, (price, qty) in enumerate(depth["bids"]):
+            bid_data[i * 2] = (price - mid_price) / mid_price if mid_price > 0 else 0
+            bid_data[i * 2 + 1] = qty
+
+        # 归一化卖盘：100档 × 2 = 200
+        ask_data = np.zeros(200, dtype=np.float32)
+        for i, (price, qty) in enumerate(depth["asks"]):
+            ask_data[i * 2] = (price - mid_price) / mid_price if mid_price > 0 else 0
+            ask_data[i * 2 + 1] = qty
+
+        # 归一化成交：100笔
+        trade_prices = np.zeros(100, dtype=np.float32)
+        trade_quantities = np.zeros(100, dtype=np.float32)
+        trade_buyer_ids: list[int] = []
+        trade_seller_ids: list[int] = []
+
+        for i, trade in enumerate(self.recent_trades[:100]):
+            trade_prices[i] = (trade.price - mid_price) / mid_price if mid_price > 0 else 0
+            trade_quantities[i] = trade.quantity
+            trade_buyer_ids.append(trade.buyer_id)
+            trade_seller_ids.append(trade.seller_id)
+
+        return NormalizedMarketState(
+            mid_price=mid_price,
+            tick_size=tick_size,
+            bid_data=bid_data,
+            ask_data=ask_data,
+            trade_prices=trade_prices,
+            trade_quantities=trade_quantities,
+            trade_buyer_ids=trade_buyer_ids,
+            trade_seller_ids=trade_seller_ids,
+        )
+
     def _init_market(self) -> None:
         """初始化市场
 
@@ -138,10 +196,14 @@ class Trainer:
             return
 
         orderbook = self.matching_engine._orderbook
+
+        # 预计算归一化市场数据
+        market_state = self._compute_normalized_market_state()
+
         mm_population = self.populations.get(AgentType.MARKET_MAKER)
         if mm_population:
             for agent in mm_population.agents:
-                action, params = agent.decide(orderbook, self.recent_trades)
+                action, params = agent.decide(market_state, orderbook)
                 agent.execute_action(action, params, self.event_bus)
 
     def _reset_market(self) -> None:
@@ -183,13 +245,16 @@ class Trainer:
             Event(EventType.TICK_START, time.time(), {"tick": self.tick})
         )
 
+        # 预计算归一化市场数据
+        market_state = self._compute_normalized_market_state()
+
         # 按顺序执行：做市商->庄家->散户
         for agent_type in [AgentType.MARKET_MAKER, AgentType.WHALE, AgentType.RETAIL]:
             population = self.populations.get(agent_type)
             if population:
                 for agent in population.agents:
-                    # 决策
-                    action, params = agent.decide(orderbook, self.recent_trades)
+                    # 决策（传入预计算的市场状态和订单簿）
+                    action, params = agent.decide(market_state, orderbook)
                     # 执行
                     agent.execute_action(action, params, self.event_bus)
 

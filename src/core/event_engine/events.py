@@ -25,3 +25,4 @@ class Event:
     event_type: EventType
     timestamp: float
     data: dict[str, Any] = field(default_factory=dict)
+    target_ids: set[int] | None = None  # None 表示广播，否则只发送给指定 ID

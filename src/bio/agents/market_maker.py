@@ -11,6 +11,7 @@ from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
+from src.market.market_state import NormalizedMarketState
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
 from src.market.matching.trade import Trade
@@ -65,8 +66,48 @@ class MarketMakerAgent(Agent):
         """
         return [ActionType.QUOTE, ActionType.CLEAR_POSITION]
 
+    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> list[float]:
+        """获取做市商挂单信息（30 个值）
+
+        买单 5 个位置 x 3 = 15
+        卖单 5 个位置 x 3 = 15
+        每个位置：[价格归一化, 数量, 有效标志(1.0/0.0)]
+
+        Args:
+            mid_price: 中间价（用于价格归一化）
+            orderbook: 订单簿（用于查询订单详情）
+
+        Returns:
+            30 个浮点数的列表
+        """
+        inputs: list[float] = []
+
+        # 买单（5 个位置）
+        for i in range(5):
+            if i < len(self.bid_order_ids):
+                order_id = self.bid_order_ids[i]
+                order = orderbook.order_map.get(order_id)
+                if order is not None:
+                    price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0
+                    inputs.extend([price_norm, float(order.quantity), 1.0])
+                    continue
+            inputs.extend([0.0, 0.0, 0.0])
+
+        # 卖单（5 个位置）
+        for i in range(5):
+            if i < len(self.ask_order_ids):
+                order_id = self.ask_order_ids[i]
+                order = orderbook.order_map.get(order_id)
+                if order is not None:
+                    price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0
+                    inputs.extend([price_norm, float(order.quantity), 1.0])
+                    continue
+            inputs.extend([0.0, 0.0, 0.0])
+
+        return inputs
+
     def decide(
-        self, orderbook: OrderBook, recent_trades: list[Trade]
+        self, market_state: NormalizedMarketState, orderbook: OrderBook
     ) -> tuple[ActionType, dict[str, Any]]:
         """决策下一步动作
 
@@ -80,8 +121,8 @@ class MarketMakerAgent(Agent):
         - 输出[17-21]: 卖单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
 
         Args:
+            market_state: 预计算的归一化市场数据
             orderbook: 订单簿对象
-            recent_trades: 最近成交记录列表
 
         Returns:
             (动作类型, 动作参数字典)
@@ -90,7 +131,7 @@ class MarketMakerAgent(Agent):
             - CLEAR_POSITION: {}
         """
         # 1. 观察市场，获取神经网络输入（复用基类方法）
-        inputs = self.observe(orderbook, recent_trades)
+        inputs = self.observe(market_state, orderbook)
 
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
@@ -108,13 +149,11 @@ class MarketMakerAgent(Agent):
 
         # 5. QUOTE 动作：解析买卖单参数
         # 获取参考价格
-        mid_price = orderbook.get_mid_price()
-        if mid_price is None:
-            mid_price = orderbook.last_price
+        mid_price = market_state.mid_price
         if mid_price == 0:
             mid_price = 100.0
 
-        tick_size = orderbook.tick_size if orderbook.tick_size > 0 else 0.1
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
         # 首先收集所有 10 个订单的原始数量比例，然后归一化使总和为 1.0
         bid_raw_ratios: list[float] = []
