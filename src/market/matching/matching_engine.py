@@ -87,15 +87,6 @@ class MatchingEngine:
         """
         self._fee_rates[agent_id] = (maker_rate, taker_rate)
 
-    def unregister_agent(self, agent_id: int) -> None:
-        """
-        移除 Agent 的费率配置（淘汰时调用）
-
-        Args:
-            agent_id: Agent ID
-        """
-        self._fee_rates.pop(agent_id, None)
-
     def calculate_fee(self, agent_id: int, amount: float, is_maker: bool) -> float:
         """
         计算手续费

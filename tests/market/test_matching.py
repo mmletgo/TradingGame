@@ -264,29 +264,6 @@ def test_register_agent():
     assert engine._fee_rates[1] == (0.0, 0.0001)
 
 
-def test_unregister_agent():
-    """测试注销 Agent 费率"""
-    event_bus = EventBus()
-    config = MarketConfig(
-        initial_price=100.0,
-        tick_size=0.1,
-        lot_size=1.0,
-        depth=100,
-    )
-    engine = MatchingEngine(event_bus, config)
-
-    # 注册 Agent
-    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
-    assert 1 in engine._fee_rates
-
-    # 注销 Agent
-    engine.unregister_agent(agent_id=1)
-    assert 1 not in engine._fee_rates
-
-    # 注销不存在的 Agent 不应该报错
-    engine.unregister_agent(agent_id=999)  # 不应该抛出异常
-
-
 def test_multiple_agents_different_rates():
     """测试多个 Agent 使用不同费率"""
     event_bus = EventBus()

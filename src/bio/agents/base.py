@@ -474,20 +474,6 @@ class Agent:
         order_id = int.from_bytes(hash_bytes[:8], byteorder="big", signed=False)
         return order_id
 
-    def get_fitness(self, current_price: float) -> float:
-        """计算适应度
-
-        适应度 = 账户净值 / 初始净值，用于 NEAT 进化算法评估 Agent 的交易表现。
-
-        Args:
-            current_price: 当前市场价格，用于计算账户净值
-
-        Returns:
-            适应度值（>1 表示盈利，=1 表示持平，<1 表示亏损）
-        """
-        equity = self.account.get_equity(current_price)
-        return equity / self.account.initial_balance
-
     def reset(self, config: AgentConfig) -> None:
         """重置 Agent 状态
 

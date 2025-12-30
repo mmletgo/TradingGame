@@ -79,9 +79,6 @@ Agent 基类，提供通用属性和方法。
 #### `reset(config: AgentConfig) -> None`
 重置 Agent 状态。使用 `unsubscribe_with_id` 取消订阅，重置账户，然后重新订阅，并将 `is_liquidated` 重置为 False。
 
-#### `get_fitness(current_price: float) -> float`
-计算适应度（净值 / 初始净值），用于 NEAT 进化。
-
 ## 事件机制
 
 Agent 使用带 ID 的订阅机制处理成交事件：

@@ -11,11 +11,7 @@ class EventType(Enum):
     TICK_END = "tick_end"
     ORDER_PLACED = "order_placed"
     ORDER_CANCELLED = "order_cancelled"
-    ORDER_FILLED = "order_filled"
     TRADE_EXECUTED = "trade_executed"
-    AGENT_ELIMINATED = "agent_eliminated"
-    AGENT_SPAWNED = "agent_spawned"
-    MARKET_INITIALIZED = "market_initialized"
     LIQUIDATION = "liquidation"
 
 

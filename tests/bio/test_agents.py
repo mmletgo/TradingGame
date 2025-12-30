@@ -1602,195 +1602,6 @@ class TestAgentExecuteAction:
         assert len(order_ids) == 100
 
 
-class TestAgentGetFitness:
-    """测试 Agent.get_fitness"""
-
-    def test_get_fitness_no_position(self):
-        """测试无持仓时的适应度"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 计算适应度
-        fitness = agent.get_fitness(100.0)
-
-        # 无持仓时，净值 = 余额 = 初始余额，适应度 = 1.0
-        assert fitness == 1.0
-
-    def test_get_fitness_profit(self):
-        """测试盈利时的适应度"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 开多仓：100 @ 100
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 100.0, 100.0)
-
-        # 价格涨到 110
-        fitness = agent.get_fitness(110.0)
-
-        # 净值 = 10000 + 100 * (110 - 100) = 11000
-        # 适应度 = 11000 / 10000 = 1.1
-        assert abs(fitness - 1.1) < 0.01
-
-    def test_get_fitness_loss(self):
-        """测试亏损时的适应度"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 开多仓：100 @ 100
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 100.0, 100.0)
-
-        # 价格跌到 90
-        fitness = agent.get_fitness(90.0)
-
-        # 净值 = 10000 + 100 * (90 - 100) = 9000
-        # 适应度 = 9000 / 10000 = 0.9
-        assert abs(fitness - 0.9) < 0.01
-
-    def test_get_fitness_near_liquidation(self):
-        """测试接近爆仓时的适应度"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 开多仓：10000 @ 100（满杠杆）
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 10000.0, 100.0)
-
-        # 价格跌到 99
-        fitness = agent.get_fitness(99.0)
-
-        # 净值 = 10000 + 10000 * (99 - 100) = 0
-        # 适应度 = 0 / 10000 = 0
-        assert abs(fitness - 0.0) < 0.01
-
-    def test_get_fitness_short_position_profit(self):
-        """测试空仓盈利时的适应度"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.WHALE,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 开空仓：1000 @ 100
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.SELL, 1000.0, 100.0)
-
-        # 价格跌到 90（空仓盈利）
-        fitness = agent.get_fitness(90.0)
-
-        # 净值 = 10000000 + 1000 * (100 - 90) = 10010000
-        # 适应度 = 10010000 / 10000000 = 1.001
-        assert abs(fitness - 1.001) < 0.0001
-
-
 class TestAgentReset:
     """测试 Agent.reset"""
 
@@ -2126,12 +1937,10 @@ class TestRetailAgentInit:
         assert hasattr(agent, "observe")
         assert hasattr(agent, "decide")
         assert hasattr(agent, "execute_action")
-        assert hasattr(agent, "get_fitness")
         assert hasattr(agent, "reset")
         assert callable(agent.observe)
         assert callable(agent.decide)
         assert callable(agent.execute_action)
-        assert callable(agent.get_fitness)
         assert callable(agent.reset)
 
     def test_retail_agent_subscribes_to_events(self):
@@ -2586,12 +2395,10 @@ class TestWhaleAgentInit:
         assert hasattr(agent, "observe")
         assert hasattr(agent, "decide")
         assert hasattr(agent, "execute_action")
-        assert hasattr(agent, "get_fitness")
         assert hasattr(agent, "reset")
         assert callable(agent.observe)
         assert callable(agent.decide)
         assert callable(agent.execute_action)
-        assert callable(agent.get_fitness)
         assert callable(agent.reset)
 
     def test_whale_agent_subscribes_to_events(self):
@@ -3263,12 +3070,10 @@ class TestMarketMakerAgentInit:
         assert hasattr(agent, "observe")
         assert hasattr(agent, "decide")
         assert hasattr(agent, "execute_action")
-        assert hasattr(agent, "get_fitness")
         assert hasattr(agent, "reset")
         assert callable(agent.observe)
         assert callable(agent.decide)
         assert callable(agent.execute_action)
-        assert callable(agent.get_fitness)
         assert callable(agent.reset)
 
     def test_market_maker_agent_subscribes_to_events(self):

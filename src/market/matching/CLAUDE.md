@@ -41,9 +41,6 @@
 - `evolve()` 进化后（新 Agent 需要注册）
 - `load_checkpoint()` 加载检查点后
 
-#### `unregister_agent(agent_id: int) -> None`
-移除 Agent 的费率配置（淘汰时调用）。
-
 #### `calculate_fee(agent_id: int, amount: float, is_maker: bool) -> float`
 计算手续费。未注册的 Agent 使用默认散户费率。
 

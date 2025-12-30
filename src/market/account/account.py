@@ -65,21 +65,6 @@ class Account:
         """
         return self.balance + self.position.get_unrealized_pnl(current_price)
 
-    def get_available_margin(self, current_price: float) -> float:
-        """计算可用保证金
-
-        可用保证金 = 净值 - 占用保证金，用于判断是否有足够资金开新仓。
-
-        Args:
-            current_price: 当前市场价格，用于计算净值和占用保证金
-
-        Returns:
-            可用保证金金额（可能为负数，表示保证金已不足）
-        """
-        equity = self.get_equity(current_price)
-        margin_used = self.position.get_margin_used(current_price, self.leverage)
-        return equity - margin_used
-
     def get_margin_ratio(self, current_price: float) -> float:
         """计算保证金率
 
