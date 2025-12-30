@@ -980,6 +980,7 @@ class TestAccountOnTrade:
             seller_id=2,
             buyer_fee=5.0,
             seller_fee=2.0,
+            is_buyer_taker=True,
         )
 
         # 处理买入成交
@@ -1017,6 +1018,7 @@ class TestAccountOnTrade:
             seller_id=1,
             buyer_fee=5.5,
             seller_fee=0.0,
+            is_buyer_taker=True,
         )
 
         # 记录初始余额

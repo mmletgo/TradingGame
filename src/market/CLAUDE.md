@@ -24,9 +24,7 @@
 - `bid_data: NDArray[np.float32]` - 买盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
 - `ask_data: NDArray[np.float32]` - 卖盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
 - `trade_prices: NDArray[np.float32]` - 成交价格归一化，shape (100,)
-- `trade_quantities: NDArray[np.float32]` - 成交数量，shape (100,)
-- `trade_buyer_ids: list[int]` - 成交买方 ID 列表，用于 Agent 计算成交方向
-- `trade_seller_ids: list[int]` - 成交卖方 ID 列表
+- `trade_quantities: NDArray[np.float32]` - 成交数量（带方向），shape (100,)，正数表示 taker 是买方，负数表示 taker 是卖方
 
 **使用场景：**
 在每个 tick 开始时由 Trainer 预计算一次，然后传递给所有 Agent 使用，避免重复计算订单簿数据的归一化。

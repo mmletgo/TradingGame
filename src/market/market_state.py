@@ -19,9 +19,7 @@ class NormalizedMarketState:
         bid_data: 买盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
         ask_data: 卖盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
         trade_prices: 成交价格归一化，shape (100,)
-        trade_quantities: 成交数量，shape (100,)
-        trade_buyer_ids: 成交买方 ID 列表，用于 Agent 计算成交方向
-        trade_seller_ids: 成交卖方 ID 列表
+        trade_quantities: 成交数量（带方向），shape (100,)，正数表示taker是买方，负数表示taker是卖方
     """
     mid_price: float
     tick_size: float
@@ -29,5 +27,3 @@ class NormalizedMarketState:
     ask_data: NDArray[np.float32]      # shape: (200,)
     trade_prices: NDArray[np.float32]  # shape: (100,)
     trade_quantities: NDArray[np.float32]  # shape: (100,)
-    trade_buyer_ids: list[int]
-    trade_seller_ids: list[int]

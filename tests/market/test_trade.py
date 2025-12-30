@@ -20,6 +20,7 @@ def test_trade_init_normal():
         seller_id=456,
         buyer_fee=0.05,
         seller_fee=0.02,
+        is_buyer_taker=True,
     )
 
     time_after = time.time()
@@ -32,6 +33,7 @@ def test_trade_init_normal():
     assert trade.seller_id == 456
     assert trade.buyer_fee == 0.05
     assert trade.seller_fee == 0.02
+    assert trade.is_buyer_taker is True
 
     # 验证时间戳在合理范围内
     assert time_before <= trade.timestamp <= time_after
@@ -47,6 +49,7 @@ def test_trade_init_zero_values():
         seller_id=0,
         buyer_fee=0.0,
         seller_fee=0.0,
+        is_buyer_taker=False,
     )
 
     assert trade.trade_id == 0
@@ -56,6 +59,7 @@ def test_trade_init_zero_values():
     assert trade.seller_id == 0
     assert trade.buyer_fee == 0.0
     assert trade.seller_fee == 0.0
+    assert trade.is_buyer_taker is False
     # 时间戳应该存在
     assert trade.timestamp > 0
 
@@ -70,6 +74,7 @@ def test_trade_init_small_values():
         seller_id=2,
         buyer_fee=0.0001,
         seller_fee=0.0002,
+        is_buyer_taker=True,
     )
 
     assert trade.trade_id == 999
@@ -91,6 +96,7 @@ def test_trade_init_large_values():
         seller_id=88888,
         buyer_fee=100.0,
         seller_fee=200.0,
+        is_buyer_taker=False,
     )
 
     assert trade.trade_id == 1000000
@@ -112,6 +118,7 @@ def test_trade_timestamp_unique():
         seller_id=2,
         buyer_fee=0.1,
         seller_fee=0.1,
+        is_buyer_taker=True,
     )
 
     trade2 = Trade(
@@ -122,6 +129,7 @@ def test_trade_timestamp_unique():
         seller_id=2,
         buyer_fee=0.1,
         seller_fee=0.1,
+        is_buyer_taker=False,
     )
 
     # 两条记录的时间戳应该不同（除非在同一微秒内创建）

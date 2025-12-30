@@ -23,6 +23,7 @@ class Trade:
         seller_id: 卖方Agent ID
         buyer_fee: 买方手续费
         seller_fee: 卖方手续费
+        is_buyer_taker: 买方是否为taker（主动吃单方）
         timestamp: 成交时间戳
     """
 
@@ -33,6 +34,7 @@ class Trade:
     seller_id: int
     buyer_fee: float
     seller_fee: float
+    is_buyer_taker: bool
     timestamp: float
 
     def __init__(
@@ -44,6 +46,7 @@ class Trade:
         seller_id: int,
         buyer_fee: float,
         seller_fee: float,
+        is_buyer_taker: bool,
         timestamp: float | None = None,
     ) -> None:
         """
@@ -57,6 +60,7 @@ class Trade:
             seller_id: 卖方Agent ID
             buyer_fee: 买方手续费
             seller_fee: 卖方手续费
+            is_buyer_taker: 买方是否为taker（主动吃单方）
             timestamp: 成交时间戳（可选，默认使用当前时间）
         """
         self.trade_id = trade_id
@@ -66,4 +70,5 @@ class Trade:
         self.seller_id = seller_id
         self.buyer_fee = buyer_fee
         self.seller_fee = seller_fee
+        self.is_buyer_taker = is_buyer_taker
         self.timestamp = timestamp if timestamp is not None else time.time()

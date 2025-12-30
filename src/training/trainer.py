@@ -164,17 +164,14 @@ class Trainer:
             ask_data[i * 2] = (price - mid_price) / mid_price if mid_price > 0 else 0
             ask_data[i * 2 + 1] = qty
 
-        # 归一化成交：100笔
+        # 归一化成交：100笔（数量带方向：正=taker买入，负=taker卖出）
         trade_prices = np.zeros(100, dtype=np.float32)
         trade_quantities = np.zeros(100, dtype=np.float32)
-        trade_buyer_ids: list[int] = []
-        trade_seller_ids: list[int] = []
 
         for i, trade in enumerate(self.recent_trades[:100]):
             trade_prices[i] = (trade.price - mid_price) / mid_price if mid_price > 0 else 0
-            trade_quantities[i] = trade.quantity
-            trade_buyer_ids.append(trade.buyer_id)
-            trade_seller_ids.append(trade.seller_id)
+            # 用正负表示方向：正数=taker买入，负数=taker卖出
+            trade_quantities[i] = trade.quantity if trade.is_buyer_taker else -trade.quantity
 
         return NormalizedMarketState(
             mid_price=mid_price,
@@ -183,26 +180,26 @@ class Trainer:
             ask_data=ask_data,
             trade_prices=trade_prices,
             trade_quantities=trade_quantities,
-            trade_buyer_ids=trade_buyer_ids,
-            trade_seller_ids=trade_seller_ids,
         )
 
     def _init_market(self) -> None:
         """初始化市场
 
         只有做市商先行动，建立初始流动性。
+
+        每个做市商按顺序行动，后一个做市商看到的是前一个做市商
+        下单后的市场状态。
         """
         if not self.matching_engine:
             return
 
         orderbook = self.matching_engine._orderbook
 
-        # 预计算归一化市场数据
-        market_state = self._compute_normalized_market_state()
-
         mm_population = self.populations.get(AgentType.MARKET_MAKER)
         if mm_population:
             for agent in mm_population.agents:
+                # 每个做市商决策前重新计算市场状态，确保看到最新的订单簿
+                market_state = self._compute_normalized_market_state()
                 action, params = agent.decide(market_state, orderbook)
                 agent.execute_action(action, params, self.event_bus)
 
@@ -214,13 +211,10 @@ class Trainer:
         if not self.matching_engine:
             return
 
-        # 清空订单簿（手动实现，因为 OrderBook 没有 clear 方法）
-        orderbook = self.matching_engine._orderbook
-        orderbook.bids.clear()
-        orderbook.asks.clear()
-        orderbook.order_map.clear()
-        # 重置最新价为初始价
-        orderbook.last_price = self.config.market.initial_price
+        # 清空订单簿并重置最新价
+        self.matching_engine._orderbook.clear(
+            reset_price=self.config.market.initial_price
+        )
 
         # 清空最近成交
         self.recent_trades.clear()

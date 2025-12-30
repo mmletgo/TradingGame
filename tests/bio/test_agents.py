@@ -27,8 +27,6 @@ def create_mock_market_state(mid_price: float = 100.0, tick_size: float = 0.1) -
         ask_data=np.zeros(200, dtype=np.float32),
         trade_prices=np.zeros(100, dtype=np.float32),
         trade_quantities=np.zeros(100, dtype=np.float32),
-        trade_buyer_ids=[],
-        trade_seller_ids=[],
     )
 
 
@@ -189,6 +187,7 @@ class TestAgentOnTradeEvent:
                 "seller_id": 2,
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
+                "is_buyer_taker": True,
             },
         )
 
@@ -242,6 +241,7 @@ class TestAgentOnTradeEvent:
                 "seller_id": 1,
                 "buyer_fee": 5.5,
                 "seller_fee": 0.0,
+                "is_buyer_taker": True,
             },
         )
 
@@ -305,6 +305,7 @@ class TestAgentOnTradeEvent:
                 "seller_id": 3,
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
+                "is_buyer_taker": True,
             },
             target_ids={2, 3},  # 只发送给 agent_id=2 和 agent_id=3
         )
@@ -363,6 +364,7 @@ class TestAgentOnTradeEvent:
                 "seller_id": 2,
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
+                "is_buyer_taker": True,
             },
             target_ids={1, 2},  # 发送给参与成交的双方
         )
@@ -412,23 +414,25 @@ class TestAgentObserve:
         orderbook.last_price = 100.0
 
         # 创建 NormalizedMarketState
+        # trade_quantities: 正数表示 taker 是买方，负数表示 taker 是卖方
+        trade_quantities = np.zeros(100, dtype=np.float32)
+        trade_quantities[0] = 10.0   # 第一笔成交：taker 是买方，数量 10
+        trade_quantities[1] = -5.0   # 第二笔成交：taker 是卖方，数量 5
+        trade_quantities[2] = 8.0    # 第三笔成交：taker 是买方，数量 8
+
+        trade_prices = np.zeros(100, dtype=np.float32)
+        trade_prices[0] = -0.001  # 99.9 归一化
+        trade_prices[1] = 0.001   # 100.1 归一化
+        trade_prices[2] = 0.0     # 100.0 归一化
+
         market_state = NormalizedMarketState(
             mid_price=100.0,
             tick_size=0.1,
             bid_data=np.array([0.1, 10.0] * 100, dtype=np.float32),  # 100档买盘
             ask_data=np.array([-0.1, 10.0] * 100, dtype=np.float32),  # 100档卖盘
-            trade_prices=np.zeros(100, dtype=np.float32),
-            trade_quantities=np.zeros(100, dtype=np.float32),
-            trade_buyer_ids=[1, 3, 4],  # 本 Agent 是第一笔成交的买方
-            trade_seller_ids=[2, 1, 5],  # 本 Agent 是第二笔成交的卖方
+            trade_prices=trade_prices,
+            trade_quantities=trade_quantities,
         )
-        # 设置前三笔成交
-        market_state.trade_prices[0] = -0.001  # 99.9 归一化
-        market_state.trade_prices[1] = 0.001   # 100.1 归一化
-        market_state.trade_prices[2] = 0.0     # 100.0 归一化
-        market_state.trade_quantities[0] = 10.0
-        market_state.trade_quantities[1] = 5.0
-        market_state.trade_quantities[2] = 8.0
 
         # 设置一些持仓
         from src.market.orderbook.order import OrderSide
@@ -438,19 +442,20 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        # 200 买盘 + 200 卖盘 + 300 成交 + 4 持仓 + 3 挂单
-        expected_length = 200 + 200 + 300 + 4 + 3
+        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单
+        expected_length = 200 + 200 + 200 + 4 + 3
         assert len(inputs) == expected_length
 
-        # 验证第一个成交的买卖方向（本 Agent 是买方，应为 1.0）
+        # 验证成交数据（价格在前100个，数量在后100个）
         trade_start_idx = 200 + 200  # 跳过订单簿深度数据
-        assert inputs[trade_start_idx + 2] == 1.0  # 第一笔成交，本 Agent 是买方
-
-        # 验证第二个成交的买卖方向（本 Agent 是卖方，应为 -1.0）
-        assert inputs[trade_start_idx + 5] == -1.0  # 第二笔成交，本 Agent 是卖方
-
-        # 验证第三个成交的买卖方向（无关，应为 0.0）
-        assert inputs[trade_start_idx + 8] == 0.0  # 第三笔成交，无关
+        # 前100个是价格（使用容差比较，因为是 float32）
+        assert abs(inputs[trade_start_idx + 0] - (-0.001)) < 1e-6  # 第一笔成交价格
+        assert abs(inputs[trade_start_idx + 1] - 0.001) < 1e-6     # 第二笔成交价格
+        # 后100个是数量（带方向）
+        quantity_start_idx = trade_start_idx + 100
+        assert inputs[quantity_start_idx + 0] == 10.0   # 第一笔成交，taker 是买方
+        assert inputs[quantity_start_idx + 1] == -5.0   # 第二笔成交，taker 是卖方
+        assert inputs[quantity_start_idx + 2] == 8.0    # 第三笔成交，taker 是买方
 
     def test_observe_empty_market_state(self):
         """测试空市场状态观察"""
@@ -491,12 +496,12 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度（固定长度）
-        # 200 买盘 + 200 卖盘 + 300 成交 + 4 持仓 + 3 挂单
-        expected_length = 200 + 200 + 300 + 4 + 3
+        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单
+        expected_length = 200 + 200 + 200 + 4 + 3
         assert len(inputs) == expected_length
 
         # 验证持仓状态（在末尾附近）
-        position_start_idx = 200 + 200 + 300
+        position_start_idx = 200 + 200 + 200
         assert inputs[position_start_idx + 0] == 0.0  # 持仓归一化
         assert inputs[position_start_idx + 1] == 0.0  # 持仓均价归一化
         assert inputs[position_start_idx + 2] == 1.0  # 余额归一化（10000/10000 = 1.0）
@@ -545,11 +550,11 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        expected_length = 200 + 200 + 300 + 4 + 3
+        expected_length = 200 + 200 + 200 + 4 + 3
         assert len(inputs) == expected_length
 
         # 验证持仓数据（在持仓部分）
-        position_start_idx = 200 + 200 + 300
+        position_start_idx = 200 + 200 + 200
         # 持仓归一化 = position_value / (equity * leverage)
         # position_value = 100 * 100 = 10000
         # equity = 10000 (balance)
@@ -1954,6 +1959,7 @@ class TestAgentReset:
                 "seller_id": 2,
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
+                "is_buyer_taker": True,
             },
             target_ids={1, 2},  # 定向发送给参与成交的双方
         )
@@ -2164,6 +2170,7 @@ class TestRetailAgentInit:
                 "seller_id": 2,
                 "buyer_fee": 5.0,
                 "seller_fee": 2.0,
+                "is_buyer_taker": True,
             },
             target_ids={1, 2},  # 定向发送给参与成交的双方
         )
@@ -2623,6 +2630,7 @@ class TestWhaleAgentInit:
                 "seller_id": 10002,
                 "buyer_fee": 0.0,
                 "seller_fee": 1.0,
+                "is_buyer_taker": True,
             },
             target_ids={10001, 10002},  # 定向发送给参与成交的双方
         )
@@ -3299,6 +3307,7 @@ class TestMarketMakerAgentInit:
                 "seller_id": 10012,
                 "buyer_fee": 0.0,
                 "seller_fee": 0.5,
+                "is_buyer_taker": True,
             },
             target_ids={10011, 10012},  # 定向发送给参与成交的双方
         )

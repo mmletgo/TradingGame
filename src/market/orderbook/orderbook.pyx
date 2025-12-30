@@ -223,3 +223,18 @@ cdef class OrderBook:
         asks = [(price, self.asks[price].get_volume()) for price in ask_prices]
 
         return {"bids": bids, "asks": asks}
+
+    def clear(self, reset_price: float | None = None) -> None:
+        """
+        清空订单簿
+
+        清空所有买卖盘和订单映射，可选地重置最新价。
+
+        Args:
+            reset_price: 重置后的最新价，如果为 None 则保持当前值
+        """
+        self.bids.clear()
+        self.asks.clear()
+        self.order_map.clear()
+        if reset_price is not None:
+            self.last_price = reset_price

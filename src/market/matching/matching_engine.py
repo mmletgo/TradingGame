@@ -188,6 +188,7 @@ class MatchingEngine:
                     seller_id=seller_id,
                     buyer_fee=buyer_fee,
                     seller_fee=seller_fee,
+                    is_buyer_taker=(order.side == OrderSide.BUY),
                 )
                 self._next_trade_id += 1
                 trades.append(trade)
@@ -300,6 +301,7 @@ class MatchingEngine:
                     seller_id=seller_id,
                     buyer_fee=buyer_fee,
                     seller_fee=seller_fee,
+                    is_buyer_taker=(order.side == OrderSide.BUY),
                 )
                 self._next_trade_id += 1
                 trades.append(trade)
@@ -350,6 +352,7 @@ class MatchingEngine:
                     "seller_id": trade.seller_id,
                     "buyer_fee": trade.buyer_fee,
                     "seller_fee": trade.seller_fee,
+                    "is_buyer_taker": trade.is_buyer_taker,
                 },
                 target_ids={trade.buyer_id, trade.seller_id},
             )

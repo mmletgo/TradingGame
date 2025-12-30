@@ -85,7 +85,7 @@ class Agent:
 
         Args:
             event: 成交事件，包含 trade_id, price, quantity, buyer_id, seller_id,
-                   buyer_fee, seller_fee 等字段
+                   buyer_fee, seller_fee, is_buyer_taker 等字段
         """
         # 从事件数据构建 Trade 对象
         trade = Trade(
@@ -96,6 +96,7 @@ class Agent:
             seller_id=event.data["seller_id"],
             buyer_fee=event.data["buyer_fee"],
             seller_fee=event.data["seller_fee"],
+            is_buyer_taker=event.data["is_buyer_taker"],
             timestamp=event.timestamp,
         )
 
@@ -120,20 +121,10 @@ class Agent:
         # 2. 卖盘（直接使用预计算值）- 200 个
         inputs.extend(market_state.ask_data.tolist())
 
-        # 3. 成交（补充方向信息）- 300 个
-        for i in range(100):
-            inputs.append(float(market_state.trade_prices[i]))
-            inputs.append(float(market_state.trade_quantities[i]))
-            # 方向：本 Agent 是买方(1)/卖方(-1)/无关(0)
-            if i < len(market_state.trade_buyer_ids):
-                if market_state.trade_buyer_ids[i] == self.agent_id:
-                    inputs.append(1.0)
-                elif market_state.trade_seller_ids[i] == self.agent_id:
-                    inputs.append(-1.0)
-                else:
-                    inputs.append(0.0)
-            else:
-                inputs.append(0.0)
+        # 3. 成交（价格 + 数量带方向）- 200 个
+        # 数量正负表示方向：正=taker买入，负=taker卖出
+        inputs.extend(market_state.trade_prices.tolist())
+        inputs.extend(market_state.trade_quantities.tolist())
 
         # 4. 持仓信息 - 4 个
         inputs.extend(self._get_position_inputs(market_state.mid_price))
