@@ -448,9 +448,9 @@
       "file": "src/market/account/account.py",
       "test_file": "tests/market/test_account.py",
       "signature": "def liquidate(self, current_price: float, event_bus: EventBus) -> None",
-      "business_logic": "执行强制平仓",
-      "code_logic": "平掉所有持仓，发布强平事件",
-      "test_cases": ["多仓强平", "空仓强平"],
+      "business_logic": "发布强平事件，由训练引擎/演示引擎订阅后提交市价单平仓",
+      "code_logic": "构建 LIQUIDATION 事件数据（包含 agent_id, agent_type, current_price, position_quantity, position_avg_price），通过 EventBus 发布事件",
+      "test_cases": ["多仓强平事件发布", "空仓强平事件发布", "无持仓时强平事件发布"],
       "dependencies": ["F4"],
       "called_by": ["F65"],
       "uses": ["EventBus"]
