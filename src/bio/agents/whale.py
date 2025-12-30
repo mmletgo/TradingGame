@@ -79,6 +79,9 @@ class WhaleAgent(Agent):
                 - MARKET_BUY/MARKET_SELL: {"quantity": float}
             event_bus: 事件总线
         """
+        # 如果已被强平，不执行任何动作
+        if self.is_liquidated:
+            return
 
         # 如果是下单动作，先检查并撤掉旧挂单
         if self.account.pending_order_id is not None:

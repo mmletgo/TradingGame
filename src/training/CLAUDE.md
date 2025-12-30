@@ -43,6 +43,8 @@
 **关键方法：**
 - `setup()` - 初始化训练环境
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
+- `_on_liquidation()` - 处理强平事件，提交市价单平仓并标记 Agent 已被强平
+- `_mark_agent_liquidated()` - 标记指定 Agent 已被强平，本轮 episode 禁用
 - `run_tick()` - 执行单个 tick（按做市商->庄家->散户顺序）
 - `run_episode()` - 运行完整 episode（重置、运行、进化）
 - `train()` - 主训练循环
@@ -67,8 +69,16 @@
 3. **Tick 执行** (`run_tick`)
    - 发布 TICK_START 事件
    - 按顺序执行：做市商 -> 庄家 -> 散户
-   - 检查强平条件
+   - 检查强平条件（被强平的 Agent 会被标记，本轮 episode 禁用）
    - 发布 TICK_END 事件
+
+## 强平机制
+
+当 Agent 触发强平条件时：
+1. `_on_liquidation()` 处理强平事件，提交市价单平仓
+2. `_mark_agent_liquidated()` 将 Agent 的 `is_liquidated` 标志设为 True
+3. 被强平的 Agent 在本轮 episode 剩余时间内无法执行任何动作（decide 返回 HOLD，execute_action 直接返回）
+4. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
 
 ## 依赖关系
 

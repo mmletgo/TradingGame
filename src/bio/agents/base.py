@@ -51,6 +51,7 @@ class Agent:
     agent_type: AgentType
     brain: Brain
     account: Account
+    is_liquidated: bool
 
     def __init__(
         self,
@@ -79,6 +80,9 @@ class Agent:
 
         # 使用带 ID 的订阅，支持定向发送
         event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, agent_id, self._on_trade_event)
+
+        # 初始化强平标志
+        self.is_liquidated = False
 
     def _on_trade_event(self, event: Event) -> None:
         """处理成交事件（已定向发送，无需过滤）
@@ -216,6 +220,10 @@ class Agent:
             - MARKET_BUY/MARKET_SELL: {"quantity": float}
             - CANCEL/CLEAR_POSITION/HOLD: {}
         """
+        # 如果已被强平，直接返回 HOLD
+        if self.is_liquidated:
+            return ActionType.HOLD, {}
+
         # 1. 观察市场，获取神经网络输入
         inputs = self.observe(market_state, orderbook)
 
@@ -331,6 +339,10 @@ class Agent:
                 - CLEAR_POSITION/HOLD: {}
             event_bus: 事件总线
         """
+        # 如果已被强平，不执行任何动作
+        if self.is_liquidated:
+            return
+
         if action == ActionType.HOLD:
             # 不动：不做任何操作
             return
@@ -492,3 +504,6 @@ class Agent:
 
         # 重新订阅成交事件
         self.event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, self.agent_id, self._on_trade_event)
+
+        # 重置强平标志
+        self.is_liquidated = False

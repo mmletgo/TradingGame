@@ -154,6 +154,23 @@ class Trainer:
             )
             self.matching_engine.process_order(order)
 
+        # 标记 Agent 已被强平
+        self._mark_agent_liquidated(agent_id)
+
+    def _mark_agent_liquidated(self, agent_id: int) -> None:
+        """标记 Agent 已被强平
+
+        Args:
+            agent_id: 被强平的 Agent ID
+        """
+        for population in self.populations.values():
+            for agent in population.agents:
+                if agent.agent_id == agent_id:
+                    if not agent.is_liquidated:
+                        agent.is_liquidated = True
+                        self.logger.info(f"Agent {agent_id} 已被强平，本轮 episode 禁用")
+                    return
+
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
         """预计算归一化的公共市场数据
 

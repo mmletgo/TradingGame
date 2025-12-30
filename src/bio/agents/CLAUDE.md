@@ -37,11 +37,12 @@ Agent 基类，提供通用属性和方法。
 - `brain: Brain` - NEAT 神经网络
 - `account: Account` - 交易账户
 - `event_bus: EventBus` - 事件总线
+- `is_liquidated: bool` - 强平标志，True 表示已被强平，本轮 episode 禁用
 
 **核心方法：**
 
 #### `__init__(agent_id, agent_type, brain, config, event_bus)`
-初始化 Agent，使用 `subscribe_with_id` 订阅 TRADE_EXECUTED 事件，支持定向发送。
+初始化 Agent，使用 `subscribe_with_id` 订阅 TRADE_EXECUTED 事件，支持定向发送。初始化 `is_liquidated` 为 False。
 
 #### `_on_trade_event(event: Event) -> None`
 处理成交事件。由于已使用定向发送机制，事件必然与本 Agent 相关，无需过滤。
@@ -65,7 +66,7 @@ Agent 基类，提供通用属性和方法。
 - 卖单 5 个位置 x 3 = 15（价格归一化、数量、有效标志）
 
 #### `decide(market_state: NormalizedMarketState, orderbook: OrderBook) -> tuple[ActionType, dict[str, Any]]`
-决策下一步动作。接收预计算的市场状态，调用 `observe` 获取神经网络输入，前向传播得到输出，解析为动作类型和参数。
+决策下一步动作。如果已被强平（`is_liquidated=True`），直接返回 HOLD。否则接收预计算的市场状态，调用 `observe` 获取神经网络输入，前向传播得到输出，解析为动作类型和参数。
 
 神经网络输出结构：
 - 输出[0-6]: 7 种动作类型的得分（选择最大值）
@@ -73,10 +74,10 @@ Agent 基类，提供通用属性和方法。
 - 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
 
 #### `execute_action(action, params, event_bus) -> None`
-执行动作，根据动作类型发布订单事件到事件总线。
+执行动作。如果已被强平（`is_liquidated=True`），不执行任何动作直接返回。否则根据动作类型发布订单事件到事件总线。
 
 #### `reset(config: AgentConfig) -> None`
-重置 Agent 状态。使用 `unsubscribe_with_id` 取消订阅，重置账户，然后重新订阅。
+重置 Agent 状态。使用 `unsubscribe_with_id` 取消订阅，重置账户，然后重新订阅，并将 `is_liquidated` 重置为 False。
 
 #### `get_fitness(current_price: float) -> float`
 计算适应度（净值 / 初始净值），用于 NEAT 进化。

@@ -73,6 +73,10 @@ class RetailAgent(Agent):
                 - HOLD: {}
             event_bus: 事件总线
         """
+        # 如果已被强平，不执行任何动作
+        if self.is_liquidated:
+            return
+
         # 处理挂单操作：先撤旧单（如有），再挂新单
         if action == ActionType.PLACE_BID or action == ActionType.PLACE_ASK:
             # 如果已有挂单，先撤单

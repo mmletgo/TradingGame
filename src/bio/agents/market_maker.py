@@ -130,6 +130,10 @@ class MarketMakerAgent(Agent):
                       "ask_orders": [{"price": float, "quantity": float}, ...]}
             - CLEAR_POSITION: {}
         """
+        # 如果已被强平，返回清仓（实际不执行）
+        if self.is_liquidated:
+            return ActionType.CLEAR_POSITION, {}
+
         # 1. 观察市场，获取神经网络输入（复用基类方法）
         inputs = self.observe(market_state, orderbook)
 
@@ -243,6 +247,10 @@ class MarketMakerAgent(Agent):
                 - CLEAR_POSITION: {}
             event_bus: 事件总线
         """
+        # 如果已被强平，不执行任何动作
+        if self.is_liquidated:
+            return
+
         timestamp = time.time()
 
         if action == ActionType.QUOTE:
