@@ -538,26 +538,26 @@
       "name": "Agent.observe",
       "file": "src/bio/agents/base.py",
       "test_file": "tests/bio/test_agents.py",
-      "signature": "def observe(self, orderbook: OrderBook) -> list[float]",
-      "business_logic": "观察市场状态，生成神经网络输入",
-      "code_logic": "归一化价格、持仓、余额等信息",
-      "test_cases": ["正常观察", "空订单簿"],
-      "dependencies": ["F16", "F17", "F19"],
+      "signature": "def observe(self, orderbook: OrderBook, recent_trades: list[Trade]) -> list[float]",
+      "business_logic": "观察市场状态，生成神经网络输入。输入包括上下100档订单簿的价格和数量、最近100笔成交、agent自身的持仓数量、余额信息",
+      "code_logic": "归一化处理订单簿深度数据、成交记录、持仓、余额等信息，返回神经网络输入向量",
+      "test_cases": ["正常观察", "空订单簿", "空成交记录"],
+      "dependencies": ["F16", "F17", "F18", "F19"],
       "called_by": ["F43"],
-      "uses": ["OrderBook", "Account"]
+      "uses": ["OrderBook", "Account", "Trade"]
     },
     {
       "id": "F43",
       "name": "Agent.decide",
       "file": "src/bio/agents/base.py",
       "test_file": "tests/bio/test_agents.py",
-      "signature": "def decide(self, orderbook: OrderBook) -> tuple[ActionType, dict]",
+      "signature": "def decide(self, orderbook: OrderBook, recent_trades: list[Trade]) -> tuple[ActionType, dict]",
       "business_logic": "决策下一步动作",
-      "code_logic": "观察市场，神经网络前向传播，解析输出为动作",
+      "code_logic": "观察市场（调用observe），神经网络前向传播，解析输出为动作",
       "test_cases": ["正常决策", "各种动作输出"],
       "dependencies": ["F38", "F42"],
       "called_by": ["F65"],
-      "uses": ["OrderBook", "ActionType", "Brain"]
+      "uses": ["OrderBook", "ActionType", "Brain", "Trade"]
     },
     {
       "id": "F44",

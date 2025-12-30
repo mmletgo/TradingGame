@@ -21,6 +21,7 @@ class Account:
     Attributes:
         agent_id: Agent ID
         agent_type: Agent 类型
+        initial_balance: 初始余额
         balance: 余额
         position: 持仓对象
         leverage: 杠杆倍数
@@ -42,6 +43,7 @@ class Account:
         """
         self.agent_id: int = agent_id
         self.agent_type: AgentType = agent_type
+        self.initial_balance: float = config.initial_balance
         self.balance: float = config.initial_balance
         self.position: Position = Position()
         self.leverage: float = config.leverage
