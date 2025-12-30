@@ -696,7 +696,7 @@
       "test_file": "tests/bio/test_agents.py",
       "signature": "def get_action_space(self) -> list[ActionType]",
       "business_logic": "获取做市商可用动作",
-      "code_logic": "返回 [PLACE_BID, PLACE_ASK, CANCEL, CLEAR_POSITION]",
+      "code_logic": "返回 [QUOTE, CLEAR_POSITION]（双边挂单和清仓）",
       "test_cases": ["获取动作空间"],
       "dependencies": [],
       "called_by": ["F43"],
@@ -709,7 +709,7 @@
       "test_file": "tests/bio/test_agents.py",
       "signature": "def execute_action(self, action: ActionType, params: dict, event_bus: EventBus) -> None",
       "business_logic": "做市商执行动作",
-      "code_logic": "确保至少一买一卖挂单，可主动清仓",
+      "code_logic": "QUOTE 动作：先撤掉所有旧挂单，然后双边各挂 1-10 单（每单价格和数量由神经网络决定）。CLEAR_POSITION：先撤掉所有挂单，再根据持仓方向市价平仓",
       "test_cases": ["双边挂单", "清仓"],
       "dependencies": ["F44"],
       "called_by": ["F65"],
@@ -1195,6 +1195,19 @@
       "dependencies": ["F6", "F63", "F77", "F78", "F82", "F83", "F85"],
       "called_by": [],
       "uses": ["Config", "Trainer", "DemoServer"]
+    },
+    {
+      "id": "F93",
+      "name": "MarketMakerAgent.decide",
+      "file": "src/bio/agents/market_maker.py",
+      "test_file": "tests/bio/test_agents.py",
+      "signature": "def decide(self, orderbook: OrderBook, recent_trades: list[Trade]) -> tuple[ActionType, dict[str, Any]]",
+      "business_logic": "做市商决策下一步动作",
+      "code_logic": "观察市场状态，通过神经网络前向传播，解析输出为 QUOTE 或 CLEAR_POSITION 动作。QUOTE 动作返回 bid_orders 和 ask_orders 各 1-5 单。10 个订单的数量权重映射到 [0,1] 后归一化，确保总和为 1.0（总购买力不超过净值*杠杆）",
+      "test_cases": ["决策 QUOTE 动作", "决策 CLEAR_POSITION 动作", "神经网络输出维度验证", "生成订单在不同价位", "数量比例归一化"],
+      "dependencies": ["F38", "F42"],
+      "called_by": ["F65"],
+      "uses": ["ActionType", "Brain", "OrderBook", "Trade"]
     }
   ],
   "dependency_graph": {
@@ -1289,7 +1302,8 @@
     "F89": [],
     "F90": ["F6", "F63", "F67", "F77", "F78", "F85"],
     "F91": ["F6", "F63", "F67", "F85"],
-    "F92": ["F6", "F63", "F77", "F78", "F82", "F83", "F85"]
+    "F92": ["F6", "F63", "F77", "F78", "F82", "F83", "F85"],
+    "F93": ["F38", "F42"]
   },
   "implementation_order": [
     "F1", "F2", "F3", "F4", "F5",
@@ -1303,7 +1317,7 @@
     "F41", "F42", "F43", "F44", "F45", "F46",
     "F47", "F48", "F49",
     "F50", "F51", "F52",
-    "F53", "F54", "F55",
+    "F53", "F54", "F55", "F93",
     "F56", "F57", "F58", "F59", "F60", "F61", "F62",
     "F63", "F64", "F65", "F66", "F67", "F68", "F69",
     "F70", "F71", "F72", "F73", "F74", "F75", "F76",

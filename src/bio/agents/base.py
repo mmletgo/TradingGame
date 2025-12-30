@@ -31,6 +31,7 @@ class ActionType(Enum):
     MARKET_BUY = 4  # 市价买入
     MARKET_SELL = 5  # 市价卖出
     CLEAR_POSITION = 6  # 清仓
+    QUOTE = 7  # 做市商双边挂单（每边1-10单）
 
 
 class Agent:

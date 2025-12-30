@@ -178,7 +178,8 @@
         {"name": "CANCEL", "type": "int", "description": "撤单"},
         {"name": "MARKET_BUY", "type": "int", "description": "市价买入"},
         {"name": "MARKET_SELL", "type": "int", "description": "市价卖出"},
-        {"name": "CLEAR_POSITION", "type": "int", "description": "清仓"}
+        {"name": "CLEAR_POSITION", "type": "int", "description": "清仓"},
+        {"name": "QUOTE", "type": "int", "description": "做市商双边挂单（每边1-10单）"}
       ],
       "used_by": ["F43", "F44", "F48", "F51", "F54"]
     },
@@ -204,6 +205,47 @@
         {"name": "account", "type": "Account", "description": "账户"}
       ],
       "used_by": ["F47", "F50", "F53", "F56", "F57"]
+    },
+    {
+      "name": "MarketMakerAgent",
+      "file": "src/bio/agents/market_maker.py",
+      "description": "做市商 Agent，继承自 Agent，为市场提供流动性",
+      "fields": [
+        {"name": "agent_id", "type": "int", "description": "Agent ID"},
+        {"name": "brain", "type": "Brain", "description": "神经网络"},
+        {"name": "account", "type": "Account", "description": "账户"},
+        {"name": "bid_order_ids", "type": "list[int]", "description": "买单订单ID列表（最多10个）"},
+        {"name": "ask_order_ids", "type": "list[int]", "description": "卖单订单ID列表（最多10个）"}
+      ],
+      "methods": [
+        {
+          "name": "get_action_space",
+          "signature": "def get_action_space(self) -> list[ActionType]",
+          "description": "返回做市商的可用动作空间 [QUOTE, CLEAR_POSITION]",
+          "returns": "list[ActionType]"
+        },
+        {
+          "name": "decide",
+          "signature": "def decide(self, orderbook: OrderBook, recent_trades: list[Trade]) -> tuple[ActionType, dict[str, Any]]",
+          "description": "覆盖基类，做市商专用决策逻辑。神经网络输出 22 个值：动作选择(2) + 5买单(价格+数量权重) + 5卖单(价格+数量权重)。10 个订单的数量权重映射到 [0,1] 后归一化，确保总和为 1.0",
+          "parameters": [
+            {"name": "orderbook", "type": "OrderBook", "description": "订单簿对象"},
+            {"name": "recent_trades", "type": "list[Trade]", "description": "最近成交记录"}
+          ],
+          "returns": "(ActionType, dict)"
+        },
+        {
+          "name": "execute_action",
+          "signature": "def execute_action(self, action: ActionType, params: dict[str, Any], event_bus: EventBus) -> None",
+          "description": "执行 QUOTE 或 CLEAR_POSITION 动作",
+          "parameters": [
+            {"name": "action", "type": "ActionType", "description": "动作类型"},
+            {"name": "params", "type": "dict", "description": "动作参数"},
+            {"name": "event_bus", "type": "EventBus", "description": "事件总线"}
+          ]
+        }
+      ],
+      "used_by": ["F57", "F65"]
     },
     {
       "name": "Population",
