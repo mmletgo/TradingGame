@@ -4,13 +4,11 @@
 负责订单撮合的核心逻辑，管理订单簿，处理订单提交、撤销和撮合。
 """
 
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
 from src.config.config import MarketConfig
-
-if TYPE_CHECKING:
-    from src.market.orderbook.order import Order, OrderSide
-    from src.market.matching.trade import Trade
+from src.market.orderbook.order import Order, OrderSide, OrderType
+from src.market.matching.trade import Trade
 
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
@@ -127,9 +125,9 @@ class MatchingEngine:
 
     def _match_orders(
         self,
-        order: "Order",
-        price_check: Callable[[float, float, "OrderSide"], bool] | None = None,
-    ) -> tuple[list["Trade"], float]:
+        order: Order,
+        price_check: Callable[[float, float, OrderSide], bool] | None = None,
+    ) -> tuple[list[Trade], float]:
         """
         通用撮合逻辑
 
@@ -143,9 +141,6 @@ class MatchingEngine:
         Returns:
             (trades, remaining): 成交列表和剩余数量
         """
-        from src.market.orderbook.order import OrderSide
-        from src.market.matching.trade import Trade
-
         trades: list[Trade] = []
         remaining = order.quantity - order.filled_quantity
 
@@ -232,7 +227,7 @@ class MatchingEngine:
 
         return trades, remaining
 
-    def match_limit_order(self, order: "Order") -> list["Trade"]:
+    def match_limit_order(self, order: Order) -> list[Trade]:
         """
         限价单撮合
 
@@ -245,9 +240,7 @@ class MatchingEngine:
         Returns:
             本次撮合产生的所有成交记录列表
         """
-        from src.market.orderbook.order import OrderSide
-
-        def limit_price_check(order_price: float, best_price: float, side: "OrderSide") -> bool:
+        def limit_price_check(order_price: float, best_price: float, side: OrderSide) -> bool:
             """限价单价格检查：买单价格 >= 卖一价，卖单价格 <= 买一价"""
             if side == OrderSide.BUY:
                 return order_price >= best_price
@@ -265,7 +258,7 @@ class MatchingEngine:
 
         return trades
 
-    def match_market_order(self, order: "Order") -> list["Trade"]:
+    def match_market_order(self, order: Order) -> list[Trade]:
         """
         市价单撮合
 
@@ -283,7 +276,7 @@ class MatchingEngine:
         trades, _ = self._match_orders(order, None)
         return trades
 
-    def process_order(self, order: "Order") -> list["Trade"]:
+    def process_order(self, order: Order) -> list[Trade]:
         """
         处理订单，执行撮合
 
@@ -295,8 +288,6 @@ class MatchingEngine:
         Returns:
             本次撮合产生的所有成交记录列表（可能为空）
         """
-        from src.market.orderbook.order import OrderType
-
         # 根据订单类型调用对应撮合函数
         if order.order_type == OrderType.LIMIT:
             trades = self.match_limit_order(order)

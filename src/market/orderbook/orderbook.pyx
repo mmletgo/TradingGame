@@ -85,6 +85,9 @@ cdef class OrderBook:
     cdef public dict order_map  # order_id -> Order
     cdef public double last_price
     cdef public double tick_size
+    cdef public bint _depth_dirty  # 深度缓存是否失效
+    cdef public object _cached_depth  # 缓存的深度数据
+    cdef public int _cached_levels  # 缓存的档位数
 
     def __init__(self, tick_size: float = 0.1) -> None:
         """
@@ -98,6 +101,9 @@ cdef class OrderBook:
         self.order_map = {}  # 订单ID映射
         self.last_price = 0.0  # 最新价
         self.tick_size = tick_size
+        self._depth_dirty = True  # 初始时缓存无效
+        self._cached_depth = None
+        self._cached_levels = 0
 
     def add_order(self, order: "Order") -> None:
         """
@@ -123,6 +129,9 @@ cdef class OrderBook:
 
         # 添加到订单映射表
         self.order_map[order.order_id] = order
+
+        # 标记缓存失效
+        self._depth_dirty = True
 
     def cancel_order(self, order_id: int) -> "Order | None":
         """
@@ -158,6 +167,9 @@ cdef class OrderBook:
 
         # 5. 从 order_map 移除
         del self.order_map[order_id]
+
+        # 标记缓存失效
+        self._depth_dirty = True
 
         return removed_order
 
@@ -211,6 +223,7 @@ cdef class OrderBook:
 
         返回买卖各 N 档的价格和数量。买盘从高到低，卖盘从低到高。
         利用 SortedDict 已排序特性，避免每次调用都排序，时间复杂度从 O(n log n) 降为 O(levels)。
+        使用缓存机制，当订单簿未变化时直接返回缓存结果。
 
         Args:
             levels: 获取的档位数，默认 100
@@ -219,6 +232,10 @@ cdef class OrderBook:
             {"bids": [(price, quantity), ...], "asks": [(price, quantity), ...]}
             买盘按价格降序排列，卖盘按价格升序排列
         """
+        # 如果缓存有效且 levels 匹配，直接返回
+        if not self._depth_dirty and self._cached_depth is not None and self._cached_levels == levels:
+            return self._cached_depth
+
         # 买盘：SortedDict 升序排列，取最后 levels 个并反转得到降序
         # 使用切片获取最后 levels 个键，然后反转
         bid_keys = self.bids.keys()
@@ -232,7 +249,14 @@ cdef class OrderBook:
         ask_prices = list(ask_keys[:levels])
         asks = [(price, self.asks[price].get_volume()) for price in ask_prices]
 
-        return {"bids": bids, "asks": asks}
+        result = {"bids": bids, "asks": asks}
+
+        # 缓存结果
+        self._cached_depth = result
+        self._cached_levels = levels
+        self._depth_dirty = False
+
+        return result
 
     def clear(self, reset_price: float | None = None) -> None:
         """
@@ -249,3 +273,6 @@ cdef class OrderBook:
         self.order_map.clear()
         if reset_price is not None:
             self.last_price = reset_price
+        # 清空缓存
+        self._depth_dirty = True
+        self._cached_depth = None

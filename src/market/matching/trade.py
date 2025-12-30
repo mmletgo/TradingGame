@@ -5,10 +5,8 @@
 """
 
 import time
-from dataclasses import dataclass
 
 
-@dataclass
 class Trade:
     """
     成交记录
@@ -27,15 +25,8 @@ class Trade:
         timestamp: 成交时间戳
     """
 
-    trade_id: int
-    price: float
-    quantity: float
-    buyer_id: int
-    seller_id: int
-    buyer_fee: float
-    seller_fee: float
-    is_buyer_taker: bool
-    timestamp: float
+    __slots__ = ('trade_id', 'price', 'quantity', 'buyer_id', 'seller_id',
+                 'buyer_fee', 'seller_fee', 'is_buyer_taker', 'timestamp')
 
     def __init__(
         self,

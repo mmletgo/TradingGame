@@ -25,6 +25,9 @@ class OrderType(IntEnum):
 class Order:
     """订单数据类"""
 
+    __slots__ = ('order_id', 'agent_id', 'side', 'order_type',
+                 'price', 'quantity', 'filled_quantity', 'timestamp')
+
     def __init__(
         self,
         order_id: int,

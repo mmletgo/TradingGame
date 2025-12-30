@@ -12,6 +12,11 @@ extensions = [
         ["src/market/orderbook/orderbook.pyx"],
         include_dirs=[numpy.get_include()],
     ),
+    Extension(
+        "src.market.account.position",
+        ["src/market/account/position.pyx"],
+        include_dirs=[numpy.get_include()],
+    ),
 ]
 
 setup(

@@ -39,22 +39,25 @@ Agent 基类，提供通用属性和方法。
 - `event_bus: EventBus` - 事件总线
 - `is_liquidated: bool` - 强平标志，True 表示已被强平，本轮 episode 禁用
 - `_action_handlers: dict[ActionType, Callable[[dict[str, Any], EventBus], None]]` - 动作分发表，将动作类型映射到处理函数
+- `_input_buffer: np.ndarray` - 预分配的神经网络输入缓冲区（散户/庄家 607，做市商 634）
 
 **核心方法：**
 
 #### `__init__(agent_id, agent_type, brain, config, event_bus)`
-初始化 Agent，使用 `subscribe_with_id` 订阅 TRADE_EXECUTED 事件，支持定向发送。初始化 `is_liquidated` 为 False，并调用 `_init_action_handlers()` 初始化动作分发表。
+初始化 Agent，使用 `subscribe_with_id` 订阅 TRADE_EXECUTED 事件，支持定向发送。初始化 `is_liquidated` 为 False，预分配神经网络输入缓冲区 `_input_buffer`（607 个 float64），并调用 `_init_action_handlers()` 初始化动作分发表。
 
 #### `_on_trade_event(event: Event) -> None`
 处理成交事件。由于已使用定向发送机制，事件必然与本 Agent 相关，无需过滤。
 
 #### `observe(market_state: NormalizedMarketState, orderbook: OrderBook) -> list[float]`
-从预计算的市场状态构建神经网络输入。使用 `np.concatenate` 一次性拼接所有数组，避免多次 `tolist()` 和 `list.extend()` 操作，减少内存拷贝和 Python 循环开销：
+从预计算的市场状态构建神经网络输入。使用预分配的 `_input_buffer` 数组，通过切片赋值直接复制数据，避免 `np.concatenate` 创建新数组的开销：
 1. 买盘数据 - 200 个（100档 x 2：价格归一化 + 数量）
 2. 卖盘数据 - 200 个（100档 x 2：价格归一化 + 数量）
 3. 成交数据 - 200 个（100笔价格 + 100笔数量带方向）
 4. 持仓信息 - 4 个（持仓归一化、均价归一化、余额归一化、净值归一化）
 5. 挂单信息 - 散户/庄家 3 个，做市商 30 个（见下方说明）
+
+做市商重写此方法使用更大的缓冲区（634）并填充 30 个挂单信息。
 
 #### `_get_position_inputs(mid_price: float) -> np.ndarray`
 获取持仓信息输入（4 个值），返回 NumPy 数组以支持高效拼接。
@@ -159,6 +162,8 @@ Agent 使用带 ID 的订阅机制处理成交事件：
 | 7-11 | 买单 1-5 数量权重 |
 | 12-16 | 卖单 1-5 价格偏移 |
 | 17-21 | 卖单 1-5 数量权重 |
+
+做市商的 `decide` 方法对输出解析进行了向量化优化，使用 NumPy 批量处理数量比例和价格偏移的计算，减少 Python 循环开销。
 
 ## 依赖关系
 

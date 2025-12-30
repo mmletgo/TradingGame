@@ -60,6 +60,9 @@ class MarketMakerAgent(Agent):
         self.bid_order_ids: list[int] = []
         self.ask_order_ids: list[int] = []
 
+        # 做市商输入更大（634 = 604 + 30 挂单信息）
+        self._input_buffer = np.zeros(634, dtype=np.float64)
+
         # 初始化动作处理器
         self._init_action_handlers()
 
@@ -82,6 +85,27 @@ class MarketMakerAgent(Agent):
             可用动作类型列表 [QUOTE, CLEAR_POSITION]
         """
         return [ActionType.QUOTE, ActionType.CLEAR_POSITION]
+
+    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> list[float]:
+        """从预计算的市场状态构建神经网络输入
+
+        做市商覆盖基类方法，使用更大的输入缓冲区（634 = 604 + 30 挂单信息）。
+
+        Args:
+            market_state: 预计算的归一化市场数据
+            orderbook: 订单簿（用于查询挂单信息）
+
+        Returns:
+            神经网络输入向量
+        """
+        # 直接复制到预分配数组
+        self._input_buffer[:200] = market_state.bid_data
+        self._input_buffer[200:400] = market_state.ask_data
+        self._input_buffer[400:500] = market_state.trade_prices
+        self._input_buffer[500:600] = market_state.trade_quantities
+        self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
+        self._input_buffer[604:634] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
+        return self._input_buffer.tolist()
 
     def _fill_order_inputs(
         self,
@@ -182,74 +206,45 @@ class MarketMakerAgent(Agent):
 
         tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
-        # 首先收集所有 10 个订单的原始数量比例，然后归一化使总和为 1.0
-        bid_raw_ratios: list[float] = []
-        ask_raw_ratios: list[float] = []
-
-        # 收集买单数量比例（映射到 [0, 1]）
-        for i in range(5):
-            quantity_ratio_norm = max(-1.0, min(1.0, outputs[7 + i]))
-            # 映射 [-1, 1] 到 [0, 1]
-            raw_ratio = (quantity_ratio_norm + 1) / 2
-            bid_raw_ratios.append(max(0.0, raw_ratio))
-
-        # 收集卖单数量比例（映射到 [0, 1]）
-        for i in range(5):
-            quantity_ratio_norm = max(-1.0, min(1.0, outputs[17 + i]))
-            # 映射 [-1, 1] 到 [0, 1]
-            raw_ratio = (quantity_ratio_norm + 1) / 2
-            ask_raw_ratios.append(max(0.0, raw_ratio))
+        # 向量化收集数量比例
+        outputs_arr = np.array(outputs)
+        bid_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[7:12], -1, 1) + 1) / 2)
+        ask_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[17:22], -1, 1) + 1) / 2)
 
         # 计算总和并归一化（确保 10 个订单的总比例 = 1.0）
-        total_raw_ratio = sum(bid_raw_ratios) + sum(ask_raw_ratios)
+        total_raw_ratio = bid_raw_ratios.sum() + ask_raw_ratios.sum()
         if total_raw_ratio > 0:
-            # 归一化系数，使总和 = 1.0
-            normalize_factor = 1.0 / total_raw_ratio
-            bid_ratios = [r * normalize_factor for r in bid_raw_ratios]
-            ask_ratios = [r * normalize_factor for r in ask_raw_ratios]
+            bid_ratios = bid_raw_ratios / total_raw_ratio
+            ask_ratios = ask_raw_ratios / total_raw_ratio
         else:
-            # 如果所有比例都是 0，则0
-            bid_ratios = [0] * 5
-            ask_ratios = [0] * 5
+            bid_ratios = np.zeros(5)
+            ask_ratios = np.zeros(5)
+
+        # 向量化解析买单价格
+        bid_price_offsets = np.clip(outputs_arr[2:7], -1, 1)
+        bid_price_ticks = np.maximum(1.0, np.abs(bid_price_offsets) * 100)
+        bid_prices = mid_price - bid_price_ticks * tick_size
 
         bid_orders: list[dict[str, float]] = []
+        # 构建买单列表（仍需循环计算数量，但价格已向量化）
+        for i in range(5):
+            quantity = self._calculate_order_quantity(float(bid_prices[i]), float(bid_ratios[i]))
+            # 只添加数量 > 0 的订单
+            if quantity > 0:
+                bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
+
+        # 向量化解析卖单价格
+        ask_price_offsets = np.clip(outputs_arr[12:17], -1, 1)
+        ask_price_ticks = np.maximum(1.0, np.abs(ask_price_offsets) * 100)
+        ask_prices = mid_price + ask_price_ticks * tick_size
+
         ask_orders: list[dict[str, float]] = []
-
-        # 解析 5 个买单（价格和数量）
+        # 构建卖单列表（仍需循环计算数量，但价格已向量化）
         for i in range(5):
-            price_offset_norm = max(-1.0, min(1.0, outputs[2 + i]))
-            quantity_ratio = bid_ratios[i]
-
-            # 计算价格（买单价格严格低于 mid_price）
-            # 至少偏移 1 tick，最多偏移 100 ticks
-            price_offset_ticks = max(
-                1.0, abs(price_offset_norm) * 100
-            )  # 1-100 ticks below
-            price = mid_price - price_offset_ticks * tick_size
-
-            quantity = self._calculate_order_quantity(price, quantity_ratio)
-
+            quantity = self._calculate_order_quantity(float(ask_prices[i]), float(ask_ratios[i]))
             # 只添加数量 > 0 的订单
             if quantity > 0:
-                bid_orders.append({"price": price, "quantity": quantity})
-
-        # 解析 5 个卖单（价格和数量）
-        for i in range(5):
-            price_offset_norm = max(-1.0, min(1.0, outputs[12 + i]))
-            quantity_ratio = ask_ratios[i]
-
-            # 计算价格（卖单价格严格高于 mid_price）
-            # 至少偏移 1 tick，最多偏移 100 ticks
-            price_offset_ticks = max(
-                1.0, abs(price_offset_norm) * 100
-            )  # 1-100 ticks above
-            price = mid_price + price_offset_ticks * tick_size
-
-            quantity = self._calculate_order_quantity(price, quantity_ratio)
-
-            # 只添加数量 > 0 的订单
-            if quantity > 0:
-                ask_orders.append({"price": price, "quantity": quantity})
+                ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
 
         return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 

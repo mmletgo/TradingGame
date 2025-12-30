@@ -1,18 +1,18 @@
 """事件类型和事件基类定义"""
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import IntEnum
 from typing import Any
 
 
-class EventType(Enum):
+class EventType(IntEnum):
     """事件类型枚举"""
-    TICK_START = "tick_start"
-    TICK_END = "tick_end"
-    ORDER_PLACED = "order_placed"
-    ORDER_CANCELLED = "order_cancelled"
-    TRADE_EXECUTED = "trade_executed"
-    LIQUIDATION = "liquidation"
+    TICK_START = 1
+    TICK_END = 2
+    ORDER_PLACED = 3
+    ORDER_CANCELLED = 4
+    TRADE_EXECUTED = 5
+    LIQUIDATION = 6
 
 
 @dataclass

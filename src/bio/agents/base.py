@@ -81,6 +81,9 @@ class Agent:
         self.account = Account(agent_id, agent_type, config)
         self.event_bus = event_bus
 
+        # 预分配神经网络输入缓冲区（607 = 200 + 200 + 100 + 100 + 4 + 3）
+        self._input_buffer: np.ndarray = np.zeros(607, dtype=np.float64)
+
         # 使用带 ID 的订阅，支持定向发送
         event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, agent_id, self._on_trade_event)
 
@@ -126,16 +129,14 @@ class Agent:
         Returns:
             神经网络输入向量
         """
-        # 使用 NumPy concatenate 一次性拼接所有数组，避免多次 tolist() 和 list.extend()
-        inputs = np.concatenate([
-            market_state.bid_data,           # 买盘 - 200 个
-            market_state.ask_data,           # 卖盘 - 200 个
-            market_state.trade_prices,       # 成交价格 - 100 个
-            market_state.trade_quantities,   # 成交数量（带方向）- 100 个
-            self._get_position_inputs(market_state.mid_price),           # 持仓信息 - 4 个
-            self._get_pending_order_inputs(market_state.mid_price, orderbook),  # 挂单信息 - 3 个（子类可重写）
-        ])
-        return inputs.tolist()  # 只做一次 tolist 转换
+        # 直接复制到预分配数组，避免 np.concatenate 创建新数组
+        self._input_buffer[:200] = market_state.bid_data
+        self._input_buffer[200:400] = market_state.ask_data
+        self._input_buffer[400:500] = market_state.trade_prices
+        self._input_buffer[500:600] = market_state.trade_quantities
+        self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
+        self._input_buffer[604:607] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
+        return self._input_buffer.tolist()
 
     def _get_position_inputs(self, mid_price: float) -> np.ndarray:
         """获取持仓信息输入（4 个值）

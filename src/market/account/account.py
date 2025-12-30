@@ -134,7 +134,7 @@ class Account:
             fee = trade.seller_fee
 
         # 更新持仓
-        self.position.update(side, trade.quantity, trade.price)
+        self.position.update(side.value, trade.quantity, trade.price)
 
         # 扣除手续费
         self.balance -= fee
