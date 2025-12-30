@@ -17,6 +17,11 @@ extensions = [
         ["src/market/account/position.pyx"],
         include_dirs=[numpy.get_include()],
     ),
+    Extension(
+        "src.bio.brain.fast_network",
+        ["src/bio/brain/fast_network.pyx"],
+        include_dirs=[numpy.get_include()],
+    ),
 ]
 
 setup(
