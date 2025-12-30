@@ -38,11 +38,12 @@ Agent 基类，提供通用属性和方法。
 - `account: Account` - 交易账户
 - `event_bus: EventBus` - 事件总线
 - `is_liquidated: bool` - 强平标志，True 表示已被强平，本轮 episode 禁用
+- `_action_handlers: dict[ActionType, Callable[[dict[str, Any], EventBus], None]]` - 动作分发表，将动作类型映射到处理函数
 
 **核心方法：**
 
 #### `__init__(agent_id, agent_type, brain, config, event_bus)`
-初始化 Agent，使用 `subscribe_with_id` 订阅 TRADE_EXECUTED 事件，支持定向发送。初始化 `is_liquidated` 为 False。
+初始化 Agent，使用 `subscribe_with_id` 订阅 TRADE_EXECUTED 事件，支持定向发送。初始化 `is_liquidated` 为 False，并调用 `_init_action_handlers()` 初始化动作分发表。
 
 #### `_on_trade_event(event: Event) -> None`
 处理成交事件。由于已使用定向发送机制，事件必然与本 Agent 相关，无需过滤。
@@ -88,8 +89,26 @@ Agent 基类，提供通用属性和方法。
 #### `_place_market_order(side: OrderSide, quantity: float, event_bus: EventBus) -> None`
 创建并发布市价单的私有辅助方法。被 `execute_action` 中的 MARKET_BUY、MARKET_SELL 和 CLEAR_POSITION 动作调用。
 
+#### `_init_action_handlers() -> None`
+初始化动作分发表。将动作类型映射到对应的处理函数：
+- `PLACE_BID` -> 调用 `_place_limit_order(OrderSide.BUY, ...)`
+- `PLACE_ASK` -> 调用 `_place_limit_order(OrderSide.SELL, ...)`
+- `CANCEL` -> 调用 `_handle_cancel`
+- `MARKET_BUY` -> 调用 `_place_market_order(OrderSide.BUY, ...)`
+- `MARKET_SELL` -> 调用 `_place_market_order(OrderSide.SELL, ...)`
+- `CLEAR_POSITION` -> 调用 `_handle_clear_position`
+- `HOLD` 不在表中，会被自然忽略
+
+子类可重写此方法扩展或替换分发表。散户重写此方法调用 `super()._init_action_handlers()` 后覆盖 PLACE_BID/PLACE_ASK 为特定实现（先撤旧单再挂新单）。
+
+#### `_handle_cancel(params: dict[str, Any], event_bus: EventBus) -> None`
+处理撤单动作。从 params 中获取 order_id（可选，默认使用账户的 pending_order_id），发布撤单事件。
+
+#### `_handle_clear_position(params: dict[str, Any], event_bus: EventBus) -> None`
+处理清仓动作。根据当前持仓方向发送市价单平仓（多仓卖出，空仓买入）。
+
 #### `execute_action(action, params, event_bus) -> None`
-执行动作。如果已被强平（`is_liquidated=True`），不执行任何动作直接返回。否则根据动作类型调用 `_place_limit_order` 或 `_place_market_order` 发布订单事件到事件总线。
+执行动作。使用字典分发模式查找对应的处理函数。如果已被强平（`is_liquidated=True`），不执行任何动作直接返回。否则从 `_action_handlers` 获取处理函数并调用。
 
 #### `reset(config: AgentConfig) -> None`
 重置 Agent 状态。使用 `unsubscribe_with_id` 取消订阅，重置账户，然后重新订阅，并将 `is_liquidated` 重置为 False。

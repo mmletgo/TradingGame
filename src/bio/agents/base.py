@@ -5,7 +5,7 @@
 
 import time
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -54,6 +54,7 @@ class Agent:
     account: Account
     is_liquidated: bool
     _order_counter: int
+    _action_handlers: dict[ActionType, Callable[[dict[str, Any], EventBus], None]]
 
     def __init__(
         self,
@@ -88,6 +89,9 @@ class Agent:
 
         # 初始化订单计数器
         self._order_counter = 0
+
+        # 初始化动作分发表
+        self._init_action_handlers()
 
     def _on_trade_event(self, event: Event) -> None:
         """处理成交事件（已定向发送，无需过滤）
@@ -355,10 +359,65 @@ class Agent:
         event = Event(EventType.ORDER_PLACED, time.time(), {"order": order})
         event_bus.publish(event)
 
+    def _init_action_handlers(self) -> None:
+        """初始化动作分发表
+
+        将动作类型映射到对应的处理函数，用于 execute_action 的字典分发。
+        HOLD 不在表中，会被自然忽略。
+        """
+        self._action_handlers = {
+            ActionType.PLACE_BID: lambda params, event_bus: self._place_limit_order(
+                OrderSide.BUY, params["price"], params["quantity"], event_bus
+            ),
+            ActionType.PLACE_ASK: lambda params, event_bus: self._place_limit_order(
+                OrderSide.SELL, params["price"], params["quantity"], event_bus
+            ),
+            ActionType.CANCEL: self._handle_cancel,
+            ActionType.MARKET_BUY: lambda params, event_bus: self._place_market_order(
+                OrderSide.BUY, params["quantity"], event_bus
+            ),
+            ActionType.MARKET_SELL: lambda params, event_bus: self._place_market_order(
+                OrderSide.SELL, params["quantity"], event_bus
+            ),
+            ActionType.CLEAR_POSITION: self._handle_clear_position,
+        }
+
+    def _handle_cancel(self, params: dict[str, Any], event_bus: EventBus) -> None:
+        """处理撤单动作
+
+        Args:
+            params: 动作参数字典，可包含 order_id（可选，默认使用账户的 pending_order_id）
+            event_bus: 事件总线
+        """
+        order_id = params.get("order_id") or self.account.pending_order_id
+        if order_id is not None:
+            event = Event(
+                EventType.ORDER_CANCELLED,
+                time.time(),
+                {"order_id": order_id, "agent_id": self.agent_id},
+            )
+            event_bus.publish(event)
+
+    def _handle_clear_position(self, params: dict[str, Any], event_bus: EventBus) -> None:
+        """处理清仓动作
+
+        根据当前持仓方向，发送市价单平仓。
+
+        Args:
+            params: 动作参数字典（清仓不需要参数）
+            event_bus: 事件总线
+        """
+        position_qty = self.account.position.quantity
+        if position_qty > 0:
+            self._place_market_order(OrderSide.SELL, position_qty, event_bus)
+        elif position_qty < 0:
+            self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
+
     def execute_action(self, action: ActionType, params: dict[str, Any], event_bus: EventBus) -> None:
         """执行动作
 
         根据动作类型发布订单事件到事件总线，由撮合引擎处理。
+        使用字典分发模式查找对应的处理函数。
 
         Args:
             action: 动作类型
@@ -371,38 +430,9 @@ class Agent:
         """
         if self.is_liquidated:
             return
-
-        if action == ActionType.HOLD:
-            return
-
-        if action == ActionType.PLACE_BID:
-            self._place_limit_order(OrderSide.BUY, params["price"], params["quantity"], event_bus)
-
-        elif action == ActionType.PLACE_ASK:
-            self._place_limit_order(OrderSide.SELL, params["price"], params["quantity"], event_bus)
-
-        elif action == ActionType.CANCEL:
-            order_id = params.get("order_id") or self.account.pending_order_id
-            if order_id is not None:
-                event = Event(
-                    EventType.ORDER_CANCELLED,
-                    time.time(),
-                    {"order_id": order_id, "agent_id": self.agent_id},
-                )
-                event_bus.publish(event)
-
-        elif action == ActionType.MARKET_BUY:
-            self._place_market_order(OrderSide.BUY, params["quantity"], event_bus)
-
-        elif action == ActionType.MARKET_SELL:
-            self._place_market_order(OrderSide.SELL, params["quantity"], event_bus)
-
-        elif action == ActionType.CLEAR_POSITION:
-            position_qty = self.account.position.quantity
-            if position_qty > 0:
-                self._place_market_order(OrderSide.SELL, position_qty, event_bus)
-            elif position_qty < 0:
-                self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
+        handler = self._action_handlers.get(action)
+        if handler:
+            handler(params, event_bus)
 
     def _generate_order_id(self) -> int:
         """生成唯一订单ID

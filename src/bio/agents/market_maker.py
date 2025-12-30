@@ -4,7 +4,7 @@
 """
 
 import time
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -32,19 +32,21 @@ class MarketMakerAgent(Agent):
         account: 交易账户
         bid_order_ids: 买单订单ID列表（最多10个）
         ask_order_ids: 卖单订单ID列表（最多10个）
+        _action_handlers: 动作处理器字典
     """
 
     agent_id: int
     brain: Brain
     bid_order_ids: list[int]
     ask_order_ids: list[int]
+    _action_handlers: dict[ActionType, Callable[[dict[str, Any], EventBus], None]]
 
     def __init__(
         self, agent_id: int, brain: Brain, config: AgentConfig, event_bus: EventBus
     ) -> None:
         """创建做市商 Agent
 
-        调用父类构造函数，设置类型为 MARKET_MAKER，初始化买卖挂单列表。
+        调用父类构造函数，设置类型为 MARKET_MAKER，初始化买卖挂单列表和动作处理器。
 
         Args:
             agent_id: Agent ID
@@ -57,6 +59,19 @@ class MarketMakerAgent(Agent):
         # 做市商每边（买/卖）可以挂1-10个订单
         self.bid_order_ids: list[int] = []
         self.ask_order_ids: list[int] = []
+
+        # 初始化动作处理器
+        self._init_action_handlers()
+
+    def _init_action_handlers(self) -> None:
+        """初始化动作处理器字典
+
+        将动作类型映射到对应的处理方法。
+        """
+        self._action_handlers = {
+            ActionType.QUOTE: self._handle_quote,
+            ActionType.CLEAR_POSITION: self._handle_clear_position,
+        }
 
     def get_action_space(self) -> list[ActionType]:
         """获取做市商可用动作
@@ -285,6 +300,41 @@ class MarketMakerAgent(Agent):
             event_bus.publish(event)
             order_ids.append(order_id)
 
+    def _handle_quote(self, params: dict[str, Any], event_bus: EventBus) -> None:
+        """处理 QUOTE 动作
+
+        先撤掉所有旧挂单，然后双边各挂 1-5 单（每单价格和数量由神经网络决定）。
+
+        Args:
+            params: 动作参数字典
+                {"bid_orders": [{"price": float, "quantity": float}, ...],
+                 "ask_orders": [{"price": float, "quantity": float}, ...]}
+            event_bus: 事件总线
+        """
+        self._cancel_all_orders(event_bus)
+        self._place_quote_orders(
+            params.get("bid_orders", []), OrderSide.BUY, self.bid_order_ids, event_bus
+        )
+        self._place_quote_orders(
+            params.get("ask_orders", []), OrderSide.SELL, self.ask_order_ids, event_bus
+        )
+
+    def _handle_clear_position(self, params: dict[str, Any], event_bus: EventBus) -> None:
+        """处理 CLEAR_POSITION 动作
+
+        先撤掉所有挂单，再根据持仓方向市价平仓。
+
+        Args:
+            params: 动作参数字典（此动作不使用参数）
+            event_bus: 事件总线
+        """
+        self._cancel_all_orders(event_bus)
+        position_qty = self.account.position.quantity
+        if position_qty > 0:
+            self._place_market_order(OrderSide.SELL, position_qty, event_bus)
+        elif position_qty < 0:
+            self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
+
     def execute_action(
         self, action: ActionType, params: dict[str, Any], event_bus: EventBus
     ) -> None:
@@ -305,19 +355,6 @@ class MarketMakerAgent(Agent):
         if self.is_liquidated:
             return
 
-        if action == ActionType.QUOTE:
-            self._cancel_all_orders(event_bus)
-            self._place_quote_orders(
-                params.get("bid_orders", []), OrderSide.BUY, self.bid_order_ids, event_bus
-            )
-            self._place_quote_orders(
-                params.get("ask_orders", []), OrderSide.SELL, self.ask_order_ids, event_bus
-            )
-
-        elif action == ActionType.CLEAR_POSITION:
-            self._cancel_all_orders(event_bus)
-            position_qty = self.account.position.quantity
-            if position_qty > 0:
-                self._place_market_order(OrderSide.SELL, position_qty, event_bus)
-            elif position_qty < 0:
-                self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
+        handler = self._action_handlers.get(action)
+        if handler:
+            handler(params, event_bus)
