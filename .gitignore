@@ -13,3 +13,4 @@ false
 *.c
 *.so
 logs
+*.prof
