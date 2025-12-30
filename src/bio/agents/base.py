@@ -142,15 +142,24 @@ class Agent:
             price_norm = (price - mid_price) / mid_price if mid_price > 0 else 0
             inputs.append(price_norm)
             inputs.append(qty)
+        # 补齐缺失的买盘档位（填充 0）
+        for _ in range(100 - len(depth["bids"])):
+            inputs.append(0.0)
+            inputs.append(0.0)
 
         # 卖盘：价格归一化（相对于 mid_price），数量保持原值
         for price, qty in depth["asks"]:
             price_norm = (price - mid_price) / mid_price if mid_price > 0 else 0
             inputs.append(price_norm)
             inputs.append(qty)
+        # 补齐缺失的卖盘档位（填充 0）
+        for _ in range(100 - len(depth["asks"])):
+            inputs.append(0.0)
+            inputs.append(0.0)
 
         # 3. 最近100笔成交记录（每笔3个值：价格归一化+数量+买卖方向）
-        for trade in recent_trades[:100]:
+        trades_to_process = recent_trades[:100]
+        for trade in trades_to_process:
             price_norm = (trade.price - mid_price) / mid_price if mid_price > 0 else 0
             inputs.append(price_norm)
             inputs.append(trade.quantity)
@@ -161,6 +170,11 @@ class Agent:
                 inputs.append(-1.0)
             else:
                 inputs.append(0.0)
+        # 补齐缺失的成交记录（填充 0）
+        for _ in range(100 - len(trades_to_process)):
+            inputs.append(0.0)
+            inputs.append(0.0)
+            inputs.append(0.0)
 
         # 4. 自身持仓和余额信息
         # 持仓价值归一化：持仓价值 / (净值 * 杠杆倍率)

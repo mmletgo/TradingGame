@@ -61,13 +61,23 @@ class Population:
         self.generation = 0
         self.logger = get_logger("population")
 
+        # 根据 Agent 类型选择 NEAT 配置文件
+        # 散户和庄家使用 9 个输出，做市商使用 22 个输出
+        from pathlib import Path
+
+        config_dir = Path(config.training.neat_config_path)
+        if agent_type == AgentType.MARKET_MAKER:
+            neat_config_path = config_dir / "neat_market_maker.cfg"
+        else:
+            neat_config_path = config_dir / "neat_retail.cfg"
+
         # 加载 NEAT 配置
         self.neat_config = neat.Config(
             neat.DefaultGenome,
             neat.DefaultReproduction,
             neat.DefaultSpeciesSet,
             neat.DefaultStagnation,
-            config.training.neat_config_path,
+            str(neat_config_path),
         )
 
         # 创建 NEAT 种群

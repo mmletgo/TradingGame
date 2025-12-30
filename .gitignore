@@ -12,3 +12,4 @@ build/
 false
 *.c
 *.so
+logs

@@ -259,7 +259,7 @@ class TestPopulationInit:
             training=TrainingConfig(
                 episode_length=1000,
                 checkpoint_interval=1000,
-                neat_config_path="config/neat_config.txt",
+                neat_config_path="config",  # 配置目录
             ),
             demo=DemoConfig(
                 host="localhost",
@@ -401,13 +401,14 @@ class TestPopulationInit:
         Population(AgentType.RETAIL, config, event_bus)
 
         # 验证 neat.Config 使用了正确的参数
+        # 散户使用 neat_retail.cfg 配置文件（在 config 目录下）
         import neat
         mock_neat_config.assert_called_once_with(
             neat.DefaultGenome,
             neat.DefaultReproduction,
             neat.DefaultSpeciesSet,
             neat.DefaultStagnation,
-            "config/neat_config.txt",
+            "config/neat_retail.cfg",  # config_dir / neat_retail.cfg
         )
 
 
@@ -639,7 +640,7 @@ class TestPopulationEvolve:
             training=TrainingConfig(
                 episode_length=1000,
                 checkpoint_interval=1000,
-                neat_config_path="config/neat_config.txt",
+                neat_config_path="config",  # 配置目录
             ),
             demo=DemoConfig(
                 host="localhost",
@@ -849,7 +850,7 @@ class TestPopulationResetAgents:
             training=TrainingConfig(
                 episode_length=1000,
                 checkpoint_interval=1000,
-                neat_config_path="config/neat_config.txt",
+                neat_config_path="config",  # 配置目录
             ),
             demo=DemoConfig(
                 host="localhost",
