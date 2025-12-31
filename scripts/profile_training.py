@@ -38,7 +38,7 @@ def create_profile_config() -> Config:
     # 使用较小的 agent 数量以加快分析
     agents = {
         AgentType.RETAIL: AgentConfig(
-            count=1000,  # 减少到 1000
+            count=1000,
             initial_balance=10000.0,
             leverage=100.0,
             maintenance_margin_rate=0.005,
@@ -54,7 +54,7 @@ def create_profile_config() -> Config:
             taker_fee_rate=0.0001,
         ),
         AgentType.MARKET_MAKER: AgentConfig(
-            count=50,  # 减少到 50
+            count=100,
             initial_balance=10000000.0,
             leverage=10.0,
             maintenance_margin_rate=0.05,
@@ -114,7 +114,7 @@ def main() -> None:
     # 按累计时间排序
     stats = pstats.Stats(profiler)
     stats.strip_dirs()
-    stats.sort_stats('cumulative')
+    stats.sort_stats("cumulative")
     stats.print_stats(50)
 
     print("\n" + "=" * 60)
@@ -122,11 +122,11 @@ def main() -> None:
     print("=" * 60)
 
     # 按自身时间排序（不含子调用）
-    stats.sort_stats('tottime')
+    stats.sort_stats("tottime")
     stats.print_stats(50)
 
     # 保存完整结果到文件
-    stats.dump_stats('profile_results.prof')
+    stats.dump_stats("profile_results.prof")
     print(f"\n完整结果已保存到: profile_results.prof")
     print("使用 snakeviz profile_results.prof 可视化查看")
 
