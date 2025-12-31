@@ -38,7 +38,7 @@ def create_profile_config() -> Config:
     # 使用较小的 agent 数量以加快分析
     agents = {
         AgentType.RETAIL: AgentConfig(
-            count=1000,
+            count=10000,
             initial_balance=10000.0,
             leverage=100.0,
             maintenance_margin_rate=0.005,
@@ -93,7 +93,7 @@ def main() -> None:
     print("=" * 60)
     print("性能分析 - NEAT AI 交易模拟")
     print("=" * 60)
-    print("配置: 1000 散户, 10 庄家, 50 做市商")
+    print("配置: 10000 散户, 10 庄家, 100 做市商")
     print("运行: 1 episode x 100 ticks")
     print("=" * 60)
     print()
