@@ -2,21 +2,10 @@
 NEAT 神经网络封装模块
 
 使用 Cython 优化的快速前向传播网络。
+优化版本已迁移到 fork 的 neat-python 库中。
 """
 import neat
-from typing import TYPE_CHECKING
-
-# 尝试导入 Cython 优化版本，失败则回退到原生实现
-try:
-    from src.bio.brain.fast_network import FastFeedForwardNetwork
-    _USE_FAST_NETWORK = True
-except ImportError:
-    from neat.nn import FeedForwardNetwork
-    _USE_FAST_NETWORK = False
-
-if TYPE_CHECKING:
-    from src.bio.brain.fast_network import FastFeedForwardNetwork
-    from neat.nn import FeedForwardNetwork
+from neat.nn import FastFeedForwardNetwork, FeedForwardNetwork
 
 
 class Brain:
@@ -27,7 +16,7 @@ class Brain:
     """
 
     genome: neat.DefaultGenome
-    network: "FastFeedForwardNetwork | FeedForwardNetwork"
+    network: FastFeedForwardNetwork | FeedForwardNetwork
     config: neat.Config
 
     @classmethod
@@ -54,10 +43,8 @@ class Brain:
         """
         self.genome = genome
         self.config = config
-        if _USE_FAST_NETWORK:
-            self.network = FastFeedForwardNetwork.create(genome, config)
-        else:
-            self.network = neat.nn.FeedForwardNetwork.create(genome, config)
+        # 使用 FastFeedForwardNetwork（如果可用则为 Cython 优化版本）
+        self.network = FastFeedForwardNetwork.create(genome, config)
 
     def forward(self, inputs: list[float]) -> list[float]:
         """

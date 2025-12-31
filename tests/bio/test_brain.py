@@ -9,7 +9,7 @@
 import pytest
 import neat
 
-from src.bio.brain.brain import Brain, _USE_FAST_NETWORK
+from src.bio.brain.brain import Brain, FastFeedForwardNetwork, FeedForwardNetwork
 
 
 def create_test_genome_and_config() -> tuple[neat.DefaultGenome, neat.Config]:
@@ -195,8 +195,9 @@ class TestFastFeedForwardNetworkIntegration:
     """测试 FastFeedForwardNetwork 集成（实际网络测试）"""
 
     def test_use_fast_network_flag(self) -> None:
-        """测试是否使用快速网络"""
-        assert _USE_FAST_NETWORK is True, "应该使用 Cython 优化的快速网络"
+        """测试是否使用 Cython 优化的快速网络"""
+        # 如果 FastFeedForwardNetwork 不是 FeedForwardNetwork 的别名，则使用的是 Cython 版本
+        assert FastFeedForwardNetwork is not FeedForwardNetwork, "应该使用 Cython 优化的快速网络"
 
     def test_real_network_forward(self) -> None:
         """测试实际网络的前向传播"""
