@@ -114,51 +114,56 @@ class UIController:
         Args:
             episodes: 训练的episode数量
         """
-        for ep in range(episodes):
-            if self._stop_event.is_set():
-                break
-
-            # 运行一个episode
-            self.trainer.episode = ep + 1
-
-            # 重置所有种群的Agent账户
-            for population in self.trainer.populations.values():
-                population.reset_agents()
-
-            # 重置市场状态
-            self.trainer._reset_market()
-            self.trainer.tick = 0
-            self.data_collector.reset()
-
-            # 运行ticks
-            episode_length = self.trainer.config.training.episode_length
-            for _ in range(episode_length):
+        try:
+            for ep in range(episodes):
                 if self._stop_event.is_set():
                     break
 
-                # 检查暂停
-                while self._pause_event.is_set() and not self._stop_event.is_set():
-                    time.sleep(0.1)
+                # 运行一个episode
+                self.trainer.episode = ep + 1
 
-                # 执行tick
-                self.trainer.run_tick()
-
-                # 采样数据
-                self._tick_counter += 1
-                if self._tick_counter >= self.sample_rate:
-                    self._tick_counter = 0
-                    self._collect_and_send_data()
-
-            # 进化（训练模式）
-            if not self._is_demo_mode and not self._stop_event.is_set():
-                current_price = self.trainer.matching_engine._orderbook.last_price
+                # 重置所有种群的Agent账户
                 for population in self.trainer.populations.values():
-                    population.evolve(current_price)
+                    population.reset_agents()
 
-                # 重建映射
-                self.trainer._register_all_agents()
-                self.trainer._build_agent_map()
-                self.trainer._build_execution_order()
+                # 重置市场状态
+                self.trainer._reset_market()
+                self.trainer.tick = 0
+                self.data_collector.reset()
+
+                # 运行ticks
+                episode_length = self.trainer.config.training.episode_length
+                for _ in range(episode_length):
+                    if self._stop_event.is_set():
+                        break
+
+                    # 检查暂停
+                    while self._pause_event.is_set() and not self._stop_event.is_set():
+                        time.sleep(0.1)
+
+                    # 执行tick
+                    self.trainer.run_tick()
+
+                    # 采样数据
+                    self._tick_counter += 1
+                    if self._tick_counter >= self.sample_rate:
+                        self._tick_counter = 0
+                        self._collect_and_send_data()
+
+                # 进化（训练模式）
+                if not self._is_demo_mode and not self._stop_event.is_set():
+                    current_price = self.trainer.matching_engine._orderbook.last_price
+                    for population in self.trainer.populations.values():
+                        population.evolve(current_price)
+
+                    # 重建映射
+                    self.trainer._register_all_agents()
+                    self.trainer._build_agent_map()
+                    self.trainer._build_execution_order()
+        except Exception as e:
+            import traceback
+            print(f"Training loop error: {e}")
+            traceback.print_exc()
 
     def _demo_loop(self) -> None:
         """演示循环（不进化）
@@ -218,9 +223,11 @@ class UIController:
                     self.data_queue.put_nowait(snapshot)
                 except queue.Empty:
                     pass
-        except Exception:
-            # 采集失败不影响训练
-            pass
+        except Exception as e:
+            # 采集失败不影响训练，但打印错误
+            import traceback
+            print(f"Data collection error: {e}")
+            traceback.print_exc()
 
     def pause(self) -> None:
         """暂停训练/演示

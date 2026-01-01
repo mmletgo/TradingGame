@@ -183,13 +183,13 @@ class TrainingUIApp:
         """
         self.controller.stop()
 
-    def _on_speed_change(self, speed: float) -> None:
+    def _on_speed_change(self, _speed: float) -> None:
         """速度变化回调（训练模式不使用）
 
         训练模式以最大速度运行，不需要速度控制。
 
         Args:
-            speed: 速度倍率（忽略）
+            _speed: 速度倍率（忽略）
         """
         pass
 
@@ -198,32 +198,37 @@ class TrainingUIApp:
 
         从控制器获取最新数据快照，更新各个UI组件。
         """
-        # 获取最新数据
-        data: UIDataSnapshot | None = self.controller.get_latest_data()
-        if data is None:
-            return
+        try:
+            # 获取最新数据
+            data: UIDataSnapshot | None = self.controller.get_latest_data()
+            if data is None:
+                return
 
-        # 更新控制面板状态
-        if self.control_panel:
-            self.control_panel.update_status(
-                episode=data.episode,
-                tick=data.tick,
-                total_ticks=self.episode_length,
-                price=data.last_price,
-            )
+            # 更新控制面板状态
+            if self.control_panel:
+                self.control_panel.update_status(
+                    episode=data.episode,
+                    tick=data.tick,
+                    total_ticks=self.episode_length,
+                    price=data.last_price,
+                )
 
-        # 更新订单簿
-        if self.orderbook_panel:
-            self.orderbook_panel.update(data.bids, data.asks)
+            # 更新订单簿
+            if self.orderbook_panel:
+                self.orderbook_panel.update(data.bids, data.asks)
 
-        # 更新图表
-        if self.chart_panel:
-            self.chart_panel.update_price(data.price_history)
-            self.chart_panel.update_equity(data.equity_history, data.population_stats)
+            # 更新图表
+            if self.chart_panel:
+                self.chart_panel.update_price(data.price_history)
+                self.chart_panel.update_equity(data.equity_history, data.population_stats)
 
-        # 更新成交记录
-        if self.trades_panel:
-            self.trades_panel.update(data.recent_trades)
+            # 更新成交记录
+            if self.trades_panel:
+                self.trades_panel.update(data.recent_trades)
+        except Exception as e:
+            import traceback
+            print(f"UI update error: {e}")
+            traceback.print_exc()
 
     def run(self) -> None:
         """运行主循环

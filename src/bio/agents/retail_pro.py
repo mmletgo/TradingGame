@@ -167,6 +167,7 @@ class RetailProAgent(Agent):
             # 高级散户特定：先撤旧单再挂新单
             if self.account.pending_order_id is not None:
                 matching_engine.cancel_order_direct(self.account.pending_order_id)
+                self.account.pending_order_id = None  # 清除旧挂单ID
             side = OrderSide.BUY if action == ActionType.PLACE_BID else OrderSide.SELL
             trades = self._place_limit_order_direct(
                 side, params["price"], params["quantity"], matching_engine

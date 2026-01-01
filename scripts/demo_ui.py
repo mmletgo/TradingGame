@@ -176,7 +176,24 @@ def main() -> None:
     # 初始化
     print("初始化演示环境...")
     trainer.setup()
-    print("初始化完成")
+    print("训练器初始化完成")
+
+    # 预热：重置一次市场和Agent，确保所有懒加载完成
+    print("预热中（重置市场和Agent）...")
+    for population in trainer.populations.values():
+        population.reset_agents()
+    trainer._reset_market()
+
+    # 运行一个测试tick确保一切就绪
+    print("运行测试tick...")
+    trainer.run_tick()
+    trainer.tick = 0  # 重置tick计数
+
+    # 再次重置，准备正式演示
+    for population in trainer.populations.values():
+        population.reset_agents()
+    trainer._reset_market()
+    print("预热完成，所有初始化已就绪")
 
     # 创建并运行演示UI
     app = DemoUIApp(trainer, checkpoint_path=args.checkpoint)

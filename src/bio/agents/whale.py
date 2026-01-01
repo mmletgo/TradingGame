@@ -209,6 +209,7 @@ class WhaleAgent(Agent):
         # 庄家所有动作都先撤旧单
         if self.account.pending_order_id is not None:
             matching_engine.cancel_order_direct(self.account.pending_order_id)
+            self.account.pending_order_id = None  # 清除旧挂单ID
 
         if action == ActionType.PLACE_BID:
             trades = self._place_limit_order_direct(

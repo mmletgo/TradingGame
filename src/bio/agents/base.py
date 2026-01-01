@@ -538,6 +538,13 @@ class Agent:
         )
         trades = matching_engine.process_order_direct(order)
         self._process_trades_direct(trades)
+
+        # 更新挂单ID（如果订单未完全成交，则记录）
+        if matching_engine._orderbook.order_map.get(order.order_id) is not None:
+            self.account.pending_order_id = order.order_id
+        else:
+            self.account.pending_order_id = None
+
         return trades
 
     def _place_market_order_direct(
