@@ -5,6 +5,7 @@ NEAT 神经网络封装模块
 优化版本已迁移到 fork 的 neat-python 库中。
 """
 import neat
+import numpy as np
 from neat.nn import FastFeedForwardNetwork, FeedForwardNetwork
 
 
@@ -46,12 +47,12 @@ class Brain:
         # 使用 FastFeedForwardNetwork（如果可用则为 Cython 优化版本）
         self.network = FastFeedForwardNetwork.create(genome, config)
 
-    def forward(self, inputs: list[float]) -> list[float]:
+    def forward(self, inputs: list[float] | np.ndarray) -> list[float]:
         """
         前向传播
 
         Args:
-            inputs: 输入向量
+            inputs: 输入向量（list 或 ndarray）
 
         Returns:
             神经网络输出向量

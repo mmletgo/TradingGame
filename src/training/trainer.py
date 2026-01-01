@@ -4,7 +4,6 @@
 """
 
 import pickle
-import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
     from src.bio.agents.base import Agent
 from src.config.config import Config
 from src.core.event_engine.event_bus import EventBus
-from src.core.event_engine.events import Event, EventType
+from src.core.event_engine.events import Event
 from src.core.log_engine.logger import get_logger
 from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
@@ -80,7 +79,8 @@ class Trainer:
     def setup(self) -> None:
         """初始化训练环境
 
-        创建三种群、撮合引擎，订阅事件，初始化市场。
+        创建三种群、撮合引擎，初始化市场。
+        训练模式使用直接调用，不需要订阅事件。
         """
         # 创建三种群
         for agent_type in AgentType:
@@ -91,11 +91,8 @@ class Trainer:
         # 创建撮合引擎
         self.matching_engine = MatchingEngine(self.event_bus, self.config.market)
 
-        # 订阅成交事件
-        self.event_bus.subscribe(EventType.TRADE_EXECUTED, self._on_trade)
-
-        # 订阅强平事件
-        self.event_bus.subscribe(EventType.LIQUIDATION, self._on_liquidation)
+        # 训练模式使用直接调用，不需要订阅成交事件和强平事件
+        # 保留事件系统用于可能的调试或 UI 模式
 
         # 注册所有 Agent 的费率
         self._register_all_agents()
@@ -193,6 +190,52 @@ class Trainer:
             agent.is_liquidated = True
             self.logger.info(f"Agent {agent_id} 已被强平，本轮 episode 禁用")
 
+    def _handle_liquidation_direct(self, agent: "Agent", current_price: float) -> None:
+        """直接处理强平（训练模式）
+
+        创建市价平仓单，直接调用撮合引擎处理，更新账户。
+
+        Args:
+            agent: 被强平的 Agent
+            current_price: 当前价格
+        """
+        if not self.matching_engine:
+            return
+
+        position_qty = agent.account.position.quantity
+        if position_qty == 0:
+            return
+
+        # 创建市价平仓单
+        side = OrderSide.SELL if position_qty > 0 else OrderSide.BUY
+        order = Order(
+            order_id=agent._generate_order_id(),
+            agent_id=agent.agent_id,
+            side=side,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=abs(position_qty),
+        )
+
+        # 直接撮合
+        trades = self.matching_engine.process_order_direct(order)
+
+        # 更新账户（taker 和 maker）
+        for trade in trades:
+            is_buyer = trade.buyer_id == agent.agent_id
+            agent.account.on_trade(trade, is_buyer)
+            self.recent_trades.append(trade)
+            # 更新 maker 的账户
+            maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+            if maker_id != agent.agent_id:
+                maker_agent = self.agent_map.get(maker_id)
+                if maker_agent is not None:
+                    maker_is_buyer = trade.buyer_id == maker_id
+                    maker_agent.account.on_trade(trade, maker_is_buyer)
+
+        # 标记已强平
+        agent.is_liquidated = True
+
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
         """预计算归一化的公共市场数据
 
@@ -260,7 +303,7 @@ class Trainer:
         )
 
     def _init_market(self) -> None:
-        """初始化市场
+        """初始化市场（直接调用模式）
 
         只有做市商先行动，建立初始流动性。
 
@@ -278,7 +321,19 @@ class Trainer:
                 # 每个做市商决策前重新计算市场状态，确保看到最新的订单簿
                 market_state = self._compute_normalized_market_state()
                 action, params = agent.decide(market_state, orderbook)
-                agent.execute_action(action, params, self.event_bus)
+                # 直接执行（绕过事件系统）
+                trades = agent.execute_action_direct(
+                    action, params, self.matching_engine
+                )
+                for trade in trades:
+                    self.recent_trades.append(trade)
+                    # 更新 maker 的账户
+                    maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+                    if maker_id != agent.agent_id:
+                        maker_agent = self.agent_map.get(maker_id)
+                        if maker_agent is not None:
+                            is_buyer = trade.buyer_id == maker_id
+                            maker_agent.account.on_trade(trade, is_buyer)
 
     def _reset_market(self) -> None:
         """重置市场状态
@@ -300,40 +355,48 @@ class Trainer:
         self._init_market()
 
     def run_tick(self) -> None:
-        """执行一个 tick
+        """执行一个 tick（直接调用模式）
 
         按顺序执行：做市商->庄家->散户 的决策和交易。
-        检查强平条件。
+        检查强平条件。绕过事件系统，直接调用撮合引擎。
         """
         if not self.matching_engine:
             return
 
         self.tick += 1
         orderbook = self.matching_engine._orderbook
-
-        # 发布 TICK_START 事件
-        self.event_bus.publish(
-            Event(EventType.TICK_START, time.time(), {"tick": self.tick})
-        )
+        current_price = orderbook.last_price
 
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
-        current_price = orderbook.last_price
 
-        # 使用预构建的执行顺序列表，合并决策/执行和强平检查
+        # 使用预构建的执行顺序列表
         for agent in self.agent_execution_order:
-            # 决策（传入预计算的市场状态和订单簿）
+            if agent.is_liquidated:
+                continue
+
+            # 决策
             action, params = agent.decide(market_state, orderbook)
-            # 执行
-            agent.execute_action(action, params, self.event_bus)
+
+            # 直接执行（绕过事件系统）
+            trades = agent.execute_action_direct(
+                action, params, self.matching_engine
+            )
+
+            # 记录成交并更新对手方账户（maker）
+            for trade in trades:
+                self.recent_trades.append(trade)
+                # 更新 maker 的账户（taker 的账户已在 execute_action_direct 中更新）
+                maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+                if maker_id != agent.agent_id:
+                    maker_agent = self.agent_map.get(maker_id)
+                    if maker_agent is not None:
+                        is_buyer = trade.buyer_id == maker_id
+                        maker_agent.account.on_trade(trade, is_buyer)
+
             # 检查强平
             if agent.account.check_liquidation(current_price):
-                agent.account.liquidate(current_price, self.event_bus)
-
-        # 发布 TICK_END 事件
-        self.event_bus.publish(
-            Event(EventType.TICK_END, time.time(), {"tick": self.tick})
-        )
+                self._handle_liquidation_direct(agent, current_price)
 
     def run_episode(self) -> None:
         """运行一个 episode

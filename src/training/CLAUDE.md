@@ -31,24 +31,23 @@
 
 ### Trainer (trainer.py)
 
-管理整体训练流程，协调种群、撮合引擎和事件系统。
+管理整体训练流程，协调种群和撮合引擎。训练模式使用直接调用，绕过事件系统。
 
 **主要功能：**
 - 初始化训练环境（创建种群、撮合引擎）
 - 管理训练生命周期（tick、episode）
-- 处理成交和强平事件
+- 直接调用模式处理成交和强平
 - 保存/加载检查点
 - 支持暂停/恢复/停止控制
 
 **关键方法：**
-- `setup()` - 初始化训练环境
+- `setup()` - 初始化训练环境（训练模式不订阅事件）
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->散户）
-- `_on_liquidation()` - 处理强平事件，提交市价单平仓并标记 Agent 已被强平
-- `_mark_agent_liquidated()` - 通过映射表 O(1) 查找并标记 Agent 已被强平
+- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓并标记 Agent
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
-- `run_tick()` - 执行单个 tick，使用预构建的执行顺序列表
+- `run_tick()` - 执行单个 tick（直接调用模式），绕过事件系统
 - `run_episode()` - 运行完整 episode（重置、运行、进化）
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
@@ -58,16 +57,16 @@
 - 使用 `agent_map` 映射表实现 O(1) Agent 查找
 - 使用 `agent_execution_order` 预构建执行顺序，合并决策/执行和强平检查循环
 - 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
+- **直接调用模式**：训练时绕过事件系统，直接调用撮合引擎和 Agent 方法
 
 ## 训练流程
 
 1. **初始化阶段** (`setup`)
    - 创建三个种群（散户/庄家/做市商）
    - 创建撮合引擎
-   - 订阅成交和强平事件
    - 注册所有 Agent 的费率到撮合引擎
    - 构建 Agent 映射表和执行顺序
-   - 做市商建立初始流动性
+   - 做市商建立初始流动性（直接调用模式）
 
 2. **Episode 循环** (`run_episode`)
    - 重置所有 Agent 账户
@@ -76,28 +75,48 @@
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
-3. **Tick 执行** (`run_tick`)
-   - 发布 TICK_START 事件
+3. **Tick 执行** (`run_tick` - 直接调用模式)
    - 向量化计算归一化市场状态
    - 使用预构建的执行顺序列表遍历所有 Agent：
+     - 跳过已强平的 Agent
      - 决策（传入市场状态和订单簿）
-     - 执行动作
-     - 检查强平条件
-   - 发布 TICK_END 事件
+     - 直接执行动作（`execute_action_direct`，绕过事件系统）
+     - 记录成交到 `recent_trades`
+     - 检查强平条件，触发 `_handle_liquidation_direct`
+
+## 直接调用模式
+
+训练模式绕过事件系统，直接调用以提高性能：
+
+### Agent 方法
+- `execute_action_direct(action, params, matching_engine)` - 直接执行动作，返回成交列表
+- `_place_limit_order_direct()` - 直接下限价单
+- `_place_market_order_direct()` - 直接下市价单
+- `_process_trades_direct()` - 直接处理成交，更新账户
+
+### 撮合引擎方法
+- `process_order_direct(order)` - 直接处理订单，不发布事件
+- `cancel_order_direct(order_id)` - 直接撤单
+
+### Trainer 方法
+- `_init_market()` - 直接调用做市商初始化市场
+- `run_tick()` - 直接调用 Agent 和撮合引擎
+- `_handle_liquidation_direct()` - 直接处理强平
 
 ## 强平机制
 
-当 Agent 触发强平条件时：
-1. `_on_liquidation()` 处理强平事件，提交市价单平仓
-2. `_mark_agent_liquidated()` 将 Agent 的 `is_liquidated` 标志设为 True
-3. 被强平的 Agent 在本轮 episode 剩余时间内无法执行任何动作（decide 返回 HOLD，execute_action 直接返回）
-4. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
+当 Agent 触发强平条件时（训练模式）：
+1. `_handle_liquidation_direct()` 创建市价平仓单，直接调用撮合引擎处理
+2. 成交后直接更新 Agent 账户
+3. 将 Agent 的 `is_liquidated` 标志设为 True
+4. 被强平的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
+5. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
 
 ## 依赖关系
 
 - `src.bio.agents` - Agent 类
 - `src.config.config` - 配置类
-- `src.core.event_engine` - 事件系统
+- `src.core.event_engine` - 事件系统（保留用于调试/UI模式）
 - `src.core.log_engine` - 日志系统
 - `src.market.matching` - 撮合引擎
 - `src.market.orderbook` - 订单簿

@@ -4,7 +4,7 @@
 与普通散户不同，高级散户可以看到完整的100档订单簿和100笔成交。
 """
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from src.bio.agents.base import ActionType
 from src.bio.agents.base import Agent
@@ -12,7 +12,11 @@ from src.config.config import AgentConfig, AgentType
 from src.bio.brain.brain import Brain
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
+from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
+
+if TYPE_CHECKING:
+    from src.market.matching.matching_engine import MatchingEngine
 
 
 class RetailProAgent(Agent):
@@ -135,3 +139,40 @@ class RetailProAgent(Agent):
         handler = self._action_handlers.get(action)
         if handler:
             handler(params, event_bus)
+
+    def execute_action_direct(
+        self,
+        action: ActionType,
+        params: dict[str, Any],
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """直接执行动作（训练模式，绕过事件系统）
+
+        高级散户特定实现：PLACE_BID/PLACE_ASK 会先撤旧单再挂新单。
+
+        Args:
+            action: 动作类型
+            params: 动作参数字典
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
+        """
+        if self.is_liquidated:
+            return []
+
+        trades: list[Trade] = []
+
+        if action == ActionType.PLACE_BID or action == ActionType.PLACE_ASK:
+            # 高级散户特定：先撤旧单再挂新单
+            if self.account.pending_order_id is not None:
+                matching_engine.cancel_order_direct(self.account.pending_order_id)
+            side = OrderSide.BUY if action == ActionType.PLACE_BID else OrderSide.SELL
+            trades = self._place_limit_order_direct(
+                side, params["price"], params["quantity"], matching_engine
+            )
+        else:
+            # 其他动作使用父类实现
+            trades = super().execute_action_direct(action, params, matching_engine)
+
+        return trades

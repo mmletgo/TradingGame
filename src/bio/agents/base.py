@@ -4,11 +4,14 @@
 """
 
 from enum import Enum
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 
 from src.config.config import AgentConfig, AgentType
+
+if TYPE_CHECKING:
+    from src.market.matching.matching_engine import MatchingEngine
 from src.core.event_engine.events import Event, EventType
 from src.core.event_engine.event_bus import EventBus
 from src.bio.brain.brain import Brain
@@ -118,7 +121,7 @@ class Agent:
         is_buyer = event.data["buyer_id"] == self.agent_id
         self.account.on_trade(trade, is_buyer)
 
-    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> list[float]:
+    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入
 
         Args:
@@ -126,7 +129,7 @@ class Agent:
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量
+            神经网络输入向量（ndarray）
         """
         # 直接复制到预分配数组，避免 np.concatenate 创建新数组
         self._input_buffer[:200] = market_state.bid_data
@@ -135,7 +138,7 @@ class Agent:
         self._input_buffer[500:600] = market_state.trade_quantities
         self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
         self._input_buffer[604:607] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
-        return self._input_buffer.tolist()
+        return self._input_buffer  # 不调用 .tolist()
 
     def _get_position_inputs(self, mid_price: float) -> np.ndarray:
         """获取持仓信息输入（4 个值）
@@ -433,6 +436,147 @@ class Agent:
         handler = self._action_handlers.get(action)
         if handler:
             handler(params, event_bus)
+
+    def execute_action_direct(
+        self,
+        action: ActionType,
+        params: dict[str, Any],
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """直接执行动作（训练模式，绕过事件系统）
+
+        直接调用撮合引擎处理订单，不通过事件系统。
+        成交后直接更新账户，不依赖事件回调。
+
+        Args:
+            action: 动作类型
+            params: 动作参数字典
+                - PLACE_BID/PLACE_ASK: {"price": float, "quantity": float}
+                - MARKET_BUY/MARKET_SELL: {"quantity": float}
+                - CANCEL: {"order_id": int} (可选，默认使用账户的 pending_order_id)
+                - CLEAR_POSITION/HOLD: {}
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
+        """
+        if self.is_liquidated:
+            return []
+
+        trades: list[Trade] = []
+
+        if action == ActionType.PLACE_BID:
+            trades = self._place_limit_order_direct(
+                OrderSide.BUY, params["price"], params["quantity"], matching_engine
+            )
+        elif action == ActionType.PLACE_ASK:
+            trades = self._place_limit_order_direct(
+                OrderSide.SELL, params["price"], params["quantity"], matching_engine
+            )
+        elif action == ActionType.CANCEL:
+            order_id = params.get("order_id") or self.account.pending_order_id
+            if order_id is not None:
+                matching_engine.cancel_order_direct(order_id)
+        elif action == ActionType.MARKET_BUY:
+            trades = self._place_market_order_direct(
+                OrderSide.BUY, params["quantity"], matching_engine
+            )
+        elif action == ActionType.MARKET_SELL:
+            trades = self._place_market_order_direct(
+                OrderSide.SELL, params["quantity"], matching_engine
+            )
+        elif action == ActionType.CLEAR_POSITION:
+            trades = self._handle_clear_position_direct(matching_engine)
+        # HOLD: 不执行任何操作
+
+        return trades
+
+    def _place_limit_order_direct(
+        self,
+        side: OrderSide,
+        price: float,
+        quantity: float,
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """直接下限价单（训练模式）
+
+        Args:
+            side: 订单方向
+            price: 价格
+            quantity: 数量
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
+        """
+        order = Order(
+            order_id=self._generate_order_id(),
+            agent_id=self.agent_id,
+            side=side,
+            order_type=OrderType.LIMIT,
+            price=price,
+            quantity=quantity,
+        )
+        trades = matching_engine.process_order_direct(order)
+        self._process_trades_direct(trades)
+        return trades
+
+    def _place_market_order_direct(
+        self,
+        side: OrderSide,
+        quantity: float,
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """直接下市价单（训练模式）
+
+        Args:
+            side: 订单方向
+            quantity: 数量
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
+        """
+        order = Order(
+            order_id=self._generate_order_id(),
+            agent_id=self.agent_id,
+            side=side,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=quantity,
+        )
+        trades = matching_engine.process_order_direct(order)
+        self._process_trades_direct(trades)
+        return trades
+
+    def _handle_clear_position_direct(
+        self,
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """直接处理清仓（训练模式）
+
+        Args:
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
+        """
+        position_qty = self.account.position.quantity
+        if position_qty > 0:
+            return self._place_market_order_direct(OrderSide.SELL, position_qty, matching_engine)
+        elif position_qty < 0:
+            return self._place_market_order_direct(OrderSide.BUY, abs(position_qty), matching_engine)
+        return []
+
+    def _process_trades_direct(self, trades: list[Trade]) -> None:
+        """直接处理成交列表，更新账户（训练模式）
+
+        Args:
+            trades: 成交列表
+        """
+        for trade in trades:
+            is_buyer = trade.buyer_id == self.agent_id
+            self.account.on_trade(trade, is_buyer)
 
     def _generate_order_id(self) -> int:
         """生成唯一订单ID

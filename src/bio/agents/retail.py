@@ -3,7 +3,7 @@
 本模块定义散户 Agent 类，继承自 Agent 基类。
 """
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 
@@ -14,8 +14,12 @@ from src.bio.brain.brain import Brain
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
 from src.market.market_state import NormalizedMarketState
+from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
+
+if TYPE_CHECKING:
+    from src.market.matching.matching_engine import MatchingEngine
 
 
 class RetailAgent(Agent):
@@ -72,7 +76,7 @@ class RetailAgent(Agent):
             ActionType.PLACE_ASK, params, event_bus
         )
 
-    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> list[float]:
+    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入（散户限制版）
 
         散户只能看到买卖各10档订单簿和最近10笔成交。
@@ -82,7 +86,7 @@ class RetailAgent(Agent):
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（67维）
+            神经网络输入向量（67维 ndarray）
         """
         depth = self.ORDERBOOK_DEPTH
         trade_size = self.TRADE_HISTORY_SIZE
@@ -110,7 +114,7 @@ class RetailAgent(Agent):
         offset += 4  # 64
         self._input_buffer[offset:offset + 3] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
 
-        return self._input_buffer.tolist()
+        return self._input_buffer  # 不调用 .tolist()
 
     def get_action_space(self) -> list[ActionType]:
         """获取散户可用动作空间
@@ -185,3 +189,40 @@ class RetailAgent(Agent):
         handler = self._action_handlers.get(action)
         if handler:
             handler(params, event_bus)
+
+    def execute_action_direct(
+        self,
+        action: ActionType,
+        params: dict[str, Any],
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """直接执行动作（训练模式，绕过事件系统）
+
+        散户特定实现：PLACE_BID/PLACE_ASK 会先撤旧单再挂新单。
+
+        Args:
+            action: 动作类型
+            params: 动作参数字典
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
+        """
+        if self.is_liquidated:
+            return []
+
+        trades: list[Trade] = []
+
+        if action == ActionType.PLACE_BID or action == ActionType.PLACE_ASK:
+            # 散户特定：先撤旧单再挂新单
+            if self.account.pending_order_id is not None:
+                matching_engine.cancel_order_direct(self.account.pending_order_id)
+            side = OrderSide.BUY if action == ActionType.PLACE_BID else OrderSide.SELL
+            trades = self._place_limit_order_direct(
+                side, params["price"], params["quantity"], matching_engine
+            )
+        else:
+            # 其他动作使用父类实现
+            trades = super().execute_action_direct(action, params, matching_engine)
+
+        return trades

@@ -314,3 +314,39 @@ class MatchingEngine:
             self._event_bus.publish(event)
 
         return trades
+
+    def process_order_direct(self, order: Order) -> list[Trade]:
+        """直接处理订单（训练模式，不发布事件）
+
+        根据订单类型调用对应的撮合函数，不发布成交事件。
+        用于训练模式下绕过事件系统，减少开销。
+
+        Args:
+            order: 订单对象（限价单或市价单）
+
+        Returns:
+            本次撮合产生的所有成交记录列表（可能为空）
+        """
+        if order.order_type == OrderType.LIMIT:
+            trades = self.match_limit_order(order)
+        else:  # OrderType.MARKET
+            trades = self.match_market_order(order)
+        return trades
+
+    def cancel_order_direct(self, order_id: int) -> bool:
+        """直接撤单（训练模式）
+
+        不发布任何事件，直接从订单簿中撤销订单。
+
+        Args:
+            order_id: 订单ID
+
+        Returns:
+            是否成功撤单
+        """
+        return self._orderbook.cancel_order(order_id)
+
+    @property
+    def orderbook(self) -> OrderBook:
+        """获取订单簿（供直接调用模式使用）"""
+        return self._orderbook

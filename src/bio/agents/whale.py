@@ -3,14 +3,18 @@
 本模块定义庄家 Agent 类，继承自 Agent 基类。
 """
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from src.bio.agents.base import ActionType, Agent
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event, EventType
+from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
+
+if TYPE_CHECKING:
+    from src.market.matching.matching_engine import MatchingEngine
 
 
 class WhaleAgent(Agent):
@@ -178,3 +182,50 @@ class WhaleAgent(Agent):
         handler = self._action_handlers.get(action)
         if handler:
             handler(params, event_bus)
+
+    def execute_action_direct(
+        self,
+        action: ActionType,
+        params: dict[str, Any],
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """直接执行动作（训练模式，绕过事件系统）
+
+        庄家特定实现：所有动作都会先撤旧单再执行。
+
+        Args:
+            action: 动作类型
+            params: 动作参数字典
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
+        """
+        if self.is_liquidated:
+            return []
+
+        trades: list[Trade] = []
+
+        # 庄家所有动作都先撤旧单
+        if self.account.pending_order_id is not None:
+            matching_engine.cancel_order_direct(self.account.pending_order_id)
+
+        if action == ActionType.PLACE_BID:
+            trades = self._place_limit_order_direct(
+                OrderSide.BUY, params["price"], params["quantity"], matching_engine
+            )
+        elif action == ActionType.PLACE_ASK:
+            trades = self._place_limit_order_direct(
+                OrderSide.SELL, params["price"], params["quantity"], matching_engine
+            )
+        elif action == ActionType.MARKET_BUY:
+            trades = self._place_market_order_direct(
+                OrderSide.BUY, params["quantity"], matching_engine
+            )
+        elif action == ActionType.MARKET_SELL:
+            trades = self._place_market_order_direct(
+                OrderSide.SELL, params["quantity"], matching_engine
+            )
+        # 庄家没有 HOLD、CANCEL、CLEAR_POSITION 动作
+
+        return trades
