@@ -144,6 +144,11 @@ class MatchingEngine:
         trades: list[Trade] = []
         remaining = order.quantity - order.filled_quantity
 
+        # 预计算 taker（新订单）的费率信息，避免循环内重复查找
+        taker_agent_id = order.agent_id
+        taker_rates = self._fee_rates.get(taker_agent_id, (0.0002, 0.0005))
+        taker_rate = taker_rates[1]  # taker费率
+
         while remaining > 0:
             if order.side == OrderSide.BUY:
                 # 买单与卖盘撮合
@@ -184,19 +189,27 @@ class MatchingEngine:
 
                 # 成交价格 = maker订单价格（对手盘价格）
                 trade_price = maker_order.price
+                trade_amount = trade_price * trade_qty
 
-                # 确定买卖方和手续费类型
+                # 计算 taker 手续费（使用预计算的费率）
+                taker_fee_amount = trade_amount * taker_rate
+
+                # 确定买卖方和手续费（内联计算以减少函数调用开销）
                 # 新订单是 taker，对手盘是 maker
+                maker_agent_id = maker_order.agent_id
+                maker_rates = self._fee_rates.get(maker_agent_id, (0.0002, 0.0005))
+                maker_fee = trade_amount * maker_rates[0]  # maker费率
+
                 if order.side == OrderSide.BUY:
-                    buyer_id = order.agent_id
-                    seller_id = maker_order.agent_id
-                    buyer_fee = self.calculate_fee(buyer_id, trade_price * trade_qty, is_maker=False)
-                    seller_fee = self.calculate_fee(seller_id, trade_price * trade_qty, is_maker=True)
+                    buyer_id = taker_agent_id
+                    seller_id = maker_agent_id
+                    buyer_fee = taker_fee_amount
+                    seller_fee = maker_fee
                 else:  # OrderSide.SELL
-                    buyer_id = maker_order.agent_id
-                    seller_id = order.agent_id
-                    buyer_fee = self.calculate_fee(buyer_id, trade_price * trade_qty, is_maker=True)
-                    seller_fee = self.calculate_fee(seller_id, trade_price * trade_qty, is_maker=False)
+                    buyer_id = maker_agent_id
+                    seller_id = taker_agent_id
+                    buyer_fee = maker_fee
+                    seller_fee = taker_fee_amount
 
                 # 创建成交记录
                 trade = Trade(

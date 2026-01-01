@@ -62,4 +62,5 @@ class Trade:
         self.buyer_fee = buyer_fee
         self.seller_fee = seller_fee
         self.is_buyer_taker = is_buyer_taker
-        self.timestamp = timestamp if timestamp is not None else time.time()
+        # 训练模式使用固定时间戳以避免 time.time() 调用开销
+        self.timestamp = timestamp if timestamp is not None else 0.0

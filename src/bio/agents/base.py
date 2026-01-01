@@ -86,6 +86,12 @@ class Agent:
         # 预分配神经网络输入缓冲区（607 = 200 + 200 + 100 + 100 + 4 + 3）
         self._input_buffer: np.ndarray = np.zeros(607, dtype=np.float64)
 
+        # 预分配持仓信息缓冲区（4 个值）
+        self._position_buffer: np.ndarray = np.zeros(4, dtype=np.float64)
+
+        # 预分配挂单信息缓冲区（3 个值）
+        self._pending_order_buffer: np.ndarray = np.zeros(3, dtype=np.float64)
+
         # 使用带 ID 的订阅，支持定向发送
         event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, agent_id, self._on_trade_event)
 
@@ -149,28 +155,31 @@ class Agent:
         Returns:
             持仓信息输入向量 [持仓归一化, 均价归一化, 余额归一化, 净值归一化]
         """
+        # 使用预分配的缓冲区避免每次创建新数组
+        result = self._position_buffer
+
         # 持仓价值归一化
         equity = self.account.get_equity(mid_price)
         position_value = abs(self.account.position.quantity) * mid_price
         if equity > 0 and self.account.leverage > 0:
-            position_norm = position_value / (equity * self.account.leverage)
+            result[0] = position_value / (equity * self.account.leverage)
         else:
-            position_norm = 0.0
+            result[0] = 0.0
 
         # 持仓均价归一化
         if self.account.position.quantity == 0:
-            avg_price_norm = 0.0
+            result[1] = 0.0
         else:
-            avg_price_norm = (self.account.position.avg_price - mid_price) / mid_price if mid_price > 0 else 0.0
+            result[1] = (self.account.position.avg_price - mid_price) / mid_price if mid_price > 0 else 0.0
 
         # 余额归一化
         initial_balance = self.account.initial_balance
-        balance_norm = self.account.balance / initial_balance if initial_balance > 0 else 0.0
+        result[2] = self.account.balance / initial_balance if initial_balance > 0 else 0.0
 
         # 净值归一化
-        equity_norm = equity / initial_balance if initial_balance > 0 else 0.0
+        result[3] = equity / initial_balance if initial_balance > 0 else 0.0
 
-        return np.array([position_norm, avg_price_norm, balance_norm, equity_norm], dtype=np.float64)
+        return result
 
     def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> np.ndarray:
         """获取挂单信息输入（3 个值：价格归一化、数量、方向）
@@ -184,17 +193,27 @@ class Agent:
         Returns:
             挂单信息输入向量 [价格归一化, 数量, 方向]
         """
+        # 使用预分配的缓冲区避免每次创建新数组
+        result = self._pending_order_buffer
+
         pending_id = self.account.pending_order_id
         if pending_id is None:
-            return np.array([0.0, 0.0, 0.0], dtype=np.float64)
+            result[0] = 0.0
+            result[1] = 0.0
+            result[2] = 0.0
+            return result
 
         order = orderbook.order_map.get(pending_id)
         if order is None:
-            return np.array([0.0, 0.0, 0.0], dtype=np.float64)
+            result[0] = 0.0
+            result[1] = 0.0
+            result[2] = 0.0
+            return result
 
-        price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0.0
-        direction = 1.0 if order.side == OrderSide.BUY else -1.0
-        return np.array([price_norm, float(order.quantity), direction], dtype=np.float64)
+        result[0] = (order.price - mid_price) / mid_price if mid_price > 0 else 0.0
+        result[1] = float(order.quantity)
+        result[2] = 1.0 if order.side == OrderSide.BUY else -1.0
+        return result
 
     def decide(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> tuple[ActionType, dict[str, Any]]:
         """决策下一步动作（接收预计算的市场状态）
