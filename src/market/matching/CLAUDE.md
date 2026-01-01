@@ -58,6 +58,15 @@
 #### `process_order(order: Order) -> list[Trade]`
 处理订单入口，根据订单类型调用对应撮合函数，并发布成交事件。
 
+#### `process_order_direct(order: Order) -> list[Trade]`
+直接处理订单（训练模式）。不发布成交事件，直接返回成交列表。用于训练模式绕过事件系统，减少开销。
+
+#### `cancel_order_direct(order_id: int) -> bool`
+直接撤单（训练模式）。不发布任何事件，直接从订单簿中撤销订单。
+
+#### `orderbook` (property)
+获取订单簿实例（供直接调用模式使用）。
+
 ### Trade (trade.py)
 
 成交记录数据类。
@@ -94,6 +103,20 @@ Agent._on_trade_event() 处理成交
 | 散户 | 0.0002 (万2) | 0.0005 (万5) |
 | 庄家 | 0.0 | 0.0001 (万1) |
 | 做市商 | 0.0 | 0.0001 (万1) |
+
+## 性能优化
+
+### 直接调用模式（训练优化）
+训练模式下绕过事件系统，直接调用撮合方法：
+- `process_order_direct(order)` - 直接处理订单
+- `cancel_order_direct(order_id)` - 直接撤单
+
+### `_match_orders` 优化
+- 预计算 taker 费率到循环外，避免重复查找
+- 内联费率计算，避免 `calculate_fee()` 函数调用开销
+
+### Trade 时间戳优化
+训练模式使用固定时间戳 `0.0`，避免 `time.time()` 调用开销。
 
 ## 依赖关系
 
