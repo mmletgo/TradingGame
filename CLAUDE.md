@@ -78,8 +78,9 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 3. **Tick 执行**: TICK_START → 做市商 → 庄家 → 散户 → 检查强平 → TICK_END
 
 ### NEAT 配置
-- `config/neat_retail.cfg` - 散户和庄家（9 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（22 个输出节点）
+- `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）
+- `config/neat_whale.cfg` - 庄家（607 个输入节点，9 个输出节点）
+- `config/neat_market_maker.cfg` - 做市商（634 个输入节点，22 个输出节点）
 
 ## 目录级 CLAUDE.md 系统
 

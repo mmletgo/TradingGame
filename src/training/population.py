@@ -62,12 +62,14 @@ class Population:
         self.logger = get_logger("population")
 
         # 根据 Agent 类型选择 NEAT 配置文件
-        # 散户和庄家使用 9 个输出，做市商使用 22 个输出
+        # 散户使用 67 个输入（10档订单簿 + 10笔成交），庄家使用 607 个输入，做市商使用 634 个输入
         from pathlib import Path
 
         config_dir = Path(config.training.neat_config_path)
         if agent_type == AgentType.MARKET_MAKER:
             neat_config_path = config_dir / "neat_market_maker.cfg"
+        elif agent_type == AgentType.WHALE:
+            neat_config_path = config_dir / "neat_whale.cfg"
         else:
             neat_config_path = config_dir / "neat_retail.cfg"
 
