@@ -71,12 +71,48 @@ class TrainingUIApp:
     def _setup_dpg(self) -> None:
         """初始化DearPyGui上下文和视口"""
         dpg.create_context()
+
+        # 加载中文字体
+        self._load_chinese_font()
+
         dpg.create_viewport(
-            title="NEAT Trading Simulator - 训练模式",
+            title="NEAT Trading Simulator - Training Mode",
             width=1400,
             height=900,
         )
         dpg.setup_dearpygui()
+
+    def _load_chinese_font(self) -> None:
+        """加载中文字体"""
+        import os
+
+        # 常见中文字体路径
+        font_paths = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc",
+            "/usr/share/fonts/truetype/arphic/uming.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            # Windows
+            "C:/Windows/Fonts/msyh.ttc",
+            "C:/Windows/Fonts/simhei.ttf",
+            # macOS
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+        ]
+
+        font_path = None
+        for path in font_paths:
+            if os.path.exists(path):
+                font_path = path
+                break
+
+        if font_path:
+            with dpg.font_registry():
+                with dpg.font(font_path, 16) as chinese_font:
+                    dpg.add_font_range_hint(dpg.mvFontRangeHint_Chinese_Full)
+                    dpg.add_font_range_hint(dpg.mvFontRangeHint_Default)
+            dpg.bind_font(chinese_font)
 
     def _setup_ui(self) -> None:
         """创建UI布局
