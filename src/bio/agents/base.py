@@ -3,7 +3,6 @@
 本模块定义 Agent 基类，是所有 AI Agent（散户、庄家、做市商）的父类。
 """
 
-import time
 from enum import Enum
 from typing import Any, Callable
 
@@ -337,7 +336,7 @@ class Agent:
             price=price,
             quantity=quantity,
         )
-        event = Event(EventType.ORDER_PLACED, time.time(), {"order": order})
+        event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
         event_bus.publish(event)
 
     def _place_market_order(self, side: OrderSide, quantity: float, event_bus: EventBus) -> None:
@@ -357,7 +356,7 @@ class Agent:
             price=0.0,
             quantity=quantity,
         )
-        event = Event(EventType.ORDER_PLACED, time.time(), {"order": order})
+        event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
         event_bus.publish(event)
 
     def _init_action_handlers(self) -> None:
@@ -394,7 +393,7 @@ class Agent:
         if order_id is not None:
             event = Event(
                 EventType.ORDER_CANCELLED,
-                time.time(),
+                0.0,
                 {"order_id": order_id, "agent_id": self.agent_id},
             )
             event_bus.publish(event)

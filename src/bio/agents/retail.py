@@ -3,7 +3,6 @@
 本模块定义散户 Agent 类，继承自 Agent 基类。
 """
 
-import time
 from typing import Any, Callable
 
 import numpy as np
@@ -144,13 +143,12 @@ class RetailAgent(Agent):
         if self.account.pending_order_id is not None:
             cancel_event = Event(
                 EventType.ORDER_CANCELLED,
-                time.time(),
+                0.0,
                 {"order_id": self.account.pending_order_id, "agent_id": self.agent_id},
             )
             event_bus.publish(cancel_event)
 
         # 再挂新单
-        timestamp = time.time()
         price = params["price"]
         quantity = params["quantity"]
         order_id = self._generate_order_id()
@@ -163,7 +161,7 @@ class RetailAgent(Agent):
             price=price,
             quantity=quantity,
         )
-        place_event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
+        place_event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
         event_bus.publish(place_event)
 
     def execute_action(self, action: ActionType, params: dict[str, Any], event_bus: EventBus) -> None:

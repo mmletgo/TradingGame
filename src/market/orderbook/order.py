@@ -5,7 +5,6 @@
 """
 
 from enum import IntEnum
-import time
 
 
 class OrderSide(IntEnum):
@@ -36,6 +35,7 @@ class Order:
         order_type: OrderType,
         price: float,
         quantity: float,
+        timestamp: float = 0.0,
     ) -> None:
         """
         初始化订单
@@ -47,6 +47,7 @@ class Order:
             order_type: 订单类型
             price: 价格
             quantity: 数量
+            timestamp: 时间戳（默认为0，训练模式下不需要精确时间）
         """
         self.order_id: int = order_id
         self.agent_id: int = agent_id
@@ -55,4 +56,4 @@ class Order:
         self.price: float = price
         self.quantity: float = quantity
         self.filled_quantity: float = 0.0
-        self.timestamp: float = time.time()
+        self.timestamp: float = timestamp

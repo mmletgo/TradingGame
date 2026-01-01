@@ -3,7 +3,6 @@
 本模块定义庄家 Agent 类，继承自 Agent 基类。
 """
 
-import time
 from typing import Any, Callable
 
 from src.bio.agents.base import ActionType, Agent
@@ -99,7 +98,7 @@ class WhaleAgent(Agent):
         if self.account.pending_order_id is not None:
             cancel_event = Event(
                 EventType.ORDER_CANCELLED,
-                time.time(),
+                0.0,
                 {"order_id": self.account.pending_order_id, "agent_id": self.agent_id},
             )
             event_bus.publish(cancel_event)
@@ -117,7 +116,6 @@ class WhaleAgent(Agent):
             event_bus: 事件总线
         """
         self._cancel_pending_order(event_bus)
-        timestamp = time.time()
         price = params["price"]
         quantity = params["quantity"]
         order_id = self._generate_order_id()
@@ -130,7 +128,7 @@ class WhaleAgent(Agent):
             price=price,
             quantity=quantity,
         )
-        place_event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
+        place_event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
         event_bus.publish(place_event)
 
     def _handle_market_order(
@@ -146,7 +144,6 @@ class WhaleAgent(Agent):
             event_bus: 事件总线
         """
         self._cancel_pending_order(event_bus)
-        timestamp = time.time()
         quantity = params["quantity"]
         order_id = self._generate_order_id()
         side = OrderSide.BUY if action == ActionType.MARKET_BUY else OrderSide.SELL
@@ -158,7 +155,7 @@ class WhaleAgent(Agent):
             price=0.0,  # 市价单价格无意义
             quantity=quantity,
         )
-        place_event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
+        place_event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
         event_bus.publish(place_event)
 
     def execute_action(

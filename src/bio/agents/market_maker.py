@@ -3,7 +3,6 @@
 本模块定义做市商 Agent 类，继承自 Agent 基类。
 """
 
-import time
 from typing import Any, Callable
 
 import numpy as np
@@ -254,11 +253,10 @@ class MarketMakerAgent(Agent):
         Args:
             event_bus: 事件总线
         """
-        timestamp = time.time()
         for order_id in self.bid_order_ids + self.ask_order_ids:
             event = Event(
                 EventType.ORDER_CANCELLED,
-                timestamp,
+                0.0,
                 {"order_id": order_id, "agent_id": self.agent_id},
             )
             event_bus.publish(event)
@@ -280,7 +278,6 @@ class MarketMakerAgent(Agent):
             order_ids: 用于存储订单ID的列表（将被修改）
             event_bus: 事件总线
         """
-        timestamp = time.time()
         for order_spec in orders:
             order_id = self._generate_order_id()
             order = Order(
@@ -291,7 +288,7 @@ class MarketMakerAgent(Agent):
                 price=order_spec["price"],
                 quantity=order_spec["quantity"],
             )
-            event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
+            event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
             event_bus.publish(event)
             order_ids.append(order_id)
 

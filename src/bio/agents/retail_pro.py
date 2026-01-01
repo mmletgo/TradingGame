@@ -4,7 +4,6 @@
 与普通散户不同，高级散户可以看到完整的100档订单簿和100笔成交。
 """
 
-import time
 from typing import Any, Callable
 
 from src.bio.agents.base import ActionType
@@ -94,13 +93,12 @@ class RetailProAgent(Agent):
         if self.account.pending_order_id is not None:
             cancel_event = Event(
                 EventType.ORDER_CANCELLED,
-                time.time(),
+                0.0,
                 {"order_id": self.account.pending_order_id, "agent_id": self.agent_id},
             )
             event_bus.publish(cancel_event)
 
         # 再挂新单
-        timestamp = time.time()
         price = params["price"]
         quantity = params["quantity"]
         order_id = self._generate_order_id()
@@ -113,7 +111,7 @@ class RetailProAgent(Agent):
             price=price,
             quantity=quantity,
         )
-        place_event = Event(EventType.ORDER_PLACED, timestamp, {"order": order})
+        place_event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
         event_bus.publish(place_event)
 
     def execute_action(self, action: ActionType, params: dict[str, Any], event_bus: EventBus) -> None:
