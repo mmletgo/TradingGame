@@ -223,8 +223,11 @@ class MarketMakerAgent(Agent):
             ask_ratios = np.zeros(5)
 
         # 向量化解析买单价格
+        # 每个订单有基础偏移（i+1）* 20 ticks，加上神经网络微调 ±10 ticks
         bid_price_offsets = np.clip(outputs_arr[2:7], -1, 1)
-        bid_price_ticks = np.maximum(1.0, np.abs(bid_price_offsets) * 100)
+        base_offsets = np.array([20.0, 40.0, 60.0, 80.0, 100.0])  # 基础偏移 2-10 个价格单位
+        nn_adjusts = bid_price_offsets * 10.0  # 神经网络微调 ±1 个价格单位
+        bid_price_ticks = np.maximum(1.0, base_offsets + nn_adjusts)
         bid_prices = mid_price - bid_price_ticks * tick_size
 
         bid_orders: list[dict[str, float]] = []
@@ -237,7 +240,8 @@ class MarketMakerAgent(Agent):
 
         # 向量化解析卖单价格
         ask_price_offsets = np.clip(outputs_arr[12:17], -1, 1)
-        ask_price_ticks = np.maximum(1.0, np.abs(ask_price_offsets) * 100)
+        nn_adjusts = ask_price_offsets * 10.0  # 神经网络微调 ±1 个价格单位
+        ask_price_ticks = np.maximum(1.0, base_offsets + nn_adjusts)
         ask_prices = mid_price + ask_price_ticks * tick_size
 
         ask_orders: list[dict[str, float]] = []
