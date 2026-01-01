@@ -11,6 +11,7 @@ import numpy as np
 from src.bio.agents.base import Agent
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.bio.agents.retail import RetailAgent
+from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.agents.whale import WhaleAgent
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType, Config
@@ -70,6 +71,8 @@ class Population:
             neat_config_path = config_dir / "neat_market_maker.cfg"
         elif agent_type == AgentType.WHALE:
             neat_config_path = config_dir / "neat_whale.cfg"
+        elif agent_type == AgentType.RETAIL_PRO:
+            neat_config_path = config_dir / "neat_retail_pro.cfg"
         else:
             neat_config_path = config_dir / "neat_retail.cfg"
 
@@ -116,6 +119,8 @@ class Population:
         # 根据 agent_type 确定 Agent 类（避免循环内重复判断）
         if self.agent_type == AgentType.RETAIL:
             agent_class = RetailAgent
+        elif self.agent_type == AgentType.RETAIL_PRO:
+            agent_class = RetailProAgent
         elif self.agent_type == AgentType.WHALE:
             agent_class = WhaleAgent
         elif self.agent_type == AgentType.MARKET_MAKER:
