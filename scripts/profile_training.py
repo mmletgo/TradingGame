@@ -46,6 +46,14 @@ def create_profile_config() -> Config:
             maker_fee_rate=0.0002,
             taker_fee_rate=0.0005,
         ),
+        AgentType.RETAIL_PRO: AgentConfig(
+            count=100,
+            initial_balance=10000.0,
+            leverage=100.0,
+            maintenance_margin_rate=0.005,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.0005,
+        ),
         AgentType.WHALE: AgentConfig(
             count=10,
             initial_balance=10000000.0,
@@ -110,7 +118,7 @@ def main() -> None:
     print("=" * 60)
     print("性能分析 - NEAT AI 交易模拟")
     print("=" * 60)
-    print("配置: 10000 散户, 10 庄家, 100 做市商")
+    print("配置: 10000 散户, 100 高级散户, 10 庄家, 100 做市商")
     print("运行: 1 episode x 100 ticks")
     print("=" * 60)
     print()
