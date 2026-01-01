@@ -80,6 +80,9 @@ class Population:
             str(neat_config_path),
         )
 
+        # 动态设置 pop_size 为 AgentConfig.count
+        self.neat_config.pop_size = self.agent_config.count
+
         # 创建 NEAT 种群
         self.neat_pop = neat.Population(self.neat_config)
 

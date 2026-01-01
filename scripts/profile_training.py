@@ -7,6 +7,7 @@
 import cProfile
 import pstats
 import sys
+import time
 from pathlib import Path
 from io import StringIO
 
@@ -78,12 +79,28 @@ def create_profile_config() -> Config:
     return Config(market=market, agents=agents, training=training, demo=demo)
 
 
-def run_training() -> None:
-    """运行训练（被 profile 的函数）"""
+def run_training() -> tuple[float, float]:
+    """运行训练（被 profile 的函数）
+
+    Returns:
+        tuple[float, float]: (初始化耗时, tick+进化耗时)
+    """
     config = create_profile_config()
     trainer = Trainer(config)
+
+    # 计时初始化阶段
+    init_start = time.perf_counter()
     trainer.setup()
+    init_end = time.perf_counter()
+    init_time = init_end - init_start
+
+    # 计时 tick + 进化阶段
+    train_start = time.perf_counter()
     trainer.train(episodes=1)  # 只运行 1 个 episode
+    train_end = time.perf_counter()
+    train_time = train_end - train_start
+
+    return init_time, train_time
 
 
 def main() -> None:
@@ -102,9 +119,18 @@ def main() -> None:
     profiler = cProfile.Profile()
     profiler.enable()
 
-    run_training()
+    init_time, train_time = run_training()
 
     profiler.disable()
+
+    # 打印耗时统计
+    print("\n" + "=" * 60)
+    print("耗时统计")
+    print("=" * 60)
+    print(f"初始化耗时 (setup):     {init_time:.3f} 秒")
+    print(f"tick+进化耗时 (train):  {train_time:.3f} 秒")
+    print(f"总耗时:                 {init_time + train_time:.3f} 秒")
+    print("=" * 60)
 
     # 输出统计结果
     print("\n" + "=" * 60)

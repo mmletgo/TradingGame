@@ -108,6 +108,8 @@
 - `config/neat_retail.cfg` - 散户和庄家（9 个输出节点）
 - `config/neat_market_maker.cfg` - 做市商（22 个输出节点）
 
+**注意：** NEAT 配置文件中的 `pop_size` 会被 `AgentConfig.count` 动态覆盖，即种群数量由脚本中的配置决定，而非 NEAT 配置文件。
+
 ## 启动脚本
 
 训练脚本位于 `scripts/` 目录：
