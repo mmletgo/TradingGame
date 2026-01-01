@@ -28,13 +28,13 @@ class OrderBookPanel:
                 dpg.add_plot_axis(dpg.mvXAxis, label="价格", tag=self._make_tag("depth_x"))
                 dpg.add_plot_axis(dpg.mvYAxis, label="累计量", tag=self._make_tag("depth_y"))
 
-                # 买盘（绿色）
-                dpg.add_shade_series([], [], [],
+                # 买盘（绿色）- 使用 area_series 替代 shade_series
+                dpg.add_area_series([], [],
                     label="买盘", parent=self._make_tag("depth_y"),
                     tag=self._make_tag("bid_shade"))
 
                 # 卖盘（红色）
-                dpg.add_shade_series([], [], [],
+                dpg.add_area_series([], [],
                     label="卖盘", parent=self._make_tag("depth_y"),
                     tag=self._make_tag("ask_shade"))
 
@@ -66,14 +66,14 @@ class OrderBookPanel:
         """设置深度图颜色主题"""
         # 买盘绿色主题
         with dpg.theme() as bid_theme:
-            with dpg.theme_component(dpg.mvShadeSeries):
+            with dpg.theme_component(dpg.mvAreaSeries):
                 dpg.add_theme_color(dpg.mvPlotCol_Fill, (100, 255, 100, 100), category=dpg.mvThemeCat_Plots)
                 dpg.add_theme_color(dpg.mvPlotCol_Line, (100, 255, 100, 255), category=dpg.mvThemeCat_Plots)
         dpg.bind_item_theme(self._make_tag("bid_shade"), bid_theme)
 
         # 卖盘红色主题
         with dpg.theme() as ask_theme:
-            with dpg.theme_component(dpg.mvShadeSeries):
+            with dpg.theme_component(dpg.mvAreaSeries):
                 dpg.add_theme_color(dpg.mvPlotCol_Fill, (255, 100, 100, 100), category=dpg.mvThemeCat_Plots)
                 dpg.add_theme_color(dpg.mvPlotCol_Line, (255, 100, 100, 255), category=dpg.mvThemeCat_Plots)
         dpg.bind_item_theme(self._make_tag("ask_shade"), ask_theme)
@@ -109,13 +109,11 @@ class OrderBookPanel:
             cumsum += qty
             ask_cumsum.append(cumsum)
 
-        # 更新shade series
+        # 更新area series
         if bid_prices:
-            dpg.set_value(self._make_tag("bid_shade"),
-                [bid_prices, bid_cumsum, [0.0] * len(bid_prices)])
+            dpg.set_value(self._make_tag("bid_shade"), [bid_prices, bid_cumsum])
         if ask_prices:
-            dpg.set_value(self._make_tag("ask_shade"),
-                [ask_prices, ask_cumsum, [0.0] * len(ask_prices)])
+            dpg.set_value(self._make_tag("ask_shade"), [ask_prices, ask_cumsum])
 
         # 自动调整坐标轴
         if bid_prices or ask_prices:
