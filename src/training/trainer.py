@@ -253,16 +253,18 @@ class Trainer:
 
         # 更新账户（taker 和 maker）
         for trade in trades:
-            is_buyer = trade.buyer_id == agent.agent_id
+            # 使用 is_buyer_taker 判断 taker 是买方还是卖方
+            # 旧逻辑 `is_buyer = trade.buyer_id == agent.agent_id` 在自成交时会出错
+            is_buyer = trade.is_buyer_taker
             agent.account.on_trade(trade, is_buyer)
             self.recent_trades.append(trade)
-            # 更新 maker 的账户
+            # 更新 maker 的账户（即使自成交也需要更新）
             maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-            if maker_id != agent.agent_id:
-                maker_agent = self.agent_map.get(maker_id)
-                if maker_agent is not None:
-                    maker_is_buyer = trade.buyer_id == maker_id
-                    maker_agent.account.on_trade(trade, maker_is_buyer)
+            maker_agent = self.agent_map.get(maker_id)
+            if maker_agent is not None:
+                # maker 的方向与 taker 相反
+                maker_is_buyer = not trade.is_buyer_taker
+                maker_agent.account.on_trade(trade, maker_is_buyer)
 
         # 检查是否需要 ADL
         remaining_qty = target_qty - filled_qty
@@ -310,8 +312,8 @@ class Trainer:
             exclude_agent_id=liquidated_agent.agent_id,
         )
 
-        # 执行 ADL
-        adl_trades = self.adl_manager.execute_adl(
+        # 执行 ADL（内部直接更新账户，返回剩余未平仓数量）
+        remaining_after_adl = self.adl_manager.execute_adl(
             liquidated_agent=liquidated_agent,
             remaining_qty=remaining_qty,
             candidates=candidates,
@@ -319,23 +321,25 @@ class Trainer:
             current_price=current_price,
         )
 
-        # 更新账户
-        for counter_agent, trade_qty, trade_price in adl_trades:
-            # 更新被强平方账户
-            liquidated_agent.account.on_adl_trade(trade_qty, trade_price, is_taker=True)
-
-            # 更新 ADL 对手方账户
-            counter_agent.account.on_adl_trade(trade_qty, trade_price, is_taker=False)
-
-            self.logger.info(
-                f"ADL 完成: Agent {liquidated_agent.agent_id} 与 Agent {counter_agent.agent_id} "
-                f"成交 {trade_qty} @ {trade_price:.2f}"
+        # 兜底处理：理论上不应该出现 ADL 候选不足的情况（多空对等）
+        # 如果出现，说明有其他 bug，记录错误日志并强制清零
+        if remaining_after_adl > 0:
+            self.logger.error(
+                f"ADL 异常: Agent {liquidated_agent.agent_id} "
+                f"剩余仓位 {remaining_after_adl} 无法匹配（多空应对等，请检查bug）, "
+                f"强制清零, 余额 {liquidated_agent.account.balance:.2f} → 0"
             )
+            # 强制清零仓位和余额
+            liquidated_agent.account.position.quantity = 0
+            liquidated_agent.account.position.avg_price = 0.0
+            liquidated_agent.account.balance = 0.0
 
     def _check_elimination(self, agent: "Agent", current_price: float) -> None:
         """检查并处理个体淘汰（资金不足时淘汰）
 
-        当 当前净值/初始资金 < 0.1 时，标记个体为淘汰状态。
+        当 当前净值/初始资金 < 0.1 时：
+        1. 强平其持有的仓位（市价单 + ADL）
+        2. 标记个体为淘汰状态
 
         Args:
             agent: 要检查的 Agent
@@ -345,6 +349,20 @@ class Trainer:
             return  # 已淘汰，无需重复检查
 
         if agent.account.check_elimination(current_price, threshold=0.1):
+            # 先撤销挂单（防止淘汰后仍被成交）
+            if agent.account.pending_order_id is not None and self.matching_engine:
+                self.matching_engine.cancel_order_direct(agent.account.pending_order_id)
+                agent.account.pending_order_id = None
+
+            # 再强平仓位（如果有的话）
+            if agent.account.position.quantity != 0:
+                self._handle_liquidation_direct(agent, current_price)
+
+            # 处理穿仓：如果余额为负，归零（由系统承担损失）
+            if agent.account.balance < 0:
+                agent.account.balance = 0.0
+
+            # 最后标记为淘汰
             agent.is_liquidated = True
             self._pop_liquidated_counts[agent.agent_type] = (
                 self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
@@ -457,13 +475,13 @@ class Trainer:
                 )
                 for trade in trades:
                     self.recent_trades.append(trade)
-                    # 更新 maker 的账户
+                    # 更新 maker 的账户（即使自成交也需要更新）
                     maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-                    if maker_id != agent.agent_id:
-                        maker_agent = self.agent_map.get(maker_id)
-                        if maker_agent is not None:
-                            is_buyer = trade.buyer_id == maker_id
-                            maker_agent.account.on_trade(trade, is_buyer)
+                    maker_agent = self.agent_map.get(maker_id)
+                    if maker_agent is not None:
+                        # maker 的方向与 taker 相反
+                        is_buyer = not trade.is_buyer_taker
+                        maker_agent.account.on_trade(trade, is_buyer)
 
     def _reset_market(self) -> None:
         """重置市场状态
@@ -483,6 +501,21 @@ class Trainer:
 
         # 做市商重新初始化
         self._init_market()
+
+        # 调试：检查初始化后的仓位平衡
+        total_position = 0
+        long_qty = 0
+        short_qty = 0
+        for population in self.populations.values():
+            for agent in population.agents:
+                qty = agent.account.position.quantity
+                total_position += qty
+                if qty > 0:
+                    long_qty += qty
+                elif qty < 0:
+                    short_qty += qty
+        if total_position != 0:
+            self.logger.error(f"初始化后仓位不对等！总偏差={total_position}, 多头={long_qty}, 空头={short_qty}")
 
     def run_tick(self) -> None:
         """执行一个 tick（直接调用模式）
@@ -518,17 +551,19 @@ class Trainer:
                 self.recent_trades.append(trade)
                 # 更新 maker 的账户（taker 的账户已在 execute_action_direct 中更新）
                 maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-                if maker_id != agent.agent_id:
-                    maker_agent = self.agent_map.get(maker_id)
-                    if maker_agent is not None:
-                        is_buyer = trade.buyer_id == maker_id
-                        maker_agent.account.on_trade(trade, is_buyer)
+                # 注意：即使 maker_id == agent.agent_id（自成交），也需要更新 maker 端
+                # 因为 _process_trades_direct 只更新了 taker 端（买或卖其中一方）
+                maker_agent = self.agent_map.get(maker_id)
+                if maker_agent is not None:
+                    # maker 的方向与 taker 相反：taker 买则 maker 卖，taker 卖则 maker 买
+                    is_buyer = not trade.is_buyer_taker
+                    maker_agent.account.on_trade(trade, is_buyer)
 
-            # 检查强平（仅平仓，不淘汰）
+            # 检查强平
             if agent.account.check_liquidation(current_price):
                 self._handle_liquidation_direct(agent, current_price)
 
-            # 检查淘汰（资金不足10%时淘汰）
+            # 检查淘汰
             self._check_elimination(agent, current_price)
 
     def run_episode(self) -> None:

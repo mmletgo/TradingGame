@@ -168,13 +168,15 @@ class ADLManager:
         candidates: list[ADLCandidate] = []
 
         for agent in agents:
-            # 排除被强平的 Agent
+            # 排除被强平的 Agent（当前正在处理的那个）
             if exclude_agent_id is not None and agent.agent_id == exclude_agent_id:
                 continue
 
-            # 排除已淘汰的 Agent
-            if agent.is_liquidated:
-                continue
+            # 不排除已淘汰的 Agent！
+            # 虽然淘汰时会强平，但同一 tick 中可能存在竞态条件：
+            # Agent A 淘汰时通过 ADL 减了 Agent B 的仓，然后 A 被标记淘汰，
+            # 当 B 随后淘汰需要 ADL 时，A 仍可能持有仓位但已被标记淘汰。
+            # 为保持多空对等，已淘汰但仍持有仓位的 Agent 必须参与 ADL。
 
             # 计算 ADL 分数
             candidate = self.calculate_adl_score(agent, current_price)
@@ -203,10 +205,11 @@ class ADLManager:
         candidates: list[ADLCandidate],
         bankruptcy_price: float,
         current_price: float,
-    ) -> list[tuple["Agent", int, float]]:
+    ) -> int:
         """执行 ADL 成交
 
         按照候选列表顺序，逐个与被强平仓位成交，直到仓位全部平完。
+        直接在内部更新账户，确保成交和账户更新同步。
 
         Args:
             liquidated_agent: 被强平的 Agent
@@ -216,12 +219,10 @@ class ADLManager:
             current_price: 当前市场价格（仅用于日志）
 
         Returns:
-            ADL 成交列表：[(对手方Agent, 成交数量, 成交价格), ...]
+            剩余未能平仓的数量（理论上应为 0）
         """
-        adl_trades: list[tuple["Agent", int, float]] = []
-
         if remaining_qty <= 0:
-            return adl_trades
+            return 0
 
         self.logger.info(
             f"ADL 触发: Agent {liquidated_agent.agent_id} "
@@ -235,22 +236,21 @@ class ADLManager:
             if remaining_qty <= 0:
                 break
 
-            # 计算可减仓数量（取对手方持仓绝对值和剩余需求的较小值）
-            counter_position = abs(candidate.position_qty)
-            trade_qty = min(counter_position, remaining_qty)
+            # 使用实际仓位而不是快照值（其他 ADL 可能已经减少了候选者的仓位）
+            actual_position = abs(candidate.agent.account.position.quantity)
+            trade_qty = min(actual_position, remaining_qty)
 
             if trade_qty <= 0:
                 continue
 
-            # 记录 ADL 成交
-            adl_trades.append((candidate.agent, trade_qty, bankruptcy_price))
+            # 立即更新账户，确保成交和账户更新同步
+            liquidated_agent.account.on_adl_trade(trade_qty, bankruptcy_price, is_taker=True)
+            candidate.agent.account.on_adl_trade(trade_qty, bankruptcy_price, is_taker=False)
 
             self.logger.info(
-                f"ADL 成交: Agent {candidate.agent.agent_id} "
-                f"被减仓 {trade_qty}, "
-                f"成交价 {bankruptcy_price:.2f}, "
-                f"原持仓 {candidate.position_qty}, "
-                f"ADL分数 {candidate.adl_score:.4f}"
+                f"ADL 成交: Agent {liquidated_agent.agent_id} 与 Agent {candidate.agent.agent_id} "
+                f"成交 {trade_qty} @ {bankruptcy_price:.2f}, "
+                f"原持仓 {candidate.position_qty}, 实际持仓 {actual_position}"
             )
 
             remaining_qty -= trade_qty
@@ -261,4 +261,4 @@ class ADLManager:
                 f"剩余 {remaining_qty} 无法匹配"
             )
 
-        return adl_trades
+        return remaining_qty

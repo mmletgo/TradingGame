@@ -322,6 +322,9 @@ class Agent:
 
         return action, params
 
+    # 订单数量上限，防止 int 溢出
+    MAX_ORDER_QUANTITY: int = 100_000_000
+
     def _calculate_order_quantity(self, price: float, ratio: float) -> int:
         """计算订单数量
 
@@ -346,8 +349,8 @@ class Agent:
         ratio = max(0.1, min(1.0, ratio))
         quantity = (buying_power * ratio) / price if price > 0 else 0.0
 
-        # 确保数量为整数且至少为1（最小交易单位）
-        quantity = max(1, int(quantity))
+        # 确保数量为整数且至少为1（最小交易单位），同时限制最大值防止溢出
+        quantity = max(1, min(self.MAX_ORDER_QUANTITY, int(quantity)))
 
         return quantity
 
@@ -620,7 +623,10 @@ class Agent:
             trades: 成交列表
         """
         for trade in trades:
-            is_buyer = trade.buyer_id == self.agent_id
+            # 使用 is_buyer_taker 判断 taker 是买方还是卖方
+            # 旧逻辑 `is_buyer = trade.buyer_id == self.agent_id` 在自成交时会出错
+            # 因为自成交时 buyer_id == seller_id == self.agent_id
+            is_buyer = trade.is_buyer_taker
             self.account.on_trade(trade, is_buyer)
 
     def _generate_order_id(self) -> int:

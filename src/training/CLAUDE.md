@@ -89,8 +89,9 @@
      - 决策（传入市场状态和订单簿）
      - 直接执行动作（`execute_action_direct`，绕过事件系统）
      - 记录成交到 `recent_trades`
-     - 检查强平条件，触发 `_handle_liquidation_direct`（仅平仓）
-     - 检查淘汰条件，触发 `_check_elimination`（资金不足10%时淘汰）
+     - **对 maker 检查强平/淘汰条件**（成交可能导致 maker 亏损）
+     - 检查 taker 强平条件，触发 `_handle_liquidation_direct`（仅平仓）
+     - 检查 taker 淘汰条件，触发 `_check_elimination`（资金不足10%时淘汰）
 
 ## 直接调用模式
 
@@ -121,15 +122,17 @@
 
 **ADL（自动减仓）**：市价强平无法完全成交时触发
 1. 计算被强平方的破产价格
-2. 筛选对手方候选（持有反向持仓且盈利的 Agent），按盈利比例排序
+2. 筛选对手方候选（持有反向持仓的 Agent，**包括已淘汰的**），按盈利比例排序
 3. 依次与候选对手方以破产价格成交，直至剩余仓位清零
 4. 通过 `account.on_adl_trade()` 更新双方账户
+5. 由于多空仓位完全对等，理论上不会出现候选不足的情况
 
 **淘汰（Elimination）**：净值/初始资金 < 10% 时触发
 1. `_check_elimination()` 检查淘汰条件
-2. 满足条件时将 Agent 的 `is_liquidated` 标志设为 True
-3. 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
-4. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
+2. 满足条件时**先强平其持有的仓位**（通过 `_handle_liquidation_direct`，包含市价单和 ADL）
+3. 然后将 Agent 的 `is_liquidated` 标志设为 True
+4. 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
+5. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
 
 ## 依赖关系
 

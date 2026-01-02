@@ -165,22 +165,22 @@ class TestGetADLCandidates:
         assert len(candidates) == 1
         assert candidates[0].agent.agent_id == 2
 
-    def test_exclude_liquidated_agents(
+    def test_include_liquidated_agents_with_position(
         self, adl_manager: ADLManager, retail_config: AgentConfig
     ):
-        """测试排除已淘汰的 Agent"""
+        """测试包含已淘汰但仍持有仓位的 Agent（保持多空对等）"""
         agents = [
             create_mock_agent(1, 10000.0, 100, 100.0, retail_config),
             create_mock_agent(2, 10000.0, 100, 100.0, retail_config),
         ]
-        agents[1].is_liquidated = True
+        agents[1].is_liquidated = True  # 已淘汰但仍持有仓位
 
         candidates = adl_manager.get_adl_candidates(
             agents=agents, current_price=110.0, target_side=1, exclude_agent_id=None
         )
 
-        assert len(candidates) == 1
-        assert candidates[0].agent.agent_id == 1
+        # 应包含两个 Agent，因为已淘汰的 Agent 仍持有仓位
+        assert len(candidates) == 2
 
     def test_sorted_by_adl_score(
         self, adl_manager: ADLManager, retail_config: AgentConfig

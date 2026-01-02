@@ -170,14 +170,21 @@ class Account:
         Returns:
             已实现盈亏
         """
+        # 确保不会过度减仓（可能因为其他 ADL 已经减少了仓位）
+        abs_position = abs(self.position.quantity)
+        actual_quantity = min(quantity, abs_position)
+
+        if actual_quantity <= 0:
+            return 0.0
+
         if self.position.quantity > 0:
             # 多头平仓/被减仓
-            realized_pnl = (price - self.position.avg_price) * quantity
-            self.position.quantity -= quantity
+            realized_pnl = (price - self.position.avg_price) * actual_quantity
+            self.position.quantity -= actual_quantity
         else:
             # 空头平仓/被减仓
-            realized_pnl = (self.position.avg_price - price) * quantity
-            self.position.quantity += quantity
+            realized_pnl = (self.position.avg_price - price) * actual_quantity
+            self.position.quantity += actual_quantity
 
         # 仓位清零时重置均价
         if self.position.quantity == 0:
