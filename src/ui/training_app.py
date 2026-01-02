@@ -216,7 +216,7 @@ class TrainingUIApp:
             # 更新图表
             if self.chart_panel:
                 self.chart_panel.update_price(data.price_history)
-                self.chart_panel.update_equity(data.equity_history, data.population_stats)
+                self.chart_panel.update_equity(data.equity_history, data.alive_equity_history, data.population_stats)
 
             # 更新成交记录
             if self.trades_panel:

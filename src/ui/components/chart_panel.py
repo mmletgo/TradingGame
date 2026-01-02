@@ -53,7 +53,8 @@ class ChartPanel:
 
     # 图表面板配置
     PANEL_WIDTH: int = 1150  # 总宽度
-    EQUITY_PLOT_HEIGHT: int = 160  # 每个资产图表高度
+    EQUITY_PLOT_HEIGHT: int = 140  # 每个资产图表高度（稍微减小以容纳两列）
+    EQUITY_PLOT_WIDTH: int = 560  # 每个资产图表宽度（两张并排）
     PRICE_PLOT_HEIGHT: int = 140  # 价格图表高度
     VIOLIN_PLOT_HEIGHT: int = 120  # 小提琴图高度
     VIOLIN_PLOT_WIDTH: int = 280  # 每个小提琴图宽度（4个并排）
@@ -83,11 +84,11 @@ class ChartPanel:
             dpg.add_separator()
 
             # 种群资产曲线标题
-            dpg.add_text("种群资产总和", color=(255, 255, 0))
+            dpg.add_text("种群资产曲线（左：所有个体  右：存活个体）", color=(255, 255, 0))
 
-            # 纵向4行布局的资产图表
+            # 纵向4行布局，每行2张图（所有个体 + 存活个体）
             for agent_type in VERTICAL_LAYOUT:
-                self._create_equity_plot(agent_type)
+                self._create_equity_row(agent_type)
 
             # 设置种群曲线颜色
             self._setup_equity_themes()
@@ -107,25 +108,36 @@ class ChartPanel:
             # 小提琴图区域（4个并排）
             self._create_violin_plots()
 
-    def _create_equity_plot(self, agent_type: AgentType) -> None:
-        """创建单个种群的资产图表
+    def _create_equity_row(self, agent_type: AgentType) -> None:
+        """创建单个种群的资产图表行（所有个体 + 存活个体两张图）
 
         Args:
             agent_type: Agent类型
         """
         name = POPULATION_NAMES.get(agent_type, agent_type.value)
-        color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
         tag_prefix = agent_type.value
 
-        # 每个图表占一行，宽度自适应
-        with dpg.plot(label=name, height=self.EQUITY_PLOT_HEIGHT,
-                     width=-1, tag=f"equity_plot_{tag_prefix}"):
-            dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"equity_x_axis_{tag_prefix}")
-            dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"equity_y_axis_{tag_prefix}")
-            dpg.add_line_series([], [],
-                label=name,
-                parent=f"equity_y_axis_{tag_prefix}",
-                tag=f"equity_series_{tag_prefix}")
+        # 水平布局：两张图并排
+        with dpg.group(horizontal=True):
+            # 左图：所有个体资产总和
+            with dpg.plot(label=f"{name}(全部)", height=self.EQUITY_PLOT_HEIGHT,
+                         width=self.EQUITY_PLOT_WIDTH, tag=f"equity_plot_{tag_prefix}"):
+                dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"equity_x_axis_{tag_prefix}")
+                dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"equity_y_axis_{tag_prefix}")
+                dpg.add_line_series([], [],
+                    label="全部",
+                    parent=f"equity_y_axis_{tag_prefix}",
+                    tag=f"equity_series_{tag_prefix}")
+
+            # 右图：存活个体资产总和
+            with dpg.plot(label=f"{name}(存活)", height=self.EQUITY_PLOT_HEIGHT,
+                         width=self.EQUITY_PLOT_WIDTH, tag=f"alive_equity_plot_{tag_prefix}"):
+                dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"alive_equity_x_axis_{tag_prefix}")
+                dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"alive_equity_y_axis_{tag_prefix}")
+                dpg.add_line_series([], [],
+                    label="存活",
+                    parent=f"alive_equity_y_axis_{tag_prefix}",
+                    tag=f"alive_equity_series_{tag_prefix}")
 
     def _setup_price_theme(self) -> None:
         """设置价格曲线主题"""
@@ -139,11 +151,18 @@ class ChartPanel:
         """设置种群曲线颜色主题"""
         for agent_type in AgentType:
             color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
+            # 所有个体曲线主题
             with dpg.theme() as theme:
                 with dpg.theme_component(dpg.mvLineSeries):
                     dpg.add_theme_color(dpg.mvPlotCol_Line, (*color, 255),
                                        category=dpg.mvThemeCat_Plots)
             dpg.bind_item_theme(f"equity_series_{agent_type.value}", theme)
+            # 存活个体曲线主题（使用相同颜色）
+            with dpg.theme() as alive_theme:
+                with dpg.theme_component(dpg.mvLineSeries):
+                    dpg.add_theme_color(dpg.mvPlotCol_Line, (*color, 255),
+                                       category=dpg.mvThemeCat_Plots)
+            dpg.bind_item_theme(f"alive_equity_series_{agent_type.value}", alive_theme)
 
     def update_price(self, price_history: list[float]) -> None:
         """更新价格曲线
@@ -166,17 +185,21 @@ class ChartPanel:
         dpg.set_axis_limits("price_y_axis", min_p - margin, max_p + margin)
 
     def update_equity(self, equity_history: dict[AgentType, list[float]],
+                     alive_equity_history: dict[AgentType, list[float]],
                      population_stats: dict[AgentType, Any]) -> None:
         """更新资产曲线和统计
 
         Args:
-            equity_history: 各种群资产历史，key为AgentType，value为资产列表
+            equity_history: 各种群所有个体资产历史，key为AgentType，value为资产列表
+            alive_equity_history: 各种群存活个体资产历史，key为AgentType，value为资产列表
             population_stats: 各种群统计信息，key为AgentType，value为统计对象
         """
         for agent_type in AgentType:
             tag_prefix = agent_type.value
             history = equity_history.get(agent_type, [])
+            alive_history = alive_equity_history.get(agent_type, [])
 
+            # 更新所有个体资产曲线
             if history:
                 ticks = list(range(len(history)))
                 dpg.set_value(f"equity_series_{tag_prefix}", [ticks, history])
@@ -190,6 +213,21 @@ class ChartPanel:
                 margin = (max_equity - min_equity) * 0.1 or 1
                 dpg.set_axis_limits(f"equity_y_axis_{tag_prefix}",
                                    min_equity - margin, max_equity + margin)
+
+            # 更新存活个体资产曲线
+            if alive_history:
+                alive_ticks = list(range(len(alive_history)))
+                dpg.set_value(f"alive_equity_series_{tag_prefix}", [alive_ticks, alive_history])
+
+                # 自动调整坐标轴
+                alive_max_tick = len(alive_history)
+                alive_min_equity = min(alive_history)
+                alive_max_equity = max(alive_history)
+
+                dpg.set_axis_limits(f"alive_equity_x_axis_{tag_prefix}", 0, alive_max_tick)
+                alive_margin = (alive_max_equity - alive_min_equity) * 0.1 or 1
+                dpg.set_axis_limits(f"alive_equity_y_axis_{tag_prefix}",
+                                   alive_min_equity - alive_margin, alive_max_equity + alive_margin)
 
             # 更新统计文本和小提琴图
             stats = population_stats.get(agent_type)

@@ -63,7 +63,8 @@ class UIDataSnapshot:
 
     # 历史数据（曲线用）
     price_history: list[float]
-    equity_history: dict[AgentType, list[float]]
+    equity_history: dict[AgentType, list[float]]  # 所有个体资产总和历史
+    alive_equity_history: dict[AgentType, list[float]]  # 存活个体资产总和历史
 
 
 class UIDataCollector:
@@ -74,12 +75,14 @@ class UIDataCollector:
     Attributes:
         history_length: 历史数据长度限制
         price_history: 价格历史缓冲区
-        equity_history: 各种群净值历史缓冲区
+        equity_history: 各种群所有个体资产总和历史缓冲区
+        alive_equity_history: 各种群存活个体资产总和历史缓冲区
     """
 
     history_length: int
     price_history: deque[float]
     equity_history: dict[AgentType, deque[float]]
+    alive_equity_history: dict[AgentType, deque[float]]
 
     def __init__(self, history_length: int = 1000) -> None:
         """初始化数据采集器
@@ -90,6 +93,9 @@ class UIDataCollector:
         self.history_length = history_length
         self.price_history = deque(maxlen=history_length)
         self.equity_history = {
+            agent_type: deque(maxlen=history_length) for agent_type in AgentType
+        }
+        self.alive_equity_history = {
             agent_type: deque(maxlen=history_length) for agent_type in AgentType
         }
 
@@ -122,6 +128,9 @@ class UIDataCollector:
             stats = self._compute_population_stats(population, last_price)
             population_stats[agent_type] = stats
             self.equity_history[agent_type].append(stats.total_equity)
+            # 计算存活个体资产总和
+            alive_total = sum(stats.alive_equities) if stats.alive_equities else 0.0
+            self.alive_equity_history[agent_type].append(alive_total)
 
         # 转换成交记录
         recent_trades: list[TradeInfo] = [
@@ -145,6 +154,7 @@ class UIDataCollector:
             population_stats=population_stats,
             price_history=list(self.price_history),
             equity_history={k: list(v) for k, v in self.equity_history.items()},
+            alive_equity_history={k: list(v) for k, v in self.alive_equity_history.items()},
         )
 
     def _compute_population_stats(
@@ -206,4 +216,6 @@ class UIDataCollector:
         """重置历史数据（新episode开始时调用）"""
         self.price_history.clear()
         for history in self.equity_history.values():
+            history.clear()
+        for history in self.alive_equity_history.values():
             history.clear()
