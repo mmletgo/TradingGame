@@ -19,10 +19,15 @@
 """
 
 import argparse
+import importlib
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# 关键：在导入任何项目模块之前，先清除 importlib 缓存
+# 这可以解决修改代码后由于缓存导致的运行时问题
+importlib.invalidate_caches()
 
 # 将项目根目录添加到 Python 路径
 project_root = Path(__file__).parent.parent

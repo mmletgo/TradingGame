@@ -51,9 +51,7 @@ class MatchingEngine:
 
         # 订阅订单事件
         event_bus.subscribe(EventType.ORDER_PLACED, self._handle_order_placed)
-        event_bus.subscribe(
-            EventType.ORDER_CANCELLED, self._handle_order_cancelled
-        )
+        event_bus.subscribe(EventType.ORDER_CANCELLED, self._handle_order_cancelled)
 
         self._logger.info("撮合引擎初始化完成")
 
@@ -81,7 +79,9 @@ class MatchingEngine:
         if order_id is not None:
             self._orderbook.cancel_order(order_id)
 
-    def register_agent(self, agent_id: int, maker_rate: float, taker_rate: float) -> None:
+    def register_agent(
+        self, agent_id: int, maker_rate: float, taker_rate: float
+    ) -> None:
         """
         注册/更新 Agent 的费率配置
 
@@ -149,14 +149,55 @@ class MatchingEngine:
         taker_rates = self._fee_rates.get(taker_agent_id, (0.0002, 0.0005))
         taker_rate = taker_rates[1]  # taker费率
 
-        while remaining > 0:
+        # 最小有效数量阈值，避免浮点数精度问题导致的无限循环
+        # 小于此阈值的数量视为0
+        MIN_QTY = 1e-9
+
+        # 最大迭代次数限制，防止未知原因导致的无限循环
+        MAX_ITERATIONS = 100000
+        iteration_count = 0
+
+        prev_remaining = remaining  # 用于检测进展
+        no_progress_count = 0
+
+        while remaining > MIN_QTY:
+            iteration_count += 1
+            if iteration_count > MAX_ITERATIONS:
+                # 收集更多调试信息
+                if order.side == OrderSide.BUY:
+                    best = self._orderbook.get_best_ask()
+                    book = self._orderbook.asks
+                else:
+                    best = self._orderbook.get_best_bid()
+                    book = self._orderbook.bids
+                level_orders = len(book[best].orders) if best and best in book else 0
+                self._logger.error(
+                    f"撮合循环超过最大次数 {MAX_ITERATIONS}，强制终止。"
+                    f"remaining={remaining}, order_id={order.order_id}, "
+                    f"side={order.side}, best={best}, level_orders={level_orders}"
+                )
+                break
+
+            # 检测是否有进展
+            if remaining == prev_remaining:
+                no_progress_count += 1
+                if no_progress_count > 1000:
+                    # 连续1000次没有进展，说明对手盘流动性不足
+                    # 这是正常的市场行为，不记录警告以避免日志过多
+                    break
+            else:
+                no_progress_count = 0
+                prev_remaining = remaining
+
             if order.side == OrderSide.BUY:
                 # 买单与卖盘撮合
                 best_price = self._orderbook.get_best_ask()
                 if best_price is None:
                     break  # 对手盘为空
                 # 价格检查（限价单需要检查，市价单不检查）
-                if price_check is not None and not price_check(order.price, best_price, order.side):
+                if price_check is not None and not price_check(
+                    order.price, best_price, order.side
+                ):
                     break
                 side_book = self._orderbook.asks
             else:  # OrderSide.SELL
@@ -165,7 +206,9 @@ class MatchingEngine:
                 if best_price is None:
                     break  # 对手盘为空
                 # 价格检查（限价单需要检查，市价单不检查）
-                if price_check is not None and not price_check(order.price, best_price, order.side):
+                if price_check is not None and not price_check(
+                    order.price, best_price, order.side
+                ):
                     break
                 side_book = self._orderbook.bids
 
@@ -174,7 +217,7 @@ class MatchingEngine:
                 # 数据不一致：get_best_ask/bid 返回的价格不在 side_book 中
                 # 这是一个异常情况，应该修复订单簿状态
                 # 为避免无限循环，强制重新获取最佳价格或终止
-                self.logger.warning(
+                self._logger.warning(
                     f"价格档位不一致: best_price={best_price} 不在 side_book 中，终止撮合"
                 )
                 break
@@ -183,12 +226,14 @@ class MatchingEngine:
 
             # 遍历该价格档位的订单（按时间优先顺序）
             for maker_order in list(price_level.orders.values()):
-                if remaining <= 0:
+                if remaining <= MIN_QTY:
                     break
 
-                # 计算成交量
+                # 计算成交量（使用最小阈值避免浮点数精度问题）
                 maker_remaining = maker_order.quantity - maker_order.filled_quantity
-                if maker_remaining <= 0:
+                if maker_remaining <= MIN_QTY:
+                    # 订单实质上已完全成交，从订单簿移除
+                    self._orderbook.cancel_order(maker_order.order_id)
                     continue
 
                 trade_qty = min(remaining, maker_remaining)
@@ -243,9 +288,9 @@ class MatchingEngine:
                 if maker_order.filled_quantity >= maker_order.quantity:
                     self._orderbook.cancel_order(maker_order.order_id)
 
-            # 检查该价格档位是否已空
+            # 检查该价格档位是否已空，继续下一个价格
             if best_price not in side_book:
-                continue  # 档位已空，继续下一个价格
+                continue
 
         return trades, remaining
 
@@ -262,17 +307,23 @@ class MatchingEngine:
         Returns:
             本次撮合产生的所有成交记录列表
         """
-        def limit_price_check(order_price: float, best_price: float, side: OrderSide) -> bool:
+
+        def limit_price_check(
+            order_price: float, best_price: float, side: OrderSide
+        ) -> bool:
             """限价单价格检查：买单价格 >= 卖一价，卖单价格 <= 买一价"""
             if side == OrderSide.BUY:
                 return order_price >= best_price
             else:
                 return order_price <= best_price
 
-        trades, remaining = self._match_orders(order, limit_price_check)
+        trades, remaining = self._match_orders(
+            order=order, price_check=limit_price_check
+        )
 
-        # 如果有剩余数量，挂在订单簿上
-        if remaining > 0:
+        # 如果有剩余数量，挂在订单簿上（使用 MIN_QTY 阈值避免挂微量单）
+        MIN_QTY = 1e-9
+        if remaining > MIN_QTY:
             # 更新订单数量为剩余数量，重置已成交数量（新挂单状态）
             order.quantity = remaining
             order.filled_quantity = 0.0
