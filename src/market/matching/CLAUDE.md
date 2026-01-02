@@ -114,6 +114,7 @@ Agent._on_trade_event() 处理成交
 ### `_match_orders` 优化
 - 预计算 taker 费率到循环外，避免重复查找
 - 内联费率计算，避免 `calculate_fee()` 函数调用开销
+- **防死循环保护**：当 `get_best_ask/bid` 返回的价格不在对应盘口中时，终止撮合（记录警告日志）而非 `continue`，避免潜在的无限循环
 
 ### Trade 时间戳优化
 训练模式使用固定时间戳 `0.0`，避免 `time.time()` 调用开销。

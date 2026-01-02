@@ -171,7 +171,13 @@ class MatchingEngine:
 
             # 获取该价格档位
             if best_price not in side_book:
-                continue
+                # 数据不一致：get_best_ask/bid 返回的价格不在 side_book 中
+                # 这是一个异常情况，应该修复订单簿状态
+                # 为避免无限循环，强制重新获取最佳价格或终止
+                self.logger.warning(
+                    f"价格档位不一致: best_price={best_price} 不在 side_book 中，终止撮合"
+                )
+                break
 
             price_level = side_book[best_price]
 

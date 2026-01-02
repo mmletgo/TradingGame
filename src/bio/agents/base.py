@@ -276,14 +276,18 @@ class Agent:
         if action == ActionType.PLACE_BID:
             # 挂买单：价格由神经网络决定（相对 mid_price 的偏移）
             price_offset_ticks = price_offset_norm * 100  # ±100 ticks
-            params["price"] = mid_price + price_offset_ticks * tick_size
+            raw_price = mid_price + price_offset_ticks * tick_size
+            # 舍入到 tick_size 的整数倍，避免浮点数精度问题
+            params["price"] = round(raw_price / tick_size) * tick_size
             # 数量由神经网络决定
             params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
 
         elif action == ActionType.PLACE_ASK:
             # 挂卖单：价格由神经网络决定（相对 mid_price 的偏移）
             price_offset_ticks = price_offset_norm * 100  # ±100 ticks
-            params["price"] = mid_price + price_offset_ticks * tick_size
+            raw_price = mid_price + price_offset_ticks * tick_size
+            # 舍入到 tick_size 的整数倍，避免浮点数精度问题
+            params["price"] = round(raw_price / tick_size) * tick_size
             # 数量由神经网络决定
             params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
 

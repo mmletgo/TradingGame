@@ -87,6 +87,8 @@ Agent 基类，提供通用属性和方法。
 - 输出[7]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
 - 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
 
+**价格舍入**：所有订单价格都会舍入到 `tick_size` 的整数倍，避免浮点数精度问题导致订单簿数据不一致。
+
 #### `_place_limit_order(side: OrderSide, price: float, quantity: float, event_bus: EventBus) -> None`
 创建并发布限价单的私有辅助方法。被 `execute_action` 中的 PLACE_BID 和 PLACE_ASK 动作调用。
 
