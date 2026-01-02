@@ -38,7 +38,7 @@
 **核心类型说明：**
 - `Order.quantity: int` - 订单数量（整数）
 - `Order.filled_quantity: int` - 已成交数量（整数）
-- `PriceLevel.total_quantity: int` - 价格档位总数量（整数）
+- `PriceLevel.total_quantity: long long` - 价格档位总数量（64位整数，支持大量订单累积）
 - `get_volume() -> int` - 返回订单簿总成交量（整数）
 
 ### matching/

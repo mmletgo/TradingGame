@@ -25,7 +25,7 @@ cdef class PriceLevel:
 
     cdef public double price
     cdef public object orders  # OrderedDict: order_id -> Order
-    cdef public int total_quantity
+    cdef public long long total_quantity  # 64 位整数，避免大量订单累积时溢出
 
     def __init__(self, price: float) -> None:
         """
