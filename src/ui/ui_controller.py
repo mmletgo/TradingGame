@@ -129,6 +129,7 @@ class UIController:
                 # 重置市场状态
                 self.trainer._reset_market()
                 self.trainer.tick = 0
+                self.trainer._pop_liquidated_counts.clear()  # 重置淘汰计数
                 self.data_collector.reset()
 
                 # 运行ticks
@@ -149,6 +150,13 @@ class UIController:
                     if self._tick_counter >= self.sample_rate:
                         self._tick_counter = 0
                         self._collect_and_send_data()
+
+                    # 检查是否有任一种群被全部淘汰
+                    eliminated_type = self.trainer._any_population_eliminated()
+                    if eliminated_type is not None:
+                        # 采集最后一次数据再退出
+                        self._collect_and_send_data()
+                        break
 
                 # 进化（训练模式）
                 if not self._is_demo_mode and not self._stop_event.is_set():
@@ -183,6 +191,7 @@ class UIController:
             # 重置市场状态
             self.trainer._reset_market()
             self.trainer.tick = 0
+            self.trainer._pop_liquidated_counts.clear()  # 重置淘汰计数
             self.data_collector.reset()
 
             # 运行ticks（受速度控制）
@@ -204,6 +213,11 @@ class UIController:
 
                 # 每tick都采集数据（演示模式）
                 self._collect_and_send_data()
+
+                # 检查是否有任一种群被全部淘汰
+                eliminated_type = self.trainer._any_population_eliminated()
+                if eliminated_type is not None:
+                    break
 
     def _collect_and_send_data(self) -> None:
         """采集数据并发送到队列
