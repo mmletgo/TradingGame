@@ -60,7 +60,10 @@ cdef class PriceLevel:
         """
         if order_id in self.orders:
             order = self.orders.pop(order_id)  # O(1) 删除
-            self.total_quantity -= order.quantity
+            # 减去剩余数量（未成交部分），而不是原始数量
+            # 因为部分成交时 total_quantity 已经减去了成交数量
+            remaining = order.quantity - order.filled_quantity
+            self.total_quantity -= remaining
             return order
         return None
 

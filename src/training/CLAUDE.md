@@ -44,7 +44,7 @@
 - `setup()` - 初始化训练环境（训练模式不订阅事件）
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
-- `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->散户）
+- `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
 - `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓并标记 Agent，增加对应种群淘汰计数
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_any_population_eliminated()` - O(1) 检查是否有任一种群被全部淘汰，返回被淘汰的种群类型

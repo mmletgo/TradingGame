@@ -87,6 +87,8 @@ Agent 基类，提供通用属性和方法。
 - 输出[7]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
 - 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
 
+**订单数量约束：** 所有订单数量必须为正整数（最小为 1）。`_calculate_order_quantity` 方法会将计算结果取整并确保至少为 1。
+
 **价格舍入**：所有订单价格都会舍入到 `tick_size` 的整数倍，避免浮点数精度问题导致订单簿数据不一致。
 
 #### `_place_limit_order(side: OrderSide, price: float, quantity: float, event_bus: EventBus) -> None`

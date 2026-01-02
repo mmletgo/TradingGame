@@ -157,8 +157,10 @@ class MatchingEngine:
         MAX_ITERATIONS = 100000
         iteration_count = 0
 
-        prev_remaining = remaining  # 用于检测进展
+        # 进展检测：只有当真正无进展（没有任何状态变化）时才计数
+        prev_remaining = remaining
         no_progress_count = 0
+        MAX_NO_PROGRESS = 100  # 降低阈值，因为检测更准确了
 
         while remaining > MIN_QTY:
             iteration_count += 1
@@ -177,17 +179,6 @@ class MatchingEngine:
                     f"side={order.side}, best={best}, level_orders={level_orders}"
                 )
                 break
-
-            # 检测是否有进展
-            if remaining == prev_remaining:
-                no_progress_count += 1
-                if no_progress_count > 1000:
-                    # 连续1000次没有进展，说明对手盘流动性不足
-                    # 这是正常的市场行为，不记录警告以避免日志过多
-                    break
-            else:
-                no_progress_count = 0
-                prev_remaining = remaining
 
             if order.side == OrderSide.BUY:
                 # 买单与卖盘撮合
@@ -224,18 +215,37 @@ class MatchingEngine:
 
             price_level = side_book[best_price]
 
+            # 本次迭代的状态跟踪
+            orders_cleaned = 0  # 清理的订单数（僵尸订单 + 残单）
+            had_actual_trade = False  # 是否有实际成交
+
             # 遍历该价格档位的订单（按时间优先顺序）
             for maker_order in list(price_level.orders.values()):
                 if remaining <= MIN_QTY:
                     break
 
-                # 计算成交量（使用最小阈值避免浮点数精度问题）
+                # 【核心修复】僵尸订单检测与清理
+                # 订单在 price_level.orders 中但不在 order_map 中，这是数据不一致
+                if maker_order.order_id not in self._orderbook.order_map:
+                    # 直接从 price_level.orders 中移除
+                    del price_level.orders[maker_order.order_id]
+                    # 更新 total_quantity（使用未成交数量）
+                    zombie_remaining = maker_order.quantity - maker_order.filled_quantity
+                    price_level.total_quantity = max(
+                        0.0, price_level.total_quantity - zombie_remaining
+                    )
+                    orders_cleaned += 1
+                    continue
+
+                # 残单检测：订单剩余数量 <= MIN_QTY
                 maker_remaining = maker_order.quantity - maker_order.filled_quantity
                 if maker_remaining <= MIN_QTY:
                     # 订单实质上已完全成交，从订单簿移除
                     self._orderbook.cancel_order(maker_order.order_id)
+                    orders_cleaned += 1
                     continue
 
+                # 实际撮合
                 trade_qty = min(remaining, maker_remaining)
 
                 # 成交价格 = maker订单价格（对手盘价格）
@@ -283,17 +293,45 @@ class MatchingEngine:
                 order.filled_quantity += trade_qty
                 maker_order.filled_quantity += trade_qty
                 remaining -= trade_qty
+                had_actual_trade = True
 
-                # 如果 maker 订单完全成交，从订单簿移除
-                if maker_order.filled_quantity >= maker_order.quantity:
+                # 更新价格档位的 total_quantity（无论部分成交还是完全成交都要更新）
+                price_level.total_quantity -= trade_qty
+
+                # 如果 maker 订单完全成交（或接近完全成交），从订单簿移除
+                # 使用 MIN_QTY 阈值避免浮点精度问题产生残单
+                maker_remaining_after = maker_order.quantity - maker_order.filled_quantity
+                if maker_remaining_after <= MIN_QTY:
                     self._orderbook.cancel_order(maker_order.order_id)
-                else:
-                    # 部分成交时更新价格档位的 total_quantity
-                    price_level.total_quantity -= trade_qty
 
-            # 检查该价格档位是否已空，继续下一个价格
+            # 【修复】空档位清理：确保空档位被正确删除
+            if best_price in side_book:
+                current_level = side_book[best_price]
+                if len(current_level.orders) == 0:
+                    del side_book[best_price]
+                    self._orderbook._depth_dirty = True
+                    continue  # 档位已清理，继续下一个价格
+
+            # 检查该价格档位是否已空（被 cancel_order 删除），继续下一个价格
             if best_price not in side_book:
                 continue
+
+            # 【改进】进展检测：只有当没有任何状态变化时才计为无进展
+            # 清理僵尸/残单也算是有进展（状态在改变）
+            if remaining == prev_remaining and orders_cleaned == 0 and not had_actual_trade:
+                no_progress_count += 1
+                if no_progress_count >= MAX_NO_PROGRESS:
+                    # 真正无进展：对手盘有订单但无法成交（异常情况）
+                    self._logger.warning(
+                        f"撮合真正无进展，连续{MAX_NO_PROGRESS}次迭代无任何状态变化。"
+                        f"remaining={remaining}, order_id={order.order_id}, "
+                        f"side={order.side}, best_price={best_price}"
+                    )
+                    break
+            else:
+                # 有进展（成交或清理了订单），重置计数器
+                no_progress_count = 0
+                prev_remaining = remaining
 
         return trades, remaining
 

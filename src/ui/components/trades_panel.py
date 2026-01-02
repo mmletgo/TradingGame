@@ -56,7 +56,7 @@ class TradesPanel:
             with dpg.table_row(parent="trades_table"):
                 dpg.add_text(str(trade.tick))
                 dpg.add_text(f"{trade.price:.2f}")
-                dpg.add_text(f"{trade.quantity:.0f}")
+                dpg.add_text(str(int(trade.quantity)))
 
                 # 买入绿色，卖出红色
                 if trade.is_buyer_taker:

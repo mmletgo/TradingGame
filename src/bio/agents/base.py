@@ -300,7 +300,10 @@ class Agent:
             position_qty = self.account.position.quantity
             if position_qty > 0:
                 # 有多仓时卖出（卖出比例由神经网络决定）
-                params["quantity"] = position_qty * quantity_ratio
+                # 取整并确保至少卖出1个单位
+                sell_qty = max(1, int(position_qty * quantity_ratio))
+                # 但不能超过持仓量
+                params["quantity"] = min(sell_qty, int(position_qty))
             else:
                 # 空仓或无持仓，开空仓
                 params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
@@ -319,7 +322,7 @@ class Agent:
 
         return action, params
 
-    def _calculate_order_quantity(self, price: float, ratio: float) -> float:
+    def _calculate_order_quantity(self, price: float, ratio: float) -> int:
         """计算订单数量
 
         根据账户净值、杠杆倍数和数量比例计算订单数量。
@@ -329,13 +332,13 @@ class Agent:
             ratio: 数量比例（0.1 到 1.0，表示使用购买力的比例）
 
         Returns:
-            订单数量，如果净值为负或不足则返回 0
+            订单数量（整数），如果净值为负或不足则返回 0
         """
         equity = self.account.get_equity(price)
 
         # 净值非正时不允许下单
         if equity <= 0:
-            return 0.0
+            return 0
 
         # 可用购买力 = 净值 * 杠杆
         buying_power = equity * self.account.leverage
@@ -343,9 +346,8 @@ class Agent:
         ratio = max(0.1, min(1.0, ratio))
         quantity = (buying_power * ratio) / price if price > 0 else 0.0
 
-        # 确保数量为正数且合理（至少为最小交易单位）
-        lot_size = 1.0  # 默认最小交易单位
-        quantity = max(lot_size, round(quantity, 2))
+        # 确保数量为整数且至少为1（最小交易单位）
+        quantity = max(1, int(quantity))
 
         return quantity
 
