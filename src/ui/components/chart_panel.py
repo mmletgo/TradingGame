@@ -1,9 +1,10 @@
 """图表面板组件
 
-显示价格曲线和种群资产曲线（纵向4行布局）。
+显示价格曲线、种群资产曲线和资产分布小提琴图。
 """
 
 import dearpygui.dearpygui as dpg
+import numpy as np
 from typing import TYPE_CHECKING, Any
 
 from src.config.config import AgentType
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
         avg_equity: float
         alive_count: int
         total_count: int
+        alive_equities: list[float]
 
 
 # 种群颜色配置
@@ -46,13 +48,16 @@ VERTICAL_LAYOUT: list[AgentType] = [
 class ChartPanel:
     """图表面板
 
-    显示价格曲线和种群资产曲线（纵向4行布局）。
+    显示价格曲线、种群资产曲线和资产分布小提琴图。
     """
 
     # 图表面板配置
     PANEL_WIDTH: int = 1150  # 总宽度
     EQUITY_PLOT_HEIGHT: int = 160  # 每个资产图表高度
     PRICE_PLOT_HEIGHT: int = 140  # 价格图表高度
+    VIOLIN_PLOT_HEIGHT: int = 120  # 小提琴图高度
+    VIOLIN_PLOT_WIDTH: int = 280  # 每个小提琴图宽度（4个并排）
+    KDE_POINTS: int = 50  # KDE曲线采样点数
 
     def __init__(self) -> None:
         """初始化图表面板
@@ -98,6 +103,9 @@ class ChartPanel:
                     dpg.add_text(f"{name}: 均值: 0  存活: 0",
                         tag=f"stat_{agent_type.value}", color=color)
                     dpg.add_spacer(width=20)
+
+            # 小提琴图区域（4个并排）
+            self._create_violin_plots()
 
     def _create_equity_plot(self, agent_type: AgentType) -> None:
         """创建单个种群的资产图表
@@ -183,16 +191,20 @@ class ChartPanel:
                 dpg.set_axis_limits(f"equity_y_axis_{tag_prefix}",
                                    min_equity - margin, max_equity + margin)
 
-            # 更新统计文本
+            # 更新统计文本和小提琴图
             stats = population_stats.get(agent_type)
             name = POPULATION_NAMES.get(agent_type, agent_type.value)
             if stats:
                 avg_str = self._format_number(stats.avg_equity)
                 dpg.set_value(f"stat_{agent_type.value}",
                     f"{name}: 均值: {avg_str}  存活: {stats.alive_count}/{stats.total_count}")
+                # 更新小提琴图
+                self._update_violin_plot(agent_type, stats.alive_equities)
             else:
                 dpg.set_value(f"stat_{agent_type.value}",
                     f"{name}: 均值: 0  存活: 0/0")
+                # 清空小提琴图
+                self._update_violin_plot(agent_type, [])
 
     def _format_number(self, num: float) -> str:
         """格式化数字（大数字用K/M表示）
@@ -209,3 +221,210 @@ class ChartPanel:
             return f"{num/1e3:.1f}K"
         else:
             return f"{num:.0f}"
+
+    def _create_violin_plots(self) -> None:
+        """创建4个并排的小提琴图"""
+        with dpg.group(horizontal=True):
+            for agent_type in VERTICAL_LAYOUT:
+                name = POPULATION_NAMES.get(agent_type, agent_type.value)
+                tag_prefix = agent_type.value
+
+                with dpg.plot(
+                    label=name,
+                    height=self.VIOLIN_PLOT_HEIGHT,
+                    width=self.VIOLIN_PLOT_WIDTH,
+                    tag=f"violin_plot_{tag_prefix}",
+                    no_mouse_pos=True,
+                ):
+                    dpg.add_plot_axis(
+                        dpg.mvXAxis, label="资产", tag=f"violin_x_axis_{tag_prefix}"
+                    )
+                    dpg.add_plot_axis(
+                        dpg.mvYAxis, label="", tag=f"violin_y_axis_{tag_prefix}"
+                    )
+
+                    # 小提琴形状（Area Series）
+                    dpg.add_area_series(
+                        [],
+                        [],
+                        parent=f"violin_y_axis_{tag_prefix}",
+                        tag=f"violin_area_{tag_prefix}",
+                    )
+
+                    # 中位数线
+                    dpg.add_line_series(
+                        [],
+                        [],
+                        parent=f"violin_y_axis_{tag_prefix}",
+                        tag=f"violin_median_{tag_prefix}",
+                    )
+
+                    # 四分位线（Q1和Q3）
+                    dpg.add_line_series(
+                        [],
+                        [],
+                        parent=f"violin_y_axis_{tag_prefix}",
+                        tag=f"violin_q1_{tag_prefix}",
+                    )
+                    dpg.add_line_series(
+                        [],
+                        [],
+                        parent=f"violin_y_axis_{tag_prefix}",
+                        tag=f"violin_q3_{tag_prefix}",
+                    )
+
+        # 设置小提琴图主题
+        self._setup_violin_themes()
+
+    def _setup_violin_themes(self) -> None:
+        """设置小提琴图颜色主题"""
+        for agent_type in AgentType:
+            color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
+            tag_prefix = agent_type.value
+
+            # 小提琴形状主题（半透明填充）
+            with dpg.theme() as area_theme:
+                with dpg.theme_component(dpg.mvAreaSeries):
+                    dpg.add_theme_color(
+                        dpg.mvPlotCol_Fill,
+                        (*color, 100),
+                        category=dpg.mvThemeCat_Plots,
+                    )
+                    dpg.add_theme_color(
+                        dpg.mvPlotCol_Line,
+                        (*color, 200),
+                        category=dpg.mvThemeCat_Plots,
+                    )
+            dpg.bind_item_theme(f"violin_area_{tag_prefix}", area_theme)
+
+            # 中位数线主题（白色粗线）
+            with dpg.theme() as median_theme:
+                with dpg.theme_component(dpg.mvLineSeries):
+                    dpg.add_theme_color(
+                        dpg.mvPlotCol_Line,
+                        (255, 255, 255, 255),
+                        category=dpg.mvThemeCat_Plots,
+                    )
+            dpg.bind_item_theme(f"violin_median_{tag_prefix}", median_theme)
+
+            # 四分位线主题（灰色细线）
+            with dpg.theme() as quartile_theme:
+                with dpg.theme_component(dpg.mvLineSeries):
+                    dpg.add_theme_color(
+                        dpg.mvPlotCol_Line,
+                        (180, 180, 180, 200),
+                        category=dpg.mvThemeCat_Plots,
+                    )
+            dpg.bind_item_theme(f"violin_q1_{tag_prefix}", quartile_theme)
+            dpg.bind_item_theme(f"violin_q3_{tag_prefix}", quartile_theme)
+
+    def _gaussian_kde(
+        self, data: np.ndarray, x_grid: np.ndarray, bandwidth: float | None = None
+    ) -> np.ndarray:
+        """高斯核密度估计（纯NumPy实现）
+
+        使用高斯核函数计算概率密度估计，不依赖scipy。
+
+        Args:
+            data: 原始数据数组
+            x_grid: 评估点网格
+            bandwidth: 带宽，None则使用Silverman法则自动计算
+
+        Returns:
+            密度估计值数组
+        """
+        n = len(data)
+        if n == 0:
+            return np.zeros_like(x_grid)
+
+        # Silverman法则计算带宽
+        if bandwidth is None:
+            std = np.std(data, ddof=1) if n > 1 else 1.0
+            iqr = np.percentile(data, 75) - np.percentile(data, 25)
+            # 避免带宽过小
+            scale = min(std, iqr / 1.34) if iqr > 0 else std
+            bandwidth = 0.9 * scale * (n ** (-0.2)) if scale > 0 else 1.0
+
+        # 确保带宽不为0
+        bandwidth = max(bandwidth, 1e-6)
+
+        # 计算核密度估计
+        # K(u) = exp(-u^2/2) / sqrt(2*pi)
+        diff = x_grid[:, np.newaxis] - data[np.newaxis, :]
+        kernel_vals = np.exp(-0.5 * (diff / bandwidth) ** 2)
+        density = np.sum(kernel_vals, axis=1) / (n * bandwidth * np.sqrt(2 * np.pi))
+
+        return density
+
+    def _update_violin_plot(
+        self, agent_type: AgentType, equities: list[float]
+    ) -> None:
+        """更新单个种群的小提琴图
+
+        计算KDE密度曲线并绘制对称的小提琴形状，同时添加中位数和四分位线。
+
+        Args:
+            agent_type: Agent类型
+            equities: 存活个体的资产列表
+        """
+        tag_prefix = agent_type.value
+
+        # 数据不足时清空图表
+        if len(equities) < 2:
+            dpg.set_value(f"violin_area_{tag_prefix}", [[], []])
+            dpg.set_value(f"violin_median_{tag_prefix}", [[], []])
+            dpg.set_value(f"violin_q1_{tag_prefix}", [[], []])
+            dpg.set_value(f"violin_q3_{tag_prefix}", [[], []])
+            return
+
+        data = np.array(equities)
+
+        # 计算统计量
+        median = float(np.median(data))
+        q1 = float(np.percentile(data, 25))
+        q3 = float(np.percentile(data, 75))
+        data_min = float(np.min(data))
+        data_max = float(np.max(data))
+
+        # 扩展数据范围
+        data_range = data_max - data_min
+        margin = data_range * 0.1 if data_range > 0 else 1.0
+        x_min = data_min - margin
+        x_max = data_max + margin
+
+        # 创建评估网格
+        x_grid = np.linspace(x_min, x_max, self.KDE_POINTS)
+
+        # 计算KDE
+        density = self._gaussian_kde(data, x_grid)
+
+        # 归一化密度到 [-0.5, 0.5]
+        max_density = np.max(density)
+        if max_density > 0:
+            normalized_density = density / max_density * 0.4
+        else:
+            normalized_density = density
+
+        # 创建小提琴形状（上半部分 + 下半部分，形成闭合路径）
+        upper_y = normalized_density.tolist()
+        lower_y = (-normalized_density[::-1]).tolist()
+
+        upper_x = x_grid.tolist()
+        lower_x = x_grid[::-1].tolist()
+
+        violin_x = upper_x + lower_x
+        violin_y = upper_y + lower_y
+
+        # 更新小提琴形状
+        dpg.set_value(f"violin_area_{tag_prefix}", [violin_x, violin_y])
+
+        # 更新中位数线（水平线在y=0）
+        dpg.set_value(f"violin_median_{tag_prefix}", [[median, median], [-0.3, 0.3]])
+
+        # 更新四分位线
+        dpg.set_value(f"violin_q1_{tag_prefix}", [[q1, q1], [-0.2, 0.2]])
+        dpg.set_value(f"violin_q3_{tag_prefix}", [[q3, q3], [-0.2, 0.2]])
+
+        # 调整坐标轴范围
+        dpg.set_axis_limits(f"violin_x_axis_{tag_prefix}", x_min, x_max)
+        dpg.set_axis_limits(f"violin_y_axis_{tag_prefix}", -0.6, 0.6)

@@ -159,15 +159,15 @@ def main() -> None:
     # 设置日志
     setup_logging(args.log_dir)
 
-    print("=" * 60)
-    print("NEAT AI 交易模拟竞技场 - 带UI训练模式")
-    print("=" * 60)
-    print(f"Episodes: {args.episodes}")
-    print(f"Episode Length: {args.episode_length} ticks")
-    print(f"Checkpoint Interval: {args.checkpoint_interval}")
+    print("=" * 60, flush=True)
+    print("NEAT AI 交易模拟竞技场 - 带UI训练模式", flush=True)
+    print("=" * 60, flush=True)
+    print(f"Episodes: {args.episodes}", flush=True)
+    print(f"Episode Length: {args.episode_length} ticks", flush=True)
+    print(f"Checkpoint Interval: {args.checkpoint_interval}", flush=True)
     if args.resume:
-        print(f"Resume From: {args.resume}")
-    print("=" * 60)
+        print(f"Resume From: {args.resume}", flush=True)
+    print("=" * 60, flush=True)
 
     # 创建配置
     config = create_default_config(
@@ -180,18 +180,18 @@ def main() -> None:
     trainer = Trainer(config)
 
     # 初始化
-    print("初始化训练环境...")
+    print("初始化训练环境...", flush=True)
     trainer.setup()
-    print("训练器初始化完成")
+    print("训练器初始化完成", flush=True)
 
     # 预热：重置一次市场和Agent，确保所有懒加载完成
-    print("预热中（重置市场和Agent）...")
+    print("预热中（重置市场和Agent）...", flush=True)
     for population in trainer.populations.values():
         population.reset_agents()
     trainer._reset_market()
 
     # 运行一个测试tick确保一切就绪
-    print("运行测试tick...")
+    print("运行测试tick...", flush=True)
     trainer.run_tick()
     trainer.tick = 0  # 重置tick计数
 
@@ -199,23 +199,23 @@ def main() -> None:
     for population in trainer.populations.values():
         population.reset_agents()
     trainer._reset_market()
-    print("预热完成，所有初始化已就绪")
+    print("预热完成，所有初始化已就绪", flush=True)
 
     # 加载检查点
     if args.resume:
         resume_path = Path(args.resume)
         if resume_path.exists():
-            print(f"正在从检查点恢复: {args.resume}")
+            print(f"正在从检查点恢复: {args.resume}", flush=True)
             trainer.load_checkpoint(args.resume)
-            print(f"已恢复到 Episode {trainer.episode}")
+            print(f"已恢复到 Episode {trainer.episode}", flush=True)
         else:
-            print(f"警告: 检查点文件不存在: {args.resume}")
+            print(f"警告: 检查点文件不存在: {args.resume}", flush=True)
             sys.exit(1)
 
     # 创建并运行UI应用
     app = TrainingUIApp(trainer, episodes=args.episodes)
-    print("启动训练UI...")
-    print("按 [开始] 按钮开始训练")
+    print("启动训练UI...", flush=True)
+    print("按 [开始] 按钮开始训练", flush=True)
     app.run()
 
 

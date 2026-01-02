@@ -36,6 +36,7 @@ class PopulationStats:
     alive_count: int
     total_count: int
     generation: int
+    alive_equities: list[float]  # 存活个体的资产列表（用于小提琴图）
 
 
 @dataclass
@@ -174,6 +175,7 @@ class UIDataCollector:
                 alive_count=0,
                 total_count=0,
                 generation=population.generation,
+                alive_equities=[],
             )
 
         # 预分配数组
@@ -194,6 +196,7 @@ class UIDataCollector:
             alive_count=alive_count,
             total_count=n,
             generation=population.generation,
+            alive_equities=alive_equities.tolist(),
         )
 
     def reset(self) -> None:
