@@ -46,9 +46,10 @@
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->散户）
 - `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓并标记 Agent
+- `_all_market_makers_liquidated()` - 检查是否所有做市商都被淘汰
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
 - `run_tick()` - 执行单个 tick（直接调用模式），绕过事件系统
-- `run_episode()` - 运行完整 episode（重置、运行、进化）
+- `run_episode()` - 运行完整 episode（重置、运行、进化），若做市商全部被淘汰则提前结束
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
 
@@ -72,6 +73,7 @@
    - 重置所有 Agent 账户
    - 重置市场状态
    - 运行 episode_length 个 tick
+   - **提前结束条件**：若所有做市商都被强平，则立即结束当前 episode
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 

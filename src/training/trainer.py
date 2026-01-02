@@ -236,6 +236,18 @@ class Trainer:
         # 标记已强平
         agent.is_liquidated = True
 
+    def _all_market_makers_liquidated(self) -> bool:
+        """检查是否所有做市商都已被淘汰
+
+        Returns:
+            bool: 如果所有做市商都被强平则返回 True
+        """
+        mm_population = self.populations.get(AgentType.MARKET_MAKER)
+        if not mm_population or not mm_population.agents:
+            return True  # 没有做市商也视为全部淘汰
+
+        return all(agent.is_liquidated for agent in mm_population.agents)
+
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
         """预计算归一化的公共市场数据
 
@@ -426,6 +438,13 @@ class Trainer:
             if not self.is_running or self.is_paused:
                 break
             self.run_tick()
+
+            # 检查做市商是否全部被淘汰
+            if self._all_market_makers_liquidated():
+                self.logger.warning(
+                    f"Episode {self.episode} 提前结束：所有做市商已被淘汰 (tick={self.tick})"
+                )
+                break
 
         # 3. 进化（仅在正常完成 episode 时）
         if self.is_running and not self.is_paused:
