@@ -136,7 +136,6 @@ class DemoUIApp:
         ):
             # 控制面板（顶部）
             self.control_panel = ControlPanel(
-                parent="main_window",
                 on_start=self._on_start,
                 on_pause=self._on_pause,
                 on_stop=self._on_stop,
@@ -148,13 +147,13 @@ class DemoUIApp:
             # 主内容区（水平布局：订单簿 + 图表 + 成交记录）
             with dpg.group(horizontal=True):
                 # 左侧：订单簿
-                self.orderbook_panel = OrderBookPanel(parent="main_window")
+                self.orderbook_panel = OrderBookPanel()
 
                 # 中间：图表区
-                self.chart_panel = ChartPanel(parent="main_window")
+                self.chart_panel = ChartPanel()
 
                 # 右侧：成交记录
-                self.trades_panel = TradesPanel(parent="main_window")
+                self.trades_panel = TradesPanel()
 
         dpg.set_primary_window("main_window", True)
 

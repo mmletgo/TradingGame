@@ -34,6 +34,23 @@ python scripts/train_noui.py --episodes 100
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 ```
 
+### 代码修改后必须执行（清理缓存 + 重新编译）
+
+修改代码后必须执行以下命令，否则可能因缓存问题导致运行时卡住或行为异常：
+
+```bash
+# 1. 清理所有 Python 缓存和编译文件
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
+find . -name "*.pyc" -delete 2>/dev/null
+find . -name "*.pyo" -delete 2>/dev/null
+find ./src -name "*.so" -delete 2>/dev/null
+find ./src -name "*.c" -delete 2>/dev/null
+rm -rf build/
+
+# 2. 重新编译 Cython 模块
+python setup.py build_ext --inplace
+```
+
 ## 核心架构
 
 ### 事件驱动架构

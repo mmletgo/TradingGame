@@ -13,13 +13,16 @@ class OrderBookPanel:
     显示深度图和价格列表。
     """
 
-    def __init__(self, parent: int | str):
-        self.parent = parent
+    def __init__(self) -> None:
+        """初始化订单簿面板
+
+        组件会自动添加到当前DearPyGui上下文中。
+        """
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         """创建UI组件"""
-        with dpg.child_window(parent=self.parent, width=350, height=-1):
+        with dpg.child_window(width=350, height=-1):
             dpg.add_text("订单簿", color=(255, 255, 0))
             dpg.add_separator()
 

@@ -12,7 +12,6 @@ class ControlPanel:
 
     def __init__(
         self,
-        parent: int | str,
         on_start: Callable[[], None] | None = None,
         on_pause: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
@@ -20,14 +19,14 @@ class ControlPanel:
     ):
         """初始化控制面板
 
+        组件会自动添加到当前DearPyGui上下文中。
+
         Args:
-            parent: 父容器的tag或id
             on_start: 开始按钮回调
             on_pause: 暂停/继续按钮回调
             on_stop: 停止按钮回调
             on_speed_change: 速度滑块变化回调
         """
-        self.parent = parent
         self.on_start = on_start
         self.on_pause = on_pause
         self.on_stop = on_stop
@@ -37,7 +36,7 @@ class ControlPanel:
 
     def _setup_ui(self) -> None:
         """创建UI组件"""
-        with dpg.group(parent=self.parent, horizontal=True):
+        with dpg.group(horizontal=True):
             dpg.add_button(label="开始", callback=self._on_start_click, tag="btn_start",
                           width=60)
             dpg.add_button(label="暂停", callback=self._on_pause_click, tag="btn_pause",

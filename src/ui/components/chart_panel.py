@@ -47,13 +47,16 @@ class ChartPanel:
     显示价格曲线和种群资产曲线（2x2网格布局）。
     """
 
-    def __init__(self, parent: int | str):
-        self.parent = parent
+    def __init__(self) -> None:
+        """初始化图表面板
+
+        组件会自动添加到当前DearPyGui上下文中。
+        """
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         """创建UI组件"""
-        with dpg.child_window(parent=self.parent, width=-1, height=-1):
+        with dpg.child_window(width=-1, height=-1):
             # 价格曲线
             dpg.add_text("价格走势", color=(255, 255, 0))
             with dpg.plot(label="", height=200, width=-1, tag="price_plot"):

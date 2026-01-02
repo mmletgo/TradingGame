@@ -211,7 +211,7 @@ controller.stop()
 订单簿面板，显示深度图和价格列表。
 
 **构造参数：**
-- `parent: int | str` - 父容器的tag或id
+- 无参数，组件会自动添加到当前DearPyGui上下文中
 
 **方法：**
 - `update(bids, asks) -> None` - 更新订单簿数据
@@ -227,7 +227,7 @@ controller.stop()
 图表面板，显示价格曲线和种群资产曲线（2x2网格布局）。
 
 **构造参数：**
-- `parent: int | str` - 父容器的tag或id
+- 无参数，组件会自动添加到当前DearPyGui上下文中
 
 **方法：**
 - `update_price(price_history) -> None` - 更新价格曲线
@@ -263,7 +263,7 @@ controller.stop()
 成交记录面板，显示最近20笔成交记录。
 
 **构造参数：**
-- `parent: int | str` - 父容器的tag或id
+- 无参数，组件会自动添加到当前DearPyGui上下文中
 
 **方法：**
 - `update(trades) -> None` - 更新成交记录
@@ -279,11 +279,12 @@ controller.stop()
 控制面板，提供训练/演示控制和状态显示。
 
 **构造参数：**
-- `parent: int | str` - 父容器的tag或id
 - `on_start: Callable[[], None] | None` - 开始回调
 - `on_pause: Callable[[], None] | None` - 暂停/继续回调
 - `on_stop: Callable[[], None] | None` - 停止回调
 - `on_speed_change: Callable[[float], None] | None` - 速度变化回调
+
+注：组件会自动添加到当前DearPyGui上下文中
 
 **方法：**
 - `update_status(episode, tick, total_ticks, price) -> None` - 更新状态显示
@@ -335,8 +336,8 @@ from src.ui.components import OrderBookPanel, ChartPanel, TradesPanel, ControlPa
 dpg.create_context()
 
 with dpg.window(label="TradingGame", tag="main_window"):
-    # 控制面板
-    control = ControlPanel("main_window",
+    # 控制面板（自动添加到当前窗口上下文）
+    control = ControlPanel(
         on_start=lambda: controller.start_demo(),
         on_pause=lambda: controller.pause(),
         on_stop=lambda: controller.stop())
@@ -345,14 +346,14 @@ with dpg.window(label="TradingGame", tag="main_window"):
 
     # 主内容区（水平三栏布局：订单簿 | 图表 | 成交记录）
     with dpg.group(horizontal=True):
-        # 左侧：订单簿
-        orderbook = OrderBookPanel("main_window")
+        # 左侧：订单簿（自动添加到当前group上下文）
+        orderbook = OrderBookPanel()
 
         # 中间：图表
-        chart = ChartPanel("main_window")
+        chart = ChartPanel()
 
         # 右侧：成交记录
-        trades = TradesPanel("main_window")
+        trades = TradesPanel()
 
 # 数据更新循环
 def update_ui():
