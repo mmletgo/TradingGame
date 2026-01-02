@@ -77,8 +77,8 @@ class TrainingUIApp:
 
         dpg.create_viewport(
             title="NEAT Trading Simulator - Training Mode",
-            width=1400,
-            height=900,
+            width=1920,
+            height=1080,
         )
         dpg.setup_dearpygui()
 
@@ -119,9 +119,7 @@ class TrainingUIApp:
 
         布局结构：
         - 顶部：控制面板（开始/暂停/停止按钮，状态显示）
-        - 中部左侧：订单簿面板
-        - 中部右侧：价格/净值图表面板
-        - 底部：成交记录面板
+        - 主内容区（水平布局）：订单簿(300w) | 图表区(中间) | 成交记录(右侧250w)
         """
         with dpg.window(
             label="主窗口",
@@ -143,18 +141,15 @@ class TrainingUIApp:
 
             dpg.add_separator()
 
-            # 主内容区（订单簿 + 图表）
+            # 主内容区（水平布局：订单簿 + 图表 + 成交记录）
             with dpg.group(horizontal=True):
                 # 左侧：订单簿
                 self.orderbook_panel = OrderBookPanel(parent="main_window")
 
-                # 右侧：图表
+                # 中间：图表区
                 self.chart_panel = ChartPanel(parent="main_window")
 
-            dpg.add_separator()
-
-            # 底部：成交记录
-            with dpg.group(horizontal=True):
+                # 右侧：成交记录
                 self.trades_panel = TradesPanel(parent="main_window")
 
         dpg.set_primary_window("main_window", True)

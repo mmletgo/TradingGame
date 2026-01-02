@@ -26,7 +26,7 @@ class TradesPanel:
             with dpg.table(header_row=True, tag="trades_table",
                           borders_innerH=True, borders_outerH=True,
                           borders_innerV=True, borders_outerV=True,
-                          scrollY=True, height=-1):
+                          scrollY=False):
                 dpg.add_table_column(label="Tick", width_fixed=True, init_width_or_weight=60)
                 dpg.add_table_column(label="价格", width_fixed=True, init_width_or_weight=80)
                 dpg.add_table_column(label="数量", width_fixed=True, init_width_or_weight=80)
@@ -45,7 +45,7 @@ class TradesPanel:
                 dpg.delete_item(child)
 
         # 添加最新成交（倒序显示，最新在上）
-        for trade in reversed(trades[-50:]):  # 显示最近50笔
+        for trade in reversed(trades[-20:]):  # 显示最近20笔
             with dpg.table_row(parent="trades_table"):
                 dpg.add_text(str(trade.tick))
                 dpg.add_text(f"{trade.price:.2f}")

@@ -224,7 +224,7 @@ controller.stop()
 
 ### ChartPanel
 
-图表面板，显示价格曲线和种群资产曲线。
+图表面板，显示价格曲线和种群资产曲线（2x2网格布局）。
 
 **构造参数：**
 - `parent: int | str` - 父容器的tag或id
@@ -236,15 +236,31 @@ controller.stop()
   - `equity_history: dict[AgentType, list[float]]` - 各种群资产历史
   - `population_stats: dict[AgentType, PopulationStats]` - 各种群统计信息
 
+**布局：**
+- 价格走势图：高度200
+- 4个独立的资产图表（2x2网格）：
+  - 左上：散户资产图
+  - 右上：高级散户资产图
+  - 左下：庄家资产图
+  - 右下：做市商资产图
+- 每个资产图表高度160，宽度自适应
+- 每个图表标题显示种群名称
+- 统计文字显示在4个图表下方
+
 **颜色配置：**
 - 散户: 绿色 (100, 200, 100)
 - 高级散户: 蓝色 (100, 150, 255)
 - 庄家: 橙色 (255, 200, 100)
 - 做市商: 紫色 (200, 100, 255)
 
+**Tag命名规则：**
+- 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`
+- 资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
+- 统计文本：`stat_{agent_type}`
+
 ### TradesPanel
 
-成交记录面板，显示最近50笔成交记录。
+成交记录面板，显示最近20笔成交记录。
 
 **构造参数：**
 - `parent: int | str` - 父容器的tag或id
@@ -254,8 +270,9 @@ controller.stop()
   - `trades: list[TradeInfo]` - 成交记录列表
 
 **显示格式：**
-- 最新50笔成交，倒序显示（最新在上）
+- 最新20笔成交，倒序显示（最新在上）
 - 买入绿色，卖出红色
+- 面板高度自适应，表格无滚动条
 
 ### ControlPanel
 
@@ -326,7 +343,7 @@ with dpg.window(label="TradingGame", tag="main_window"):
 
     dpg.add_separator()
 
-    # 主内容区（水平布局）
+    # 主内容区（水平三栏布局：订单簿 | 图表 | 成交记录）
     with dpg.group(horizontal=True):
         # 左侧：订单簿
         orderbook = OrderBookPanel("main_window")
@@ -334,8 +351,7 @@ with dpg.window(label="TradingGame", tag="main_window"):
         # 中间：图表
         chart = ChartPanel("main_window")
 
-    with dpg.group(horizontal=True):
-        # 左侧：成交记录
+        # 右侧：成交记录
         trades = TradesPanel("main_window")
 
 # 数据更新循环
@@ -348,7 +364,7 @@ def update_ui():
         chart.update_equity(snapshot.equity_history, snapshot.population_stats)
         trades.update(snapshot.recent_trades)
 
-dpg.create_viewport(title='TradingGame', width=1280, height=800)
+dpg.create_viewport(title='TradingGame', width=1920, height=1080)
 dpg.setup_dearpygui()
 dpg.show_viewport()
 

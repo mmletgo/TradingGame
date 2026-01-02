@@ -48,7 +48,7 @@ class OrderBookPanel:
             with dpg.table(header_row=True, tag=self._make_tag("ask_table"),
                           borders_innerH=True, borders_outerH=True,
                           borders_innerV=True, borders_outerV=True,
-                          scrollY=True, height=150):
+                          scrollY=False, height=200):
                 dpg.add_table_column(label="价格")
                 dpg.add_table_column(label="数量")
 
@@ -58,7 +58,7 @@ class OrderBookPanel:
             with dpg.table(header_row=True, tag=self._make_tag("bid_table"),
                           borders_innerH=True, borders_outerH=True,
                           borders_innerV=True, borders_outerV=True,
-                          scrollY=True, height=150):
+                          scrollY=False, height=200):
                 dpg.add_table_column(label="价格")
                 dpg.add_table_column(label="数量")
 
