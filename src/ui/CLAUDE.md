@@ -208,7 +208,7 @@ controller.stop()
 
 ### OrderBookPanel
 
-订单簿面板，显示深度图和价格列表。
+订单簿面板，显示深度图和合并的买卖盘价格列表。
 
 **构造参数：**
 - 无参数，组件会自动添加到当前DearPyGui上下文中
@@ -216,30 +216,32 @@ controller.stop()
 **类常量：**
 - `PANEL_WIDTH: int = 280` - 面板宽度
 - `DEPTH_CHART_HEIGHT: int = 180` - 深度图高度
-- `TABLE_HEIGHT: int = 280` - 价格表格高度
+- `DISPLAY_LEVELS: int = 10` - 每边显示档数
 
 **方法：**
 - `update(bids, asks) -> None` - 更新订单簿数据
-  - `bids: list[tuple[float, float]]` - 买盘数据 [(price, qty), ...]
-  - `asks: list[tuple[float, float]]` - 卖盘数据 [(price, qty), ...]
+  - `bids: list[tuple[float, float]]` - 买盘数据 [(price, qty), ...]，按价格从高到低排序
+  - `asks: list[tuple[float, float]]` - 卖盘数据 [(price, qty), ...]，按价格从低到高排序
 
 **功能：**
 - 深度图：使用area_series显示买卖盘累计量，买盘绿色，卖盘红色
-- 价格列表：显示前10档买卖盘价格和数量
+- 合并盘口列表：买卖盘在同一个表格中显示，价格从高到低
+  - 卖盘10档在上（红色，价格从高到低）
+  - 分隔线
+  - 买盘10档在下（绿色，价格从高到低）
 - 面板宽度280px，无滚动条
 
 ### ChartPanel
 
-图表面板，显示价格曲线和种群资产曲线（2x2网格布局）。
+图表面板，显示价格曲线和种群资产曲线（纵向4行布局）。
 
 **构造参数：**
 - 无参数，组件会自动添加到当前DearPyGui上下文中
 
 **类常量：**
 - `PANEL_WIDTH: int = 1150` - 面板总宽度
-- `EQUITY_PLOT_WIDTH: int = 550` - 每个资产图表宽度
-- `EQUITY_PLOT_HEIGHT: int = 180` - 每个资产图表高度
-- `PRICE_PLOT_HEIGHT: int = 150` - 价格图表高度
+- `EQUITY_PLOT_HEIGHT: int = 160` - 每个资产图表高度
+- `PRICE_PLOT_HEIGHT: int = 140` - 价格图表高度
 
 **方法：**
 - `update_price(price_history) -> None` - 更新价格曲线
@@ -249,13 +251,13 @@ controller.stop()
   - `population_stats: dict[AgentType, PopulationStats]` - 各种群统计信息
 
 **布局：**
-- 价格走势图：高度150px，宽度自适应
-- 4个独立的资产图表（2x2网格）：
-  - 左上：散户资产图
-  - 右上：高级散户资产图
-  - 左下：庄家资产图
-  - 右下：做市商资产图
-- 每个资产图表：高度180px，宽度550px（固定宽度确保2x2网格正确排列）
+- 价格走势图：高度140px，宽度自适应
+- 4个独立的资产图表（纵向排列，每行1个）：
+  - 第1行：散户资产图
+  - 第2行：高级散户资产图
+  - 第3行：庄家资产图
+  - 第4行：做市商资产图
+- 每个资产图表：高度160px，宽度自适应
 - 每个图表标题显示种群名称
 - 统计文字水平排列显示在4个图表下方（节省垂直空间）
 

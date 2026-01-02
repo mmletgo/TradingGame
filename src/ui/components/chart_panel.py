@@ -1,6 +1,6 @@
 """图表面板组件
 
-显示价格曲线和种群资产曲线（2x2网格布局）。
+显示价格曲线和种群资产曲线（纵向4行布局）。
 """
 
 import dearpygui.dearpygui as dpg
@@ -34,24 +34,25 @@ POPULATION_NAMES: dict[AgentType, str] = {
     AgentType.MARKET_MAKER: "做市商"
 }
 
-# 2x2网格布局的种群顺序：左上、右上、左下、右下
-GRID_LAYOUT: list[tuple[AgentType, AgentType]] = [
-    (AgentType.RETAIL, AgentType.RETAIL_PRO),      # 第一行：散户, 高级散户
-    (AgentType.WHALE, AgentType.MARKET_MAKER),     # 第二行：庄家, 做市商
+# 纵向布局的种群顺序
+VERTICAL_LAYOUT: list[AgentType] = [
+    AgentType.RETAIL,
+    AgentType.RETAIL_PRO,
+    AgentType.WHALE,
+    AgentType.MARKET_MAKER,
 ]
 
 
 class ChartPanel:
     """图表面板
 
-    显示价格曲线和种群资产曲线（2x2网格布局）。
+    显示价格曲线和种群资产曲线（纵向4行布局）。
     """
 
-    # 图表面板宽度配置
-    PANEL_WIDTH: int = 1150  # 总宽度(1920 - 订单簿270 - 成交记录250 - 边距)
-    EQUITY_PLOT_WIDTH: int = 550  # 每个资产图表宽度
-    EQUITY_PLOT_HEIGHT: int = 180  # 每个资产图表高度
-    PRICE_PLOT_HEIGHT: int = 150  # 价格图表高度
+    # 图表面板配置
+    PANEL_WIDTH: int = 1150  # 总宽度
+    EQUITY_PLOT_HEIGHT: int = 160  # 每个资产图表高度
+    PRICE_PLOT_HEIGHT: int = 140  # 价格图表高度
 
     def __init__(self) -> None:
         """初始化图表面板
@@ -79,11 +80,9 @@ class ChartPanel:
             # 种群资产曲线标题
             dpg.add_text("种群平均资产", color=(255, 255, 0))
 
-            # 2x2网格布局的资产图表
-            for row_agents in GRID_LAYOUT:
-                with dpg.group(horizontal=True):
-                    for agent_type in row_agents:
-                        self._create_equity_plot(agent_type)
+            # 纵向4行布局的资产图表
+            for agent_type in VERTICAL_LAYOUT:
+                self._create_equity_plot(agent_type)
 
             # 设置种群曲线颜色
             self._setup_equity_themes()
@@ -107,23 +106,25 @@ class ChartPanel:
             agent_type: Agent类型
         """
         name = POPULATION_NAMES.get(agent_type, agent_type.value)
+        color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
         tag_prefix = agent_type.value
 
-        with dpg.group(width=self.EQUITY_PLOT_WIDTH):
-            with dpg.plot(label=name, height=self.EQUITY_PLOT_HEIGHT,
-                         width=self.EQUITY_PLOT_WIDTH, tag=f"equity_plot_{tag_prefix}"):
-                dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"equity_x_axis_{tag_prefix}")
-                dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"equity_y_axis_{tag_prefix}")
-                dpg.add_line_series([], [],
-                    label=name,
-                    parent=f"equity_y_axis_{tag_prefix}",
-                    tag=f"equity_series_{tag_prefix}")
+        # 每个图表占一行，宽度自适应
+        with dpg.plot(label=name, height=self.EQUITY_PLOT_HEIGHT,
+                     width=-1, tag=f"equity_plot_{tag_prefix}"):
+            dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"equity_x_axis_{tag_prefix}")
+            dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"equity_y_axis_{tag_prefix}")
+            dpg.add_line_series([], [],
+                label=name,
+                parent=f"equity_y_axis_{tag_prefix}",
+                tag=f"equity_series_{tag_prefix}")
 
     def _setup_price_theme(self) -> None:
         """设置价格曲线主题"""
         with dpg.theme() as price_theme:
             with dpg.theme_component(dpg.mvLineSeries):
-                dpg.add_theme_color(dpg.mvPlotCol_Line, (255, 255, 100), category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_color(dpg.mvPlotCol_Line, (255, 255, 100),
+                                   category=dpg.mvThemeCat_Plots)
         dpg.bind_item_theme("price_series", price_theme)
 
     def _setup_equity_themes(self) -> None:
@@ -132,7 +133,8 @@ class ChartPanel:
             color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
             with dpg.theme() as theme:
                 with dpg.theme_component(dpg.mvLineSeries):
-                    dpg.add_theme_color(dpg.mvPlotCol_Line, (*color, 255), category=dpg.mvThemeCat_Plots)
+                    dpg.add_theme_color(dpg.mvPlotCol_Line, (*color, 255),
+                                       category=dpg.mvThemeCat_Plots)
             dpg.bind_item_theme(f"equity_series_{agent_type.value}", theme)
 
     def update_price(self, price_history: list[float]) -> None:
@@ -178,7 +180,8 @@ class ChartPanel:
 
                 dpg.set_axis_limits(f"equity_x_axis_{tag_prefix}", 0, max_tick)
                 margin = (max_equity - min_equity) * 0.1 or 1
-                dpg.set_axis_limits(f"equity_y_axis_{tag_prefix}", min_equity - margin, max_equity + margin)
+                dpg.set_axis_limits(f"equity_y_axis_{tag_prefix}",
+                                   min_equity - margin, max_equity + margin)
 
             # 更新统计文本
             stats = population_stats.get(agent_type)
