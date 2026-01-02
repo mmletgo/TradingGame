@@ -31,6 +31,7 @@ class PopulationStats:
     """种群统计信息"""
 
     avg_equity: float
+    total_equity: float  # 存活个体资产总和
     max_equity: float
     min_equity: float
     alive_count: int
@@ -120,7 +121,7 @@ class UIDataCollector:
         for agent_type, population in trainer.populations.items():
             stats = self._compute_population_stats(population, last_price)
             population_stats[agent_type] = stats
-            self.equity_history[agent_type].append(stats.avg_equity)
+            self.equity_history[agent_type].append(stats.total_equity)
 
         # 转换成交记录
         recent_trades: list[TradeInfo] = [
@@ -170,6 +171,7 @@ class UIDataCollector:
         if n == 0:
             return PopulationStats(
                 avg_equity=0.0,
+                total_equity=0.0,
                 max_equity=0.0,
                 min_equity=0.0,
                 alive_count=0,
@@ -191,6 +193,7 @@ class UIDataCollector:
 
         return PopulationStats(
             avg_equity=float(np.mean(alive_equities)) if alive_count > 0 else 0.0,
+            total_equity=float(np.sum(alive_equities)),
             max_equity=float(np.max(equities)),
             min_equity=float(np.min(equities)),
             alive_count=alive_count,

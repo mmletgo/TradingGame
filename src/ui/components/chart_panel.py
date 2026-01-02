@@ -83,7 +83,7 @@ class ChartPanel:
             dpg.add_separator()
 
             # 种群资产曲线标题
-            dpg.add_text("种群平均资产", color=(255, 255, 0))
+            dpg.add_text("种群资产总和", color=(255, 255, 0))
 
             # 纵向4行布局的资产图表
             for agent_type in VERTICAL_LAYOUT:
@@ -100,7 +100,7 @@ class ChartPanel:
                 for agent_type in AgentType:
                     color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
                     name = POPULATION_NAMES.get(agent_type, agent_type.value)
-                    dpg.add_text(f"{name}: 均值: 0  存活: 0",
+                    dpg.add_text(f"{name}: 总计: 0  存活: 0",
                         tag=f"stat_{agent_type.value}", color=color)
                     dpg.add_spacer(width=20)
 
@@ -195,14 +195,14 @@ class ChartPanel:
             stats = population_stats.get(agent_type)
             name = POPULATION_NAMES.get(agent_type, agent_type.value)
             if stats:
-                avg_str = self._format_number(stats.avg_equity)
+                total_str = self._format_number(stats.total_equity)
                 dpg.set_value(f"stat_{agent_type.value}",
-                    f"{name}: 均值: {avg_str}  存活: {stats.alive_count}/{stats.total_count}")
+                    f"{name}: 总计: {total_str}  存活: {stats.alive_count}/{stats.total_count}")
                 # 更新小提琴图
                 self._update_violin_plot(agent_type, stats.alive_equities)
             else:
                 dpg.set_value(f"stat_{agent_type.value}",
-                    f"{name}: 均值: 0  存活: 0/0")
+                    f"{name}: 总计: 0  存活: 0/0")
                 # 清空小提琴图
                 self._update_violin_plot(agent_type, [])
 

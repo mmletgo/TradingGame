@@ -27,7 +27,7 @@ UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 **属性：**
 - `history_length: int` - 历史数据长度限制
 - `price_history: deque[float]` - 价格历史缓冲区
-- `equity_history: dict[AgentType, deque[float]]` - 各种群净值历史缓冲区
+- `equity_history: dict[AgentType, deque[float]]` - 各种群资产总和历史缓冲区
 
 **方法：**
 - `collect_tick_data(trainer) -> UIDataSnapshot` - 收集当前tick数据快照
@@ -47,7 +47,7 @@ UI数据快照，每个tick的完整数据。
 - `recent_trades: list[TradeInfo]` - 最近成交记录
 - `population_stats: dict[AgentType, PopulationStats]` - 种群统计
 - `price_history: list[float]` - 价格历史
-- `equity_history: dict[AgentType, list[float]]` - 净值历史
+- `equity_history: dict[AgentType, list[float]]` - 资产总和历史
 
 ### TradeInfo
 
@@ -65,6 +65,7 @@ UI数据快照，每个tick的完整数据。
 
 **字段：**
 - `avg_equity: float` - 存活Agent平均净值
+- `total_equity: float` - 存活Agent资产总和
 - `max_equity: float` - 最大净值
 - `min_equity: float` - 最小净值
 - `alive_count: int` - 存活数量
