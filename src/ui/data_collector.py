@@ -31,7 +31,7 @@ class PopulationStats:
     """种群统计信息"""
 
     avg_equity: float
-    total_equity: float  # 存活个体资产总和
+    total_equity: float  # 所有个体资产总和
     max_equity: float
     min_equity: float
     alive_count: int
@@ -193,7 +193,7 @@ class UIDataCollector:
 
         return PopulationStats(
             avg_equity=float(np.mean(alive_equities)) if alive_count > 0 else 0.0,
-            total_equity=float(np.sum(alive_equities)),
+            total_equity=float(np.sum(equities)),  # 所有个体资产总和
             max_equity=float(np.max(equities)),
             min_equity=float(np.min(equities)),
             alive_count=alive_count,

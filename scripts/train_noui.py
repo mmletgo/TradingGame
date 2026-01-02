@@ -85,7 +85,7 @@ def create_default_config(
             taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.WHALE: AgentConfig(
-            count=10,
+            count=100,
             initial_balance=10000000.0,  # 1000万
             leverage=10.0,
             maintenance_margin_rate=0.05,  # 5%
