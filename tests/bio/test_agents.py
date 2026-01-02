@@ -254,10 +254,11 @@ class TestAgentOnTradeEvent:
         # 验证账户更新
         assert agent.account.position.quantity == 50.0  # 100 - 50
         assert agent.account.position.avg_price == 100.0
-        # 余额不变（庄家 maker 费率为 0）
-        assert agent.account.balance == initial_balance
         # 已实现盈亏 = 50 * (110 - 100) = 500
         assert abs(agent.account.position.realized_pnl - 500.0) < 0.01
+        # 余额增加已实现盈亏，扣除手续费（seller_fee=0）
+        # balance = initial_balance + realized_pnl - fee = 10000000 + 500 - 0
+        assert abs(agent.account.balance - (initial_balance + 500.0)) < 0.01
 
     def test_targeted_event_delivery(self):
         """测试定向事件发送（无关事件不会发送给 Agent）

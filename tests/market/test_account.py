@@ -916,7 +916,8 @@ class TestAccountOnTrade:
         # 验证持仓：数量减至 50，均价不变
         assert account.position.quantity == 50.0
         assert account.position.avg_price == 100.0
-        # 验证余额：扣除手续费
-        assert account.balance == initial_balance
         # 验证已实现盈亏：50 * (110 - 100) = 500
         assert abs(account.position.realized_pnl - 500.0) < 0.01
+        # 验证余额：已实现盈亏加到余额，扣除手续费（seller_fee=0）
+        # balance = initial_balance + realized_pnl - fee = 10000000 + 500 - 0
+        assert abs(account.balance - (initial_balance + 500.0)) < 0.01

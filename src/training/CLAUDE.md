@@ -45,7 +45,8 @@
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
-- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓并标记 Agent，增加对应种群淘汰计数
+- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓（不淘汰个体）
+- `_check_elimination()` - 检查个体淘汰条件（净值/初始资金 < 10%），淘汰时标记 Agent 并增加种群淘汰计数
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_any_population_eliminated()` - O(1) 检查是否有任一种群被全部淘汰，返回被淘汰的种群类型
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
@@ -75,18 +76,19 @@
    - 重置所有 Agent 账户
    - 重置市场状态
    - 运行 episode_length 个 tick
-   - **提前结束条件**：若任一种群（散户/庄家/做市商）全部被强平，则立即结束当前 episode
+   - **提前结束条件**：若任一种群（散户/庄家/做市商）全部被淘汰，则立即结束当前 episode
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
 3. **Tick 执行** (`run_tick` - 直接调用模式)
    - 向量化计算归一化市场状态
    - 使用预构建的执行顺序列表遍历所有 Agent：
-     - 跳过已强平的 Agent
+     - 跳过已淘汰的 Agent
      - 决策（传入市场状态和订单簿）
      - 直接执行动作（`execute_action_direct`，绕过事件系统）
      - 记录成交到 `recent_trades`
-     - 检查强平条件，触发 `_handle_liquidation_direct`
+     - 检查强平条件，触发 `_handle_liquidation_direct`（仅平仓）
+     - 检查淘汰条件，触发 `_check_elimination`（资金不足10%时淘汰）
 
 ## 直接调用模式
 
@@ -107,14 +109,18 @@
 - `run_tick()` - 直接调用 Agent 和撮合引擎
 - `_handle_liquidation_direct()` - 直接处理强平
 
-## 强平机制
+## 强平与淘汰机制
 
-当 Agent 触发强平条件时（训练模式）：
+**强平（Liquidation）**：保证金率低于维持保证金率时触发
 1. `_handle_liquidation_direct()` 创建市价平仓单，直接调用撮合引擎处理
 2. 成交后直接更新 Agent 账户
-3. 将 Agent 的 `is_liquidated` 标志设为 True
-4. 被强平的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
-5. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
+3. 强平后 Agent **可以继续交易**（不自动淘汰）
+
+**淘汰（Elimination）**：净值/初始资金 < 10% 时触发
+1. `_check_elimination()` 检查淘汰条件
+2. 满足条件时将 Agent 的 `is_liquidated` 标志设为 True
+3. 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
+4. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
 
 ## 依赖关系
 

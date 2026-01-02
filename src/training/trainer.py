@@ -250,13 +250,28 @@ class Trainer:
                     maker_is_buyer = trade.buyer_id == maker_id
                     maker_agent.account.on_trade(trade, maker_is_buyer)
 
-        # 标记已强平
-        agent.is_liquidated = True
+        # 注意：强平后不再自动淘汰个体，淘汰条件改为 check_elimination
 
-        # 增加对应种群的淘汰计数
-        self._pop_liquidated_counts[agent.agent_type] = (
-            self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
-        )
+    def _check_elimination(self, agent: "Agent", current_price: float) -> None:
+        """检查并处理个体淘汰（资金不足时淘汰）
+
+        当 当前净值/初始资金 < 0.1 时，标记个体为淘汰状态。
+
+        Args:
+            agent: 要检查的 Agent
+            current_price: 当前价格
+        """
+        if agent.is_liquidated:
+            return  # 已淘汰，无需重复检查
+
+        if agent.account.check_elimination(current_price, threshold=0.1):
+            agent.is_liquidated = True
+            self._pop_liquidated_counts[agent.agent_type] = (
+                self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
+            )
+            self.logger.info(
+                f"Agent {agent.agent_id} 已淘汰（资金不足10%），本轮 episode 禁用"
+            )
 
     def _any_population_eliminated(self) -> AgentType | None:
         """检查是否有任一种群被全部淘汰（O(1) 复杂度）
@@ -429,9 +444,12 @@ class Trainer:
                         is_buyer = trade.buyer_id == maker_id
                         maker_agent.account.on_trade(trade, is_buyer)
 
-            # 检查强平
+            # 检查强平（仅平仓，不淘汰）
             if agent.account.check_liquidation(current_price):
                 self._handle_liquidation_direct(agent, current_price)
+
+            # 检查淘汰（资金不足10%时淘汰）
+            self._check_elimination(agent, current_price)
 
     def run_episode(self) -> None:
         """运行一个 episode

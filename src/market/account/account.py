@@ -97,6 +97,24 @@ class Account:
         margin_ratio = self.get_margin_ratio(current_price)
         return margin_ratio < self.maintenance_margin_rate
 
+    def check_elimination(self, current_price: float, threshold: float = 0.1) -> bool:
+        """检查是否需要淘汰（资金不足）
+
+        当 当前净值/初始资金 < threshold 时，返回 True 表示需要淘汰。
+
+        Args:
+            current_price: 当前市场价格，用于计算净值
+            threshold: 淘汰阈值，默认 0.1（即资金剩余不足 10%）
+
+        Returns:
+            True 表示需要淘汰，False 表示不需要
+        """
+        equity = self.get_equity(current_price)
+        if self.initial_balance <= 0:
+            return True  # 防止除零
+        ratio = equity / self.initial_balance
+        return ratio < threshold
+
     def liquidate(self, current_price: float, event_bus: EventBus) -> None:
         """执行强制平仓
 
@@ -133,8 +151,8 @@ class Account:
             side = OrderSide.SELL
             fee = trade.seller_fee
 
-        # 更新持仓
-        self.position.update(side.value, trade.quantity, trade.price)
+        # 更新持仓，获取已实现盈亏
+        realized_pnl = self.position.update(side.value, trade.quantity, trade.price)
 
-        # 扣除手续费
-        self.balance -= fee
+        # 将已实现盈亏加到余额，并扣除手续费
+        self.balance += realized_pnl - fee
