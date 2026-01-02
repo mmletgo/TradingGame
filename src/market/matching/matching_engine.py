@@ -287,6 +287,9 @@ class MatchingEngine:
                 # 如果 maker 订单完全成交，从订单簿移除
                 if maker_order.filled_quantity >= maker_order.quantity:
                     self._orderbook.cancel_order(maker_order.order_id)
+                else:
+                    # 部分成交时更新价格档位的 total_quantity
+                    price_level.total_quantity -= trade_qty
 
             # 检查该价格档位是否已空，继续下一个价格
             if best_price not in side_book:
