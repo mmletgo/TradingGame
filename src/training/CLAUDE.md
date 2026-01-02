@@ -45,17 +45,19 @@
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->散户）
-- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓并标记 Agent
-- `_all_market_makers_liquidated()` - 检查是否所有做市商都被淘汰
+- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓并标记 Agent，增加对应种群淘汰计数
+- `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
+- `_any_population_eliminated()` - O(1) 检查是否有任一种群被全部淘汰，返回被淘汰的种群类型
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
 - `run_tick()` - 执行单个 tick（直接调用模式），绕过事件系统
-- `run_episode()` - 运行完整 episode（重置、运行、进化），若做市商全部被淘汰则提前结束
+- `run_episode()` - 运行完整 episode（重置、运行、进化），若任一种群全部被淘汰则提前结束
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
 
 **性能优化：**
 - 使用 `deque(maxlen=100)` 自动管理成交记录，避免列表切片开销
 - 使用 `agent_map` 映射表实现 O(1) Agent 查找
+- 使用 `_pop_total_counts` 和 `_pop_liquidated_counts` 计数器实现 O(1) 种群淘汰检查，避免每 tick 遍历
 - 使用 `agent_execution_order` 预构建执行顺序，合并决策/执行和强平检查循环
 - 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
 - **直接调用模式**：训练时绕过事件系统，直接调用撮合引擎和 Agent 方法
@@ -73,7 +75,7 @@
    - 重置所有 Agent 账户
    - 重置市场状态
    - 运行 episode_length 个 tick
-   - **提前结束条件**：若所有做市商都被强平，则立即结束当前 episode
+   - **提前结束条件**：若任一种群（散户/庄家/做市商）全部被强平，则立即结束当前 episode
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 

@@ -54,6 +54,8 @@ class Trainer:
     recent_trades: deque[Trade]
     agent_map: dict[int, "Agent"]
     agent_execution_order: list["Agent"]
+    _pop_total_counts: dict[AgentType, int]  # 各种群总数
+    _pop_liquidated_counts: dict[AgentType, int]  # 各种群当前 episode 已淘汰数量
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -75,6 +77,8 @@ class Trainer:
         self.recent_trades = deque(maxlen=100)
         self.agent_map = {}
         self.agent_execution_order = []
+        self._pop_total_counts = {}
+        self._pop_liquidated_counts = {}
 
     def setup(self) -> None:
         """初始化训练环境
@@ -100,6 +104,9 @@ class Trainer:
         # 构建 Agent 映射表和执行顺序
         self._build_agent_map()
         self._build_execution_order()
+
+        # 记录各种群总数
+        self._update_pop_total_counts()
 
         # 初始化市场（做市商先行动）
         self._init_market()
@@ -138,6 +145,11 @@ class Trainer:
             population = self.populations.get(agent_type)
             if population:
                 self.agent_execution_order.extend(population.agents)
+
+    def _update_pop_total_counts(self) -> None:
+        """更新各种群总数"""
+        for agent_type, population in self.populations.items():
+            self._pop_total_counts[agent_type] = len(population.agents)
 
     def _on_trade(self, event: Event) -> None:
         """处理成交事件，记录最近成交
@@ -236,17 +248,23 @@ class Trainer:
         # 标记已强平
         agent.is_liquidated = True
 
-    def _all_market_makers_liquidated(self) -> bool:
-        """检查是否所有做市商都已被淘汰
+        # 增加对应种群的淘汰计数
+        self._pop_liquidated_counts[agent.agent_type] = (
+            self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
+        )
+
+    def _any_population_eliminated(self) -> AgentType | None:
+        """检查是否有任一种群被全部淘汰（O(1) 复杂度）
 
         Returns:
-            bool: 如果所有做市商都被强平则返回 True
+            AgentType | None: 被淘汰的种群类型，如果没有则返回 None
         """
-        mm_population = self.populations.get(AgentType.MARKET_MAKER)
-        if not mm_population or not mm_population.agents:
-            return True  # 没有做市商也视为全部淘汰
-
-        return all(agent.is_liquidated for agent in mm_population.agents)
+        for agent_type, total in self._pop_total_counts.items():
+            if total > 0:
+                liquidated = self._pop_liquidated_counts.get(agent_type, 0)
+                if liquidated >= total:
+                    return agent_type
+        return None
 
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
         """预计算归一化的公共市场数据
@@ -430,8 +448,9 @@ class Trainer:
         # 重置市场状态
         self._reset_market()
 
-        # 重置 tick 计数（每个 episode 从 0 开始）
+        # 重置 tick 计数和各种群淘汰计数（每个 episode 从 0 开始）
         self.tick = 0
+        self._pop_liquidated_counts.clear()
 
         # 2. 运行 episode_length 个 tick
         for _ in range(episode_length):
@@ -439,10 +458,11 @@ class Trainer:
                 break
             self.run_tick()
 
-            # 检查做市商是否全部被淘汰
-            if self._all_market_makers_liquidated():
+            # 检查是否有任一种群被全部淘汰
+            eliminated_type = self._any_population_eliminated()
+            if eliminated_type is not None:
                 self.logger.warning(
-                    f"Episode {self.episode} 提前结束：所有做市商已被淘汰 (tick={self.tick})"
+                    f"Episode {self.episode} 提前结束：{eliminated_type.value} 已全部淘汰 (tick={self.tick})"
                 )
                 break
 
@@ -456,6 +476,7 @@ class Trainer:
             self._register_all_agents()
             self._build_agent_map()
             self._build_execution_order()
+            self._update_pop_total_counts()
 
             self.logger.info(f"Episode {self.episode} 完成，tick={self.tick}")
 
@@ -554,6 +575,7 @@ class Trainer:
         self._register_all_agents()
         self._build_agent_map()
         self._build_execution_order()
+        self._update_pop_total_counts()
 
         self.logger.info(f"检查点已加载: {path}")
 
