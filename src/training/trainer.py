@@ -319,6 +319,18 @@ class Trainer:
             current_price=current_price,
         )
 
+        # ADL 成交后检查 candidates 的强平和淘汰条件
+        # 注意：已淘汰的 candidate 不需要再检查（is_liquidated=True）
+        for candidate in candidates:
+            candidate_agent = candidate.agent
+            if candidate_agent.is_liquidated:
+                continue  # 已淘汰，跳过检查
+            # 检查强平条件
+            if candidate_agent.account.check_liquidation(current_price):
+                self._handle_liquidation_direct(candidate_agent, current_price)
+            # 检查淘汰条件
+            self._check_elimination(candidate_agent, current_price)
+
         # 兜底处理：理论上不应该出现 ADL 候选不足的情况（多空对等）
         # 如果出现，说明有其他 bug，记录错误日志并强制清零
         if remaining_after_adl > 0:
@@ -556,6 +568,11 @@ class Trainer:
                     # maker 的方向与 taker 相反：taker 买则 maker 卖，taker 卖则 maker 买
                     is_buyer = not trade.is_buyer_taker
                     maker_agent.account.on_trade(trade, is_buyer)
+
+                    # 检查 maker 的强平和淘汰条件（成交可能导致 maker 亏损）
+                    if maker_agent.account.check_liquidation(current_price):
+                        self._handle_liquidation_direct(maker_agent, current_price)
+                    self._check_elimination(maker_agent, current_price)
 
             # 检查强平
             if agent.account.check_liquidation(current_price):
