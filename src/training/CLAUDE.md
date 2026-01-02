@@ -41,11 +41,12 @@
 - 支持暂停/恢复/停止控制
 
 **关键方法：**
-- `setup()` - 初始化训练环境（训练模式不订阅事件）
+- `setup()` - 初始化训练环境（训练模式不订阅事件），创建 ADL 管理器
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
-- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓（不淘汰个体）
+- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓；若市价单无法完全成交则触发 ADL
+- `_execute_adl()` - 执行 ADL 自动减仓，计算破产价格、获取候选对手方、执行减仓并更新账户
 - `_check_elimination()` - 检查个体淘汰条件（净值/初始资金 < 10%），淘汰时标记 Agent 并增加种群淘汰计数
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_any_population_eliminated()` - O(1) 检查是否有任一种群被全部淘汰，返回被淘汰的种群类型
@@ -68,6 +69,7 @@
 1. **初始化阶段** (`setup`)
    - 创建三个种群（散户/庄家/做市商）
    - 创建撮合引擎
+   - 创建 ADL 管理器
    - 注册所有 Agent 的费率到撮合引擎
    - 构建 Agent 映射表和执行顺序
    - 做市商建立初始流动性（直接调用模式）
@@ -114,7 +116,14 @@
 **强平（Liquidation）**：保证金率低于维持保证金率时触发
 1. `_handle_liquidation_direct()` 创建市价平仓单，直接调用撮合引擎处理
 2. 成交后直接更新 Agent 账户
-3. 强平后 Agent **可以继续交易**（不自动淘汰）
+3. **若市价单无法完全成交**（订单簿流动性不足），剩余仓位触发 ADL 机制
+4. 强平后 Agent **可以继续交易**（不自动淘汰）
+
+**ADL（自动减仓）**：市价强平无法完全成交时触发
+1. 计算被强平方的破产价格
+2. 筛选对手方候选（持有反向持仓且盈利的 Agent），按盈利比例排序
+3. 依次与候选对手方以破产价格成交，直至剩余仓位清零
+4. 通过 `account.on_adl_trade()` 更新双方账户
 
 **淘汰（Elimination）**：净值/初始资金 < 10% 时触发
 1. `_check_elimination()` 检查淘汰条件
@@ -128,6 +137,7 @@
 - `src.config.config` - 配置类
 - `src.core.event_engine` - 事件系统（保留用于调试/UI模式）
 - `src.core.log_engine` - 日志系统
+- `src.market.adl` - ADL 管理器
 - `src.market.matching` - 撮合引擎
 - `src.market.orderbook` - 订单簿
 

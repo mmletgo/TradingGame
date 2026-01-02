@@ -19,6 +19,7 @@ from src.config.config import Config
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event
 from src.core.log_engine.logger import get_logger
+from src.market.adl.adl_manager import ADLManager
 from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
@@ -47,6 +48,7 @@ class Trainer:
     event_bus: EventBus
     populations: dict[AgentType, Population]
     matching_engine: MatchingEngine | None
+    adl_manager: ADLManager | None
     tick: int
     episode: int
     is_running: bool
@@ -74,6 +76,7 @@ class Trainer:
 
         self.populations = {}
         self.matching_engine = None
+        self.adl_manager = None
         self.recent_trades = deque(maxlen=100)
         self.agent_map = {}
         self.agent_execution_order = []
@@ -94,6 +97,9 @@ class Trainer:
 
         # 创建撮合引擎
         self.matching_engine = MatchingEngine(self.event_bus, self.config.market)
+
+        # 创建 ADL 管理器
+        self.adl_manager = ADLManager()
 
         # 训练模式使用直接调用，不需要订阅成交事件和强平事件
         # 保留事件系统用于可能的调试或 UI 模式
@@ -211,31 +217,39 @@ class Trainer:
         """直接处理强平（训练模式）
 
         创建市价平仓单，直接调用撮合引擎处理，更新账户。
+        如果市价单无法完全成交，触发 ADL 机制。
 
         Args:
             agent: 被强平的 Agent
             current_price: 当前价格
         """
-        if not self.matching_engine:
+        if not self.matching_engine or not self.adl_manager:
             return
 
         position_qty = agent.account.position.quantity
         if position_qty == 0:
             return
 
+        # 记录原始持仓方向
+        is_long = position_qty > 0
+        target_qty = abs(position_qty)
+
         # 创建市价平仓单
-        side = OrderSide.SELL if position_qty > 0 else OrderSide.BUY
+        side = OrderSide.SELL if is_long else OrderSide.BUY
         order = Order(
             order_id=agent._generate_order_id(),
             agent_id=agent.agent_id,
             side=side,
             order_type=OrderType.MARKET,
             price=0.0,
-            quantity=abs(position_qty),
+            quantity=target_qty,
         )
 
         # 直接撮合
         trades = self.matching_engine.process_order_direct(order)
+
+        # 计算已成交数量
+        filled_qty = sum(trade.quantity for trade in trades)
 
         # 更新账户（taker 和 maker）
         for trade in trades:
@@ -250,7 +264,73 @@ class Trainer:
                     maker_is_buyer = trade.buyer_id == maker_id
                     maker_agent.account.on_trade(trade, maker_is_buyer)
 
-        # 注意：强平后不再自动淘汰个体，淘汰条件改为 check_elimination
+        # 检查是否需要 ADL
+        remaining_qty = target_qty - filled_qty
+        if remaining_qty > 0:
+            self._execute_adl(agent, remaining_qty, current_price, is_long)
+
+    def _execute_adl(
+        self,
+        liquidated_agent: "Agent",
+        remaining_qty: int,
+        current_price: float,
+        is_long: bool,
+    ) -> None:
+        """执行 ADL 自动减仓
+
+        Args:
+            liquidated_agent: 被强平的 Agent
+            remaining_qty: 剩余需要平仓的数量
+            current_price: 当前市场价格
+            is_long: 被强平方是否为多头
+        """
+        if not self.adl_manager:
+            return
+
+        # 计算破产价格
+        bankruptcy_price = self.adl_manager.calculate_bankruptcy_price(
+            liquidated_agent, current_price
+        )
+
+        # 获取所有 Agent
+        all_agents: list["Agent"] = []
+        for population in self.populations.values():
+            all_agents.extend(population.agents)
+
+        # 确定需要的对手方方向
+        # 被强平方是多头（需要卖出平仓），则需要空头对手（买入）
+        # 被强平方是空头（需要买入平仓），则需要多头对手（卖出）
+        target_side = -1 if is_long else 1
+
+        # 获取 ADL 候选列表
+        candidates = self.adl_manager.get_adl_candidates(
+            agents=all_agents,
+            current_price=current_price,
+            target_side=target_side,
+            exclude_agent_id=liquidated_agent.agent_id,
+        )
+
+        # 执行 ADL
+        adl_trades = self.adl_manager.execute_adl(
+            liquidated_agent=liquidated_agent,
+            remaining_qty=remaining_qty,
+            candidates=candidates,
+            bankruptcy_price=bankruptcy_price,
+            current_price=current_price,
+        )
+
+        # 更新账户
+        for counter_agent, trade_qty, trade_price in adl_trades:
+            # 更新被强平方账户
+            liquidated_agent.account.on_adl_trade(trade_qty, trade_price, is_taker=True)
+
+            # 更新 ADL 对手方账户
+            counter_agent.account.on_adl_trade(trade_qty, trade_price, is_taker=False)
+
+            self.logger.info(
+                f"ADL 完成: Agent {liquidated_agent.agent_id} 与 Agent {counter_agent.agent_id} "
+                f"成交 {trade_qty} @ {trade_price:.2f}"
+            )
 
     def _check_elimination(self, agent: "Agent", current_price: float) -> None:
         """检查并处理个体淘汰（资金不足时淘汰）

@@ -156,3 +156,35 @@ class Account:
 
         # 将已实现盈亏加到余额，并扣除手续费
         self.balance += realized_pnl - fee
+
+    def on_adl_trade(self, quantity: int, price: float, is_taker: bool) -> float:
+        """处理 ADL 成交
+
+        ADL 成交不收取手续费。
+
+        Args:
+            quantity: 成交数量（正数）
+            price: 成交价格（破产价格）
+            is_taker: 是否为被强平方（True=被强平方，False=ADL对手方）
+
+        Returns:
+            已实现盈亏
+        """
+        if self.position.quantity > 0:
+            # 多头平仓/被减仓
+            realized_pnl = (price - self.position.avg_price) * quantity
+            self.position.quantity -= quantity
+        else:
+            # 空头平仓/被减仓
+            realized_pnl = (self.position.avg_price - price) * quantity
+            self.position.quantity += quantity
+
+        # 仓位清零时重置均价
+        if self.position.quantity == 0:
+            self.position.avg_price = 0.0
+
+        # 更新余额（ADL 不收手续费）
+        self.balance += realized_pnl
+        self.position.realized_pnl += realized_pnl
+
+        return realized_pnl
