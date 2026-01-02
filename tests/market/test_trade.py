@@ -15,7 +15,7 @@ def test_trade_init_normal():
     trade = Trade(
         trade_id=1,
         price=100.5,
-        quantity=10.0,
+        quantity=10,
         buyer_id=123,
         seller_id=456,
         buyer_fee=0.05,
@@ -28,7 +28,7 @@ def test_trade_init_normal():
     # 验证所有属性
     assert trade.trade_id == 1
     assert trade.price == 100.5
-    assert trade.quantity == 10.0
+    assert trade.quantity == 10
     assert trade.buyer_id == 123
     assert trade.seller_id == 456
     assert trade.buyer_fee == 0.05
@@ -44,7 +44,7 @@ def test_trade_init_zero_values():
     trade = Trade(
         trade_id=0,
         price=0.0,
-        quantity=0.0,
+        quantity=0,
         buyer_id=0,
         seller_id=0,
         buyer_fee=0.0,
@@ -54,7 +54,7 @@ def test_trade_init_zero_values():
 
     assert trade.trade_id == 0
     assert trade.price == 0.0
-    assert trade.quantity == 0.0
+    assert trade.quantity == 0
     assert trade.buyer_id == 0
     assert trade.seller_id == 0
     assert trade.buyer_fee == 0.0
@@ -69,7 +69,7 @@ def test_trade_init_small_values():
     trade = Trade(
         trade_id=999,
         price=0.01,
-        quantity=0.001,
+        quantity=1,
         buyer_id=1,
         seller_id=2,
         buyer_fee=0.0001,
@@ -79,7 +79,7 @@ def test_trade_init_small_values():
 
     assert trade.trade_id == 999
     assert trade.price == 0.01
-    assert trade.quantity == 0.001
+    assert trade.quantity == 1
     assert trade.buyer_id == 1
     assert trade.seller_id == 2
     assert trade.buyer_fee == 0.0001
@@ -91,7 +91,7 @@ def test_trade_init_large_values():
     trade = Trade(
         trade_id=1000000,
         price=10000.0,
-        quantity=1000000.0,
+        quantity=1000000,
         buyer_id=99999,
         seller_id=88888,
         buyer_fee=100.0,
@@ -101,7 +101,7 @@ def test_trade_init_large_values():
 
     assert trade.trade_id == 1000000
     assert trade.price == 10000.0
-    assert trade.quantity == 1000000.0
+    assert trade.quantity == 1000000
     assert trade.buyer_id == 99999
     assert trade.seller_id == 88888
     assert trade.buyer_fee == 100.0
@@ -113,7 +113,7 @@ def test_trade_timestamp_unique():
     trade1 = Trade(
         trade_id=1,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
         buyer_id=1,
         seller_id=2,
         buyer_fee=0.1,
@@ -124,7 +124,7 @@ def test_trade_timestamp_unique():
     trade2 = Trade(
         trade_id=2,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
         buyer_id=1,
         seller_id=2,
         buyer_fee=0.1,

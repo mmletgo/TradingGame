@@ -166,7 +166,7 @@ class Trainer:
         trade = Trade(
             trade_id=data.get("trade_id", 0),
             price=data.get("price", 0.0),
-            quantity=data.get("quantity", 0.0),
+            quantity=int(data.get("quantity", 0)),  # 确保是 int
             buyer_id=data.get("buyer_id", 0),
             seller_id=data.get("seller_id", 0),
             buyer_fee=data.get("buyer_fee", 0.0),
@@ -189,7 +189,7 @@ class Trainer:
                 side=side,
                 order_type=OrderType.MARKET,
                 price=0.0,  # 市价单不需要价格
-                quantity=abs(quantity),
+                quantity=abs(int(quantity)),  # 确保是 int
             )
             self.matching_engine.process_order(order)
 

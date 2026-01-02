@@ -32,7 +32,7 @@ class Trade:
         self,
         trade_id: int,
         price: float,
-        quantity: float,
+        quantity: int,
         buyer_id: int,
         seller_id: int,
         buyer_fee: float,

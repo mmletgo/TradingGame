@@ -25,7 +25,7 @@ cdef class PriceLevel:
 
     cdef public double price
     cdef public object orders  # OrderedDict: order_id -> Order
-    cdef public double total_quantity
+    cdef public int total_quantity
 
     def __init__(self, price: float) -> None:
         """
@@ -36,7 +36,7 @@ cdef class PriceLevel:
         """
         self.price = price
         self.orders = OrderedDict()  # order_id -> Order，保持 FIFO 顺序
-        self.total_quantity = 0.0  # 总数量
+        self.total_quantity = 0  # 总数量
 
     def add_order(self, order: "Order") -> None:
         """
@@ -67,7 +67,7 @@ cdef class PriceLevel:
             return order
         return None
 
-    def get_volume(self) -> float:
+    def get_volume(self) -> int:
         """
         获取该价格档位的总挂单量
 

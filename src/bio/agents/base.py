@@ -351,7 +351,7 @@ class Agent:
 
         return quantity
 
-    def _place_limit_order(self, side: OrderSide, price: float, quantity: float, event_bus: EventBus) -> None:
+    def _place_limit_order(self, side: OrderSide, price: float, quantity: int, event_bus: EventBus) -> None:
         """创建并发布限价单
 
         Args:
@@ -372,7 +372,7 @@ class Agent:
         event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
         event_bus.publish(event)
 
-    def _place_market_order(self, side: OrderSide, quantity: float, event_bus: EventBus) -> None:
+    def _place_market_order(self, side: OrderSide, quantity: int, event_bus: EventBus) -> None:
         """创建并发布市价单
 
         Args:
@@ -525,7 +525,7 @@ class Agent:
         self,
         side: OrderSide,
         price: float,
-        quantity: float,
+        quantity: int,
         matching_engine: "MatchingEngine",
     ) -> list[Trade]:
         """直接下限价单（训练模式）
@@ -565,7 +565,7 @@ class Agent:
     def _place_market_order_direct(
         self,
         side: OrderSide,
-        quantity: float,
+        quantity: int,
         matching_engine: "MatchingEngine",
     ) -> list[Trade]:
         """直接下市价单（训练模式）

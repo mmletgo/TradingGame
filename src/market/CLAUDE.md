@@ -35,9 +35,18 @@
 
 订单簿实现，使用 Cython 加速，支持买卖各 100 档。
 
+**核心类型说明：**
+- `Order.quantity: int` - 订单数量（整数）
+- `Order.filled_quantity: int` - 已成交数量（整数）
+- `PriceLevel.total_quantity: int` - 价格档位总数量（整数）
+- `get_volume() -> int` - 返回订单簿总成交量（整数）
+
 ### matching/
 
 撮合引擎，实现价格优先、时间优先的撮合规则。
+
+**核心类型说明：**
+- `Trade.quantity: int` - 成交数量（整数）
 
 ### account/
 
@@ -46,6 +55,9 @@
 - 余额管理
 - 保证金计算
 - 强平逻辑
+
+**核心类型说明：**
+- `Position.quantity: int` - 持仓数量（整数，正数为多仓，负数为空仓）
 
 ## 依赖关系
 

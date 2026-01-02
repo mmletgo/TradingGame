@@ -87,15 +87,15 @@ Agent 基类，提供通用属性和方法。
 - 输出[7]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
 - 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
 
-**订单数量约束：** 所有订单数量必须为正整数（最小为 1）。`_calculate_order_quantity` 方法会将计算结果取整并确保至少为 1。
+**订单数量约束：** 所有订单数量（quantity）均为 int 类型，最小单位为 1。`_calculate_order_quantity` 方法会将计算结果取整并确保至少为 1。
 
 **价格舍入**：所有订单价格都会舍入到 `tick_size` 的整数倍，避免浮点数精度问题导致订单簿数据不一致。
 
-#### `_place_limit_order(side: OrderSide, price: float, quantity: float, event_bus: EventBus) -> None`
-创建并发布限价单的私有辅助方法。被 `execute_action` 中的 PLACE_BID 和 PLACE_ASK 动作调用。
+#### `_place_limit_order(side: OrderSide, price: float, quantity: int, event_bus: EventBus) -> None`
+创建并发布限价单的私有辅助方法。被 `execute_action` 中的 PLACE_BID 和 PLACE_ASK 动作调用。quantity 参数为 int 类型。
 
-#### `_place_market_order(side: OrderSide, quantity: float, event_bus: EventBus) -> None`
-创建并发布市价单的私有辅助方法。被 `execute_action` 中的 MARKET_BUY、MARKET_SELL 和 CLEAR_POSITION 动作调用。
+#### `_place_market_order(side: OrderSide, quantity: int, event_bus: EventBus) -> None`
+创建并发布市价单的私有辅助方法。被 `execute_action` 中的 MARKET_BUY、MARKET_SELL 和 CLEAR_POSITION 动作调用。quantity 参数为 int 类型。
 
 #### `_init_action_handlers() -> None`
 初始化动作分发表。将动作类型映射到对应的处理函数：
@@ -127,11 +127,11 @@ Agent 基类，提供通用属性和方法。
 - **WhaleAgent**: 所有动作都先撤旧单
 - **MarketMakerAgent**: QUOTE 先撤所有旧单再双边挂单，CLEAR_POSITION 先撤单再平仓
 
-#### `_place_limit_order_direct(side, price, quantity, matching_engine) -> list[Trade]`
-直接下限价单（训练模式）。创建订单，调用撮合引擎处理，更新账户，返回成交列表。
+#### `_place_limit_order_direct(side, price, quantity: int, matching_engine) -> list[Trade]`
+直接下限价单（训练模式）。创建订单，调用撮合引擎处理，更新账户，返回成交列表。quantity 参数为 int 类型。
 
-#### `_place_market_order_direct(side, quantity, matching_engine) -> list[Trade]`
-直接下市价单（训练模式）。创建订单，调用撮合引擎处理，更新账户，返回成交列表。
+#### `_place_market_order_direct(side, quantity: int, matching_engine) -> list[Trade]`
+直接下市价单（训练模式）。创建订单，调用撮合引擎处理，更新账户，返回成交列表。quantity 参数为 int 类型。
 
 #### `_handle_clear_position_direct(matching_engine) -> list[Trade]`
 直接处理清仓（训练模式）。根据持仓方向下市价单平仓。

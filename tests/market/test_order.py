@@ -16,7 +16,7 @@ def test_create_limit_buy_order():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.5,
-        quantity=10.0,
+        quantity=10,
     )
 
     assert order.order_id == 1
@@ -24,8 +24,8 @@ def test_create_limit_buy_order():
     assert order.side == OrderSide.BUY
     assert order.order_type == OrderType.LIMIT
     assert order.price == 100.5
-    assert order.quantity == 10.0
-    assert order.filled_quantity == 0.0
+    assert order.quantity == 10
+    assert order.filled_quantity == 0
     assert order.timestamp > 0
 
 
@@ -37,7 +37,7 @@ def test_create_limit_sell_order():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=99.8,
-        quantity=5.0,
+        quantity=5,
     )
 
     assert order.order_id == 2
@@ -45,8 +45,8 @@ def test_create_limit_sell_order():
     assert order.side == OrderSide.SELL
     assert order.order_type == OrderType.LIMIT
     assert order.price == 99.8
-    assert order.quantity == 5.0
-    assert order.filled_quantity == 0.0
+    assert order.quantity == 5
+    assert order.filled_quantity == 0
 
 
 def test_create_market_buy_order():
@@ -57,7 +57,7 @@ def test_create_market_buy_order():
         side=OrderSide.BUY,
         order_type=OrderType.MARKET,
         price=0.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     assert order.order_id == 3
@@ -65,8 +65,8 @@ def test_create_market_buy_order():
     assert order.side == OrderSide.BUY
     assert order.order_type == OrderType.MARKET
     assert order.price == 0.0
-    assert order.quantity == 20.0
-    assert order.filled_quantity == 0.0
+    assert order.quantity == 20
+    assert order.filled_quantity == 0
 
 
 def test_create_market_sell_order():
@@ -77,7 +77,7 @@ def test_create_market_sell_order():
         side=OrderSide.SELL,
         order_type=OrderType.MARKET,
         price=0.0,
-        quantity=15.0,
+        quantity=15,
     )
 
     assert order.order_id == 4
@@ -85,8 +85,8 @@ def test_create_market_sell_order():
     assert order.side == OrderSide.SELL
     assert order.order_type == OrderType.MARKET
     assert order.price == 0.0
-    assert order.quantity == 15.0
-    assert order.filled_quantity == 0.0
+    assert order.quantity == 15
+    assert order.filled_quantity == 0
 
 
 def test_timestamp_is_set():
@@ -98,7 +98,7 @@ def test_timestamp_is_set():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=1.0,
+        quantity=1,
     )
     after = time.time()
 
@@ -113,10 +113,10 @@ def test_filled_quantity_initial_zero():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
 
-    assert order.filled_quantity == 0.0
+    assert order.filled_quantity == 0
 
 
 def test_order_side_enum_values():

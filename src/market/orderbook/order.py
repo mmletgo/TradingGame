@@ -34,7 +34,7 @@ class Order:
         side: OrderSide,
         order_type: OrderType,
         price: float,
-        quantity: float,
+        quantity: int,
         timestamp: float = 0.0,
     ) -> None:
         """
@@ -54,6 +54,6 @@ class Order:
         self.side: OrderSide = side
         self.order_type: OrderType = order_type
         self.price: float = price
-        self.quantity: float = quantity
-        self.filled_quantity: float = 0.0
+        self.quantity: int = quantity
+        self.filled_quantity: int = 0
         self.timestamp: float = timestamp

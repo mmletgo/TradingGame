@@ -16,7 +16,7 @@ def test_create_price_level():
     assert level.price == 100.5
     assert isinstance(level.orders, OrderedDict)
     assert len(level.orders) == 0
-    assert level.total_quantity == 0.0
+    assert level.total_quantity == 0
 
 
 def test_create_price_level_zero():
@@ -26,7 +26,7 @@ def test_create_price_level_zero():
     assert level.price == 0.0
     assert isinstance(level.orders, OrderedDict)
     assert len(level.orders) == 0
-    assert level.total_quantity == 0.0
+    assert level.total_quantity == 0
 
 
 def test_create_price_level_negative():
@@ -36,7 +36,7 @@ def test_create_price_level_negative():
     assert level.price == -10.0
     assert isinstance(level.orders, OrderedDict)
     assert len(level.orders) == 0
-    assert level.total_quantity == 0.0
+    assert level.total_quantity == 0
 
 
 def test_add_order_single():
@@ -48,14 +48,14 @@ def test_add_order_single():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.5,
-        quantity=10.0,
+        quantity=10,
     )
 
     level.add_order(order)
 
     assert len(level.orders) == 1
     assert level.orders[1] is order
-    assert level.total_quantity == 10.0
+    assert level.total_quantity == 10
 
 
 def test_add_order_multiple():
@@ -67,7 +67,7 @@ def test_add_order_multiple():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=5.0,
+        quantity=5,
     )
     order2 = Order(
         order_id=2,
@@ -75,7 +75,7 @@ def test_add_order_multiple():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=15.0,
+        quantity=15,
     )
     order3 = Order(
         order_id=3,
@@ -83,7 +83,7 @@ def test_add_order_multiple():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=7.5,
+        quantity=7,
     )
 
     level.add_order(order1)
@@ -96,7 +96,7 @@ def test_add_order_multiple():
     assert orders_list[0] is order1
     assert orders_list[1] is order2
     assert orders_list[2] is order3
-    assert level.total_quantity == 27.5
+    assert level.total_quantity == 27
 
 
 def test_remove_order_exists():
@@ -108,7 +108,7 @@ def test_remove_order_exists():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -116,7 +116,7 @@ def test_remove_order_exists():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     level.add_order(order1)
@@ -129,7 +129,7 @@ def test_remove_order_exists():
     assert len(level.orders) == 1
     assert 1 not in level.orders
     assert 2 in level.orders
-    assert level.total_quantity == 20.0
+    assert level.total_quantity == 20
 
 
 def test_remove_order_not_exists():
@@ -141,7 +141,7 @@ def test_remove_order_not_exists():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
 
     level.add_order(order1)
@@ -151,7 +151,7 @@ def test_remove_order_not_exists():
 
     assert removed is None
     assert len(level.orders) == 1
-    assert level.total_quantity == 10.0
+    assert level.total_quantity == 10
 
 
 def test_remove_order_empty():
@@ -162,7 +162,7 @@ def test_remove_order_empty():
 
     assert removed is None
     assert len(level.orders) == 0
-    assert level.total_quantity == 0.0
+    assert level.total_quantity == 0
 
 
 def test_remove_order_fifo_preserved():
@@ -174,7 +174,7 @@ def test_remove_order_fifo_preserved():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=5.0,
+        quantity=5,
     )
     order2 = Order(
         order_id=2,
@@ -182,7 +182,7 @@ def test_remove_order_fifo_preserved():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=15.0,
+        quantity=15,
     )
     order3 = Order(
         order_id=3,
@@ -190,7 +190,7 @@ def test_remove_order_fifo_preserved():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=7.5,
+        quantity=7,
     )
 
     level.add_order(order1)
@@ -205,14 +205,14 @@ def test_remove_order_fifo_preserved():
     assert len(orders_list) == 2
     assert orders_list[0] is order1
     assert orders_list[1] is order3
-    assert level.total_quantity == 12.5  # 5.0 + 7.5
+    assert level.total_quantity == 12  # 5 + 7
 
 
 def test_get_volume_empty():
     """测试空档位返回0"""
     level = PriceLevel(price=100.0)
 
-    assert level.get_volume() == 0.0
+    assert level.get_volume() == 0
 
 
 def test_get_volume_with_orders():
@@ -224,7 +224,7 @@ def test_get_volume_with_orders():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -232,13 +232,13 @@ def test_get_volume_with_orders():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.5,
+        quantity=20,
     )
 
     level.add_order(order1)
     level.add_order(order2)
 
-    assert level.get_volume() == 30.5
+    assert level.get_volume() == 30
 
 
 def test_create_orderbook_default():
@@ -272,7 +272,7 @@ def test_add_order_buy():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
 
     book.add_order(order)
@@ -281,7 +281,7 @@ def test_add_order_buy():
     assert 100.0 in book.bids
     assert len(book.bids) == 1
     assert book.bids[100.0].price == 100.0
-    assert book.bids[100.0].total_quantity == 10.0
+    assert book.bids[100.0].total_quantity == 10
     # 验证订单映射
     assert 1 in book.order_map
     assert book.order_map[1] is order
@@ -298,7 +298,7 @@ def test_add_order_sell():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
 
     book.add_order(order)
@@ -307,7 +307,7 @@ def test_add_order_sell():
     assert 100.0 in book.asks
     assert len(book.asks) == 1
     assert book.asks[100.0].price == 100.0
-    assert book.asks[100.0].total_quantity == 10.0
+    assert book.asks[100.0].total_quantity == 10
     # 验证订单映射
     assert 1 in book.order_map
     assert book.order_map[1] is order
@@ -324,7 +324,7 @@ def test_add_order_existing_level():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -332,7 +332,7 @@ def test_add_order_existing_level():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(order1)
@@ -342,7 +342,7 @@ def test_add_order_existing_level():
     assert len(book.bids) == 1
     assert 100.0 in book.bids
     # 验证档位总量
-    assert book.bids[100.0].total_quantity == 30.0
+    assert book.bids[100.0].total_quantity == 30
     # 验证档位中有两个订单
     assert len(book.bids[100.0].orders) == 2
     # 验证订单映射
@@ -359,7 +359,7 @@ def test_add_order_different_prices():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -367,7 +367,7 @@ def test_add_order_different_prices():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.5,
-        quantity=20.0,
+        quantity=20,
     )
     order3 = Order(
         order_id=3,
@@ -375,7 +375,7 @@ def test_add_order_different_prices():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.5,
-        quantity=15.0,
+        quantity=15,
     )
 
     book.add_order(order1)
@@ -388,9 +388,9 @@ def test_add_order_different_prices():
     assert 99.5 in book.bids
     assert 100.5 in book.bids
     # 验证每个档位的数量
-    assert book.bids[100.0].total_quantity == 10.0
-    assert book.bids[99.5].total_quantity == 20.0
-    assert book.bids[100.5].total_quantity == 15.0
+    assert book.bids[100.0].total_quantity == 10
+    assert book.bids[99.5].total_quantity == 20
+    assert book.bids[100.5].total_quantity == 15
 
 
 def test_add_order_both_sides():
@@ -402,7 +402,7 @@ def test_add_order_both_sides():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     sell_order = Order(
         order_id=2,
@@ -410,7 +410,7 @@ def test_add_order_both_sides():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(buy_order)
@@ -421,8 +421,8 @@ def test_add_order_both_sides():
     assert len(book.asks) == 1
     assert 100.0 in book.bids
     assert 100.0 in book.asks
-    assert book.bids[100.0].total_quantity == 10.0
-    assert book.asks[100.0].total_quantity == 20.0
+    assert book.bids[100.0].total_quantity == 10
+    assert book.asks[100.0].total_quantity == 20
     # 验证订单映射
     assert 1 in book.order_map
     assert 2 in book.order_map
@@ -437,7 +437,7 @@ def test_cancel_order_exists_buy():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     book.add_order(order)
 
@@ -461,7 +461,7 @@ def test_cancel_order_exists_sell():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     book.add_order(order)
 
@@ -485,7 +485,7 @@ def test_cancel_order_not_exists():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     book.add_order(order)
 
@@ -508,7 +508,7 @@ def test_cancel_order_multiple_same_price():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -516,7 +516,7 @@ def test_cancel_order_multiple_same_price():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
     order3 = Order(
         order_id=3,
@@ -524,7 +524,7 @@ def test_cancel_order_multiple_same_price():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=15.0,
+        quantity=15,
     )
 
     book.add_order(order1)
@@ -540,7 +540,7 @@ def test_cancel_order_multiple_same_price():
     assert 100.0 in book.bids
     assert len(book.bids) == 1
     # 验证档位总量正确
-    assert book.bids[100.0].total_quantity == 25.0  # 10 + 15
+    assert book.bids[100.0].total_quantity == 25  # 10 + 15
     # 验证订单映射
     assert 1 in book.order_map
     assert 2 not in book.order_map
@@ -556,7 +556,7 @@ def test_cancel_order_removes_level_if_empty():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -564,7 +564,7 @@ def test_cancel_order_removes_level_if_empty():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=101.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(order1)
@@ -590,7 +590,7 @@ def test_get_best_bid_with_orders():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.5,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -598,7 +598,7 @@ def test_get_best_bid_with_orders():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
     order3 = Order(
         order_id=3,
@@ -606,7 +606,7 @@ def test_get_best_bid_with_orders():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.0,
-        quantity=15.0,
+        quantity=15,
     )
 
     book.add_order(order1)
@@ -626,7 +626,7 @@ def test_get_best_bid_single_order():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.5,
-        quantity=10.0,
+        quantity=10,
     )
 
     book.add_order(order)
@@ -650,7 +650,7 @@ def test_get_best_bid_after_cancellation():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -658,7 +658,7 @@ def test_get_best_bid_after_cancellation():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.5,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(order1)
@@ -683,7 +683,7 @@ def test_get_best_bid_ignores_asks():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.0,
-        quantity=10.0,
+        quantity=10,
     )
     sell_order = Order(
         order_id=2,
@@ -691,7 +691,7 @@ def test_get_best_bid_ignores_asks():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=98.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(buy_order)
@@ -710,7 +710,7 @@ def test_get_best_ask_with_orders():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.5,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -718,7 +718,7 @@ def test_get_best_ask_with_orders():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
     order3 = Order(
         order_id=3,
@@ -726,7 +726,7 @@ def test_get_best_ask_with_orders():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=101.0,
-        quantity=15.0,
+        quantity=15,
     )
 
     book.add_order(order1)
@@ -746,7 +746,7 @@ def test_get_best_ask_single_order():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.5,
-        quantity=10.0,
+        quantity=10,
     )
 
     book.add_order(order)
@@ -770,7 +770,7 @@ def test_get_best_ask_after_cancellation():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -778,7 +778,7 @@ def test_get_best_ask_after_cancellation():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.5,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(order1)
@@ -803,7 +803,7 @@ def test_get_best_ask_ignores_bids():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=101.0,
-        quantity=10.0,
+        quantity=10,
     )
     buy_order = Order(
         order_id=2,
@@ -811,7 +811,7 @@ def test_get_best_ask_ignores_bids():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=102.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(sell_order)
@@ -830,7 +830,7 @@ def test_get_depth_default_levels():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -838,7 +838,7 @@ def test_get_depth_default_levels():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.5,
-        quantity=20.0,
+        quantity=20,
     )
     order3 = Order(
         order_id=3,
@@ -846,7 +846,7 @@ def test_get_depth_default_levels():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=101.0,
-        quantity=15.0,
+        quantity=15,
     )
     order4 = Order(
         order_id=4,
@@ -854,7 +854,7 @@ def test_get_depth_default_levels():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=101.5,
-        quantity=25.0,
+        quantity=25,
     )
 
     book.add_order(order1)
@@ -868,9 +868,9 @@ def test_get_depth_default_levels():
     assert "bids" in depth
     assert "asks" in depth
     # 验证买盘：按价格从高到低
-    assert depth["bids"] == [(100.0, 10.0), (99.5, 20.0)]
+    assert depth["bids"] == [(100.0, 10), (99.5, 20)]
     # 验证卖盘：按价格从低到高
-    assert depth["asks"] == [(101.0, 15.0), (101.5, 25.0)]
+    assert depth["asks"] == [(101.0, 15), (101.5, 25)]
 
 
 def test_get_depth_custom_levels():
@@ -884,7 +884,7 @@ def test_get_depth_custom_levels():
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
             price=100.0 - i * 0.5,
-            quantity=10.0 + i,
+            quantity=10 + i,
         )
         book.add_order(order)
     # 添加5个卖盘档位
@@ -895,7 +895,7 @@ def test_get_depth_custom_levels():
             side=OrderSide.SELL,
             order_type=OrderType.LIMIT,
             price=101.0 + i * 0.5,
-            quantity=20.0 + i,
+            quantity=20 + i,
         )
         book.add_order(order)
 
@@ -905,13 +905,13 @@ def test_get_depth_custom_levels():
     assert len(depth["bids"]) == 3
     assert len(depth["asks"]) == 3
     # 买盘前3档：100.0, 99.5, 99.0
-    assert depth["bids"][0] == (100.0, 10.0)
-    assert depth["bids"][1] == (99.5, 11.0)
-    assert depth["bids"][2] == (99.0, 12.0)
+    assert depth["bids"][0] == (100.0, 10)
+    assert depth["bids"][1] == (99.5, 11)
+    assert depth["bids"][2] == (99.0, 12)
     # 卖盘前3档：101.0, 101.5, 102.0
-    assert depth["asks"][0] == (101.0, 20.0)
-    assert depth["asks"][1] == (101.5, 21.0)
-    assert depth["asks"][2] == (102.0, 22.0)
+    assert depth["asks"][0] == (101.0, 20)
+    assert depth["asks"][1] == (101.5, 21)
+    assert depth["asks"][2] == (102.0, 22)
 
 
 def test_get_depth_insufficient_levels():
@@ -923,7 +923,7 @@ def test_get_depth_insufficient_levels():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -931,7 +931,7 @@ def test_get_depth_insufficient_levels():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=101.0,
-        quantity=15.0,
+        quantity=15,
     )
 
     book.add_order(order1)
@@ -942,8 +942,8 @@ def test_get_depth_insufficient_levels():
 
     assert len(depth["bids"]) == 1
     assert len(depth["asks"]) == 1
-    assert depth["bids"] == [(100.0, 10.0)]
-    assert depth["asks"] == [(101.0, 15.0)]
+    assert depth["bids"] == [(100.0, 10)]
+    assert depth["asks"] == [(101.0, 15)]
 
 
 def test_get_depth_empty_orderbook():
@@ -965,7 +965,7 @@ def test_get_depth_one_side_empty():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -973,7 +973,7 @@ def test_get_depth_one_side_empty():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.5,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(order1)
@@ -983,7 +983,7 @@ def test_get_depth_one_side_empty():
 
     # 买盘有数据
     assert len(depth["bids"]) == 2
-    assert depth["bids"] == [(100.0, 10.0), (99.5, 20.0)]
+    assert depth["bids"] == [(100.0, 10), (99.5, 20)]
     # 卖盘为空
     assert depth["asks"] == []
 
@@ -997,7 +997,7 @@ def test_get_depth_aggregates_same_price():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     order2 = Order(
         order_id=2,
@@ -1005,7 +1005,7 @@ def test_get_depth_aggregates_same_price():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
     order3 = Order(
         order_id=3,
@@ -1013,7 +1013,7 @@ def test_get_depth_aggregates_same_price():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.5,
-        quantity=15.0,
+        quantity=15,
     )
 
     book.add_order(order1)
@@ -1022,10 +1022,10 @@ def test_get_depth_aggregates_same_price():
 
     depth = book.get_depth()
 
-    # 100.0 档位应该有两个订单，数量聚合为 30.0
+    # 100.0 档位应该有两个订单，数量聚合为 30
     assert len(depth["bids"]) == 2
-    assert depth["bids"][0] == (100.0, 30.0)
-    assert depth["bids"][1] == (99.5, 15.0)
+    assert depth["bids"][0] == (100.0, 30)
+    assert depth["bids"][1] == (99.5, 15)
 
 
 def test_get_mid_price_normal():
@@ -1037,7 +1037,7 @@ def test_get_mid_price_normal():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     sell_order = Order(
         order_id=2,
@@ -1045,7 +1045,7 @@ def test_get_mid_price_normal():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=102.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(buy_order)
@@ -1064,7 +1064,7 @@ def test_get_mid_price_only_bids():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
 
     book.add_order(buy_order)
@@ -1081,7 +1081,7 @@ def test_get_mid_price_only_asks():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
 
     book.add_order(sell_order)
@@ -1105,7 +1105,7 @@ def test_get_mid_price_same_price():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=10.0,
+        quantity=10,
     )
     sell_order = Order(
         order_id=2,
@@ -1113,7 +1113,7 @@ def test_get_mid_price_same_price():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
 
     book.add_order(buy_order)
@@ -1133,7 +1133,7 @@ def test_get_mid_price_multiple_levels():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=99.0,
-        quantity=10.0,
+        quantity=10,
     )
     buy_order2 = Order(
         order_id=2,
@@ -1141,7 +1141,7 @@ def test_get_mid_price_multiple_levels():
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         price=100.0,
-        quantity=20.0,
+        quantity=20,
     )
     # 添加多个卖盘档位
     sell_order1 = Order(
@@ -1150,7 +1150,7 @@ def test_get_mid_price_multiple_levels():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=102.0,
-        quantity=15.0,
+        quantity=15,
     )
     sell_order2 = Order(
         order_id=4,
@@ -1158,7 +1158,7 @@ def test_get_mid_price_multiple_levels():
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
         price=101.0,
-        quantity=25.0,
+        quantity=25,
     )
 
     book.add_order(buy_order1)

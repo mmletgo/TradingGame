@@ -74,7 +74,7 @@
 **属性：**
 - `trade_id: int` - 成交ID
 - `price: float` - 成交价格
-- `quantity: float` - 成交数量
+- `quantity: int` - 成交数量（整数）
 - `buyer_id: int` - 买方Agent ID
 - `seller_id: int` - 卖方Agent ID
 - `buyer_fee: float` - 买方手续费
@@ -115,15 +115,9 @@ Agent._on_trade_event() 处理成交
 - 预计算 taker 费率到循环外，避免重复查找
 - 内联费率计算，避免 `calculate_fee()` 函数调用开销
 - **部分成交时同步更新 `PriceLevel.total_quantity`**：确保 UI 显示的档位数量与实际剩余数量一致
-- **防无限循环保护**：
-  1. **最小数量阈值 `MIN_QTY=1e-9`**：用于检测浮点精度问题导致的微量订单，小于此阈值的数量视为 0
-  2. **僵尸订单检测**：在遍历档位订单时，检测订单是否在 `order_map` 中，如果不在则直接从 `price_level.orders` 中移除
-  3. **残单清理**：使用 `maker_remaining <= MIN_QTY` 检测残单并调用 `cancel_order` 移除
-  4. **完全成交判断优化**：使用 `maker_remaining_after <= MIN_QTY` 判断订单是否完全成交，避免浮点精度问题产生残单
-  5. **空档位清理**：在 for 循环结束后检查档位是否为空，如果为空则从 `side_book` 中删除
-  6. **改进的进展检测**：只有当没有任何状态变化（无成交、无清理订单）时才计为无进展，连续 100 次无进展则退出撮合
-  7. **最大迭代次数限制**：撮合循环最多迭代 100000 次，超过后强制终止并记录错误日志
-  8. **价格档位不一致检测**：当 `get_best_ask/bid` 返回的价格不在对应盘口中时，终止撮合
+- **订单数量为整数**：所有订单数量（quantity）均为 int 类型，消除了浮点精度问题，简化了撮合逻辑
+- **僵尸订单检测**：在遍历档位订单时，检测订单是否在 `order_map` 中，如果不在则直接从 `price_level.orders` 中移除
+- **空档位清理**：在 for 循环结束后检查档位是否为空，如果为空则从 `side_book` 中删除
 
 ### Trade 时间戳优化
 训练模式使用固定时间戳 `0.0`，避免 `time.time()` 调用开销。
