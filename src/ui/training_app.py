@@ -119,7 +119,8 @@ class TrainingUIApp:
 
         布局结构：
         - 顶部：控制面板（开始/暂停/停止按钮，状态显示）
-        - 主内容区（水平布局）：订单簿(300w) | 图表区(中间) | 成交记录(右侧250w)
+        - 主内容区（水平布局）：订单簿(280w) | 图表区(1150w) | 成交记录(280w)
+        总宽度：280 + 1150 + 280 = 1710（留出边距给1920屏幕）
         """
         with dpg.window(
             label="主窗口",
@@ -129,6 +130,7 @@ class TrainingUIApp:
             no_title_bar=True,
             no_move=True,
             no_resize=True,
+            no_scrollbar=True,
         ):
             # 控制面板（顶部）
             self.control_panel = ControlPanel(

@@ -13,6 +13,11 @@ class OrderBookPanel:
     显示深度图和价格列表。
     """
 
+    # 面板配置
+    PANEL_WIDTH: int = 280
+    DEPTH_CHART_HEIGHT: int = 180
+    TABLE_HEIGHT: int = 280
+
     def __init__(self) -> None:
         """初始化订单簿面板
 
@@ -22,12 +27,12 @@ class OrderBookPanel:
 
     def _setup_ui(self) -> None:
         """创建UI组件"""
-        with dpg.child_window(width=350, height=-1):
+        with dpg.child_window(width=self.PANEL_WIDTH, height=-1, no_scrollbar=True):
             dpg.add_text("订单簿", color=(255, 255, 0))
             dpg.add_separator()
 
             # 深度图（使用 shade series）
-            with dpg.plot(label="深度图", height=200, width=-1, tag=self._make_tag("depth_plot")):
+            with dpg.plot(label="深度图", height=self.DEPTH_CHART_HEIGHT, width=-1, tag=self._make_tag("depth_plot")):
                 dpg.add_plot_axis(dpg.mvXAxis, label="价格", tag=self._make_tag("depth_x"))
                 dpg.add_plot_axis(dpg.mvYAxis, label="累计量", tag=self._make_tag("depth_y"))
 
@@ -51,7 +56,7 @@ class OrderBookPanel:
             with dpg.table(header_row=True, tag=self._make_tag("ask_table"),
                           borders_innerH=True, borders_outerH=True,
                           borders_innerV=True, borders_outerV=True,
-                          scrollY=False, height=200):
+                          scrollY=False, height=self.TABLE_HEIGHT):
                 dpg.add_table_column(label="价格")
                 dpg.add_table_column(label="数量")
 
@@ -61,7 +66,7 @@ class OrderBookPanel:
             with dpg.table(header_row=True, tag=self._make_tag("bid_table"),
                           borders_innerH=True, borders_outerH=True,
                           borders_innerV=True, borders_outerV=True,
-                          scrollY=False, height=200):
+                          scrollY=False, height=self.TABLE_HEIGHT):
                 dpg.add_table_column(label="价格")
                 dpg.add_table_column(label="数量")
 

@@ -38,6 +38,12 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 
 修改代码后必须执行以下命令，否则可能因缓存问题导致运行时卡住或行为异常：
 
+**一键执行（推荐）：**
+```bash
+./rebuild.sh
+```
+
+**手动执行：**
 ```bash
 # 1. 清理所有 Python 缓存和编译文件
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null

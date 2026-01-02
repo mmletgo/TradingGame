@@ -213,14 +213,20 @@ controller.stop()
 **构造参数：**
 - 无参数，组件会自动添加到当前DearPyGui上下文中
 
+**类常量：**
+- `PANEL_WIDTH: int = 280` - 面板宽度
+- `DEPTH_CHART_HEIGHT: int = 180` - 深度图高度
+- `TABLE_HEIGHT: int = 280` - 价格表格高度
+
 **方法：**
 - `update(bids, asks) -> None` - 更新订单簿数据
   - `bids: list[tuple[float, float]]` - 买盘数据 [(price, qty), ...]
   - `asks: list[tuple[float, float]]` - 卖盘数据 [(price, qty), ...]
 
 **功能：**
-- 深度图：使用shade_series显示买卖盘累计量，买盘绿色，卖盘红色
+- 深度图：使用area_series显示买卖盘累计量，买盘绿色，卖盘红色
 - 价格列表：显示前10档买卖盘价格和数量
+- 面板宽度280px，无滚动条
 
 ### ChartPanel
 
@@ -228,6 +234,12 @@ controller.stop()
 
 **构造参数：**
 - 无参数，组件会自动添加到当前DearPyGui上下文中
+
+**类常量：**
+- `PANEL_WIDTH: int = 1150` - 面板总宽度
+- `EQUITY_PLOT_WIDTH: int = 550` - 每个资产图表宽度
+- `EQUITY_PLOT_HEIGHT: int = 180` - 每个资产图表高度
+- `PRICE_PLOT_HEIGHT: int = 150` - 价格图表高度
 
 **方法：**
 - `update_price(price_history) -> None` - 更新价格曲线
@@ -237,15 +249,15 @@ controller.stop()
   - `population_stats: dict[AgentType, PopulationStats]` - 各种群统计信息
 
 **布局：**
-- 价格走势图：高度200
+- 价格走势图：高度150px，宽度自适应
 - 4个独立的资产图表（2x2网格）：
   - 左上：散户资产图
   - 右上：高级散户资产图
   - 左下：庄家资产图
   - 右下：做市商资产图
-- 每个资产图表高度160，宽度自适应
+- 每个资产图表：高度180px，宽度550px（固定宽度确保2x2网格正确排列）
 - 每个图表标题显示种群名称
-- 统计文字显示在4个图表下方
+- 统计文字水平排列显示在4个图表下方（节省垂直空间）
 
 **颜色配置：**
 - 散户: 绿色 (100, 200, 100)
@@ -260,19 +272,23 @@ controller.stop()
 
 ### TradesPanel
 
-成交记录面板，显示最近20笔成交记录。
+成交记录面板，显示最近成交记录。
 
 **构造参数：**
 - 无参数，组件会自动添加到当前DearPyGui上下文中
+
+**类常量：**
+- `PANEL_WIDTH: int = 280` - 面板宽度
+- `MAX_DISPLAY_TRADES: int = 30` - 最大显示条数
 
 **方法：**
 - `update(trades) -> None` - 更新成交记录
   - `trades: list[TradeInfo]` - 成交记录列表
 
 **显示格式：**
-- 最新20笔成交，倒序显示（最新在上）
+- 最新30笔成交，倒序显示（最新在上）
 - 买入绿色，卖出红色
-- 面板高度自适应，表格无滚动条
+- 面板宽度280px，无滚动条
 
 ### ControlPanel
 
@@ -335,7 +351,7 @@ from src.ui.components import OrderBookPanel, ChartPanel, TradesPanel, ControlPa
 
 dpg.create_context()
 
-with dpg.window(label="TradingGame", tag="main_window"):
+with dpg.window(label="TradingGame", tag="main_window", no_scrollbar=True):
     # 控制面板（自动添加到当前窗口上下文）
     control = ControlPanel(
         on_start=lambda: controller.start_demo(),
@@ -344,15 +360,16 @@ with dpg.window(label="TradingGame", tag="main_window"):
 
     dpg.add_separator()
 
-    # 主内容区（水平三栏布局：订单簿 | 图表 | 成交记录）
+    # 主内容区（水平三栏布局：订单簿(280w) | 图表(1150w) | 成交记录(280w)）
+    # 总宽度约1710px，适配1920px屏幕
     with dpg.group(horizontal=True):
-        # 左侧：订单簿（自动添加到当前group上下文）
+        # 左侧：订单簿（宽度280px）
         orderbook = OrderBookPanel()
 
-        # 中间：图表
+        # 中间：图表（宽度1150px，包含4个2x2网格的资产图表）
         chart = ChartPanel()
 
-        # 右侧：成交记录
+        # 右侧：成交记录（宽度280px）
         trades = TradesPanel()
 
 # 数据更新循环

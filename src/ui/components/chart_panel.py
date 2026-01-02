@@ -47,6 +47,12 @@ class ChartPanel:
     显示价格曲线和种群资产曲线（2x2网格布局）。
     """
 
+    # 图表面板宽度配置
+    PANEL_WIDTH: int = 1150  # 总宽度(1920 - 订单簿270 - 成交记录250 - 边距)
+    EQUITY_PLOT_WIDTH: int = 550  # 每个资产图表宽度
+    EQUITY_PLOT_HEIGHT: int = 180  # 每个资产图表高度
+    PRICE_PLOT_HEIGHT: int = 150  # 价格图表高度
+
     def __init__(self) -> None:
         """初始化图表面板
 
@@ -56,10 +62,10 @@ class ChartPanel:
 
     def _setup_ui(self) -> None:
         """创建UI组件"""
-        with dpg.child_window(width=-1, height=-1):
+        with dpg.child_window(width=self.PANEL_WIDTH, height=-1, no_scrollbar=True):
             # 价格曲线
             dpg.add_text("价格走势", color=(255, 255, 0))
-            with dpg.plot(label="", height=200, width=-1, tag="price_plot"):
+            with dpg.plot(label="", height=self.PRICE_PLOT_HEIGHT, width=-1, tag="price_plot"):
                 dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag="price_x_axis")
                 dpg.add_plot_axis(dpg.mvYAxis, label="价格", tag="price_y_axis")
                 dpg.add_line_series([], [], label="价格",
@@ -84,13 +90,15 @@ class ChartPanel:
 
             dpg.add_separator()
 
-            # 种群统计信息
+            # 种群统计信息（水平排列节省空间）
             dpg.add_text("种群统计", color=(255, 255, 0))
-            for agent_type in AgentType:
-                color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
-                name = POPULATION_NAMES.get(agent_type, agent_type.value)
-                dpg.add_text(f"{name}: 均值: 0  存活: 0",
-                    tag=f"stat_{agent_type.value}", color=color)
+            with dpg.group(horizontal=True):
+                for agent_type in AgentType:
+                    color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
+                    name = POPULATION_NAMES.get(agent_type, agent_type.value)
+                    dpg.add_text(f"{name}: 均值: 0  存活: 0",
+                        tag=f"stat_{agent_type.value}", color=color)
+                    dpg.add_spacer(width=20)
 
     def _create_equity_plot(self, agent_type: AgentType) -> None:
         """创建单个种群的资产图表
@@ -99,11 +107,11 @@ class ChartPanel:
             agent_type: Agent类型
         """
         name = POPULATION_NAMES.get(agent_type, agent_type.value)
-        color = POPULATION_COLORS.get(agent_type, (200, 200, 200))
         tag_prefix = agent_type.value
 
-        with dpg.group():
-            with dpg.plot(label=name, height=160, width=-1, tag=f"equity_plot_{tag_prefix}"):
+        with dpg.group(width=self.EQUITY_PLOT_WIDTH):
+            with dpg.plot(label=name, height=self.EQUITY_PLOT_HEIGHT,
+                         width=self.EQUITY_PLOT_WIDTH, tag=f"equity_plot_{tag_prefix}"):
                 dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"equity_x_axis_{tag_prefix}")
                 dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"equity_y_axis_{tag_prefix}")
                 dpg.add_line_series([], [],
