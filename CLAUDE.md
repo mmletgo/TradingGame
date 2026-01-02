@@ -43,20 +43,6 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 ./rebuild.sh
 ```
 
-**手动执行：**
-```bash
-# 1. 清理所有 Python 缓存和编译文件
-find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
-find . -name "*.pyc" -delete 2>/dev/null
-find . -name "*.pyo" -delete 2>/dev/null
-find ./src -name "*.so" -delete 2>/dev/null
-find ./src -name "*.c" -delete 2>/dev/null
-rm -rf build/
-
-# 2. 重新编译 Cython 模块
-python setup.py build_ext --inplace
-```
-
 ## 核心架构
 
 ### 事件驱动架构
