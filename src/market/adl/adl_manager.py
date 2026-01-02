@@ -30,47 +30,29 @@ class ADLManager:
 
         self.logger = get_logger("adl")
 
-    def calculate_bankruptcy_price(
+    def get_adl_price(
         self,
-        agent: "Agent",
         current_price: float,
     ) -> float:
-        """计算破产价格（净值归零时的价格）
+        """获取 ADL 成交价格
 
-        多头：bankruptcy_price = avg_price - balance / |quantity|
-        空头：bankruptcy_price = avg_price + balance / |quantity|
+        ADL 机制简化：直接使用当前市场价格成交。
+
+        强平 ≠ 破产：被强平时 Agent 可能还有正的净值（只是保证金率过低），
+        因此不应该用"破产价格"来计算 ADL 成交价。
+
+        使用当前市场价格的好处：
+        - 简单公平：双方都以市场价成交
+        - 避免异常：不会因为穿仓导致价格异常
+        - 符合直觉：流动性不足时强制以当前价成交
 
         Args:
-            agent: Agent 对象
             current_price: 当前市场价格
 
         Returns:
-            破产价格（最小为 0.01）
+            ADL 成交价格（即当前市场价格）
         """
-        position = agent.account.position
-        balance = agent.account.balance
-        quantity = position.quantity
-
-        # 无持仓时返回当前价格
-        if quantity == 0:
-            return current_price
-
-        avg_price = position.avg_price
-        abs_quantity = abs(quantity)
-
-        if quantity > 0:
-            # 多头：价格下跌到破产价时净值归零
-            # 净值 = balance + (price - avg_price) * quantity = 0
-            # price = avg_price - balance / quantity
-            bankruptcy_price = avg_price - balance / abs_quantity
-        else:
-            # 空头：价格上涨到破产价时净值归零
-            # 净值 = balance + (avg_price - price) * |quantity| = 0
-            # price = avg_price + balance / |quantity|
-            bankruptcy_price = avg_price + balance / abs_quantity
-
-        # 破产价格下限为 0.01
-        return max(0.01, bankruptcy_price)
+        return current_price
 
     def calculate_adl_score(
         self,
@@ -203,7 +185,7 @@ class ADLManager:
         liquidated_agent: "Agent",
         remaining_qty: int,
         candidates: list[ADLCandidate],
-        bankruptcy_price: float,
+        adl_price: float,
         current_price: float,
     ) -> int:
         """执行 ADL 成交
@@ -215,8 +197,8 @@ class ADLManager:
             liquidated_agent: 被强平的 Agent
             remaining_qty: 剩余需要平仓的数量（正数）
             candidates: ADL 候选列表（已按排名排序）
-            bankruptcy_price: 成交价格（破产价格）
-            current_price: 当前市场价格（仅用于日志）
+            adl_price: ADL 成交价格（当前市场价格）
+            current_price: 当前市场价格（用于日志，与 adl_price 相同）
 
         Returns:
             剩余未能平仓的数量（理论上应为 0）
@@ -227,8 +209,7 @@ class ADLManager:
         self.logger.info(
             f"ADL 触发: Agent {liquidated_agent.agent_id} "
             f"剩余平仓量 {remaining_qty}, "
-            f"破产价 {bankruptcy_price:.2f}, "
-            f"当前价 {current_price:.2f}, "
+            f"成交价 {adl_price:.2f}, "
             f"候选人数 {len(candidates)}"
         )
 
@@ -244,12 +225,12 @@ class ADLManager:
                 continue
 
             # 立即更新账户，确保成交和账户更新同步
-            liquidated_agent.account.on_adl_trade(trade_qty, bankruptcy_price, is_taker=True)
-            candidate.agent.account.on_adl_trade(trade_qty, bankruptcy_price, is_taker=False)
+            liquidated_agent.account.on_adl_trade(trade_qty, adl_price, is_taker=True)
+            candidate.agent.account.on_adl_trade(trade_qty, adl_price, is_taker=False)
 
             self.logger.info(
                 f"ADL 成交: Agent {liquidated_agent.agent_id} 与 Agent {candidate.agent.agent_id} "
-                f"成交 {trade_qty} @ {bankruptcy_price:.2f}, "
+                f"成交 {trade_qty} @ {adl_price:.2f}, "
                 f"原持仓 {candidate.position_qty}, 实际持仓 {actual_position}"
             )
 

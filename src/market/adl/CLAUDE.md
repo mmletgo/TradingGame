@@ -35,14 +35,17 @@ ADL 自动减仓管理器。
 
 **方法：**
 
-#### `calculate_bankruptcy_price(agent, current_price) -> float`
-计算破产价格（净值归零时的价格）。
+#### `get_adl_price(current_price) -> float`
+获取 ADL 成交价格。
 
-公式：
-- 多头：`bankruptcy_price = avg_price - balance / |quantity|`
-- 空头：`bankruptcy_price = avg_price + balance / |quantity|`
+**设计原则**：ADL 直接使用当前市场价格成交。
 
-破产价格下限为 0.01。
+强平 ≠ 破产：被强平时 Agent 可能还有正的净值（只是保证金率过低），因此不使用"破产价格"来计算 ADL 成交价。
+
+使用当前市场价格的好处：
+- 简单公平：双方都以市场价成交
+- 避免异常：不会因为穿仓导致价格异常
+- 符合直觉：流动性不足时强制以当前价成交
 
 #### `calculate_adl_score(agent, current_price) -> ADLCandidate | None`
 计算单个 Agent 的 ADL 排名分数。
@@ -67,10 +70,10 @@ ADL 自动减仓管理器。
 
 返回按 ADL 分数从高到低排序的候选列表。
 
-#### `execute_adl(liquidated_agent, remaining_qty, candidates, bankruptcy_price, current_price) -> list[tuple[Agent, int, float]]`
+#### `execute_adl(liquidated_agent, remaining_qty, candidates, adl_price, current_price) -> int`
 执行 ADL 成交。
 
-按候选列表顺序逐个减仓，直到剩余需求为零。返回 ADL 成交列表。
+按候选列表顺序逐个减仓，直到剩余需求为零。返回剩余未平仓数量（理论上应为 0）。
 
 ## 排名算法说明
 
@@ -90,10 +93,9 @@ ADL 排名算法的设计目标是优先选择高杠杆高盈利的交易者：
 
 1. 强平触发后，撮合引擎尝试用市价单平仓
 2. 如果市价单未能完全成交，计算剩余需平仓数量
-3. 计算被强平 Agent 的破产价格
-4. 获取持有反方向仓位的所有候选者，计算其 ADL 分数
-5. 按分数排序，从高到低依次减仓
-6. ADL 成交价格为破产价格（不是当前市场价格）
+3. 获取持有反方向仓位的所有候选者，计算其 ADL 分数
+4. 按分数排序，从高到低依次减仓
+5. **ADL 成交价格为当前市场价格**（简单公平，双方都以市价成交）
 
 **注**：由于多空仓位完全对等，理论上不会出现 ADL 候选不足的情况。
 
@@ -116,8 +118,8 @@ from src.market.adl import ADLManager
 # 创建管理器
 adl_manager = ADLManager()
 
-# 计算破产价格
-bankruptcy_price = adl_manager.calculate_bankruptcy_price(agent, current_price)
+# 获取 ADL 成交价格（当前市场价格）
+adl_price = adl_manager.get_adl_price(current_price)
 
 # 获取候选列表（被强平者持有空头，需要找多头对手）
 candidates = adl_manager.get_adl_candidates(
@@ -128,20 +130,19 @@ candidates = adl_manager.get_adl_candidates(
 )
 
 # 执行 ADL
-adl_trades = adl_manager.execute_adl(
+remaining = adl_manager.execute_adl(
     liquidated_agent=liquidated_agent,
     remaining_qty=100,
     candidates=candidates,
-    bankruptcy_price=bankruptcy_price,
+    adl_price=adl_price,
     current_price=100.0,
 )
 ```
 
 ## 注意事项
 
-1. ADL 成交价格是破产价格，不是当前市场价格
+1. **ADL 成交价格是当前市场价格**，简单公平
 2. ADL 成交不经过订单簿撮合，直接在对手方账户上执行减仓
 3. ADL 会记录详细日志，便于追踪和调试
-4. ADL 对手方是盈利方，以破产价格成交后仍然盈利（只是利润比按市场价成交少）
-5. **已淘汰的 Agent 也参与 ADL**，因为同一 tick 中可能存在竞态条件导致已淘汰 Agent 仍持有仓位
-6. 由于多空对等，理论上不会出现候选不足的情况；如果出现则说明有其他 bug
+4. **已淘汰的 Agent 也参与 ADL**，因为同一 tick 中可能存在竞态条件导致已淘汰 Agent 仍持有仓位
+5. 由于多空对等，理论上不会出现候选不足的情况；如果出现则说明有其他 bug

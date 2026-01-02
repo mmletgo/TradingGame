@@ -289,10 +289,8 @@ class Trainer:
         if not self.adl_manager:
             return
 
-        # 计算破产价格
-        bankruptcy_price = self.adl_manager.calculate_bankruptcy_price(
-            liquidated_agent, current_price
-        )
+        # ADL 成交价格：直接使用当前市场价格
+        adl_price = self.adl_manager.get_adl_price(current_price)
 
         # 获取所有 Agent
         all_agents: list["Agent"] = []
@@ -317,7 +315,7 @@ class Trainer:
             liquidated_agent=liquidated_agent,
             remaining_qty=remaining_qty,
             candidates=candidates,
-            bankruptcy_price=bankruptcy_price,
+            adl_price=adl_price,
             current_price=current_price,
         )
 
