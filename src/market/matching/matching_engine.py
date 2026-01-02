@@ -231,6 +231,9 @@ class MatchingEngine:
                 self._next_trade_id += 1
                 trades.append(trade)
 
+                # 更新订单簿最新价
+                self._orderbook.last_price = trade_price
+
                 # 更新已成交数量
                 order.filled_quantity += trade_qty
                 maker_order.filled_quantity += trade_qty

@@ -329,14 +329,19 @@ class Agent:
             ratio: 数量比例（0.1 到 1.0，表示使用购买力的比例）
 
         Returns:
-            订单数量
+            订单数量，如果净值为负或不足则返回 0
         """
         equity = self.account.get_equity(price)
+
+        # 净值非正时不允许下单
+        if equity <= 0:
+            return 0.0
+
         # 可用购买力 = 净值 * 杠杆
         buying_power = equity * self.account.leverage
         # 限制比例在合理范围
         ratio = max(0.1, min(1.0, ratio))
-        quantity = (buying_power * ratio) / price if price > 0 else 0
+        quantity = (buying_power * ratio) / price if price > 0 else 0.0
 
         # 确保数量为正数且合理（至少为最小交易单位）
         lot_size = 1.0  # 默认最小交易单位
@@ -532,6 +537,10 @@ class Agent:
         Returns:
             成交列表
         """
+        # 数量无效时不下单
+        if quantity <= 0:
+            return []
+
         order = Order(
             order_id=self._generate_order_id(),
             agent_id=self.agent_id,
@@ -567,6 +576,10 @@ class Agent:
         Returns:
             成交列表
         """
+        # 数量无效时不下单
+        if quantity <= 0:
+            return []
+
         order = Order(
             order_id=self._generate_order_id(),
             agent_id=self.agent_id,

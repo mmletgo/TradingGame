@@ -88,7 +88,9 @@ class MarketMakerAgent(Agent):
         """
         return [ActionType.QUOTE, ActionType.CLEAR_POSITION]
 
-    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> np.ndarray:
+    def observe(
+        self, market_state: NormalizedMarketState, orderbook: OrderBook
+    ) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入
 
         做市商覆盖基类方法，使用更大的输入缓冲区（634 = 604 + 30 挂单信息）。
@@ -106,7 +108,9 @@ class MarketMakerAgent(Agent):
         self._input_buffer[400:500] = market_state.trade_prices
         self._input_buffer[500:600] = market_state.trade_quantities
         self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
-        self._input_buffer[604:634] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
+        self._input_buffer[604:634] = self._get_pending_order_inputs(
+            market_state.mid_price, orderbook
+        )
         return self._input_buffer  # 不调用 .tolist()
 
     def _fill_order_inputs(
@@ -130,13 +134,17 @@ class MarketMakerAgent(Agent):
             if i < len(order_ids):
                 order = orderbook.order_map.get(order_ids[i])
                 if order is not None:
-                    price_norm = (order.price - mid_price) / mid_price if mid_price > 0 else 0.0
+                    price_norm = (
+                        (order.price - mid_price) / mid_price if mid_price > 0 else 0.0
+                    )
                     idx = offset + i * 3
                     inputs[idx] = price_norm
                     inputs[idx + 1] = float(order.quantity)
                     inputs[idx + 2] = 1.0
 
-    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> np.ndarray:
+    def _get_pending_order_inputs(
+        self, mid_price: float, orderbook: OrderBook
+    ) -> np.ndarray:
         """获取做市商挂单信息（30 个值）
 
         买单 5 个位置 x 3 = 15
@@ -225,31 +233,41 @@ class MarketMakerAgent(Agent):
         # 向量化解析买单价格
         # 每个订单有基础偏移（i+1）* 20 ticks，加上神经网络微调 ±10 ticks
         bid_price_offsets = np.clip(outputs_arr[2:7], -1, 1)
-        base_offsets = np.array([20.0, 40.0, 60.0, 80.0, 100.0])  # 基础偏移 2-10 个价格单位
-        nn_adjusts = bid_price_offsets * 10.0  # 神经网络微调 ±1 个价格单位
+        base_offsets = np.array(
+            [20.0, 40.0, 60.0, 80.0, 100.0]
+        )  # 基础偏移 2-10 个价格单位
+        nn_adjusts = bid_price_offsets * 20.0  # 神经网络微调 ±1 个价格单位
         bid_price_ticks = np.maximum(1.0, base_offsets + nn_adjusts)
         # 舍入到 tick_size 的整数倍，避免浮点数精度问题
-        bid_prices = np.round((mid_price - bid_price_ticks * tick_size) / tick_size) * tick_size
+        bid_prices = (
+            np.round((mid_price - bid_price_ticks * tick_size) / tick_size) * tick_size
+        )
 
         bid_orders: list[dict[str, float]] = []
         # 构建买单列表（仍需循环计算数量，但价格已向量化）
         for i in range(5):
-            quantity = self._calculate_order_quantity(float(bid_prices[i]), float(bid_ratios[i]))
+            quantity = self._calculate_order_quantity(
+                float(bid_prices[i]), float(bid_ratios[i])
+            )
             # 只添加数量 > 0 的订单
             if quantity > 0:
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
         # 向量化解析卖单价格
         ask_price_offsets = np.clip(outputs_arr[12:17], -1, 1)
-        nn_adjusts = ask_price_offsets * 10.0  # 神经网络微调 ±1 个价格单位
+        nn_adjusts = ask_price_offsets * 20.0  # 神经网络微调 ±1 个价格单位
         ask_price_ticks = np.maximum(1.0, base_offsets + nn_adjusts)
         # 舍入到 tick_size 的整数倍，避免浮点数精度问题
-        ask_prices = np.round((mid_price + ask_price_ticks * tick_size) / tick_size) * tick_size
+        ask_prices = (
+            np.round((mid_price + ask_price_ticks * tick_size) / tick_size) * tick_size
+        )
 
         ask_orders: list[dict[str, float]] = []
         # 构建卖单列表（仍需循环计算数量，但价格已向量化）
         for i in range(5):
-            quantity = self._calculate_order_quantity(float(ask_prices[i]), float(ask_ratios[i]))
+            quantity = self._calculate_order_quantity(
+                float(ask_prices[i]), float(ask_ratios[i])
+            )
             # 只添加数量 > 0 的订单
             if quantity > 0:
                 ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
@@ -320,7 +338,9 @@ class MarketMakerAgent(Agent):
             params.get("ask_orders", []), OrderSide.SELL, self.ask_order_ids, event_bus
         )
 
-    def _handle_clear_position(self, params: dict[str, Any], event_bus: EventBus) -> None:
+    def _handle_clear_position(
+        self, params: dict[str, Any], event_bus: EventBus
+    ) -> None:
         """处理 CLEAR_POSITION 动作
 
         先撤掉所有挂单，再根据持仓方向市价平仓。
@@ -487,7 +507,11 @@ class MarketMakerAgent(Agent):
         self._cancel_all_orders_direct(matching_engine)
         position_qty = self.account.position.quantity
         if position_qty > 0:
-            return self._place_market_order_direct(OrderSide.SELL, position_qty, matching_engine)
+            return self._place_market_order_direct(
+                OrderSide.SELL, position_qty, matching_engine
+            )
         elif position_qty < 0:
-            return self._place_market_order_direct(OrderSide.BUY, abs(position_qty), matching_engine)
+            return self._place_market_order_direct(
+                OrderSide.BUY, abs(position_qty), matching_engine
+            )
         return []
