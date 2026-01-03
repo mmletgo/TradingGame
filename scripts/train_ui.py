@@ -76,7 +76,7 @@ def create_default_config(
             taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.RETAIL_PRO: AgentConfig(
-            count=500,
+            count=100,
             initial_balance=1000000.0,  # 100万
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 0%
@@ -84,7 +84,7 @@ def create_default_config(
             taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.WHALE: AgentConfig(
-            count=500,
+            count=100,
             initial_balance=100000000.0,  # 1亿
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%
@@ -92,7 +92,7 @@ def create_default_config(
             taker_fee_rate=0.0001,  # 万1
         ),
         AgentType.MARKET_MAKER: AgentConfig(
-            count=500,
+            count=100,
             initial_balance=100000000.0,  # 1亿
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%

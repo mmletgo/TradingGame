@@ -188,7 +188,8 @@ class Agent:
             return result
 
         result[0] = (order.price - mid_price) / mid_price if mid_price > 0 else 0.0
-        result[1] = float(order.quantity)
+        # 数量使用对数归一化：log10(qty + 1) / 10
+        result[1] = np.log10(float(order.quantity) + 1) / 10.0
         result[2] = 1.0 if order.side == OrderSide.BUY else -1.0
         return result
 

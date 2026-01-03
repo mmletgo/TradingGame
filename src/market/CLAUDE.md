@@ -22,10 +22,15 @@
 **属性：**
 - `mid_price: float` - 中间价（用于归一化计算的参考价格）
 - `tick_size: float` - 最小价格变动单位
-- `bid_data: NDArray[np.float32]` - 买盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
-- `ask_data: NDArray[np.float32]` - 卖盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
+- `bid_data: NDArray[np.float32]` - 买盘数据，shape (200,)，100档 × 2（价格归一化 + 数量归一化）
+- `ask_data: NDArray[np.float32]` - 卖盘数据，shape (200,)，100档 × 2（价格归一化 + 数量归一化）
 - `trade_prices: NDArray[np.float32]` - 成交价格归一化，shape (100,)
-- `trade_quantities: NDArray[np.float32]` - 成交数量（带方向），shape (100,)，正数表示 taker 是买方，负数表示 taker 是卖方
+- `trade_quantities: NDArray[np.float32]` - 成交数量归一化（带方向），shape (100,)，正数表示 taker 是买方，负数表示 taker 是卖方
+
+**归一化方法：**
+- 价格归一化：`(price - mid_price) / mid_price`，范围约 [-0.1, 0.1]
+- 数量归一化：`log10(quantity + 1) / 10`，将 1e10 压缩到约 1.0
+- 成交数量带方向归一化：`sign(qty) * log10(|qty| + 1) / 10`
 
 **使用场景：**
 在每个 tick 开始时由 Trainer 预计算一次，然后传递给所有 Agent 使用，避免重复计算订单簿数据的归一化。

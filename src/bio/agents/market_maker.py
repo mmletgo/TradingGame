@@ -39,9 +39,7 @@ class MarketMakerAgent(Agent):
     bid_order_ids: list[int]
     ask_order_ids: list[int]
 
-    def __init__(
-        self, agent_id: int, brain: Brain, config: AgentConfig
-    ) -> None:
+    def __init__(self, agent_id: int, brain: Brain, config: AgentConfig) -> None:
         """创建做市商 Agent
 
         调用父类构造函数，设置类型为 MARKET_MAKER，初始化买卖挂单列表。
@@ -121,7 +119,8 @@ class MarketMakerAgent(Agent):
                     )
                     idx = offset + i * 3
                     inputs[idx] = price_norm
-                    inputs[idx + 1] = float(order.quantity)
+                    # 数量使用对数归一化：log10(qty + 1) / 10
+                    inputs[idx + 1] = np.log10(float(order.quantity) + 1) / 10.0
                     inputs[idx + 2] = 1.0
 
     def _get_pending_order_inputs(
@@ -212,19 +211,20 @@ class MarketMakerAgent(Agent):
             bid_ratios = np.zeros(5)
             ask_ratios = np.zeros(5)
 
-        # 向量化解析买单价格
-        # 每个订单有基础偏移（i+1）* 20 ticks，加上神经网络微调 ±10 ticks
+        # 价格偏移完全由神经网络决定，映射到 [1, 100] ticks
+        max_offset_ticks = 100.0
+        min_offset_ticks = 1.0
+
         bid_price_offsets = np.clip(outputs_arr[2:7], -1, 1)
-        base_offsets = np.array(
-            [20.0, 40.0, 60.0, 80.0, 100.0]
-        )  # 基础偏移 2-10 个价格单位
-        nn_adjusts = bid_price_offsets * 20.0  # 神经网络微调 ±1 个价格单位
-        bid_price_ticks = np.maximum(1.0, base_offsets + nn_adjusts)
+        # [-1, 1] -> [1, 100]
+        bid_price_ticks = min_offset_ticks + (bid_price_offsets + 1) / 2 * (
+            max_offset_ticks - min_offset_ticks
+        )
         # 舍入到 tick_size 的整数倍，避免浮点数精度问题
         # 确保价格至少为一个 tick_size，防止出现负价格或零价格
         bid_prices = np.maximum(
             tick_size,
-            np.round((mid_price - bid_price_ticks * tick_size) / tick_size) * tick_size
+            np.round((mid_price - bid_price_ticks * tick_size) / tick_size) * tick_size,
         )
 
         bid_orders: list[dict[str, float]] = []
@@ -237,10 +237,12 @@ class MarketMakerAgent(Agent):
             if quantity > 0:
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
-        # 向量化解析卖单价格
+        # 卖单价格偏移完全由神经网络决定
         ask_price_offsets = np.clip(outputs_arr[12:17], -1, 1)
-        nn_adjusts = ask_price_offsets * 20.0  # 神经网络微调 ±1 个价格单位
-        ask_price_ticks = np.maximum(1.0, base_offsets + nn_adjusts)
+        # [-1, 1] -> [1, 100]
+        ask_price_ticks = min_offset_ticks + (ask_price_offsets + 1) / 2 * (
+            max_offset_ticks - min_offset_ticks
+        )
         # 舍入到 tick_size 的整数倍，避免浮点数精度问题
         ask_prices = (
             np.round((mid_price + ask_price_ticks * tick_size) / tick_size) * tick_size
@@ -296,7 +298,7 @@ class MarketMakerAgent(Agent):
                 side=side,
                 order_type=OrderType.LIMIT,
                 price=order_spec["price"],
-                quantity=order_spec["quantity"],
+                quantity=int(order_spec["quantity"]),
             )
             trades = matching_engine.process_order(order)
             self._process_trades(trades)

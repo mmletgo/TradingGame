@@ -477,7 +477,8 @@ class Trainer:
             n = len(bids)
             if mid_price > 0:
                 bid_data[0 : n * 2 : 2] = (bid_prices - mid_price) / mid_price
-            bid_data[1 : n * 2 : 2] = bid_qtys
+            # 数量使用对数归一化：log10(qty + 1) / 10，将 1e10 压缩到 ~1.0
+            bid_data[1 : n * 2 : 2] = np.log10(bid_qtys + 1) / 10.0
 
         # 向量化卖盘：100档 × 2 = 200
         ask_data = np.zeros(200, dtype=np.float32)
@@ -488,7 +489,8 @@ class Trainer:
             n = len(asks)
             if mid_price > 0:
                 ask_data[0 : n * 2 : 2] = (ask_prices - mid_price) / mid_price
-            ask_data[1 : n * 2 : 2] = ask_qtys
+            # 数量使用对数归一化
+            ask_data[1 : n * 2 : 2] = np.log10(ask_qtys + 1) / 10.0
 
         # 向量化成交：100笔（数量带方向：正=taker买入，负=taker卖出）
         trade_prices = np.zeros(100, dtype=np.float32)
@@ -503,7 +505,8 @@ class Trainer:
             n = len(trades)
             if mid_price > 0:
                 trade_prices[:n] = (prices - mid_price) / mid_price
-            trade_quantities[:n] = qtys
+            # 成交数量带方向的对数归一化：sign(qty) * log10(|qty| + 1) / 10
+            trade_quantities[:n] = np.sign(qtys) * np.log10(np.abs(qtys) + 1) / 10.0
 
         return NormalizedMarketState(
             mid_price=mid_price,
