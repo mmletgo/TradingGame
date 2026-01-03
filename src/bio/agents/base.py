@@ -278,7 +278,8 @@ class Agent:
             price_offset_ticks = price_offset_norm * 100  # ±100 ticks
             raw_price = mid_price + price_offset_ticks * tick_size
             # 舍入到 tick_size 的整数倍，避免浮点数精度问题
-            params["price"] = round(raw_price / tick_size) * tick_size
+            # 确保价格至少为一个 tick_size，防止出现负价格或零价格
+            params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
             # 数量由神经网络决定
             params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
 
@@ -287,7 +288,8 @@ class Agent:
             price_offset_ticks = price_offset_norm * 100  # ±100 ticks
             raw_price = mid_price + price_offset_ticks * tick_size
             # 舍入到 tick_size 的整数倍，避免浮点数精度问题
-            params["price"] = round(raw_price / tick_size) * tick_size
+            # 确保价格至少为一个 tick_size，防止出现负价格或零价格
+            params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
             # 数量由神经网络决定
             params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
 

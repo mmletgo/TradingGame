@@ -91,6 +91,8 @@ Agent 基类，提供通用属性和方法。
 
 **价格舍入**：所有订单价格都会舍入到 `tick_size` 的整数倍，避免浮点数精度问题导致订单簿数据不一致。
 
+**价格保护**：所有订单价格都会确保至少为一个 `tick_size`，防止神经网络输出极端负偏移时产生负价格或零价格。当计算出的价格小于 `tick_size` 时，自动调整为 `tick_size`。
+
 #### `_place_limit_order(side: OrderSide, price: float, quantity: int, event_bus: EventBus) -> None`
 创建并发布限价单的私有辅助方法。被 `execute_action` 中的 PLACE_BID 和 PLACE_ASK 动作调用。quantity 参数为 int 类型。
 

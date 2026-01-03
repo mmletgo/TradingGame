@@ -239,7 +239,9 @@ class MarketMakerAgent(Agent):
         nn_adjusts = bid_price_offsets * 20.0  # 神经网络微调 ±1 个价格单位
         bid_price_ticks = np.maximum(1.0, base_offsets + nn_adjusts)
         # 舍入到 tick_size 的整数倍，避免浮点数精度问题
-        bid_prices = (
+        # 确保价格至少为一个 tick_size，防止出现负价格或零价格
+        bid_prices = np.maximum(
+            tick_size,
             np.round((mid_price - bid_price_ticks * tick_size) / tick_size) * tick_size
         )
 
