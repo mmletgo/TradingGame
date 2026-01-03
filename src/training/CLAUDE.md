@@ -134,10 +134,13 @@
 
 **淘汰（Elimination）**：净值/初始资金 < 10% 时触发
 1. `_check_elimination()` 检查淘汰条件
-2. 满足条件时**先强平其持有的仓位**（通过 `_handle_liquidation_direct`，包含市价单和 ADL）
-3. 然后将 Agent 的 `is_liquidated` 标志设为 True
-4. 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
-5. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
+2. 满足条件时**先撤销所有挂单**：
+   - 普通 Agent（散户/庄家）：撤销 `pending_order_id`
+   - **做市商**：调用 `_cancel_all_orders_direct()` 撤销所有买卖挂单（`bid_order_ids` 和 `ask_order_ids`）
+3. 再**强平其持有的仓位**（通过 `_handle_liquidation_direct`，包含市价单和 ADL）
+4. 然后将 Agent 的 `is_liquidated` 标志设为 True
+5. 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
+6. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
 
 ## 依赖关系
 

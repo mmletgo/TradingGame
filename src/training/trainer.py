@@ -362,7 +362,13 @@ class Trainer:
 
         if agent.account.check_elimination(current_price, threshold=0.1):
             # 先撤销挂单（防止淘汰后仍被成交）
-            if agent.account.pending_order_id is not None and self.matching_engine:
+            # 做市商有多个挂单（bid_order_ids 和 ask_order_ids），需要全部撤销
+            if agent.agent_type == AgentType.MARKET_MAKER and self.matching_engine:
+                # 类型检查：确保是 MarketMakerAgent
+                from src.bio.agents.market_maker import MarketMakerAgent
+                if isinstance(agent, MarketMakerAgent):
+                    agent._cancel_all_orders_direct(self.matching_engine)
+            elif agent.account.pending_order_id is not None and self.matching_engine:
                 self.matching_engine.cancel_order_direct(agent.account.pending_order_id)
                 agent.account.pending_order_id = None
 
