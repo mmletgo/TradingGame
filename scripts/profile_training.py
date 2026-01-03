@@ -47,7 +47,7 @@ def create_profile_config() -> Config:
         ),
         AgentType.RETAIL_PRO: AgentConfig(
             count=100,
-            initial_balance=1000000.0,  # 100万
+            initial_balance=100000.0,  # 10万
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 0%
             maker_fee_rate=0.0002,  # 万2
@@ -55,7 +55,7 @@ def create_profile_config() -> Config:
         ),
         AgentType.WHALE: AgentConfig(
             count=100,
-            initial_balance=100000000.0,  # 1亿
+            initial_balance=10000000.0,  # 1000万
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
@@ -63,7 +63,7 @@ def create_profile_config() -> Config:
         ),
         AgentType.MARKET_MAKER: AgentConfig(
             count=100,
-            initial_balance=100000000.0,  # 1亿
+            initial_balance=10000000.0,  # 1000万
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
