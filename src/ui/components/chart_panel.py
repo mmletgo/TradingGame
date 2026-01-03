@@ -84,7 +84,7 @@ class ChartPanel:
             dpg.add_separator()
 
             # 种群资产曲线标题
-            dpg.add_text("种群资产曲线（左：所有个体  右：存活个体）", color=(255, 255, 0))
+            dpg.add_text("种群平均资产曲线（左：所有个体  右：存活个体）", color=(255, 255, 0))
 
             # 纵向4行布局，每行2张图（所有个体 + 存活个体）
             for agent_type in VERTICAL_LAYOUT:
@@ -109,7 +109,7 @@ class ChartPanel:
             self._create_violin_plots()
 
     def _create_equity_row(self, agent_type: AgentType) -> None:
-        """创建单个种群的资产图表行（所有个体 + 存活个体两张图）
+        """创建单个种群的资产图表行（所有个体平均 + 存活个体平均两张图）
 
         Args:
             agent_type: Agent类型
@@ -119,23 +119,23 @@ class ChartPanel:
 
         # 水平布局：两张图并排
         with dpg.group(horizontal=True):
-            # 左图：所有个体资产总和
-            with dpg.plot(label=f"{name}(全部)", height=self.EQUITY_PLOT_HEIGHT,
+            # 左图：所有个体平均资产
+            with dpg.plot(label=f"{name}(全部均值)", height=self.EQUITY_PLOT_HEIGHT,
                          width=self.EQUITY_PLOT_WIDTH, tag=f"equity_plot_{tag_prefix}"):
                 dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"equity_x_axis_{tag_prefix}")
-                dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"equity_y_axis_{tag_prefix}")
+                dpg.add_plot_axis(dpg.mvYAxis, label="平均资产", tag=f"equity_y_axis_{tag_prefix}")
                 dpg.add_line_series([], [],
-                    label="全部",
+                    label="全部均值",
                     parent=f"equity_y_axis_{tag_prefix}",
                     tag=f"equity_series_{tag_prefix}")
 
-            # 右图：存活个体资产总和
-            with dpg.plot(label=f"{name}(存活)", height=self.EQUITY_PLOT_HEIGHT,
+            # 右图：存活个体平均资产
+            with dpg.plot(label=f"{name}(存活均值)", height=self.EQUITY_PLOT_HEIGHT,
                          width=self.EQUITY_PLOT_WIDTH, tag=f"alive_equity_plot_{tag_prefix}"):
                 dpg.add_plot_axis(dpg.mvXAxis, label="Tick", tag=f"alive_equity_x_axis_{tag_prefix}")
-                dpg.add_plot_axis(dpg.mvYAxis, label="资产", tag=f"alive_equity_y_axis_{tag_prefix}")
+                dpg.add_plot_axis(dpg.mvYAxis, label="平均资产", tag=f"alive_equity_y_axis_{tag_prefix}")
                 dpg.add_line_series([], [],
-                    label="存活",
+                    label="存活均值",
                     parent=f"alive_equity_y_axis_{tag_prefix}",
                     tag=f"alive_equity_series_{tag_prefix}")
 
@@ -190,8 +190,8 @@ class ChartPanel:
         """更新资产曲线和统计
 
         Args:
-            equity_history: 各种群所有个体资产历史，key为AgentType，value为资产列表
-            alive_equity_history: 各种群存活个体资产历史，key为AgentType，value为资产列表
+            equity_history: 各种群所有个体平均资产历史，key为AgentType，value为平均资产列表
+            alive_equity_history: 各种群存活个体平均资产历史，key为AgentType，value为平均资产列表
             population_stats: 各种群统计信息，key为AgentType，value为统计对象
         """
         for agent_type in AgentType:

@@ -62,7 +62,7 @@ def create_profile_config() -> Config:
             taker_fee_rate=0.0001,  # 万1
         ),
         AgentType.MARKET_MAKER: AgentConfig(
-            count=100,
+            count=1000,
             initial_balance=100000000.0,  # 1亿
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%

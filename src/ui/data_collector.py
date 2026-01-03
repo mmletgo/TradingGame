@@ -63,8 +63,8 @@ class UIDataSnapshot:
 
     # 历史数据（曲线用）
     price_history: list[float]
-    equity_history: dict[AgentType, list[float]]  # 所有个体资产总和历史
-    alive_equity_history: dict[AgentType, list[float]]  # 存活个体资产总和历史
+    equity_history: dict[AgentType, list[float]]  # 所有个体平均资产历史
+    alive_equity_history: dict[AgentType, list[float]]  # 存活个体平均资产历史
 
 
 class UIDataCollector:
@@ -75,8 +75,8 @@ class UIDataCollector:
     Attributes:
         history_length: 历史数据长度限制
         price_history: 价格历史缓冲区
-        equity_history: 各种群所有个体资产总和历史缓冲区
-        alive_equity_history: 各种群存活个体资产总和历史缓冲区
+        equity_history: 各种群所有个体平均资产历史缓冲区
+        alive_equity_history: 各种群存活个体平均资产历史缓冲区
     """
 
     history_length: int
@@ -137,10 +137,12 @@ class UIDataCollector:
         for agent_type, population in trainer.populations.items():
             stats = self._compute_population_stats(population, price_for_equity)
             population_stats[agent_type] = stats
-            self.equity_history[agent_type].append(stats.total_equity)
-            # 计算存活个体资产总和
-            alive_total = sum(stats.alive_equities) if stats.alive_equities else 0.0
-            self.alive_equity_history[agent_type].append(alive_total)
+            # 计算所有个体平均资产
+            avg_all = stats.total_equity / stats.total_count if stats.total_count > 0 else 0.0
+            self.equity_history[agent_type].append(avg_all)
+            # 计算存活个体平均资产
+            alive_avg = stats.avg_equity  # avg_equity 已经是存活个体的平均值
+            self.alive_equity_history[agent_type].append(alive_avg)
 
         # 转换成交记录
         recent_trades: list[TradeInfo] = [

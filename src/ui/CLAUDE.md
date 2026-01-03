@@ -27,8 +27,8 @@ UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 **属性：**
 - `history_length: int` - 历史数据长度限制
 - `price_history: deque[float]` - 价格历史缓冲区
-- `equity_history: dict[AgentType, deque[float]]` - 各种群所有个体资产总和历史缓冲区
-- `alive_equity_history: dict[AgentType, deque[float]]` - 各种群存活个体资产总和历史缓冲区
+- `equity_history: dict[AgentType, deque[float]]` - 各种群所有个体平均资产历史缓冲区
+- `alive_equity_history: dict[AgentType, deque[float]]` - 各种群存活个体平均资产历史缓冲区
 
 **方法：**
 - `collect_tick_data(trainer) -> UIDataSnapshot` - 收集当前tick数据快照
@@ -48,8 +48,8 @@ UI数据快照，每个tick的完整数据。
 - `recent_trades: list[TradeInfo]` - 最近成交记录
 - `population_stats: dict[AgentType, PopulationStats]` - 种群统计
 - `price_history: list[float]` - 价格历史
-- `equity_history: dict[AgentType, list[float]]` - 所有个体资产总和历史
-- `alive_equity_history: dict[AgentType, list[float]]` - 存活个体资产总和历史
+- `equity_history: dict[AgentType, list[float]]` - 所有个体平均资产历史
+- `alive_equity_history: dict[AgentType, list[float]]` - 存活个体平均资产历史
 
 ### TradeInfo
 
@@ -260,8 +260,8 @@ controller.stop()
 - `update_price(price_history) -> None` - 更新价格曲线
   - `price_history: list[float]` - 价格历史列表
 - `update_equity(equity_history, alive_equity_history, population_stats) -> None` - 更新资产曲线、统计和小提琴图
-  - `equity_history: dict[AgentType, list[float]]` - 各种群所有个体资产历史
-  - `alive_equity_history: dict[AgentType, list[float]]` - 各种群存活个体资产历史
+  - `equity_history: dict[AgentType, list[float]]` - 各种群所有个体平均资产历史
+  - `alive_equity_history: dict[AgentType, list[float]]` - 各种群存活个体平均资产历史
   - `population_stats: dict[AgentType, PopulationStats]` - 各种群统计信息
 
 **私有方法：**
@@ -273,13 +273,13 @@ controller.stop()
 
 **布局：**
 - 价格走势图：高度140px，宽度自适应
-- 4行资产图表，每行2张图并排（左：所有个体  右：存活个体）：
-  - 第1行：散户资产图（全部 + 存活）
-  - 第2行：高级散户资产图（全部 + 存活）
-  - 第3行：庄家资产图（全部 + 存活）
-  - 第4行：做市商资产图（全部 + 存活）
+- 4行资产图表，每行2张图并排（左：所有个体平均  右：存活个体平均）：
+  - 第1行：散户平均资产图（全部均值 + 存活均值）
+  - 第2行：高级散户平均资产图（全部均值 + 存活均值）
+  - 第3行：庄家平均资产图（全部均值 + 存活均值）
+  - 第4行：做市商平均资产图（全部均值 + 存活均值）
 - 每个资产图表：高度140px，宽度560px
-- 每个图表标题显示种群名称+类型（全部/存活）
+- 每个图表标题显示种群名称+类型（全部均值/存活均值）
 - 统计文字水平排列显示在4个图表下方（节省垂直空间）
 - 小提琴图区域（4个并排，高度120px）：
   - 每个图表宽度280px
@@ -300,8 +300,8 @@ controller.stop()
 
 **Tag命名规则：**
 - 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`
-- 所有个体资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
-- 存活个体资产图：`alive_equity_plot_{agent_type}`, `alive_equity_series_{agent_type}`, `alive_equity_x_axis_{agent_type}`, `alive_equity_y_axis_{agent_type}`
+- 所有个体平均资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
+- 存活个体平均资产图：`alive_equity_plot_{agent_type}`, `alive_equity_series_{agent_type}`, `alive_equity_x_axis_{agent_type}`, `alive_equity_y_axis_{agent_type}`
 - 统计文本：`stat_{agent_type}`
 - 小提琴图：`violin_plot_{agent_type}`, `violin_area_{agent_type}`, `violin_median_{agent_type}`, `violin_q1_{agent_type}`, `violin_q3_{agent_type}`
 
