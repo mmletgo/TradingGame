@@ -680,13 +680,6 @@ class Trainer:
                 # 因为 _process_trades_direct 只更新了 taker 端（买或卖其中一方）
                 maker_agent = self.agent_map.get(maker_id)
                 if maker_agent is not None:
-                    # 如果 maker 已淘汰或正在淘汰，跳过仓位更新
-                    # 这防止淘汰中的 Agent 因为残留挂单被成交而增加仓位
-                    if (
-                        maker_agent.is_liquidated
-                        or maker_agent.agent_id in self._eliminating_agents
-                    ):
-                        continue
                     # maker 的方向与 taker 相反：taker 买则 maker 卖，taker 卖则 maker 买
                     is_buyer = not trade.is_buyer_taker
                     maker_agent.account.on_trade(trade, is_buyer)
