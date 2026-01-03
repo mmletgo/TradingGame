@@ -6,6 +6,7 @@
 import pickle
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +15,9 @@ import numpy as np
 from src.bio.agents.base import AgentType
 
 if TYPE_CHECKING:
-    from src.bio.agents.base import Agent
+    from src.bio.agents.base import ActionType, Agent
+    from src.market.market_state import NormalizedMarketState as NormalizedMarketStateType
+    from src.market.orderbook.orderbook import OrderBook
 from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
@@ -64,6 +67,8 @@ class Trainer:
     _adl_short_candidates: list[
         ADLCandidate
     ]  # 空头 ADL 候选（已排序，持仓数量会动态更新）
+    _executor: ThreadPoolExecutor | None
+    _num_workers: int
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -91,6 +96,23 @@ class Trainer:
         self._eliminating_agents = set()
         self._adl_long_candidates = []
         self._adl_short_candidates = []
+        self._executor = None
+        self._num_workers = 16
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        """获取或创建线程池（惰性初始化）"""
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(
+                max_workers=self._num_workers,
+                thread_name_prefix="neat_worker"
+            )
+        return self._executor
+
+    def _shutdown_executor(self) -> None:
+        """关闭线程池"""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def setup(self) -> None:
         """初始化训练环境
@@ -517,6 +539,79 @@ class Trainer:
             trade_quantities=trade_quantities,
         )
 
+    def _evolve_populations_parallel(self, current_price: float) -> None:
+        """并行进化所有种群"""
+        executor = self._get_executor()
+        populations = list(self.populations.values())
+
+        futures = {
+            executor.submit(pop.evolve, current_price): pop
+            for pop in populations
+        }
+
+        for future in as_completed(futures):
+            pop = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                self.logger.error(f"种群 {pop.agent_type.value} 进化失败: {e}")
+                raise
+
+    def _batch_decide_parallel(
+        self,
+        agents: list["Agent"],
+        market_state: "NormalizedMarketStateType",
+        orderbook: "OrderBook",
+    ) -> list[tuple["Agent", "ActionType", dict[str, Any]]]:
+        """并行执行所有 Agent 的决策"""
+        executor = self._get_executor()
+
+        future_to_idx: dict[Future[tuple["ActionType", dict[str, Any]]], tuple[int, "Agent"]] = {}
+        for idx, agent in enumerate(agents):
+            if not agent.is_liquidated:
+                future = executor.submit(agent.decide, market_state, orderbook)
+                future_to_idx[future] = (idx, agent)
+
+        results: list[tuple["Agent", "ActionType", dict[str, Any]] | None] = [None] * len(agents)
+        for future in as_completed(future_to_idx):
+            idx, agent = future_to_idx[future]
+            try:
+                action, params = future.result()
+                results[idx] = (agent, action, params)
+            except Exception as e:
+                self.logger.warning(f"Agent {agent.agent_id} 决策异常: {e}")
+
+        return [r for r in results if r is not None]
+
+    def _check_liquidations_vectorized(self, current_price: float) -> list["Agent"]:
+        """向量化检查所有 Agent 的强平条件"""
+        active_agents = [a for a in self.agent_execution_order if not a.is_liquidated]
+        n = len(active_agents)
+
+        if n == 0:
+            return []
+
+        balances = np.array([a.account.balance for a in active_agents], dtype=np.float64)
+        quantities = np.array([a.account.position.quantity for a in active_agents], dtype=np.float64)
+        avg_prices = np.array([a.account.position.avg_price for a in active_agents], dtype=np.float64)
+        maintenance_rates = np.array(
+            [a.account.maintenance_margin_rate for a in active_agents],
+            dtype=np.float64
+        )
+
+        unrealized_pnl = (current_price - avg_prices) * quantities
+        equities = balances + unrealized_pnl
+        position_values = np.abs(quantities) * current_price
+
+        margin_ratios = np.where(
+            position_values > 0,
+            equities / position_values,
+            np.inf
+        )
+
+        need_liquidation = margin_ratios < maintenance_rates
+        return [active_agents[i] for i in range(n) if need_liquidation[i]]
+
     def _init_market(self) -> None:
         """初始化市场（直接调用模式）
 
@@ -612,17 +707,13 @@ class Trainer:
         self.tick_start_price = current_price  # 保存 tick 开始时的价格
 
         # === Tick 开始：检查所有 agent 的强平条件（爆仓即淘汰）===
-        # 阶段1：收集需要淘汰的 agent，统一撤销挂单
-        agents_to_liquidate: list["Agent"] = []
+        # 阶段1：向量化收集需要淘汰的 agent，统一撤销挂单
+        agents_to_liquidate = self._check_liquidations_vectorized(current_price)
         agents_to_liquidate_ids: set[int] = set()
-        for agent in self.agent_execution_order:
-            if agent.is_liquidated:
-                continue
-            if agent.account.check_liquidation(current_price):
-                agents_to_liquidate.append(agent)
-                agents_to_liquidate_ids.add(agent.agent_id)
-                # 立即撤销挂单，防止在后续平仓过程中作为 maker 被成交
-                self._cancel_agent_orders(agent)
+        for agent in agents_to_liquidate:
+            agents_to_liquidate_ids.add(agent.agent_id)
+            # 立即撤销挂单，防止在后续平仓过程中作为 maker 被成交
+            self._cancel_agent_orders(agent)
 
         # === 三阶段强平处理 ===
         # 阶段2：统一执行市价单平仓，收集需要 ADL 的 Agent
@@ -695,27 +786,20 @@ class Trainer:
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
 
-        # === Tick 过程：Agent 按顺序决策和下单 ===
-        for agent in self.agent_execution_order:
-            if agent.is_liquidated:
-                continue
+        # === 并行决策阶段 ===
+        decisions = self._batch_decide_parallel(
+            self.agent_execution_order, market_state, orderbook
+        )
 
-            # 决策
-            action, params = agent.decide(market_state, orderbook)
-
-            # 直接执行（绕过事件系统）
+        # === 串行执行阶段 ===
+        for agent, action, params in decisions:
             trades = agent.execute_action(action, params, self.matching_engine)
 
-            # 记录成交并更新对手方账户（maker）
             for trade in trades:
                 self.recent_trades.append(trade)
-                # 更新 maker 的账户（taker 的账户已在 execute_action 中更新）
                 maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-                # 注意：即使 maker_id == agent.agent_id（自成交），也需要更新 maker 端
-                # 因为 _process_trades 只更新了 taker 端（买或卖其中一方）
                 maker_agent = self.agent_map.get(maker_id)
                 if maker_agent is not None:
-                    # maker 的方向与 taker 相反：taker 买则 maker 卖，taker 卖则 maker 买
                     is_buyer = not trade.is_buyer_taker
                     maker_agent.account.on_trade(trade, is_buyer)
 
@@ -765,8 +849,7 @@ class Trainer:
         # 3. 进化（仅在正常完成 episode 时）
         if self.is_running and not self.is_paused:
             current_price = self.matching_engine._orderbook.last_price
-            for population in self.populations.values():
-                population.evolve(current_price)
+            self._evolve_populations_parallel(current_price)
 
             # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
             self._register_all_agents()
@@ -889,3 +972,4 @@ class Trainer:
         """停止训练"""
         self.is_running = False
         self.logger.info("训练已停止")
+        self._shutdown_executor()

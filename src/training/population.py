@@ -4,6 +4,8 @@
 """
 
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from typing import ClassVar
 
 import neat
 import numpy as np
@@ -33,6 +35,10 @@ class Population:
         logger: 日志器
     """
 
+    # 类级别线程池（所有 Population 实例共享）
+    _shared_executor: ClassVar[ThreadPoolExecutor | None] = None
+    _num_workers: ClassVar[int] = 16
+
     agent_type: AgentType
     agents: list[Agent]
     neat_pop: neat.Population
@@ -40,6 +46,23 @@ class Population:
     agent_config: AgentConfig
     generation: int
     logger: logging.Logger
+
+    @classmethod
+    def _get_shared_executor(cls) -> ThreadPoolExecutor:
+        """获取共享线程池"""
+        if cls._shared_executor is None:
+            cls._shared_executor = ThreadPoolExecutor(
+                max_workers=cls._num_workers,
+                thread_name_prefix="agent_creator"
+            )
+        return cls._shared_executor
+
+    @classmethod
+    def shutdown_executor(cls) -> None:
+        """关闭共享线程池"""
+        if cls._shared_executor is not None:
+            cls._shared_executor.shutdown(wait=True)
+            cls._shared_executor = None
 
     def __init__(self, agent_type: AgentType, config: Config) -> None:
         """创建种群
@@ -101,14 +124,40 @@ class Population:
         AgentType.MARKET_MAKER: 3_000_000,
     }
 
+    def _create_single_agent(
+        self,
+        idx: int,
+        genome_id: int,
+        genome: neat.DefaultGenome,
+        agent_class: type[Agent],
+        agent_id_offset: int,
+    ) -> tuple[int, Agent]:
+        """创建单个 Agent（线程安全）
+
+        Args:
+            idx: Agent 在列表中的索引
+            genome_id: 基因组 ID
+            genome: NEAT 基因组对象
+            agent_class: Agent 类（RetailAgent/WhaleAgent/MarketMakerAgent）
+            agent_id_offset: Agent ID 偏移量
+
+        Returns:
+            (索引, Agent) 元组
+        """
+        brain = Brain.from_genome(genome, self.neat_config)
+        unique_agent_id = agent_id_offset + idx
+        agent = agent_class(unique_agent_id, brain, self.agent_config)
+        return (idx, agent)
+
     def create_agents(
         self,
         genomes: list[tuple[int, neat.DefaultGenome]],
     ) -> list[Agent]:
-        """从基因组创建 Agent 列表
+        """从基因组创建 Agent 列表（并行化版本）
 
         遍历基因组列表，为每个基因组创建对应的 Brain 和 Agent。
         根据种群的 agent_type 创建对应类型的 Agent（散户/庄家/做市商）。
+        小批量（<50）串行处理，大批量并行处理以提升性能。
 
         Args:
             genomes: NEAT 基因组列表，每项为 (genome_id, genome) 元组
@@ -116,9 +165,9 @@ class Population:
         Returns:
             创建的 Agent 列表
         """
-        # 根据 agent_type 确定 Agent 类（避免循环内重复判断）
+        # 确定 Agent 类
         if self.agent_type == AgentType.RETAIL:
-            agent_class = RetailAgent
+            agent_class: type[Agent] = RetailAgent
         elif self.agent_type == AgentType.RETAIL_PRO:
             agent_class = RetailProAgent
         elif self.agent_type == AgentType.WHALE:
@@ -128,19 +177,44 @@ class Population:
         else:
             raise ValueError(f"未知的 Agent 类型: {self.agent_type}")
 
-        # 获取该种群类型的 agent_id 偏移量，确保全局唯一
         agent_id_offset = self._AGENT_ID_OFFSET.get(self.agent_type, 0)
 
-        agents: list[Agent] = []
+        # 小批量直接串行处理，避免线程池开销
+        if len(genomes) < 50:
+            agents: list[Agent] = []
+            for idx, (genome_id, genome) in enumerate(genomes):
+                brain = Brain.from_genome(genome, self.neat_config)
+                unique_agent_id = agent_id_offset + idx
+                agent = agent_class(unique_agent_id, brain, self.agent_config)
+                agents.append(agent)
+            return agents
+
+        # 大批量并行创建
+        executor = self._get_shared_executor()
+        futures: dict[Future[tuple[int, Agent]], int] = {}
 
         for idx, (genome_id, genome) in enumerate(genomes):
-            brain = Brain.from_genome(genome, self.neat_config)
-            # 使用 offset + 索引 作为 agent_id，确保全局唯一
-            unique_agent_id = agent_id_offset + idx
-            agent = agent_class(unique_agent_id, brain, self.agent_config)
-            agents.append(agent)
+            future = executor.submit(
+                self._create_single_agent,
+                idx,
+                genome_id,
+                genome,
+                agent_class,
+                agent_id_offset,
+            )
+            futures[future] = idx
 
-        return agents
+        # 收集结果，按索引排序
+        results: list[tuple[int, Agent]] = []
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                raise RuntimeError(f"创建 Agent 失败: {e}") from e
+
+        results.sort(key=lambda x: x[0])
+        return [agent for _, agent in results]
 
     def evaluate(self, current_price: float) -> list[tuple[Agent, float]]:
         """评估种群适应度

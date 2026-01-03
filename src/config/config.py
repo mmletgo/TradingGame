@@ -75,11 +75,22 @@ class TrainingConfig:
         episode_length: 每个 episode 的 tick 数量（默认 1000）
         checkpoint_interval: 检查点间隔（episode 数）
         neat_config_path: NEAT 配置文件路径
+        parallel_workers: 并行工作进程数（默认 16）
+        enable_parallel_evolution: 是否启用并行进化（默认 True）
+        enable_parallel_decision: 是否启用并行决策（默认 True）
+        enable_parallel_creation: 是否启用并行创建（默认 True）
+        random_seed: 随机种子（默认 None，表示不固定）
     """
 
     episode_length: int
     checkpoint_interval: int
     neat_config_path: str
+    # 并行化配置
+    parallel_workers: int = 16
+    enable_parallel_evolution: bool = True
+    enable_parallel_decision: bool = True
+    enable_parallel_creation: bool = True
+    random_seed: int | None = None
 
 
 @dataclass
