@@ -114,8 +114,8 @@ UI控制器，管理训练线程与UI线程的交互。
 4. 队列满时丢弃最旧数据，保证UI总能获取最新数据
 
 **提前结束逻辑：**
-- 训练/演示循环在每个tick后检查`trainer._any_population_eliminated()`
-- 若任一种群（散户/庄家/做市商）存活个体归零，立即结束当前episode的tick循环
+- 训练/演示循环在每个tick后检查`trainer._any_population_below_half()`
+- 若任一种群（散户/庄家/做市商）存活个体少于初始值的一半，立即结束当前episode的tick循环
 - 进入进化阶段（训练模式）或开始新episode（演示模式）
 
 ## 依赖接口

@@ -433,16 +433,18 @@ class Trainer:
         if liquidated_agent.account.balance < 0:
             liquidated_agent.account.balance = 0.0
 
-    def _any_population_eliminated(self) -> AgentType | None:
-        """检查是否有任一种群被全部淘汰（O(1) 复杂度）
+    def _any_population_below_half(self) -> AgentType | None:
+        """检查是否有任一种群存活个体少于初始值的一半（O(1) 复杂度）
 
         Returns:
-            AgentType | None: 被淘汰的种群类型，如果没有则返回 None
+            AgentType | None: 存活不足一半的种群类型，如果没有则返回 None
         """
         for agent_type, total in self._pop_total_counts.items():
             if total > 0:
                 liquidated = self._pop_liquidated_counts.get(agent_type, 0)
-                if liquidated >= total:
+                alive = total - liquidated
+                # 存活个体少于初始值的一半时触发
+                if alive < total / 2:
                     return agent_type
         return None
 
@@ -743,11 +745,15 @@ class Trainer:
                 break
             self.run_tick()
 
-            # 检查是否有任一种群被全部淘汰
-            eliminated_type = self._any_population_eliminated()
-            if eliminated_type is not None:
+            # 检查是否有任一种群存活个体少于初始值的一半
+            below_half_type = self._any_population_below_half()
+            if below_half_type is not None:
+                total = self._pop_total_counts[below_half_type]
+                liquidated = self._pop_liquidated_counts.get(below_half_type, 0)
+                alive = total - liquidated
                 self.logger.warning(
-                    f"Episode {self.episode} 提前结束：{eliminated_type.value} 已全部淘汰 (tick={self.tick})"
+                    f"Episode {self.episode} 提前结束：{below_half_type.value} 存活不足一半 "
+                    f"({alive}/{total}) (tick={self.tick})"
                 )
                 break
 

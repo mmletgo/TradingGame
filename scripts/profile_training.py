@@ -36,39 +36,38 @@ def create_profile_config() -> Config:
         depth=100,
     )
 
-    # 使用较小的 agent 数量以加快分析
     agents = {
         AgentType.RETAIL: AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
+            count=100000,
+            initial_balance=100000.0,  # 10万
+            leverage=1.0,
+            maintenance_margin_rate=0.5,  # 50%
+            maker_fee_rate=0.0002,  # 万2
+            taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.RETAIL_PRO: AgentConfig(
             count=100,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
+            initial_balance=1000000.0,  # 100万
+            leverage=1.0,
+            maintenance_margin_rate=0.5,  # 0%
+            maker_fee_rate=0.0002,  # 万2
+            taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.WHALE: AgentConfig(
             count=100,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
+            initial_balance=100000000.0,  # 1亿
+            leverage=1.0,
+            maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
-            taker_fee_rate=0.0001,
+            taker_fee_rate=0.0001,  # 万1
         ),
         AgentType.MARKET_MAKER: AgentConfig(
-            count=1000,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
+            count=100,
+            initial_balance=100000000.0,  # 1亿
+            leverage=1.0,
+            maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
-            taker_fee_rate=0.0001,
+            taker_fee_rate=0.0001,  # 万1
         ),
     }
 

@@ -49,10 +49,10 @@
 - `_handle_liquidation()` - 处理强平，提交市价单平仓，若市价单无法完全成交则触发 ADL，强平完成后淘汰 Agent（调用前必须先撤销挂单）
 - `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty），ADL 后检查参与者的强平条件
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
-- `_any_population_eliminated()` - O(1) 检查是否有任一种群被全部淘汰，返回被淘汰的种群类型
+- `_any_population_below_half()` - O(1) 检查是否有任一种群存活个体少于初始值的一半，返回不足一半的种群类型
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
 - `run_tick()` - 执行单个 tick
-- `run_episode()` - 运行完整 episode（重置、运行、进化），若任一种群全部被淘汰则提前结束
+- `run_episode()` - 运行完整 episode（重置、运行、进化），若任一种群存活不足一半则提前结束
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
 
@@ -77,7 +77,7 @@
    - 重置所有 Agent 账户
    - 重置市场状态
    - 运行 episode_length 个 tick
-   - **提前结束条件**：若任一种群（散户/庄家/做市商）全部被淘汰，则立即结束当前 episode
+   - **提前结束条件**：若任一种群（散户/庄家/做市商）存活个体少于初始值的一半，则立即结束当前 episode
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
