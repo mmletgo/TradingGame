@@ -83,15 +83,19 @@
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
 3. **Tick 执行** (`run_tick` - 直接调用模式)
-   - 向量化计算归一化市场状态
-   - 使用预构建的执行顺序列表遍历所有 Agent：
-     - 跳过已淘汰的 Agent
-     - 决策（传入市场状态和订单簿）
-     - 直接执行动作（`execute_action_direct`，绕过事件系统）
-     - 记录成交到 `recent_trades`
-     - **对 maker 检查强平/淘汰条件**（成交可能导致 maker 亏损）
-     - 检查 taker 强平条件，触发 `_handle_liquidation_direct`（仅平仓）
-     - 检查 taker 淘汰条件，触发 `_check_elimination`（资金不足10%时淘汰）
+
+   **时序设计**：Agent 的下单操作影响的是下一个 tick，确保淘汰检查和数据采集使用同一价格
+
+   - **Tick 开始**：
+     - 保存 tick 开始时的价格到 `tick_start_price`（供数据采集使用）
+     - 遍历所有 Agent，用当前价格检查强平和淘汰条件
+   - **Tick 过程**：
+     - 向量化计算归一化市场状态
+     - Agent 按顺序决策和下单（做市商→庄家→高级散户→散户）
+     - 记录成交到 `recent_trades`，更新 maker 账户
+   - **Tick 结束**：
+     - 下单产生的价格变动效果在下个 tick 被感知
+     - 数据采集使用 `tick_start_price` 计算资产，与淘汰检查一致
 
 ## 直接调用模式
 

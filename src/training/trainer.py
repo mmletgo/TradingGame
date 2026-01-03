@@ -58,6 +58,7 @@ class Trainer:
     agent_execution_order: list["Agent"]
     _pop_total_counts: dict[AgentType, int]  # 各种群总数
     _pop_liquidated_counts: dict[AgentType, int]  # 各种群当前 episode 已淘汰数量
+    tick_start_price: float  # tick 开始时的价格，供数据采集使用
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -82,6 +83,7 @@ class Trainer:
         self.agent_execution_order = []
         self._pop_total_counts = {}
         self._pop_liquidated_counts = {}
+        self.tick_start_price = 0.0
 
     def setup(self) -> None:
         """初始化训练环境
@@ -527,11 +529,20 @@ class Trainer:
         if total_position != 0:
             self.logger.error(f"初始化后仓位不对等！总偏差={total_position}, 多头={long_qty}, 空头={short_qty}")
 
+        # 初始化 tick_start_price，供数据采集使用
+        self.tick_start_price = self.matching_engine._orderbook.last_price
+
     def run_tick(self) -> None:
         """执行一个 tick（直接调用模式）
 
-        按顺序执行：做市商->庄家->散户 的决策和交易。
-        检查强平条件。绕过事件系统，直接调用撮合引擎。
+        时序设计：
+        1. Tick 开始：用当前价格检查所有 agent 的强平和淘汰条件
+        2. Tick 过程：Agent 按顺序决策和下单
+        3. Tick 结束：下单效果（价格变动）在下个 tick 被感知
+
+        这样设计确保：
+        - 淘汰检查和数据采集使用同一价格（tick 开始时的价格）
+        - 所有 agent 在同一价格基础上被检查，公平
         """
         if not self.matching_engine:
             return
@@ -539,11 +550,22 @@ class Trainer:
         self.tick += 1
         orderbook = self.matching_engine._orderbook
         current_price = orderbook.last_price
+        self.tick_start_price = current_price  # 保存 tick 开始时的价格
+
+        # === Tick 开始：检查所有 agent 的强平和淘汰条件 ===
+        for agent in self.agent_execution_order:
+            if agent.is_liquidated:
+                continue
+            # 检查强平
+            if agent.account.check_liquidation(current_price):
+                self._handle_liquidation_direct(agent, current_price)
+            # 检查淘汰
+            self._check_elimination(agent, current_price)
 
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
 
-        # 使用预构建的执行顺序列表
+        # === Tick 过程：Agent 按顺序决策和下单 ===
         for agent in self.agent_execution_order:
             if agent.is_liquidated:
                 continue
@@ -569,17 +591,7 @@ class Trainer:
                     is_buyer = not trade.is_buyer_taker
                     maker_agent.account.on_trade(trade, is_buyer)
 
-                    # 检查 maker 的强平和淘汰条件（成交可能导致 maker 亏损）
-                    if maker_agent.account.check_liquidation(current_price):
-                        self._handle_liquidation_direct(maker_agent, current_price)
-                    self._check_elimination(maker_agent, current_price)
-
-            # 检查强平
-            if agent.account.check_liquidation(current_price):
-                self._handle_liquidation_direct(agent, current_price)
-
-            # 检查淘汰
-            self._check_elimination(agent, current_price)
+        # 强平和淘汰检查移到下个 tick 开始时执行
 
     def run_episode(self) -> None:
         """运行一个 episode

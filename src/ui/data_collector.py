@@ -105,6 +105,9 @@ class UIDataCollector:
         从训练器中提取所有UI展示所需的数据，包括价格、订单簿、
         成交记录和种群统计信息。
 
+        重要：使用 tick_start_price（tick 开始时的价格）计算资产，
+        确保与淘汰检查使用同一价格，避免出现"负资产回正"的显示异常。
+
         Args:
             trainer: 训练器实例
 
@@ -114,7 +117,14 @@ class UIDataCollector:
         # 获取订单簿和价格
         orderbook = trainer.matching_engine._orderbook
         depth = orderbook.get_depth(100)
-        last_price = orderbook.last_price
+
+        # 使用 tick 开始时的价格（与淘汰检查一致）
+        # 这样数据采集和淘汰检查使用同一价格，不会出现显示异常
+        price_for_equity = trainer.tick_start_price
+        if price_for_equity <= 0:
+            price_for_equity = orderbook.last_price  # 兼容初始化阶段
+
+        last_price = price_for_equity
         mid_price = orderbook.get_mid_price()
         if mid_price is None:
             mid_price = last_price
@@ -125,7 +135,7 @@ class UIDataCollector:
         # 计算各种群统计（使用NumPy向量化）
         population_stats: dict[AgentType, PopulationStats] = {}
         for agent_type, population in trainer.populations.items():
-            stats = self._compute_population_stats(population, last_price)
+            stats = self._compute_population_stats(population, price_for_equity)
             population_stats[agent_type] = stats
             self.equity_history[agent_type].append(stats.total_equity)
             # 计算存活个体资产总和
