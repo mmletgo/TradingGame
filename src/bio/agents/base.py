@@ -4,7 +4,7 @@
 """
 
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -12,8 +12,6 @@ from src.config.config import AgentConfig, AgentType
 
 if TYPE_CHECKING:
     from src.market.matching.matching_engine import MatchingEngine
-from src.core.event_engine.events import Event, EventType
-from src.core.event_engine.event_bus import EventBus
 from src.bio.brain.brain import Brain
 from src.market.account.account import Account
 from src.market.matching.trade import Trade
@@ -41,7 +39,7 @@ class ActionType(Enum):
 class Agent:
     """Agent 基类
 
-    三种类型 AI Agent（散户、庄家、做市商）的基类，提供通用的属性和事件处理。
+    三种类型 AI Agent（散户、庄家、做市商）的基类，提供通用的属性和方法。
 
     Attributes:
         agent_id: Agent ID
@@ -56,7 +54,6 @@ class Agent:
     account: Account
     is_liquidated: bool
     _order_counter: int
-    _action_handlers: dict[ActionType, Callable[[dict[str, Any], EventBus], None]]
 
     def __init__(
         self,
@@ -64,24 +61,21 @@ class Agent:
         agent_type: AgentType,
         brain: Brain,
         config: AgentConfig,
-        event_bus: EventBus,
     ) -> None:
         """创建 Agent
 
-        初始化 ID、类型、神经网络、账户，并订阅成交事件。
+        初始化 ID、类型、神经网络、账户。
 
         Args:
             agent_id: Agent ID
             agent_type: Agent 类型
             brain: NEAT 神经网络
             config: Agent 配置
-            event_bus: 事件总线
         """
         self.agent_id = agent_id
         self.agent_type = agent_type
         self.brain = brain
         self.account = Account(agent_id, agent_type, config)
-        self.event_bus = event_bus
 
         # 预分配神经网络输入缓冲区（607 = 200 + 200 + 100 + 100 + 4 + 3）
         self._input_buffer: np.ndarray = np.zeros(607, dtype=np.float64)
@@ -92,40 +86,11 @@ class Agent:
         # 预分配挂单信息缓冲区（3 个值）
         self._pending_order_buffer: np.ndarray = np.zeros(3, dtype=np.float64)
 
-        # 使用带 ID 的订阅，支持定向发送
-        event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, agent_id, self._on_trade_event)
-
         # 初始化强平标志
         self.is_liquidated = False
 
         # 初始化订单计数器
         self._order_counter = 0
-
-        # 初始化动作分发表
-        self._init_action_handlers()
-
-    def _on_trade_event(self, event: Event) -> None:
-        """处理成交事件（已定向发送，无需过滤）
-
-        Args:
-            event: 成交事件，包含 trade_id, price, quantity, buyer_id, seller_id,
-                   buyer_fee, seller_fee, is_buyer_taker 等字段
-        """
-        # 从事件数据构建 Trade 对象
-        trade = Trade(
-            trade_id=event.data["trade_id"],
-            price=event.data["price"],
-            quantity=event.data["quantity"],
-            buyer_id=event.data["buyer_id"],
-            seller_id=event.data["seller_id"],
-            buyer_fee=event.data["buyer_fee"],
-            seller_fee=event.data["seller_fee"],
-            is_buyer_taker=event.data["is_buyer_taker"],
-            timestamp=event.timestamp,
-        )
-
-        is_buyer = event.data["buyer_id"] == self.agent_id
-        self.account.on_trade(trade, is_buyer)
 
     def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入
@@ -356,132 +321,16 @@ class Agent:
 
         return quantity
 
-    def _place_limit_order(self, side: OrderSide, price: float, quantity: int, event_bus: EventBus) -> None:
-        """创建并发布限价单
-
-        Args:
-            side: 订单方向（买/卖）
-            price: 价格
-            quantity: 数量
-            event_bus: 事件总线
-        """
-        order_id = self._generate_order_id()
-        order = Order(
-            order_id=order_id,
-            agent_id=self.agent_id,
-            side=side,
-            order_type=OrderType.LIMIT,
-            price=price,
-            quantity=quantity,
-        )
-        event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
-        event_bus.publish(event)
-
-    def _place_market_order(self, side: OrderSide, quantity: int, event_bus: EventBus) -> None:
-        """创建并发布市价单
-
-        Args:
-            side: 订单方向（买/卖）
-            quantity: 数量
-            event_bus: 事件总线
-        """
-        order_id = self._generate_order_id()
-        order = Order(
-            order_id=order_id,
-            agent_id=self.agent_id,
-            side=side,
-            order_type=OrderType.MARKET,
-            price=0.0,
-            quantity=quantity,
-        )
-        event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
-        event_bus.publish(event)
-
-    def _init_action_handlers(self) -> None:
-        """初始化动作分发表
-
-        将动作类型映射到对应的处理函数，用于 execute_action 的字典分发。
-        HOLD 不在表中，会被自然忽略。
-        """
-        self._action_handlers = {
-            ActionType.PLACE_BID: lambda params, event_bus: self._place_limit_order(
-                OrderSide.BUY, params["price"], params["quantity"], event_bus
-            ),
-            ActionType.PLACE_ASK: lambda params, event_bus: self._place_limit_order(
-                OrderSide.SELL, params["price"], params["quantity"], event_bus
-            ),
-            ActionType.CANCEL: self._handle_cancel,
-            ActionType.MARKET_BUY: lambda params, event_bus: self._place_market_order(
-                OrderSide.BUY, params["quantity"], event_bus
-            ),
-            ActionType.MARKET_SELL: lambda params, event_bus: self._place_market_order(
-                OrderSide.SELL, params["quantity"], event_bus
-            ),
-            ActionType.CLEAR_POSITION: self._handle_clear_position,
-        }
-
-    def _handle_cancel(self, params: dict[str, Any], event_bus: EventBus) -> None:
-        """处理撤单动作
-
-        Args:
-            params: 动作参数字典，可包含 order_id（可选，默认使用账户的 pending_order_id）
-            event_bus: 事件总线
-        """
-        order_id = params.get("order_id") or self.account.pending_order_id
-        if order_id is not None:
-            event = Event(
-                EventType.ORDER_CANCELLED,
-                0.0,
-                {"order_id": order_id, "agent_id": self.agent_id},
-            )
-            event_bus.publish(event)
-
-    def _handle_clear_position(self, params: dict[str, Any], event_bus: EventBus) -> None:
-        """处理清仓动作
-
-        根据当前持仓方向，发送市价单平仓。
-
-        Args:
-            params: 动作参数字典（清仓不需要参数）
-            event_bus: 事件总线
-        """
-        position_qty = self.account.position.quantity
-        if position_qty > 0:
-            self._place_market_order(OrderSide.SELL, position_qty, event_bus)
-        elif position_qty < 0:
-            self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
-
-    def execute_action(self, action: ActionType, params: dict[str, Any], event_bus: EventBus) -> None:
-        """执行动作
-
-        根据动作类型发布订单事件到事件总线，由撮合引擎处理。
-        使用字典分发模式查找对应的处理函数。
-
-        Args:
-            action: 动作类型
-            params: 动作参数字典
-                - PLACE_BID/PLACE_ASK: {"price": float, "quantity": float}
-                - MARKET_BUY/MARKET_SELL: {"quantity": float}
-                - CANCEL: {"order_id": int} (可选，默认使用账户的 pending_order_id)
-                - CLEAR_POSITION/HOLD: {}
-            event_bus: 事件总线
-        """
-        if self.is_liquidated:
-            return
-        handler = self._action_handlers.get(action)
-        if handler:
-            handler(params, event_bus)
-
-    def execute_action_direct(
+    def execute_action(
         self,
         action: ActionType,
         params: dict[str, Any],
         matching_engine: "MatchingEngine",
     ) -> list[Trade]:
-        """直接执行动作（训练模式，绕过事件系统）
+        """执行动作
 
-        直接调用撮合引擎处理订单，不通过事件系统。
-        成交后直接更新账户，不依赖事件回调。
+        直接调用撮合引擎处理订单。
+        成交后直接更新账户。
 
         Args:
             action: 动作类型
@@ -501,39 +350,39 @@ class Agent:
         trades: list[Trade] = []
 
         if action == ActionType.PLACE_BID:
-            trades = self._place_limit_order_direct(
+            trades = self._place_limit_order(
                 OrderSide.BUY, params["price"], params["quantity"], matching_engine
             )
         elif action == ActionType.PLACE_ASK:
-            trades = self._place_limit_order_direct(
+            trades = self._place_limit_order(
                 OrderSide.SELL, params["price"], params["quantity"], matching_engine
             )
         elif action == ActionType.CANCEL:
             order_id = params.get("order_id") or self.account.pending_order_id
             if order_id is not None:
-                matching_engine.cancel_order_direct(order_id)
+                matching_engine.cancel_order(order_id)
         elif action == ActionType.MARKET_BUY:
-            trades = self._place_market_order_direct(
+            trades = self._place_market_order(
                 OrderSide.BUY, params["quantity"], matching_engine
             )
         elif action == ActionType.MARKET_SELL:
-            trades = self._place_market_order_direct(
+            trades = self._place_market_order(
                 OrderSide.SELL, params["quantity"], matching_engine
             )
         elif action == ActionType.CLEAR_POSITION:
-            trades = self._handle_clear_position_direct(matching_engine)
+            trades = self._handle_clear_position(matching_engine)
         # HOLD: 不执行任何操作
 
         return trades
 
-    def _place_limit_order_direct(
+    def _place_limit_order(
         self,
         side: OrderSide,
         price: float,
         quantity: int,
         matching_engine: "MatchingEngine",
     ) -> list[Trade]:
-        """直接下限价单（训练模式）
+        """下限价单
 
         Args:
             side: 订单方向
@@ -556,8 +405,8 @@ class Agent:
             price=price,
             quantity=quantity,
         )
-        trades = matching_engine.process_order_direct(order)
-        self._process_trades_direct(trades)
+        trades = matching_engine.process_order(order)
+        self._process_trades(trades)
 
         # 更新挂单ID（如果订单未完全成交，则记录）
         if matching_engine._orderbook.order_map.get(order.order_id) is not None:
@@ -567,13 +416,13 @@ class Agent:
 
         return trades
 
-    def _place_market_order_direct(
+    def _place_market_order(
         self,
         side: OrderSide,
         quantity: int,
         matching_engine: "MatchingEngine",
     ) -> list[Trade]:
-        """直接下市价单（训练模式）
+        """下市价单
 
         Args:
             side: 订单方向
@@ -595,15 +444,15 @@ class Agent:
             price=0.0,
             quantity=quantity,
         )
-        trades = matching_engine.process_order_direct(order)
-        self._process_trades_direct(trades)
+        trades = matching_engine.process_order(order)
+        self._process_trades(trades)
         return trades
 
-    def _handle_clear_position_direct(
+    def _handle_clear_position(
         self,
         matching_engine: "MatchingEngine",
     ) -> list[Trade]:
-        """直接处理清仓（训练模式）
+        """处理清仓
 
         Args:
             matching_engine: 撮合引擎
@@ -613,13 +462,13 @@ class Agent:
         """
         position_qty = self.account.position.quantity
         if position_qty > 0:
-            return self._place_market_order_direct(OrderSide.SELL, position_qty, matching_engine)
+            return self._place_market_order(OrderSide.SELL, position_qty, matching_engine)
         elif position_qty < 0:
-            return self._place_market_order_direct(OrderSide.BUY, abs(position_qty), matching_engine)
+            return self._place_market_order(OrderSide.BUY, abs(position_qty), matching_engine)
         return []
 
-    def _process_trades_direct(self, trades: list[Trade]) -> None:
-        """直接处理成交列表，更新账户（训练模式）
+    def _process_trades(self, trades: list[Trade]) -> None:
+        """处理成交列表，更新账户
 
         Args:
             trades: 成交列表
@@ -647,19 +496,13 @@ class Agent:
     def reset(self, config: AgentConfig) -> None:
         """重置 Agent 状态
 
-        清除事件订阅，重置账户余额、持仓、挂单，用于恢复训练或重置演示。
+        重置账户余额、持仓、挂单，用于恢复训练或重置演示。
 
         Args:
             config: 新的 Agent 配置对象，用于初始化账户
         """
-        # 取消带 ID 的订阅
-        self.event_bus.unsubscribe_with_id(EventType.TRADE_EXECUTED, self.agent_id)
-
         # 重置账户状态（余额、持仓、挂单ID、杠杆、费率等）
         self.account = Account(self.agent_id, self.agent_type, config)
-
-        # 重新订阅成交事件
-        self.event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, self.agent_id, self._on_trade_event)
 
         # 重置强平标志
         self.is_liquidated = False

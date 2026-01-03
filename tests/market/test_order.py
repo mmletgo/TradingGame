@@ -2,9 +2,6 @@
 测试订单模块
 """
 
-import pytest
-import time
-
 from src.market.orderbook.order import Order, OrderSide, OrderType
 
 
@@ -26,7 +23,8 @@ def test_create_limit_buy_order():
     assert order.price == 100.5
     assert order.quantity == 10
     assert order.filled_quantity == 0
-    assert order.timestamp > 0
+    # 训练模式下时间戳默认为 0.0（优化性能，避免 time.time() 调用）
+    assert order.timestamp == 0.0
 
 
 def test_create_limit_sell_order():
@@ -89,9 +87,8 @@ def test_create_market_sell_order():
     assert order.filled_quantity == 0
 
 
-def test_timestamp_is_set():
-    """测试时间戳自动设置"""
-    before = time.time()
+def test_timestamp_default_value():
+    """测试时间戳默认值为 0.0（训练模式优化）"""
     order = Order(
         order_id=5,
         agent_id=104,
@@ -100,9 +97,25 @@ def test_timestamp_is_set():
         price=100.0,
         quantity=1,
     )
-    after = time.time()
 
-    assert before <= order.timestamp <= after
+    # 训练模式下时间戳默认为 0.0
+    assert order.timestamp == 0.0
+
+
+def test_timestamp_custom_value():
+    """测试可以传入自定义时间戳"""
+    custom_timestamp = 1234567890.123
+    order = Order(
+        order_id=6,
+        agent_id=105,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=1,
+        timestamp=custom_timestamp,
+    )
+
+    assert order.timestamp == custom_timestamp
 
 
 def test_filled_quantity_initial_zero():

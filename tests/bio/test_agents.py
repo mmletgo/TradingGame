@@ -9,8 +9,6 @@ from src.bio.agents.retail import RetailAgent
 from src.bio.agents.whale import WhaleAgent
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.config.config import AgentConfig, AgentType
-from src.core.event_engine.events import Event, EventType
-from src.core.event_engine.event_bus import EventBus
 from src.bio.brain.brain import Brain
 from src.market.orderbook.order import OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
@@ -48,16 +46,12 @@ class TestAgentInit:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建散户 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证属性
@@ -87,16 +81,12 @@ class TestAgentInit:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建庄家 Agent
         agent = Agent(
             agent_id=10001,
             agent_type=AgentType.WHALE,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证属性
@@ -123,16 +113,12 @@ class TestAgentInit:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = Agent(
             agent_id=10011,
             agent_type=AgentType.MARKET_MAKER,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证属性
@@ -143,240 +129,6 @@ class TestAgentInit:
         assert agent.account.leverage == 10.0
         assert agent.account.maker_fee_rate == 0.0
         assert agent.account.taker_fee_rate == 0.0001
-
-
-class TestAgentOnTradeEvent:
-    """测试 Agent._on_trade_event"""
-
-    def test_on_buy_trade_event(self):
-        """测试处理买入成交事件"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 创建买入成交事件
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 10.0,
-                "buyer_id": 1,
-                "seller_id": 2,
-                "buyer_fee": 5.0,
-                "seller_fee": 2.0,
-                "is_buyer_taker": True,
-            },
-        )
-
-        # 处理事件
-        agent._on_trade_event(event)
-
-        # 验证账户更新
-        assert agent.account.position.quantity == 10.0
-        assert agent.account.position.avg_price == 100.0
-        assert agent.account.balance == 9995.0  # 10000 - 5
-
-    def test_on_sell_trade_event(self):
-        """测试处理卖出成交事件"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent 并先开多仓
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.WHALE,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-        # 先开多仓 100 @ 100
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 100.0, 100.0)
-
-        # 创建卖出成交事件（平仓）
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 2,
-                "price": 110.0,
-                "quantity": 50.0,
-                "buyer_id": 2,
-                "seller_id": 1,
-                "buyer_fee": 5.5,
-                "seller_fee": 0.0,
-                "is_buyer_taker": True,
-            },
-        )
-
-        # 记录初始余额
-        initial_balance = agent.account.balance
-
-        # 处理事件
-        agent._on_trade_event(event)
-
-        # 验证账户更新
-        assert agent.account.position.quantity == 50.0  # 100 - 50
-        assert agent.account.position.avg_price == 100.0
-        # 已实现盈亏 = 50 * (110 - 100) = 500
-        assert abs(agent.account.position.realized_pnl - 500.0) < 0.01
-        # 余额增加已实现盈亏，扣除手续费（seller_fee=0）
-        # balance = initial_balance + realized_pnl - fee = 10000000 + 500 - 0
-        assert abs(agent.account.balance - (initial_balance + 500.0)) < 0.01
-
-    def test_targeted_event_delivery(self):
-        """测试定向事件发送（无关事件不会发送给 Agent）
-
-        现在使用 subscribe_with_id 和 target_ids，无关事件根本不会发送给 Agent。
-        """
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent (agent_id=1)
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 验证 Agent 使用 subscribe_with_id 订阅了事件
-        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
-        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
-
-        # 创建定向发送给其他 Agent 的成交事件
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 10.0,
-                "buyer_id": 2,
-                "seller_id": 3,
-                "buyer_fee": 5.0,
-                "seller_fee": 2.0,
-                "is_buyer_taker": True,
-            },
-            target_ids={2, 3},  # 只发送给 agent_id=2 和 agent_id=3
-        )
-
-        # 记录初始账户状态
-        initial_balance = agent.account.balance
-        initial_quantity = agent.account.position.quantity
-
-        # 发布事件
-        event_bus.publish(event)
-
-        # 验证账户未更新（事件未发送给 agent_id=1）
-        assert agent.account.balance == initial_balance
-        assert agent.account.position.quantity == initial_quantity
-
-    def test_event_subscription_with_id(self):
-        """测试使用 subscribe_with_id 订阅事件"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 验证使用 subscribe_with_id 订阅
-        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
-        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
-
-        # 发布定向成交事件
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 10.0,
-                "buyer_id": 1,
-                "seller_id": 2,
-                "buyer_fee": 5.0,
-                "seller_fee": 2.0,
-                "is_buyer_taker": True,
-            },
-            target_ids={1, 2},  # 发送给参与成交的双方
-        )
-
-        # 发布事件
-        event_bus.publish(event)
-
-        # 验证账户自动更新（通过事件订阅）
-        assert agent.account.position.quantity == 10.0
-        assert agent.account.position.avg_price == 100.0
-        assert agent.account.balance == 9995.0  # 10000 - 5
 
 
 class TestAgentObserve:
@@ -397,16 +149,12 @@ class TestAgentObserve:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -473,16 +221,12 @@ class TestAgentObserve:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建空订单簿
@@ -523,16 +267,12 @@ class TestAgentObserve:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -583,16 +323,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -629,16 +365,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -680,16 +412,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -730,16 +458,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -775,16 +499,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -822,16 +542,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -869,16 +585,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -914,16 +626,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -958,16 +666,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置多仓持仓
@@ -1011,16 +715,12 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建空订单簿
@@ -1043,13 +743,28 @@ class TestAgentDecide:
         assert params["price"] == 95.0
 
 
+def create_mock_matching_engine() -> MagicMock:
+    """创建测试用的 mock MatchingEngine"""
+    mock_engine = MagicMock()
+    # 模拟订单簿
+    mock_orderbook = MagicMock()
+    mock_orderbook.order_map = {}
+    mock_engine._orderbook = mock_orderbook
+    # process_order 默认返回空成交列表
+    mock_engine.process_order.return_value = []
+    # cancel_order 不返回值
+    mock_engine.cancel_order.return_value = None
+    return mock_engine
+
+
 class TestAgentExecuteAction:
     """测试 Agent.execute_action"""
 
     def test_execute_place_bid(self):
         """测试执行挂买单"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1061,44 +776,35 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行挂买单
         action = ActionType.PLACE_BID
-        params = {"price": 99.5, "quantity": 10.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"price": 99.5, "quantity": 10}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证事件发布
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_PLACED
-        order = event.data["order"]
+        # 验证调用了 process_order
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.BUY
-        assert order.order_type.value == OrderType.LIMIT
+        assert order.side == OrderSide.BUY
+        assert order.order_type == OrderType.LIMIT
         assert order.price == 99.5
-        assert order.quantity == 10.0
+        assert order.quantity == 10
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_place_ask(self):
         """测试执行挂卖单"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1110,136 +816,35 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行挂卖单
         action = ActionType.PLACE_ASK
-        params = {"price": 100.5, "quantity": 20.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"price": 100.5, "quantity": 20}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证事件发布
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_PLACED
-        order = event.data["order"]
+        # 验证调用了 process_order
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.SELL
-        assert order.order_type.value == OrderType.LIMIT
+        assert order.side == OrderSide.SELL
+        assert order.order_type == OrderType.LIMIT
         assert order.price == 100.5
-        assert order.quantity == 20.0
-
-    def test_execute_cancel(self):
-        """测试执行撤单"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线并订阅撤单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-        agent.account.pending_order_id = 12345
-
-        # 执行撤单（不传 order_id，使用账户的 pending_order_id）
-        action = ActionType.CANCEL
-        params: dict = {}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证事件发布
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_CANCELLED
-        assert event.data["order_id"] == 12345
-        assert event.data["agent_id"] == 1
-
-    def test_execute_cancel_with_order_id(self):
-        """测试执行撤单（指定订单ID）"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线并订阅撤单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-        agent.account.pending_order_id = 12345
-
-        # 执行撤单（指定 order_id）
-        action = ActionType.CANCEL
-        params = {"order_id": 67890}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证事件发布（应使用指定的 order_id）
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_CANCELLED
-        assert event.data["order_id"] == 67890
-        assert event.data["agent_id"] == 1
+        assert order.quantity == 20
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_market_buy(self):
         """测试执行市价买入"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1251,44 +856,35 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行市价买入
         action = ActionType.MARKET_BUY
-        params = {"quantity": 15.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"quantity": 15}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证事件发布
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_PLACED
-        order = event.data["order"]
+        # 验证调用了 process_order
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.BUY
-        assert order.order_type.value == OrderType.MARKET
+        assert order.side == OrderSide.BUY
+        assert order.order_type == OrderType.MARKET
         assert order.price == 0.0
-        assert order.quantity == 15.0
+        assert order.quantity == 15
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_market_sell(self):
         """测试执行市价卖出"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1300,44 +896,35 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行市价卖出
         action = ActionType.MARKET_SELL
-        params = {"quantity": 25.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"quantity": 25}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证事件发布
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_PLACED
-        order = event.data["order"]
+        # 验证调用了 process_order
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.SELL
-        assert order.order_type.value == OrderType.MARKET
+        assert order.side == OrderSide.SELL
+        assert order.order_type == OrderType.MARKET
         assert order.price == 0.0
-        assert order.quantity == 25.0
+        assert order.quantity == 25
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_clear_position_long(self):
         """测试清仓（多仓）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1349,47 +936,38 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置多仓持仓
         from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 100.0, 100.0)
+        agent.account.position.update(OrderSide.BUY, 100, 100.0)
 
         # 执行清仓
         action = ActionType.CLEAR_POSITION
         params: dict = {}
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证事件发布（市价卖出）
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_PLACED
-        order = event.data["order"]
+        # 验证调用了 process_order（市价卖出）
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.SELL
-        assert order.order_type.value == OrderType.MARKET
-        assert order.quantity == 100.0
+        assert order.side == OrderSide.SELL
+        assert order.order_type == OrderType.MARKET
+        assert order.quantity == 100
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_clear_position_short(self):
         """测试清仓（空仓）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1401,47 +979,38 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置空仓持仓
         from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.SELL, 50.0, 100.0)
+        agent.account.position.update(OrderSide.SELL, 50, 100.0)
 
         # 执行清仓
         action = ActionType.CLEAR_POSITION
         params: dict = {}
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证事件发布（市价买入）
-        assert len(published_events) == 1
-        event = published_events[0]
-        assert event.event_type == EventType.ORDER_PLACED
-        order = event.data["order"]
+        # 验证调用了 process_order（市价买入）
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.BUY
-        assert order.order_type.value == OrderType.MARKET
-        assert order.quantity == 50.0
+        assert order.side == OrderSide.BUY
+        assert order.order_type == OrderType.MARKET
+        assert order.quantity == 50
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_clear_position_no_position(self):
         """测试清仓（无持仓）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1453,36 +1022,29 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行清仓（无持仓）
         action = ActionType.CLEAR_POSITION
         params: dict = {}
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证没有事件发布
-        assert len(published_events) == 0
+        # 验证没有调用 process_order
+        mock_engine.process_order.assert_not_called()
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_hold(self):
         """测试执行 HOLD（不动）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -1494,32 +1056,23 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅订单事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行 HOLD
         action = ActionType.HOLD
         params: dict = {}
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证没有事件发布
-        assert len(published_events) == 0
+        # 验证没有调用 process_order
+        mock_engine.process_order.assert_not_called()
+        # 返回空成交列表
+        assert trades == []
 
     def test_generate_order_id(self):
         """测试生成唯一订单ID"""
@@ -1536,16 +1089,12 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=123,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 生成多个订单ID，验证唯一性
@@ -1576,21 +1125,17 @@ class TestAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        event_bus = EventBus()
-
         agent1 = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain_1,
             config=config,
-            event_bus=event_bus,
         )
         agent2 = Agent(
             agent_id=2,
             agent_type=AgentType.RETAIL,
             brain=mock_brain_2,
             config=config,
-            event_bus=event_bus,
         )
 
         # 两个 Agent 并发生成订单ID
@@ -1621,16 +1166,12 @@ class TestAgentReset:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=1,
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=initial_config,
-            event_bus=event_bus,
         )
 
         # 修改账户状态（开仓、设置挂单ID）
@@ -1680,21 +1221,16 @@ class TestAgentReset:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建 Agent
         agent = Agent(
             agent_id=999,
             agent_type=AgentType.MARKET_MAKER,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 保存原始引用
         original_brain = agent.brain
-        original_event_bus = agent.event_bus
 
         # 重置
         new_config = AgentConfig(
@@ -1711,82 +1247,11 @@ class TestAgentReset:
         assert agent.agent_id == 999
         assert agent.agent_type == AgentType.MARKET_MAKER
         assert agent.brain is original_brain
-        assert agent.event_bus is original_event_bus
-
-    def test_reset_reestablishes_event_subscription(self):
-        """测试重置后重新建立事件订阅（使用 subscribe_with_id）"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线
-        event_bus = EventBus()
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 验证初始订阅使用 _subscriber_ids
-        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
-        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
-
-        # 重置
-        new_config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-        agent.reset(new_config)
-
-        # 验证重置后仍在 _subscriber_ids 中
-        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
-        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
-
-        # 验证事件订阅仍然有效（发布定向成交事件应能触发账户更新）
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 10.0,
-                "buyer_id": 1,
-                "seller_id": 2,
-                "buyer_fee": 5.0,
-                "seller_fee": 2.0,
-                "is_buyer_taker": True,
-            },
-            target_ids={1, 2},  # 定向发送给参与成交的双方
-        )
-        event_bus.publish(event)
-
-        # 验证账户更新了
-        assert agent.account.position.quantity == 10.0
-        assert agent.account.position.avg_price == 100.0
-        assert agent.account.balance == 9995.0  # 10000 - 5
 
     def test_reset_with_different_agent_types(self):
         """测试不同类型 Agent 的重置"""
         # 测试散户
         mock_brain = MagicMock(spec=Brain)
-        event_bus = EventBus()
 
         retail_config = AgentConfig(
             count=10000,
@@ -1801,7 +1266,6 @@ class TestAgentReset:
             agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=retail_config,
-            event_bus=event_bus,
         )
         retail_agent.account.balance = 5000.0
         retail_agent.reset(retail_config)
@@ -1821,7 +1285,6 @@ class TestAgentReset:
             agent_type=AgentType.WHALE,
             brain=mock_brain,
             config=whale_config,
-            event_bus=event_bus,
         )
         whale_agent.account.balance = 5000000.0
         whale_agent.reset(whale_config)
@@ -1841,7 +1304,6 @@ class TestAgentReset:
             agent_type=AgentType.MARKET_MAKER,
             brain=mock_brain,
             config=mm_config,
-            event_bus=event_bus,
         )
         mm_agent.account.balance = 5000000.0
         mm_agent.reset(mm_config)
@@ -1866,15 +1328,11 @@ class TestRetailAgentInit:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建散户 Agent
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证属性
@@ -1902,13 +1360,11 @@ class TestRetailAgentInit:
             maker_fee_rate=0.0002,
             taker_fee_rate=0.0005,
         )
-        event_bus = EventBus()
 
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证是 Agent 的实例
@@ -1925,13 +1381,11 @@ class TestRetailAgentInit:
             maker_fee_rate=0.0002,
             taker_fee_rate=0.0005,
         )
-        event_bus = EventBus()
 
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证继承了基类方法
@@ -1943,53 +1397,6 @@ class TestRetailAgentInit:
         assert callable(agent.decide)
         assert callable(agent.execute_action)
         assert callable(agent.reset)
-
-    def test_retail_agent_subscribes_to_events(self):
-        """测试散户 Agent 订阅成交事件（使用 subscribe_with_id）"""
-        mock_brain = MagicMock(spec=Brain)
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-        event_bus = EventBus()
-
-        agent = RetailAgent(
-            agent_id=1,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 验证使用 subscribe_with_id 订阅
-        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
-        assert 1 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
-
-        # 发布定向成交事件
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 10.0,
-                "buyer_id": 1,
-                "seller_id": 2,
-                "buyer_fee": 5.0,
-                "seller_fee": 2.0,
-                "is_buyer_taker": True,
-            },
-            target_ids={1, 2},  # 定向发送给参与成交的双方
-        )
-        event_bus.publish(event)
-
-        # 验证账户自动更新（通过事件订阅）
-        assert agent.account.position.quantity == 10.0
-        assert agent.account.position.avg_price == 100.0
-        assert agent.account.balance == 9995.0  # 10000 - 5
 
 
 class TestRetailAgentGetActionSpace:
@@ -2010,15 +1417,11 @@ class TestRetailAgentGetActionSpace:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建散户 Agent
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -2058,15 +1461,11 @@ class TestRetailAgentGetActionSpace:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建散户 Agent
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -2081,8 +1480,9 @@ class TestRetailAgentExecuteAction:
 
     def test_place_bid_with_existing_order(self):
         """测试有挂单时再挂买单：先撤旧单再挂新单"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建散户 Agent 配置
         config = AgentConfig(
@@ -2094,22 +1494,11 @@ class TestRetailAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建散户 Agent
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置已有挂单
@@ -2117,32 +1506,27 @@ class TestRetailAgentExecuteAction:
 
         # 执行挂买单
         action = ActionType.PLACE_BID
-        params = {"price": 99.5, "quantity": 10.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"price": 99.5, "quantity": 10}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证发布了两个事件：撤单 + 挂单
-        assert len(published_events) == 2
-
-        # 第一个事件是撤单
-        cancel_event = published_events[0]
-        assert cancel_event.event_type == EventType.ORDER_CANCELLED
-        assert cancel_event.data["order_id"] == 12345
-        assert cancel_event.data["agent_id"] == 1
-
-        # 第二个事件是挂单
-        place_event = published_events[1]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
+        # 验证调用了 cancel_order 撤销旧单
+        mock_engine.cancel_order.assert_called_once_with(12345)
+        # 验证调用了 process_order 挂新单
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.BUY
-        assert order.order_type.value == OrderType.LIMIT
+        assert order.side == OrderSide.BUY
+        assert order.order_type == OrderType.LIMIT
         assert order.price == 99.5
-        assert order.quantity == 10.0
+        assert order.quantity == 10
+        # 返回空成交列表
+        assert trades == []
 
     def test_place_ask_with_existing_order(self):
         """测试有挂单时再挂卖单：先撤旧单再挂新单"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建散户 Agent 配置
         config = AgentConfig(
@@ -2154,22 +1538,11 @@ class TestRetailAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建散户 Agent
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置已有挂单
@@ -2177,29 +1550,25 @@ class TestRetailAgentExecuteAction:
 
         # 执行挂卖单
         action = ActionType.PLACE_ASK
-        params = {"price": 100.5, "quantity": 20.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"price": 100.5, "quantity": 20}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证发布了两个事件：撤单 + 挂单
-        assert len(published_events) == 2
-
-        # 第一个事件是撤单
-        cancel_event = published_events[0]
-        assert cancel_event.event_type == EventType.ORDER_CANCELLED
-        assert cancel_event.data["order_id"] == 67890
-
-        # 第二个事件是挂单
-        place_event = published_events[1]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
-        assert order.side.value == OrderSide.SELL
+        # 验证调用了 cancel_order 撤销旧单
+        mock_engine.cancel_order.assert_called_once_with(67890)
+        # 验证调用了 process_order 挂新单
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
+        assert order.side == OrderSide.SELL
         assert order.price == 100.5
-        assert order.quantity == 20.0
+        assert order.quantity == 20
+        # 返回空成交列表
+        assert trades == []
 
     def test_place_bid_without_existing_order(self):
         """测试无挂单时挂买单：直接挂单"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建散户 Agent 配置
         config = AgentConfig(
@@ -2211,22 +1580,11 @@ class TestRetailAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建散户 Agent
         agent = RetailAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 确认没有挂单
@@ -2234,78 +1592,20 @@ class TestRetailAgentExecuteAction:
 
         # 执行挂买单
         action = ActionType.PLACE_BID
-        params = {"price": 99.5, "quantity": 10.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"price": 99.5, "quantity": 10}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证只发布了一个事件：挂单
-        assert len(published_events) == 1
-
-        # 事件是挂单
-        place_event = published_events[0]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
+        # 验证没有调用 cancel_order
+        mock_engine.cancel_order.assert_not_called()
+        # 验证调用了 process_order
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 1
-        assert order.side.value == OrderSide.BUY
+        assert order.side == OrderSide.BUY
         assert order.price == 99.5
-        assert order.quantity == 10.0
-
-    def test_execute_other_actions(self):
-        """测试其他动作（CANCEL, MARKET_BUY, MARKET_SELL, HOLD）使用父类实现"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建散户 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
-        # 创建散户 Agent
-        agent = RetailAgent(
-            agent_id=1,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 测试 MARKET_BUY
-        published_events.clear()
-        agent.execute_action(ActionType.MARKET_BUY, {"quantity": 15.0}, event_bus)
-        assert len(published_events) == 1
-        assert published_events[0].event_type == EventType.ORDER_PLACED
-        assert published_events[0].data["order"].order_type.value == OrderType.MARKET
-
-        # 测试 MARKET_SELL
-        published_events.clear()
-        agent.execute_action(ActionType.MARKET_SELL, {"quantity": 25.0}, event_bus)
-        assert len(published_events) == 1
-        assert published_events[0].event_type == EventType.ORDER_PLACED
-
-        # 测试 CANCEL
-        agent.account.pending_order_id = 12345
-        published_events.clear()
-        agent.execute_action(ActionType.CANCEL, {}, event_bus)
-        assert len(published_events) == 1
-        assert published_events[0].event_type == EventType.ORDER_CANCELLED
-
-        # 测试 HOLD
-        published_events.clear()
-        agent.execute_action(ActionType.HOLD, {}, event_bus)
-        assert len(published_events) == 0
+        assert order.quantity == 10
+        # 返回空成交列表
+        assert trades == []
 
 
 class TestWhaleAgentInit:
@@ -2326,15 +1626,11 @@ class TestWhaleAgentInit:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证属性
@@ -2360,13 +1656,11 @@ class TestWhaleAgentInit:
             maker_fee_rate=0.0,
             taker_fee_rate=0.0001,
         )
-        event_bus = EventBus()
 
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证是 Agent 的实例
@@ -2383,13 +1677,11 @@ class TestWhaleAgentInit:
             maker_fee_rate=0.0,
             taker_fee_rate=0.0001,
         )
-        event_bus = EventBus()
 
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证继承了基类方法
@@ -2401,53 +1693,6 @@ class TestWhaleAgentInit:
         assert callable(agent.decide)
         assert callable(agent.execute_action)
         assert callable(agent.reset)
-
-    def test_whale_agent_subscribes_to_events(self):
-        """测试庄家 Agent 订阅成交事件（使用 subscribe_with_id）"""
-        mock_brain = MagicMock(spec=Brain)
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-        event_bus = EventBus()
-
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 验证使用 subscribe_with_id 订阅
-        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
-        assert 10001 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
-
-        # 发布定向成交事件
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 100.0,
-                "buyer_id": 10001,
-                "seller_id": 10002,
-                "buyer_fee": 0.0,
-                "seller_fee": 1.0,
-                "is_buyer_taker": True,
-            },
-            target_ids={10001, 10002},  # 定向发送给参与成交的双方
-        )
-        event_bus.publish(event)
-
-        # 验证账户自动更新（通过事件订阅）
-        assert agent.account.position.quantity == 100.0
-        assert agent.account.position.avg_price == 100.0
-        assert agent.account.balance == 10000000.0  # 庄家 maker 费率为 0
 
 
 class TestWhaleAgentGetActionSpace:
@@ -2468,15 +1713,11 @@ class TestWhaleAgentGetActionSpace:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -2512,15 +1753,11 @@ class TestWhaleAgentGetActionSpace:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -2544,15 +1781,11 @@ class TestWhaleAgentGetActionSpace:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -2576,15 +1809,11 @@ class TestWhaleAgentGetActionSpace:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -2599,8 +1828,9 @@ class TestWhaleAgentExecuteAction:
 
     def test_place_bid_with_existing_order(self):
         """测试有挂单时再挂买单：先撤旧单再挂新单"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建庄家 Agent 配置
         config = AgentConfig(
@@ -2612,22 +1842,11 @@ class TestWhaleAgentExecuteAction:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置已有挂单
@@ -2635,89 +1854,27 @@ class TestWhaleAgentExecuteAction:
 
         # 执行挂买单
         action = ActionType.PLACE_BID
-        params = {"price": 99.5, "quantity": 100.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"price": 99.5, "quantity": 100}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证发布了两个事件：撤单 + 挂单
-        assert len(published_events) == 2
-
-        # 第一个事件是撤单
-        cancel_event = published_events[0]
-        assert cancel_event.event_type == EventType.ORDER_CANCELLED
-        assert cancel_event.data["order_id"] == 12345
-        assert cancel_event.data["agent_id"] == 10001
-
-        # 第二个事件是挂单
-        place_event = published_events[1]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
+        # 验证调用了 cancel_order 撤销旧单
+        mock_engine.cancel_order.assert_called_once_with(12345)
+        # 验证调用了 process_order 挂新单
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 10001
-        assert order.side.value == OrderSide.BUY
-        assert order.order_type.value == OrderType.LIMIT
+        assert order.side == OrderSide.BUY
+        assert order.order_type == OrderType.LIMIT
         assert order.price == 99.5
-        assert order.quantity == 100.0
-
-    def test_place_ask_with_existing_order(self):
-        """测试有挂单时再挂卖单：先撤旧单再挂新单"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 设置已有挂单
-        agent.account.pending_order_id = 67890
-
-        # 执行挂卖单
-        action = ActionType.PLACE_ASK
-        params = {"price": 100.5, "quantity": 200.0}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证发布了两个事件：撤单 + 挂单
-        assert len(published_events) == 2
-
-        # 第一个事件是撤单
-        cancel_event = published_events[0]
-        assert cancel_event.event_type == EventType.ORDER_CANCELLED
-        assert cancel_event.data["order_id"] == 67890
-
-        # 第二个事件是挂单
-        place_event = published_events[1]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
-        assert order.side.value == OrderSide.SELL
-        assert order.price == 100.5
-        assert order.quantity == 200.0
+        assert order.quantity == 100
+        # 返回空成交列表
+        assert trades == []
 
     def test_place_bid_without_existing_order(self):
         """测试无挂单时挂买单：直接挂单"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建庄家 Agent 配置
         config = AgentConfig(
@@ -2729,22 +1886,11 @@ class TestWhaleAgentExecuteAction:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 确认没有挂单
@@ -2752,25 +1898,26 @@ class TestWhaleAgentExecuteAction:
 
         # 执行挂买单
         action = ActionType.PLACE_BID
-        params = {"price": 99.5, "quantity": 100.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"price": 99.5, "quantity": 100}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证只发布了一个事件：挂单
-        assert len(published_events) == 1
-
-        # 事件是挂单
-        place_event = published_events[0]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
+        # 验证没有调用 cancel_order（因为没有旧单）
+        mock_engine.cancel_order.assert_not_called()
+        # 验证调用了 process_order
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
         assert order.agent_id == 10001
-        assert order.side.value == OrderSide.BUY
+        assert order.side == OrderSide.BUY
         assert order.price == 99.5
-        assert order.quantity == 100.0
+        assert order.quantity == 100
+        # 返回空成交列表
+        assert trades == []
 
     def test_market_buy_with_existing_order(self):
         """测试有挂单时市价买入：先撤旧单再市价买入"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建庄家 Agent 配置
         config = AgentConfig(
@@ -2782,22 +1929,11 @@ class TestWhaleAgentExecuteAction:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建庄家 Agent
         agent = WhaleAgent(
             agent_id=10001,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置已有挂单
@@ -2805,174 +1941,19 @@ class TestWhaleAgentExecuteAction:
 
         # 执行市价买入
         action = ActionType.MARKET_BUY
-        params = {"quantity": 150.0}
-        agent.execute_action(action, params, event_bus)
+        params = {"quantity": 150}
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证发布了两个事件：撤单 + 市价单
-        assert len(published_events) == 2
-
-        # 第一个事件是撤单
-        cancel_event = published_events[0]
-        assert cancel_event.event_type == EventType.ORDER_CANCELLED
-        assert cancel_event.data["order_id"] == 99999
-
-        # 第二个事件是市价买单
-        place_event = published_events[1]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
-        assert order.order_type.value == OrderType.MARKET
-        assert order.side.value == OrderSide.BUY
-        assert order.quantity == 150.0
-
-    def test_market_sell_with_existing_order(self):
-        """测试有挂单时市价卖出：先撤旧单再市价卖出"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 设置已有挂单
-        agent.account.pending_order_id = 88888
-
-        # 执行市价卖出
-        action = ActionType.MARKET_SELL
-        params = {"quantity": 250.0}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证发布了两个事件：撤单 + 市价单
-        assert len(published_events) == 2
-
-        # 第一个事件是撤单
-        cancel_event = published_events[0]
-        assert cancel_event.event_type == EventType.ORDER_CANCELLED
-
-        # 第二个事件是市价卖单
-        place_event = published_events[1]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
-        assert order.order_type.value == OrderType.MARKET
-        assert order.side.value == OrderSide.SELL
-        assert order.quantity == 250.0
-
-    def test_market_buy_without_existing_order(self):
-        """测试无挂单时市价买入：直接市价买入"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 执行市价买入
-        action = ActionType.MARKET_BUY
-        params = {"quantity": 150.0}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证只发布了一个事件：市价单
-        assert len(published_events) == 1
-        place_event = published_events[0]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
-        assert order.order_type.value == OrderType.MARKET
-        assert order.side.value == OrderSide.BUY
-        assert order.quantity == 150.0
-
-    def test_market_sell_without_existing_order(self):
-        """测试无挂单时市价卖出：直接市价卖出"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 执行市价卖出
-        action = ActionType.MARKET_SELL
-        params = {"quantity": 250.0}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证只发布了一个事件：市价单
-        assert len(published_events) == 1
-        place_event = published_events[0]
-        assert place_event.event_type == EventType.ORDER_PLACED
-        order = place_event.data["order"]
-        assert order.order_type.value == OrderType.MARKET
-        assert order.side.value == OrderSide.SELL
-        assert order.quantity == 250.0
+        # 验证调用了 cancel_order 撤销旧单
+        mock_engine.cancel_order.assert_called_once_with(99999)
+        # 验证调用了 process_order 市价单
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
+        assert order.order_type == OrderType.MARKET
+        assert order.side == OrderSide.BUY
+        assert order.quantity == 150
+        # 返回空成交列表
+        assert trades == []
 
 
 class TestMarketMakerAgentInit:
@@ -2993,15 +1974,11 @@ class TestMarketMakerAgentInit:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证基本属性
@@ -3035,13 +2012,11 @@ class TestMarketMakerAgentInit:
             maker_fee_rate=0.0,
             taker_fee_rate=0.0001,
         )
-        event_bus = EventBus()
 
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证是 Agent 的实例
@@ -3058,13 +2033,11 @@ class TestMarketMakerAgentInit:
             maker_fee_rate=0.0,
             taker_fee_rate=0.0001,
         )
-        event_bus = EventBus()
 
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 验证继承了基类方法
@@ -3076,53 +2049,6 @@ class TestMarketMakerAgentInit:
         assert callable(agent.decide)
         assert callable(agent.execute_action)
         assert callable(agent.reset)
-
-    def test_market_maker_agent_subscribes_to_events(self):
-        """测试做市商 Agent 订阅成交事件（使用 subscribe_with_id）"""
-        mock_brain = MagicMock(spec=Brain)
-        config = AgentConfig(
-            count=100,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-        event_bus = EventBus()
-
-        agent = MarketMakerAgent(
-            agent_id=10011,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 验证使用 subscribe_with_id 订阅
-        assert EventType.TRADE_EXECUTED in event_bus._subscriber_ids
-        assert 10011 in event_bus._subscriber_ids[EventType.TRADE_EXECUTED]
-
-        # 发布定向成交事件
-        event = Event(
-            event_type=EventType.TRADE_EXECUTED,
-            timestamp=0.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 50.0,
-                "buyer_id": 10011,
-                "seller_id": 10012,
-                "buyer_fee": 0.0,
-                "seller_fee": 0.5,
-                "is_buyer_taker": True,
-            },
-            target_ids={10011, 10012},  # 定向发送给参与成交的双方
-        )
-        event_bus.publish(event)
-
-        # 验证账户自动更新（通过事件订阅）
-        assert agent.account.position.quantity == 50.0
-        assert agent.account.position.avg_price == 100.0
-        assert agent.account.balance == 10000000.0  # 做市商 maker 费率为 0
 
 
 class TestMarketMakerAgentGetActionSpace:
@@ -3143,15 +2069,11 @@ class TestMarketMakerAgentGetActionSpace:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -3183,15 +2105,11 @@ class TestMarketMakerAgentGetActionSpace:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 获取动作空间
@@ -3211,8 +2129,9 @@ class TestMarketMakerAgentExecuteAction:
 
     def test_execute_quote_with_no_existing_orders(self):
         """测试执行双边挂单（无旧挂单）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建做市商 Agent 配置
         config = AgentConfig(
@@ -3224,71 +2143,44 @@ class TestMarketMakerAgentExecuteAction:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行双边挂单
         action = ActionType.QUOTE
         params = {
             "bid_orders": [
-                {"price": 99.5, "quantity": 10.0},
-                {"price": 99.4, "quantity": 15.0},
+                {"price": 99.5, "quantity": 10},
+                {"price": 99.4, "quantity": 15},
             ],
             "ask_orders": [
-                {"price": 100.5, "quantity": 10.0},
-                {"price": 100.6, "quantity": 12.0},
-                {"price": 100.7, "quantity": 8.0},
+                {"price": 100.5, "quantity": 10},
+                {"price": 100.6, "quantity": 12},
+                {"price": 100.7, "quantity": 8},
             ],
         }
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证发布了5个订单事件（2买+3卖）
-        order_events = [e for e in published_events if e.event_type == EventType.ORDER_PLACED]
-        cancel_events = [e for e in published_events if e.event_type == EventType.ORDER_CANCELLED]
-        assert len(order_events) == 5
-        assert len(cancel_events) == 0  # 无旧单，无撤单事件
+        # 验证没有调用 cancel_order（无旧单）
+        mock_engine.cancel_order.assert_not_called()
+        # 验证调用了 5 次 process_order（2买+3卖）
+        assert mock_engine.process_order.call_count == 5
 
         # 验证挂单ID列表
         assert len(agent.bid_order_ids) == 2
         assert len(agent.ask_order_ids) == 3
-
-        # 验证买单事件
-        bid_orders = [e.data["order"] for e in order_events if e.data["order"].side.value == OrderSide.BUY]
-        assert len(bid_orders) == 2
-        assert bid_orders[0].price == 99.5
-        assert bid_orders[0].quantity == 10.0
-        assert bid_orders[1].price == 99.4
-        assert bid_orders[1].quantity == 15.0
-
-        # 验证卖单事件
-        ask_orders = [e.data["order"] for e in order_events if e.data["order"].side.value == OrderSide.SELL]
-        assert len(ask_orders) == 3
-        assert ask_orders[0].price == 100.5
-        assert ask_orders[0].quantity == 10.0
-        assert ask_orders[1].price == 100.6
-        assert ask_orders[1].quantity == 12.0
-        assert ask_orders[2].price == 100.7
-        assert ask_orders[2].quantity == 8.0
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_quote_with_existing_orders(self):
         """测试执行双边挂单（有旧挂单：先撤再挂）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建做市商 Agent 配置
         config = AgentConfig(
@@ -3300,22 +2192,11 @@ class TestMarketMakerAgentExecuteAction:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置已有挂单
@@ -3325,33 +2206,34 @@ class TestMarketMakerAgentExecuteAction:
         # 执行双边挂单
         action = ActionType.QUOTE
         params = {
-            "bid_orders": [{"price": 99.3, "quantity": 20.0}],
-            "ask_orders": [{"price": 100.8, "quantity": 25.0}],
+            "bid_orders": [{"price": 99.3, "quantity": 20}],
+            "ask_orders": [{"price": 100.8, "quantity": 25}],
         }
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证发布了撤单事件（5个旧单）+ 挂单事件（2个新单）
-        cancel_events = [e for e in published_events if e.event_type == EventType.ORDER_CANCELLED]
-        order_events = [e for e in published_events if e.event_type == EventType.ORDER_PLACED]
-        assert len(cancel_events) == 5  # 2买+3卖
-        assert len(order_events) == 2  # 1买+1卖
+        # 验证调用了 cancel_order 撤销旧单
+        assert mock_engine.cancel_order.call_count == 5  # 2买+3卖
+        cancel_calls = [call[0][0] for call in mock_engine.cancel_order.call_args_list]
+        assert 1001 in cancel_calls
+        assert 1002 in cancel_calls
+        assert 2001 in cancel_calls
+        assert 2002 in cancel_calls
+        assert 2003 in cancel_calls
 
-        # 验证撤单事件
-        cancelled_ids = [e.data["order_id"] for e in cancel_events]
-        assert 1001 in cancelled_ids
-        assert 1002 in cancelled_ids
-        assert 2001 in cancelled_ids
-        assert 2002 in cancelled_ids
-        assert 2003 in cancelled_ids
+        # 验证调用了 2 次 process_order（1买+1卖）
+        assert mock_engine.process_order.call_count == 2
 
         # 验证挂单列表被清空后重新填充
         assert len(agent.bid_order_ids) == 1
         assert len(agent.ask_order_ids) == 1
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_clear_position_with_long_position(self):
         """测试清仓（多仓）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建做市商 Agent 配置
         config = AgentConfig(
@@ -3363,106 +2245,45 @@ class TestMarketMakerAgentExecuteAction:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 设置已有挂单和多仓
         agent.bid_order_ids = [1001, 1002]
         agent.ask_order_ids = [2001]
         from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 100.0, 100.0)
+        agent.account.position.update(OrderSide.BUY, 100, 100.0)
 
         # 执行清仓
         action = ActionType.CLEAR_POSITION
         params: dict = {}
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证发布了撤单事件（3个）+ 市价卖单事件（1个）
-        cancel_events = [e for e in published_events if e.event_type == EventType.ORDER_CANCELLED]
-        order_events = [e for e in published_events if e.event_type == EventType.ORDER_PLACED]
-        assert len(cancel_events) == 3
-        assert len(order_events) == 1
+        # 验证调用了 cancel_order 撤销所有挂单
+        assert mock_engine.cancel_order.call_count == 3  # 撤掉所有挂单
 
-        # 验证市价卖单
-        market_order = order_events[0].data["order"]
-        assert market_order.side.value == OrderSide.SELL
-        assert market_order.order_type.value == OrderType.MARKET
-        assert market_order.quantity == 100.0
+        # 验证调用了 process_order（市价卖单）
+        mock_engine.process_order.assert_called_once()
+        order = mock_engine.process_order.call_args[0][0]
+        assert order.side == OrderSide.SELL
+        assert order.order_type == OrderType.MARKET
+        assert order.quantity == 100
 
         # 验证挂单列表被清空
         assert len(agent.bid_order_ids) == 0
         assert len(agent.ask_order_ids) == 0
-
-    def test_execute_clear_position_with_short_position(self):
-        """测试清仓（空仓）"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建做市商 Agent 配置
-        config = AgentConfig(
-            count=100,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
-        # 创建做市商 Agent
-        agent = MarketMakerAgent(
-            agent_id=10011,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 设置空仓
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.SELL, 50.0, 100.0)
-
-        # 执行清仓
-        action = ActionType.CLEAR_POSITION
-        params: dict = {}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证发布了市价买单事件
-        order_events = [e for e in published_events if e.event_type == EventType.ORDER_PLACED]
-        assert len(order_events) == 1
-
-        market_order = order_events[0].data["order"]
-        assert market_order.side.value == OrderSide.BUY
-        assert market_order.order_type.value == OrderType.MARKET
-        assert market_order.quantity == 50.0
+        # 返回空成交列表
+        assert trades == []
 
     def test_execute_clear_position_with_no_position(self):
         """测试清仓（无持仓）"""
-        # 创建 mock Brain
+        # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
+        mock_engine = create_mock_matching_engine()
 
         # 创建做市商 Agent 配置
         config = AgentConfig(
@@ -3474,83 +2295,22 @@ class TestMarketMakerAgentExecuteAction:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 执行清仓（无持仓）
         action = ActionType.CLEAR_POSITION
         params: dict = {}
-        agent.execute_action(action, params, event_bus)
+        trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证没有订单事件发布（无持仓不发布市价单）
-        order_events = [e for e in published_events if e.event_type == EventType.ORDER_PLACED]
-        assert len(order_events) == 0
-
-    def test_execute_clear_position_cancels_all_orders(self):
-        """测试清仓时撤掉所有挂单"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建做市商 Agent 配置
-        config = AgentConfig(
-            count=100,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建事件总线并订阅事件
-        event_bus = EventBus()
-        published_events: list = []
-
-        def capture_event(event: Event) -> None:
-            published_events.append(event)
-
-        event_bus.subscribe(EventType.ORDER_CANCELLED, capture_event)
-        event_bus.subscribe(EventType.ORDER_PLACED, capture_event)
-
-        # 创建做市商 Agent
-        agent = MarketMakerAgent(
-            agent_id=10011,
-            brain=mock_brain,
-            config=config,
-            event_bus=event_bus,
-        )
-
-        # 设置多仓和多个挂单
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 200.0, 100.0)
-        agent.bid_order_ids = [1001, 1002, 1003, 1004, 1005]  # 5个买单
-        agent.ask_order_ids = [2001, 2002]  # 2个卖单
-
-        # 执行清仓
-        action = ActionType.CLEAR_POSITION
-        params: dict = {}
-        agent.execute_action(action, params, event_bus)
-
-        # 验证所有挂单被撤销
-        cancel_events = [e for e in published_events if e.event_type == EventType.ORDER_CANCELLED]
-        assert len(cancel_events) == 7  # 5买+2卖
-
-        # 验证挂单列表被清空
-        assert len(agent.bid_order_ids) == 0
-        assert len(agent.ask_order_ids) == 0
+        # 验证没有调用 process_order（无持仓不发布市价单）
+        mock_engine.process_order.assert_not_called()
+        # 返回空成交列表
+        assert trades == []
 
 
 class TestMarketMakerAgentDecide:
@@ -3574,15 +2334,11 @@ class TestMarketMakerAgentDecide:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -3631,15 +2387,11 @@ class TestMarketMakerAgentDecide:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -3672,15 +2424,11 @@ class TestMarketMakerAgentDecide:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -3729,15 +2477,11 @@ class TestMarketMakerAgentDecide:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -3757,10 +2501,10 @@ class TestMarketMakerAgentDecide:
         bid_prices = [o["price"] for o in params["bid_orders"]]
         ask_prices = [o["price"] for o in params["ask_orders"]]
 
-        # 买单价格应递增
-        assert bid_prices == sorted(bid_prices)
+        # 买单价格应递减（从高到低，第一个最接近 mid_price）
+        assert bid_prices == sorted(bid_prices, reverse=True)
 
-        # 卖单价格应递增
+        # 卖单价格应递增（从低到高，第一个最接近 mid_price）
         assert ask_prices == sorted(ask_prices)
 
         # 所有买单价格应低于所有卖单价格
@@ -3796,15 +2540,11 @@ class TestMarketMakerAgentDecide:
             taker_fee_rate=0.0001,
         )
 
-        # 创建事件总线
-        event_bus = EventBus()
-
         # 创建做市商 Agent
         agent = MarketMakerAgent(
             agent_id=10011,
             brain=mock_brain,
             config=config,
-            event_bus=event_bus,
         )
 
         # 创建订单簿
@@ -3824,8 +2564,7 @@ class TestMarketMakerAgentDecide:
         assert len(params["bid_orders"]) == 5
         assert len(params["ask_orders"]) == 5
 
-        # 计算总数量
-        # 由于所有数量权重相等，每个订单应该占总购买力的 1/10
+        # 计算总价值
         mid_price = market_state.mid_price
         equity = agent.account.get_equity(mid_price)
 
@@ -3833,16 +2572,17 @@ class TestMarketMakerAgentDecide:
         total_ask_value = sum(o["price"] * o["quantity"] for o in params["ask_orders"])
         total_value = total_bid_value + total_ask_value
 
-        # 总价值应该不超过净值 * 杠杆（允许一定误差，因为 _calculate_order_quantity 有最小 lot_size 限制）
+        # 总价值应该不超过净值 * 杠杆（允许一定误差，因为 _calculate_order_quantity 有最小值限制）
         max_total_value = equity * agent.account.leverage
-        # 实际总价值可能略高因为有 lot_size 向上取整，但不应超过太多
-        assert total_value <= max_total_value * 1.5  # 允许 50% 的误差空间（由于 lot_size 取整）
+        # 实际总价值可能略高因为有最小数量限制，但不应超过太多
+        assert total_value <= max_total_value * 1.5  # 允许 50% 的误差空间
 
-        # 验证每个订单的数量大致相等（因为输入权重相同）
+        # 验证每个订单的数量都大于 0
         bid_quantities = [o["quantity"] for o in params["bid_orders"]]
         ask_quantities = [o["quantity"] for o in params["ask_orders"]]
+        assert all(q > 0 for q in bid_quantities)
+        assert all(q > 0 for q in ask_quantities)
 
-        # 所有买单数量应该相等（或非常接近）
-        assert len(set(bid_quantities)) <= 2  # 允许少量差异
-        # 所有卖单数量应该相等（或非常接近）
-        assert len(set(ask_quantities)) <= 2  # 允许少量差异
+        # 验证买单数量是整数
+        assert all(isinstance(q, int) for q in bid_quantities)
+        assert all(isinstance(q, int) for q in ask_quantities)

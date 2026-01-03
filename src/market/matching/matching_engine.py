@@ -10,8 +10,6 @@ from src.config.config import MarketConfig
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.matching.trade import Trade
 
-from src.core.event_engine.event_bus import EventBus
-from src.core.event_engine.events import Event, EventType
 from src.core.log_engine.logger import get_logger
 from src.market.orderbook.orderbook import OrderBook
 
@@ -24,60 +22,28 @@ class MatchingEngine:
     - 管理订单簿
     - 处理订单提交和撤销
     - 执行撮合逻辑，生成成交记录
-    - 发布成交事件
 
     Attributes:
-        _event_bus: 事件总线
         _config: 市场配置
         _orderbook: 订单簿实例
         _logger: 日志器
         _next_trade_id: 下一个成交ID
     """
 
-    def __init__(self, event_bus: EventBus, config: MarketConfig) -> None:
+    def __init__(self, config: MarketConfig) -> None:
         """
         初始化撮合引擎
 
         Args:
-            event_bus: 事件总线，用于发布成交事件
             config: 市场配置
         """
-        self._event_bus = event_bus
         self._config = config
         self._orderbook = OrderBook(tick_size=config.tick_size)
         self._logger = get_logger(__name__)
         self._next_trade_id: int = 1
         self._fee_rates: dict[int, tuple[float, float]] = {}
 
-        # 订阅订单事件
-        event_bus.subscribe(EventType.ORDER_PLACED, self._handle_order_placed)
-        event_bus.subscribe(EventType.ORDER_CANCELLED, self._handle_order_cancelled)
-
         self._logger.info("撮合引擎初始化完成")
-
-    def _handle_order_placed(self, event: Event) -> None:
-        """处理订单提交事件
-
-        从事件中获取订单对象，调用 process_order 进行撮合。
-
-        Args:
-            event: 订单提交事件，data 中包含 "order" 字段
-        """
-        order = event.data.get("order")
-        if order is not None:
-            self.process_order(order)
-
-    def _handle_order_cancelled(self, event: Event) -> None:
-        """处理订单撤销事件
-
-        从事件中获取订单ID，从订单簿中撤销该订单。
-
-        Args:
-            event: 订单撤销事件，data 中包含 "order_id" 字段
-        """
-        order_id = event.data.get("order_id")
-        if order_id is not None:
-            self._orderbook.cancel_order(order_id)
 
     def register_agent(
         self, agent_id: int, maker_rate: float, taker_rate: float
@@ -332,46 +298,7 @@ class MatchingEngine:
         """
         处理订单，执行撮合
 
-        根据订单类型调用对应的撮合函数，并发布成交事件。
-
-        Args:
-            order: 订单对象（限价单或市价单）
-
-        Returns:
-            本次撮合产生的所有成交记录列表（可能为空）
-        """
-        # 根据订单类型调用对应撮合函数
-        if order.order_type == OrderType.LIMIT:
-            trades = self.match_limit_order(order)
-        else:  # OrderType.MARKET
-            trades = self.match_market_order(order)
-
-        # 如果有成交，发布成交事件（定向发送给买卖双方）
-        for trade in trades:
-            event = Event(
-                event_type=EventType.TRADE_EXECUTED,
-                timestamp=trade.timestamp,
-                data={
-                    "trade_id": trade.trade_id,
-                    "price": trade.price,
-                    "quantity": trade.quantity,
-                    "buyer_id": trade.buyer_id,
-                    "seller_id": trade.seller_id,
-                    "buyer_fee": trade.buyer_fee,
-                    "seller_fee": trade.seller_fee,
-                    "is_buyer_taker": trade.is_buyer_taker,
-                },
-                target_ids={trade.buyer_id, trade.seller_id},
-            )
-            self._event_bus.publish(event)
-
-        return trades
-
-    def process_order_direct(self, order: Order) -> list[Trade]:
-        """直接处理订单（训练模式，不发布事件）
-
-        根据订单类型调用对应的撮合函数，不发布成交事件。
-        用于训练模式下绕过事件系统，减少开销。
+        根据订单类型调用对应的撮合函数。
 
         Args:
             order: 订单对象（限价单或市价单）
@@ -385,10 +312,10 @@ class MatchingEngine:
             trades = self.match_market_order(order)
         return trades
 
-    def cancel_order_direct(self, order_id: int) -> bool:
-        """直接撤单（训练模式）
+    def cancel_order(self, order_id: int) -> bool:
+        """撤单
 
-        不发布任何事件，直接从订单簿中撤销订单。
+        从订单簿中撤销订单。
 
         Args:
             order_id: 订单ID
@@ -400,5 +327,5 @@ class MatchingEngine:
 
     @property
     def orderbook(self) -> OrderBook:
-        """获取订单簿（供直接调用模式使用）"""
+        """获取订单簿"""
         return self._orderbook

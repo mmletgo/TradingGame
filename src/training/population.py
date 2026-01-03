@@ -15,7 +15,6 @@ from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.agents.whale import WhaleAgent
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType, Config
-from src.core.event_engine.event_bus import EventBus
 from src.core.log_engine.logger import get_logger
 
 
@@ -30,7 +29,6 @@ class Population:
         neat_pop: NEAT 种群对象
         neat_config: NEAT 配置
         agent_config: Agent 配置
-        event_bus: 事件总线
         generation: 当前代数
         logger: 日志器
     """
@@ -40,13 +38,10 @@ class Population:
     neat_pop: neat.Population
     neat_config: neat.Config
     agent_config: AgentConfig
-    event_bus: EventBus
     generation: int
     logger: logging.Logger
 
-    def __init__(
-        self, agent_type: AgentType, config: Config, event_bus: EventBus
-    ) -> None:
+    def __init__(self, agent_type: AgentType, config: Config) -> None:
         """创建种群
 
         初始化 NEAT 种群，创建初始 Agent 列表。
@@ -54,10 +49,8 @@ class Population:
         Args:
             agent_type: Agent 类型（散户/庄家/做市商）
             config: 全局配置对象
-            event_bus: 事件总线
         """
         self.agent_type = agent_type
-        self.event_bus = event_bus
         self.agent_config = config.agents[agent_type]
         self.generation = 0
         self.logger = get_logger("population")
@@ -93,7 +86,7 @@ class Population:
 
         # 获取初始基因组并创建 Agent
         genomes = list(self.neat_pop.population.items())
-        self.agents = self.create_agents(genomes, event_bus)
+        self.agents = self.create_agents(genomes)
 
         self.logger.info(
             f"创建 {agent_type.value} 种群，初始 Agent 数量: {len(self.agents)}"
@@ -102,7 +95,6 @@ class Population:
     def create_agents(
         self,
         genomes: list[tuple[int, neat.DefaultGenome]],
-        event_bus: EventBus,
     ) -> list[Agent]:
         """从基因组创建 Agent 列表
 
@@ -111,7 +103,6 @@ class Population:
 
         Args:
             genomes: NEAT 基因组列表，每项为 (genome_id, genome) 元组
-            event_bus: 事件总线，用于 Agent 订阅事件
 
         Returns:
             创建的 Agent 列表
@@ -132,7 +123,7 @@ class Population:
 
         for genome_id, genome in genomes:
             brain = Brain.from_genome(genome, self.neat_config)
-            agent = agent_class(genome_id, brain, self.agent_config, event_bus)
+            agent = agent_class(genome_id, brain, self.agent_config)
             agents.append(agent)
 
         return agents
@@ -207,7 +198,7 @@ class Population:
 
         # 5. 从新基因组重建 Agent 列表
         new_genomes = list(self.neat_pop.population.items())
-        self.agents = self.create_agents(new_genomes, self.event_bus)
+        self.agents = self.create_agents(new_genomes)
 
         self.logger.info(
             f"{self.agent_type.value} 种群完成第 {self.generation} 代进化，"

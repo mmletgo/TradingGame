@@ -2,16 +2,11 @@
 成交记录模块测试
 """
 
-import time
-
 from src.market.matching.trade import Trade
 
 
 def test_trade_init_normal():
     """测试正常创建成交记录"""
-    # 等待一小段时间确保时间戳不同
-    time_before = time.time()
-
     trade = Trade(
         trade_id=1,
         price=100.5,
@@ -23,8 +18,6 @@ def test_trade_init_normal():
         is_buyer_taker=True,
     )
 
-    time_after = time.time()
-
     # 验证所有属性
     assert trade.trade_id == 1
     assert trade.price == 100.5
@@ -35,8 +28,8 @@ def test_trade_init_normal():
     assert trade.seller_fee == 0.02
     assert trade.is_buyer_taker is True
 
-    # 验证时间戳在合理范围内
-    assert time_before <= trade.timestamp <= time_after
+    # 训练模式下时间戳默认为 0.0（优化性能，避免 time.time() 调用）
+    assert trade.timestamp == 0.0
 
 
 def test_trade_init_zero_values():
@@ -60,8 +53,8 @@ def test_trade_init_zero_values():
     assert trade.buyer_fee == 0.0
     assert trade.seller_fee == 0.0
     assert trade.is_buyer_taker is False
-    # 时间戳应该存在
-    assert trade.timestamp > 0
+    # 训练模式下时间戳默认为 0.0
+    assert trade.timestamp == 0.0
 
 
 def test_trade_init_small_values():
@@ -108,8 +101,8 @@ def test_trade_init_large_values():
     assert trade.seller_fee == 200.0
 
 
-def test_trade_timestamp_unique():
-    """测试时间戳唯一性（快速创建两条记录）"""
+def test_trade_timestamp_default():
+    """测试时间戳默认值为 0.0（训练模式优化）"""
     trade1 = Trade(
         trade_id=1,
         price=100.0,
@@ -132,8 +125,24 @@ def test_trade_timestamp_unique():
         is_buyer_taker=False,
     )
 
-    # 两条记录的时间戳应该不同（除非在同一微秒内创建）
-    # 一般来说它们会不同，但即使相同也是合法的
-    assert trade1.timestamp > 0
-    assert trade2.timestamp > 0
-    assert trade1.timestamp <= trade2.timestamp
+    # 训练模式下时间戳默认都是 0.0
+    assert trade1.timestamp == 0.0
+    assert trade2.timestamp == 0.0
+
+
+def test_trade_timestamp_custom():
+    """测试可以传入自定义时间戳"""
+    custom_timestamp = 1234567890.123
+    trade = Trade(
+        trade_id=1,
+        price=100.0,
+        quantity=10,
+        buyer_id=1,
+        seller_id=2,
+        buyer_fee=0.1,
+        seller_fee=0.1,
+        is_buyer_taker=True,
+        timestamp=custom_timestamp,
+    )
+
+    assert trade.timestamp == custom_timestamp

@@ -1,6 +1,6 @@
 """训练器模块
 
-管理训练流程，协调种群、撮合引擎和事件系统。
+管理训练流程，协调种群和撮合引擎。
 """
 
 import pickle
@@ -16,8 +16,6 @@ from src.bio.agents.base import AgentType
 if TYPE_CHECKING:
     from src.bio.agents.base import Agent
 from src.config.config import Config
-from src.core.event_engine.event_bus import EventBus
-from src.core.event_engine.events import Event
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
 from src.market.market_state import NormalizedMarketState
@@ -34,7 +32,6 @@ class Trainer:
 
     Attributes:
         config: 全局配置
-        event_bus: 事件总线
         populations: 三种群（散户/庄家/做市商）
         matching_engine: 撮合引擎
         tick: 当前 tick
@@ -45,7 +42,6 @@ class Trainer:
     """
 
     config: Config
-    event_bus: EventBus
     populations: dict[AgentType, Population]
     matching_engine: MatchingEngine | None
     adl_manager: ADLManager | None
@@ -76,7 +72,6 @@ class Trainer:
             config: 全局配置对象
         """
         self.config = config
-        self.event_bus = EventBus()
         self.logger = get_logger("trainer")
 
         self.tick = 0
@@ -101,22 +96,17 @@ class Trainer:
         """初始化训练环境
 
         创建三种群、撮合引擎，初始化市场。
-        训练模式使用直接调用，不需要订阅事件。
+        训练模式使用直接调用。
         """
         # 创建三种群
         for agent_type in AgentType:
-            self.populations[agent_type] = Population(
-                agent_type, self.config, self.event_bus
-            )
+            self.populations[agent_type] = Population(agent_type, self.config)
 
         # 创建撮合引擎
-        self.matching_engine = MatchingEngine(self.event_bus, self.config.market)
+        self.matching_engine = MatchingEngine(self.config.market)
 
         # 创建 ADL 管理器
         self.adl_manager = ADLManager()
-
-        # 训练模式使用直接调用，不需要订阅成交事件和强平事件
-        # 保留事件系统用于可能的调试或 UI 模式
 
         # 注册所有 Agent 的费率
         self._register_all_agents()
@@ -176,46 +166,6 @@ class Trainer:
         for agent_type, population in self.populations.items():
             self._pop_total_counts[agent_type] = len(population.agents)
 
-    def _on_trade(self, event: Event) -> None:
-        """处理成交事件，记录最近成交
-
-        从事件数据中重建 Trade 对象并记录。
-        """
-        data = event.data
-        # 从事件数据重建 Trade 对象
-        trade = Trade(
-            trade_id=data.get("trade_id", 0),
-            price=data.get("price", 0.0),
-            quantity=int(data.get("quantity", 0)),  # 确保是 int
-            buyer_id=data.get("buyer_id", 0),
-            seller_id=data.get("seller_id", 0),
-            buyer_fee=data.get("buyer_fee", 0.0),
-            seller_fee=data.get("seller_fee", 0.0),
-            is_buyer_taker=data.get("is_buyer_taker", True),
-        )
-        # deque(maxlen=100) 自动丢弃旧数据
-        self.recent_trades.append(trade)
-
-    def _on_liquidation(self, event: Event) -> None:
-        """处理强平事件，提交市价单平仓"""
-        agent_id = event.data.get("agent_id")
-        quantity = event.data.get("position_quantity")
-        if agent_id is not None and quantity is not None and self.matching_engine:
-            # 平仓：如果持仓为正（多头），则卖出；如果为负（空头），则买入
-            side = OrderSide.SELL if quantity > 0 else OrderSide.BUY
-            order = Order(
-                order_id=0,  # 由撮合引擎分配
-                agent_id=agent_id,
-                side=side,
-                order_type=OrderType.MARKET,
-                price=0.0,  # 市价单不需要价格
-                quantity=abs(int(quantity)),  # 确保是 int
-            )
-            self.matching_engine.process_order(order)
-
-        # 标记 Agent 已被强平
-        self._mark_agent_liquidated(agent_id)
-
     def _mark_agent_liquidated(self, agent_id: int) -> None:
         """标记 Agent 已被强平
 
@@ -241,9 +191,9 @@ class Trainer:
             from src.bio.agents.market_maker import MarketMakerAgent
 
             if isinstance(agent, MarketMakerAgent):
-                agent._cancel_all_orders_direct(self.matching_engine)
+                agent._cancel_all_orders(self.matching_engine)
         elif agent.account.pending_order_id is not None:
-            self.matching_engine.cancel_order_direct(agent.account.pending_order_id)
+            self.matching_engine.cancel_order(agent.account.pending_order_id)
             agent.account.pending_order_id = None
 
     def _handle_liquidation_direct(self, agent: "Agent", current_price: float) -> None:
@@ -293,7 +243,7 @@ class Trainer:
         )
 
         # 直接撮合
-        trades = self.matching_engine.process_order_direct(order)
+        trades = self.matching_engine.process_order(order)
 
         # 计算已成交数量
         # filled_qty = sum(trade.quantity for trade in trades)
@@ -533,7 +483,7 @@ class Trainer:
                 market_state = self._compute_normalized_market_state()
                 action, params = agent.decide(market_state, orderbook)
                 # 直接执行（绕过事件系统）
-                trades = agent.execute_action_direct(
+                trades = agent.execute_action(
                     action, params, self.matching_engine
                 )
                 for trade in trades:
@@ -669,15 +619,15 @@ class Trainer:
             action, params = agent.decide(market_state, orderbook)
 
             # 直接执行（绕过事件系统）
-            trades = agent.execute_action_direct(action, params, self.matching_engine)
+            trades = agent.execute_action(action, params, self.matching_engine)
 
             # 记录成交并更新对手方账户（maker）
             for trade in trades:
                 self.recent_trades.append(trade)
-                # 更新 maker 的账户（taker 的账户已在 execute_action_direct 中更新）
+                # 更新 maker 的账户（taker 的账户已在 execute_action 中更新）
                 maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
                 # 注意：即使 maker_id == agent.agent_id（自成交），也需要更新 maker 端
-                # 因为 _process_trades_direct 只更新了 taker 端（买或卖其中一方）
+                # 因为 _process_trades 只更新了 taker 端（买或卖其中一方）
                 maker_agent = self.agent_map.get(maker_id)
                 if maker_agent is not None:
                     # maker 的方向与 taker 相反：taker 买则 maker 卖，taker 卖则 maker 买
@@ -826,7 +776,7 @@ class Trainer:
                 pop.neat_pop = pop_data["neat_pop"]
                 # 重建 agents
                 genomes = list(pop.neat_pop.population.items())
-                pop.agents = pop.create_agents(genomes, self.event_bus)
+                pop.agents = pop.create_agents(genomes)
 
         # 注册恢复的 Agent 费率，重建映射表和执行顺序
         self._register_all_agents()

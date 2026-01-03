@@ -16,7 +16,6 @@ from src.config.config import (
     MarketConfig,
     TrainingConfig,
 )
-from src.core.event_engine.event_bus import EventBus
 from src.training.population import Population
 
 
@@ -52,11 +51,8 @@ class TestPopulationCreateAgents:
         mock_genome2 = MagicMock()
         genomes = [(1, mock_genome1), (2, mock_genome2)]
 
-        # 创建 event_bus
-        event_bus = EventBus()
-
         # 调用 create_agents
-        agents = self.population.create_agents(genomes, event_bus)
+        agents = self.population.create_agents(genomes)
 
         # 验证返回了正确数量的 Agent
         assert len(agents) == 2
@@ -91,11 +87,8 @@ class TestPopulationCreateAgents:
         mock_genome = MagicMock()
         genomes = [(100, mock_genome)]
 
-        # 创建 event_bus
-        event_bus = EventBus()
-
         # 调用 create_agents
-        agents = self.population.create_agents(genomes, event_bus)
+        agents = self.population.create_agents(genomes)
 
         # 验证返回了正确数量的 Agent
         assert len(agents) == 1
@@ -129,11 +122,8 @@ class TestPopulationCreateAgents:
         mock_genome3 = MagicMock()
         genomes = [(10, mock_genome1), (20, mock_genome2), (30, mock_genome3)]
 
-        # 创建 event_bus
-        event_bus = EventBus()
-
         # 调用 create_agents
-        agents = self.population.create_agents(genomes, event_bus)
+        agents = self.population.create_agents(genomes)
 
         # 验证返回了正确数量的 Agent
         assert len(agents) == 3
@@ -152,11 +142,8 @@ class TestPopulationCreateAgents:
         # 空基因组列表
         genomes: list[tuple[int, MagicMock]] = []
 
-        # 创建 event_bus
-        event_bus = EventBus()
-
         # 调用 create_agents
-        agents = self.population.create_agents(genomes, event_bus)
+        agents = self.population.create_agents(genomes)
 
         # 验证返回空列表
         assert agents == []
@@ -176,11 +163,8 @@ class TestPopulationCreateAgents:
         mock_genome = MagicMock()
         genomes = [(1, mock_genome)]
 
-        # 创建 event_bus
-        event_bus = EventBus()
-
         # 调用 create_agents
-        self.population.create_agents(genomes, event_bus)
+        self.population.create_agents(genomes)
 
         # 验证 Brain.from_genome 使用了正确的配置
         mock_from_genome.assert_called_once_with(
@@ -202,11 +186,8 @@ class TestPopulationCreateAgents:
         mock_genome2 = MagicMock()
         genomes = [(1, mock_genome1), (2, mock_genome2)]
 
-        # 创建 event_bus
-        event_bus = EventBus()
-
         # 调用 create_agents
-        agents = self.population.create_agents(genomes, event_bus)
+        agents = self.population.create_agents(genomes)
 
         # 验证每个 Agent 的 brain 不同
         assert agents[0].brain is mock_brain1
@@ -294,16 +275,14 @@ class TestPopulationInit:
         mock_brain = MagicMock(spec=Brain)
         mock_from_genome.return_value = mock_brain
 
-        # 创建配置和事件总线
+        # 创建配置
         config = self._create_config(AgentType.RETAIL)
-        event_bus = EventBus()
 
         # 创建种群
-        population = Population(AgentType.RETAIL, config, event_bus)
+        population = Population(AgentType.RETAIL, config)
 
         # 验证属性
         assert population.agent_type == AgentType.RETAIL
-        assert population.event_bus is event_bus
         assert population.agent_config == config.agents[AgentType.RETAIL]
         assert population.generation == 0
         assert population.neat_config is mock_config_instance
@@ -340,9 +319,8 @@ class TestPopulationInit:
         mock_from_genome.return_value = mock_brain
 
         config = self._create_config(AgentType.WHALE)
-        event_bus = EventBus()
 
-        population = Population(AgentType.WHALE, config, event_bus)
+        population = Population(AgentType.WHALE, config)
 
         assert population.agent_type == AgentType.WHALE
         assert len(population.agents) == 1
@@ -373,9 +351,8 @@ class TestPopulationInit:
         mock_from_genome.return_value = mock_brain
 
         config = self._create_config(AgentType.MARKET_MAKER)
-        event_bus = EventBus()
 
-        population = Population(AgentType.MARKET_MAKER, config, event_bus)
+        population = Population(AgentType.MARKET_MAKER, config)
 
         assert population.agent_type == AgentType.MARKET_MAKER
         assert len(population.agents) == 3
@@ -396,9 +373,8 @@ class TestPopulationInit:
         mock_neat_pop.return_value = mock_pop_instance
 
         config = self._create_config(AgentType.RETAIL)
-        event_bus = EventBus()
 
-        Population(AgentType.RETAIL, config, event_bus)
+        Population(AgentType.RETAIL, config)
 
         # 验证 neat.Config 使用了正确的参数
         # 散户使用 neat_retail.cfg 配置文件（在 config 目录下）
@@ -679,9 +655,8 @@ class TestPopulationEvolve:
         mock_from_genome.side_effect = [mock_brain1, mock_brain2, mock_brain1, mock_brain2]
 
         config = self._create_config()
-        event_bus = EventBus()
 
-        population = Population(AgentType.RETAIL, config, event_bus)
+        population = Population(AgentType.RETAIL, config)
 
         # 验证初始代数为 0
         assert population.generation == 0
@@ -726,9 +701,8 @@ class TestPopulationEvolve:
         mock_from_genome.return_value = mock_brain1
 
         config = self._create_config()
-        event_bus = EventBus()
 
-        population = Population(AgentType.RETAIL, config, event_bus)
+        population = Population(AgentType.RETAIL, config)
         initial_agents = population.agents.copy()
 
         # evolve 后更新种群的基因组（模拟 NEAT 进化）
@@ -780,9 +754,8 @@ class TestPopulationEvolve:
         mock_from_genome.side_effect = [mock_brain1, mock_brain2, mock_brain1, mock_brain2]
 
         config = self._create_config()
-        event_bus = EventBus()
 
-        population = Population(AgentType.RETAIL, config, event_bus)
+        population = Population(AgentType.RETAIL, config)
 
         # 验证初始时 genome.fitness 为 None
         assert mock_genome1.fitness is None
@@ -884,9 +857,8 @@ class TestPopulationResetAgents:
         mock_from_genome.return_value = mock_brain
 
         config = self._create_config()
-        event_bus = EventBus()
 
-        population = Population(AgentType.RETAIL, config, event_bus)
+        population = Population(AgentType.RETAIL, config)
 
         # 修改 Agent 的账户状态
         initial_balance = config.agents[AgentType.RETAIL].initial_balance

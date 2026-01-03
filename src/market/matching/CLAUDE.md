@@ -17,23 +17,12 @@
 撮合引擎，交易市场的核心组件。
 
 **属性：**
-- `_event_bus: EventBus` - 事件总线
 - `_config: MarketConfig` - 市场配置
 - `_orderbook: OrderBook` - 订单簿实例
 - `_next_trade_id: int` - 下一个成交ID
 - `_fee_rates: dict[int, tuple[float, float]]` - Agent费率缓存
 
-**初始化时订阅的事件：**
-- `ORDER_PLACED` → `_handle_order_placed`：处理订单提交
-- `ORDER_CANCELLED` → `_handle_order_cancelled`：处理订单撤销
-
 **核心方法：**
-
-#### `_handle_order_placed(event: Event) -> None`
-处理订单提交事件，从事件中获取订单对象，调用 `process_order` 进行撮合。
-
-#### `_handle_order_cancelled(event: Event) -> None`
-处理订单撤销事件，从事件中获取订单ID，从订单簿中撤销该订单。
 
 #### `register_agent(agent_id: int, maker_rate: float, taker_rate: float) -> None`
 注册 Agent 的费率配置。由 Trainer 在以下时机调用：
@@ -56,16 +45,13 @@
 市价单撮合。内部调用 `_match_orders` 且不进行价格检查，吃对手盘直到完全成交或对手盘为空，未成交部分直接丢弃。
 
 #### `process_order(order: Order) -> list[Trade]`
-处理订单入口，根据订单类型调用对应撮合函数，并发布成交事件。
+处理订单入口，根据订单类型调用对应撮合函数，返回成交列表。
 
-#### `process_order_direct(order: Order) -> list[Trade]`
-直接处理订单（训练模式）。不发布成交事件，直接返回成交列表。用于训练模式绕过事件系统，减少开销。
-
-#### `cancel_order_direct(order_id: int) -> bool`
-直接撤单（训练模式）。不发布任何事件，直接从订单簿中撤销订单。
+#### `cancel_order(order_id: int) -> bool`
+撤单。从订单簿中撤销订单，返回是否成功。
 
 #### `orderbook` (property)
-获取订单簿实例（供直接调用模式使用）。
+获取订单簿实例。
 
 ### Trade (trade.py)
 
@@ -82,20 +68,6 @@
 - `is_buyer_taker: bool` - 买方是否为taker
 - `timestamp: float` - 成交时间戳
 
-## 事件流程
-
-```
-Agent.execute_action()
-    ↓ 发布 ORDER_PLACED 事件
-MatchingEngine._handle_order_placed()
-    ↓ 调用 process_order()
-MatchingEngine.match_limit_order() / match_market_order()
-    ↓ 产生成交
-MatchingEngine 发布 TRADE_EXECUTED 事件（定向发送给买卖双方）
-    ↓
-Agent._on_trade_event() 处理成交
-```
-
 ## 费率配置
 
 | Agent类型 | 挂单费率 | 吃单费率 |
@@ -107,11 +79,6 @@ Agent._on_trade_event() 处理成交
 **注意：** 庄家和做市商的挂单费率为负数（maker rebate），表示其挂单成交时会获得交易额万分之一的手续费奖励。
 
 ## 性能优化
-
-### 直接调用模式（训练优化）
-训练模式下绕过事件系统，直接调用撮合方法：
-- `process_order_direct(order)` - 直接处理订单
-- `cancel_order_direct(order_id)` - 直接撤单
 
 ### `_match_orders` 优化
 - 预计算 taker 费率到循环外，避免重复查找
@@ -127,6 +94,5 @@ Agent._on_trade_event() 处理成交
 ## 依赖关系
 
 - `src.config.config` - 市场配置
-- `src.core.event_engine` - 事件系统
 - `src.core.log_engine` - 日志系统
 - `src.market.orderbook` - 订单簿

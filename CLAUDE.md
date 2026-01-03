@@ -45,17 +45,9 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 
 ## 核心架构
 
-### 事件驱动架构
-所有模块通过 `EventBus` 解耦通信，禁止模块间直接 import 或回调函数：
-- `ORDER_PLACED` / `ORDER_CANCELLED` - 订单事件
-- `TRADE_EXECUTED` - 成交事件
-- `LIQUIDATION` - 强平事件
-- `TICK_START` / `TICK_END` - tick 事件
-
 ### 模块职责
 
 **src/core/** - 核心引擎
-- `event_engine/` - 发布/订阅事件系统
 - `log_engine/` - 统一日志管理（命令行只显示启动信息和错误，其余输出到日志文件）
 
 **src/market/** - 交易市场引擎
@@ -98,9 +90,9 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 相关模块：`src/market/adl/`
 
 ### 训练流程
-1. **初始化**: 创建三种群、撮合引擎、订阅事件、做市商建立初始流动性
+1. **初始化**: 创建三种群、撮合引擎、做市商建立初始流动性
 2. **Episode 循环**: 重置账户/市场 → 运行 N 个 tick → NEAT 进化
-3. **Tick 执行**: TICK_START → 做市商 → 庄家 → 散户 → 检查强平 → TICK_END
+3. **Tick 执行**: 检查强平 → 做市商 → 庄家 → 散户
 
 ### NEAT 配置
 - `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）

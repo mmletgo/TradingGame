@@ -3,14 +3,11 @@
 """
 
 from src.config.config import MarketConfig
-from src.core.event_engine.event_bus import EventBus
-from src.core.event_engine.events import Event, EventType
 from src.market.matching.matching_engine import MatchingEngine
 
 
 def test_matching_engine_init_normal():
     """测试正常创建撮合引擎"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
@@ -18,52 +15,17 @@ def test_matching_engine_init_normal():
         depth=100,
     )
 
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 验证引擎创建成功
     assert engine is not None
-    assert engine._event_bus is event_bus
     assert engine._config is config
     assert engine._orderbook is not None
     assert engine._next_trade_id == 1
 
 
-def test_matching_engine_init_subscribes_events():
-    """测试撮合引擎订阅事件"""
-    event_bus = EventBus()
-    config = MarketConfig(
-        initial_price=100.0,
-        tick_size=0.1,
-        lot_size=1.0,
-        depth=100,
-    )
-
-    # 创建引擎应该订阅事件
-    MatchingEngine(event_bus, config)
-
-    # 验证事件总线有订阅者（通过发布事件并捕获来验证）
-    # 由于我们使用的是占位函数，这里只验证不会报错
-    test_event = Event(
-        event_type=EventType.ORDER_PLACED,
-        timestamp=0.0,
-        data={"order_id": 1},
-    )
-
-    # 发布事件应该不会抛出异常
-    event_bus.publish(test_event)
-
-    cancel_event = Event(
-        event_type=EventType.ORDER_CANCELLED,
-        timestamp=0.0,
-        data={"order_id": 1},
-    )
-    event_bus.publish(cancel_event)
-
-
 def test_matching_engine_init_different_configs():
     """测试不同配置创建撮合引擎"""
-    event_bus = EventBus()
-
     # 不同的 tick_size
     config1 = MarketConfig(
         initial_price=100.0,
@@ -71,7 +33,7 @@ def test_matching_engine_init_different_configs():
         lot_size=1.0,
         depth=100,
     )
-    engine1 = MatchingEngine(event_bus, config1)
+    engine1 = MatchingEngine(config1)
     assert engine1._orderbook.tick_size == 0.01
 
     # 不同的 depth
@@ -81,13 +43,12 @@ def test_matching_engine_init_different_configs():
         lot_size=1.0,
         depth=50,
     )
-    engine2 = MatchingEngine(event_bus, config2)
+    engine2 = MatchingEngine(config2)
     assert engine2._config.depth == 50
 
 
 def test_matching_engine_multiple_engines():
     """测试创建多个撮合引擎实例"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
@@ -95,8 +56,8 @@ def test_matching_engine_multiple_engines():
         depth=100,
     )
 
-    engine1 = MatchingEngine(event_bus, config)
-    engine2 = MatchingEngine(event_bus, config)
+    engine1 = MatchingEngine(config)
+    engine2 = MatchingEngine(config)
 
     # 两个引擎应该是独立的实例
     assert engine1 is not engine2
@@ -110,14 +71,13 @@ def test_matching_engine_multiple_engines():
 
 def test_calculate_fee_retail_maker():
     """测试散户挂单费率（万2）"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册散户费率：挂单万2，吃单万5
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -133,14 +93,13 @@ def test_calculate_fee_retail_maker():
 
 def test_calculate_fee_retail_taker():
     """测试散户吃单费率（万5）"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册散户费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -156,14 +115,13 @@ def test_calculate_fee_retail_taker():
 
 def test_calculate_fee_whale():
     """测试庄家费率（挂单0，吃单万1）"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册庄家费率：挂单0，吃单万1
     engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)
@@ -179,14 +137,13 @@ def test_calculate_fee_whale():
 
 def test_calculate_fee_market_maker():
     """测试做市商费率（挂单0，吃单万1）"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册做市商费率：挂单0，吃单万1
     engine.register_agent(agent_id=3, maker_rate=0.0, taker_rate=0.0001)
@@ -202,14 +159,13 @@ def test_calculate_fee_market_maker():
 
 def test_calculate_fee_unregistered_agent():
     """测试未注册的 Agent 使用默认散户费率"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 未注册的 Agent 应该使用默认散户费率
     fee = engine.calculate_fee(agent_id=999, amount=10000.0, is_maker=True)
@@ -221,14 +177,13 @@ def test_calculate_fee_unregistered_agent():
 
 def test_calculate_fee_zero_amount():
     """测试成交金额为 0 时手续费为 0"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
 
@@ -242,14 +197,13 @@ def test_calculate_fee_zero_amount():
 
 def test_register_agent():
     """测试注册 Agent 费率"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册 Agent
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -266,14 +220,13 @@ def test_register_agent():
 
 def test_multiple_agents_different_rates():
     """测试多个 Agent 使用不同费率"""
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册散户
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -308,14 +261,13 @@ def test_match_limit_order_buy_with_asks():
     """测试买单与卖盘撮合"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)  # 卖方
@@ -376,14 +328,13 @@ def test_match_limit_order_sell_with_bids():
     """测试卖单与买盘撮合"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)  # 买方
@@ -444,14 +395,13 @@ def test_match_limit_order_no_match():
     """测试无法撮合时挂单"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -492,14 +442,13 @@ def test_match_limit_order_partial_fill():
     """测试部分成交后挂单"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -543,14 +492,13 @@ def test_match_limit_order_multiple_price_levels():
     """测试跨多个价格档位撮合"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -625,14 +573,13 @@ def test_match_limit_order_empty_orderbook():
     """测试空订单簿时挂单"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -661,14 +608,13 @@ def test_match_limit_order_fully_filled():
     """测试订单完全成交后不挂单"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -716,14 +662,13 @@ def test_match_limit_order_orderbook_quantity():
     """测试订单簿数量统计正确性（验证挂单时数量为剩余数量）"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -770,14 +715,13 @@ def test_match_market_order_buy_fully_filled():
     """测试市价买单完全成交"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)  # 卖方
@@ -832,14 +776,13 @@ def test_match_market_order_sell_fully_filled():
     """测试市价卖单完全成交"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)  # 买方
@@ -893,14 +836,13 @@ def test_match_market_order_buy_partial_fill():
     """测试市价买单部分成交（对手盘不足）"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -948,14 +890,13 @@ def test_match_market_order_sell_partial_fill():
     """测试市价卖单部分成交（对手盘不足）"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -1003,14 +944,13 @@ def test_match_market_order_empty_orderbook():
     """测试市价单在空订单簿时不成交"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -1041,14 +981,13 @@ def test_match_market_order_multiple_price_levels():
     """测试市价单跨多个价格档位成交"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -1125,14 +1064,13 @@ def test_match_market_order_taker_fee():
     """测试市价单永远是 taker，支付吃单费率"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0, taker_rate=0.0001)  # 做市商
@@ -1174,14 +1112,13 @@ def test_process_order_limit_order():
     """测试处理限价单"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -1222,14 +1159,13 @@ def test_process_order_market_order():
     """测试处理市价单"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -1268,14 +1204,13 @@ def test_process_order_no_trade():
     """测试处理未成交的订单"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -1299,85 +1234,17 @@ def test_process_order_no_trade():
     assert buy_order.order_id in engine._orderbook.order_map
 
 
-def test_process_order_publishes_events():
-    """测试处理订单时发布成交事件（定向发送给买卖双方）"""
-    from src.market.orderbook.order import Order, OrderSide, OrderType
-
-    # 用于记录收到的事件
-    received_events_buyer: list[Event] = []
-    received_events_seller: list[Event] = []
-
-    def event_handler_buyer(event: Event) -> None:
-        received_events_buyer.append(event)
-
-    def event_handler_seller(event: Event) -> None:
-        received_events_seller.append(event)
-
-    event_bus = EventBus()
-    config = MarketConfig(
-        initial_price=100.0,
-        tick_size=0.1,
-        lot_size=1.0,
-        depth=100,
-    )
-    engine = MatchingEngine(event_bus, config)
-
-    # 注册费率
-    engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
-    engine.register_agent(agent_id=2, maker_rate=0.0, taker_rate=0.0001)
-
-    # 使用 subscribe_with_id 订阅成交事件（模拟买卖双方 Agent）
-    event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 1, event_handler_seller)  # agent_id=1 是卖方
-    event_bus.subscribe_with_id(EventType.TRADE_EXECUTED, 2, event_handler_buyer)   # agent_id=2 是买方
-
-    # 挂卖单
-    sell_order = Order(
-        order_id=1,
-        agent_id=1,
-        side=OrderSide.SELL,
-        order_type=OrderType.LIMIT,
-        price=100.5,
-        quantity=10.0,
-    )
-    engine._orderbook.add_order(sell_order)
-
-    # 处理买单
-    buy_order = Order(
-        order_id=2,
-        agent_id=2,
-        side=OrderSide.BUY,
-        order_type=OrderType.LIMIT,
-        price=101.0,
-        quantity=8.0,
-    )
-
-    engine.process_order(buy_order)
-
-    # 买卖双方都应该收到 1 个成交事件
-    assert len(received_events_buyer) == 1
-    assert len(received_events_seller) == 1
-    # 验证是同一个事件
-    assert received_events_buyer[0].event_type == EventType.TRADE_EXECUTED
-    assert received_events_seller[0].event_type == EventType.TRADE_EXECUTED
-    assert received_events_buyer[0].data["trade_id"] == 1
-    assert received_events_buyer[0].data["price"] == 100.5
-    assert received_events_buyer[0].data["quantity"] == 8.0
-    assert received_events_buyer[0].data["buyer_id"] == 2
-    assert received_events_buyer[0].data["seller_id"] == 1
-
-
 def test_process_order_multiple_trades():
     """测试处理订单产生多笔成交"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)
@@ -1428,14 +1295,13 @@ def test_process_order_partial_fill():
     """测试订单部分成交"""
     from src.market.orderbook.order import Order, OrderSide, OrderType
 
-    event_bus = EventBus()
     config = MarketConfig(
         initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
     )
-    engine = MatchingEngine(event_bus, config)
+    engine = MatchingEngine(config)
 
     # 注册费率
     engine.register_agent(agent_id=1, maker_rate=0.0002, taker_rate=0.0005)

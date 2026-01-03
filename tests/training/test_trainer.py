@@ -7,7 +7,7 @@ import pickle
 import tempfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,8 +19,6 @@ from src.config.config import (
     MarketConfig,
     TrainingConfig,
 )
-from src.core.event_engine.event_bus import EventBus
-from src.core.event_engine.events import Event, EventType
 from src.training.trainer import Trainer
 
 
@@ -59,6 +57,7 @@ def mock_config() -> Config:
         market=market,
         agents={
             AgentType.RETAIL: agent_config,
+            AgentType.RETAIL_PRO: agent_config,
             AgentType.WHALE: agent_config,
             AgentType.MARKET_MAKER: agent_config,
         },
@@ -76,14 +75,6 @@ class TestTrainerInit:
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
         assert trainer.config == mock_config
-
-    @patch("src.training.trainer.get_logger")
-    def test_init_creates_event_bus(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
-        """初始化创建事件总线"""
-        mock_get_logger.return_value = MagicMock()
-        trainer = Trainer(mock_config)
-        assert trainer.event_bus is not None
-        assert isinstance(trainer.event_bus, EventBus)
 
     @patch("src.training.trainer.get_logger")
     def test_init_sets_default_state(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
@@ -140,13 +131,14 @@ class TestTrainerSetup:
         trainer = Trainer(mock_config)
         trainer.setup()
 
-        # 验证创建了三个种群
-        assert mock_population_class.call_count == 3
+        # 验证创建了四个种群
+        assert mock_population_class.call_count == 4
 
         # 验证每个种群类型都被创建
         call_args_list = mock_population_class.call_args_list
         agent_types_called = [call_args[0][0] for call_args in call_args_list]
         assert AgentType.RETAIL in agent_types_called
+        assert AgentType.RETAIL_PRO in agent_types_called
         assert AgentType.WHALE in agent_types_called
         assert AgentType.MARKET_MAKER in agent_types_called
 
@@ -173,35 +165,6 @@ class TestTrainerSetup:
         # 验证撮合引擎被创建
         mock_matching_engine_class.assert_called_once()
         assert trainer.matching_engine is mock_engine_instance
-
-    @patch("src.training.trainer.get_logger")
-    @patch("src.training.trainer.Population")
-    @patch("src.training.trainer.MatchingEngine")
-    def test_setup_subscribes_to_events(
-        self,
-        mock_matching_engine_class: MagicMock,
-        mock_population_class: MagicMock,
-        mock_get_logger: MagicMock,
-        mock_config: Config,
-    ) -> None:
-        """setup 订阅成交和强平事件"""
-        mock_get_logger.return_value = MagicMock()
-        mock_population_class.return_value = MagicMock()
-        mock_engine_instance = MagicMock()
-        mock_engine_instance._orderbook = MagicMock()
-        mock_matching_engine_class.return_value = mock_engine_instance
-
-        trainer = Trainer(mock_config)
-        # 监控事件订阅
-        with patch.object(trainer.event_bus, "subscribe") as mock_subscribe:
-            trainer.setup()
-
-            # 验证订阅了成交和强平事件
-            calls = mock_subscribe.call_args_list
-            event_types_subscribed = [call_args[0][0] for call_args in calls]
-            assert EventType.TRADE_EXECUTED in event_types_subscribed
-            assert EventType.LIQUIDATION in event_types_subscribed
-
 
 class TestTrainerControl:
     """测试训练控制方法"""
@@ -260,68 +223,6 @@ class TestTrainerControl:
         mock_logger.info.assert_called()
 
 
-class TestTrainerOnTrade:
-    """测试成交事件处理"""
-
-    @patch("src.training.trainer.get_logger")
-    def test_on_trade_records_trade(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
-        """_on_trade 记录成交"""
-        mock_get_logger.return_value = MagicMock()
-        trainer = Trainer(mock_config)
-
-        # 创建成交事件
-        event = Event(
-            EventType.TRADE_EXECUTED,
-            timestamp=1000.0,
-            data={
-                "trade_id": 1,
-                "price": 100.0,
-                "quantity": 10.0,
-                "buyer_id": 1,
-                "seller_id": 2,
-                "buyer_fee": 0.01,
-                "seller_fee": 0.01,
-            },
-        )
-
-        trainer._on_trade(event)
-
-        assert len(trainer.recent_trades) == 1
-        trade = trainer.recent_trades[0]
-        assert trade.trade_id == 1
-        assert trade.price == 100.0
-        assert trade.quantity == 10.0
-
-    @patch("src.training.trainer.get_logger")
-    def test_on_trade_limits_to_100(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
-        """_on_trade 限制最近成交数量为 100"""
-        mock_get_logger.return_value = MagicMock()
-        trainer = Trainer(mock_config)
-
-        # 添加 105 笔成交
-        for i in range(105):
-            event = Event(
-                EventType.TRADE_EXECUTED,
-                timestamp=float(i),
-                data={
-                    "trade_id": i,
-                    "price": 100.0,
-                    "quantity": 1.0,
-                    "buyer_id": 1,
-                    "seller_id": 2,
-                    "buyer_fee": 0.0,
-                    "seller_fee": 0.0,
-                },
-            )
-            trainer._on_trade(event)
-
-        # 验证只保留最近 100 笔
-        assert len(trainer.recent_trades) == 100
-        # 验证保留的是最新的（trade_id 5-104）
-        assert trainer.recent_trades[0].trade_id == 5
-        assert trainer.recent_trades[-1].trade_id == 104
-
-
 class TestTrainerRunTick:
     """测试 run_tick 方法"""
 
@@ -374,51 +275,6 @@ class TestTrainerRunTick:
         trainer.run_tick()
 
         assert trainer.tick == initial_tick + 1
-
-    @patch("src.training.trainer.get_logger")
-    @patch("src.training.trainer.Population")
-    @patch("src.training.trainer.MatchingEngine")
-    def test_run_tick_publishes_events(
-        self,
-        mock_matching_engine_class: MagicMock,
-        mock_population_class: MagicMock,
-        mock_get_logger: MagicMock,
-        mock_config: Config,
-    ) -> None:
-        """run_tick 发布 TICK_START 和 TICK_END 事件"""
-        mock_get_logger.return_value = MagicMock()
-
-        mock_population = MagicMock()
-        mock_population.agents = []
-        mock_population_class.return_value = mock_population
-
-        mock_engine = MagicMock()
-        mock_orderbook = MagicMock()
-        mock_orderbook.last_price = 100.0
-        mock_orderbook.tick_size = 0.1
-        mock_orderbook.get_mid_price.return_value = 100.0
-        mock_orderbook.get_depth.return_value = {"bids": [], "asks": []}
-        mock_engine._orderbook = mock_orderbook
-        mock_matching_engine_class.return_value = mock_engine
-
-        trainer = Trainer(mock_config)
-        trainer.setup()
-
-        # 监控事件发布
-        published_events: list[Event] = []
-        trainer.event_bus.subscribe(
-            EventType.TICK_START, lambda e: published_events.append(e)
-        )
-        trainer.event_bus.subscribe(
-            EventType.TICK_END, lambda e: published_events.append(e)
-        )
-
-        trainer.run_tick()
-
-        # 验证发布了 TICK_START 和 TICK_END 事件
-        event_types = [e.event_type for e in published_events]
-        assert EventType.TICK_START in event_types
-        assert EventType.TICK_END in event_types
 
 
 class TestTrainerRunEpisode:
@@ -511,9 +367,9 @@ class TestTrainerRunEpisode:
 
         trainer.run_episode()
 
-        # 验证种群的 reset_agents 被调用（每个种群调用一次，共 3 个种群）
-        # 由于使用相同的 mock，所以会被调用 3 次
-        assert mock_population.reset_agents.call_count == 3
+        # 验证种群的 reset_agents 被调用（每个种群调用一次，共 4 个种群）
+        # 由于使用相同的 mock，所以会被调用 4 次
+        assert mock_population.reset_agents.call_count == 4
 
     @patch("src.training.trainer.get_logger")
     @patch("src.training.trainer.Population")
@@ -900,69 +756,3 @@ class TestTrainerGetState:
         assert AgentType.MARKET_MAKER.value in state["populations"]
         assert state["populations"][AgentType.MARKET_MAKER.value]["count"] == 2
         assert state["populations"][AgentType.MARKET_MAKER.value]["generation"] == 7
-
-
-class TestTrainerOnLiquidation:
-    """测试强平事件处理"""
-
-    @patch("src.training.trainer.get_logger")
-    @patch("src.training.trainer.Population")
-    @patch("src.training.trainer.MatchingEngine")
-    def test_on_liquidation_submits_order(
-        self,
-        mock_matching_engine_class: MagicMock,
-        mock_population_class: MagicMock,
-        mock_get_logger: MagicMock,
-        mock_config: Config,
-    ) -> None:
-        """_on_liquidation 提交平仓订单"""
-        mock_get_logger.return_value = MagicMock()
-
-        mock_population = MagicMock()
-        mock_population.agents = []
-        mock_population_class.return_value = mock_population
-
-        mock_engine = MagicMock()
-        mock_engine._orderbook = MagicMock()
-        mock_matching_engine_class.return_value = mock_engine
-
-        trainer = Trainer(mock_config)
-        trainer.setup()
-
-        # 创建强平事件（多头持仓，需要卖出平仓）
-        event = Event(
-            EventType.LIQUIDATION,
-            timestamp=1000.0,
-            data={
-                "agent_id": 1,
-                "position_quantity": 10.0,  # 多头持仓
-            },
-        )
-
-        trainer._on_liquidation(event)
-
-        # 验证撮合引擎收到了订单
-        mock_engine.process_order.assert_called_once()
-        order = mock_engine.process_order.call_args[0][0]
-        assert order.agent_id == 1
-        assert order.quantity == 10.0
-
-    @patch("src.training.trainer.get_logger")
-    def test_on_liquidation_without_matching_engine(
-        self, mock_get_logger: MagicMock, mock_config: Config
-    ) -> None:
-        """没有撮合引擎时 _on_liquidation 不崩溃"""
-        mock_get_logger.return_value = MagicMock()
-        trainer = Trainer(mock_config)
-
-        event = Event(
-            EventType.LIQUIDATION,
-            timestamp=1000.0,
-            data={
-                "agent_id": 1,
-                "position_quantity": 10.0,
-            },
-        )
-
-        # 不应该抛出异常
-        trainer._on_liquidation(event)

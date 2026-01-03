@@ -3,15 +3,13 @@
 本模块定义做市商 Agent 类，继承自 Agent 基类。
 """
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from src.bio.agents.base import Agent, ActionType
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType
-from src.core.event_engine.event_bus import EventBus
-from src.core.event_engine.events import Event, EventType
 from src.market.market_state import NormalizedMarketState
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
@@ -34,29 +32,26 @@ class MarketMakerAgent(Agent):
         account: 交易账户
         bid_order_ids: 买单订单ID列表（最多10个）
         ask_order_ids: 卖单订单ID列表（最多10个）
-        _action_handlers: 动作处理器字典
     """
 
     agent_id: int
     brain: Brain
     bid_order_ids: list[int]
     ask_order_ids: list[int]
-    _action_handlers: dict[ActionType, Callable[[dict[str, Any], EventBus], None]]
 
     def __init__(
-        self, agent_id: int, brain: Brain, config: AgentConfig, event_bus: EventBus
+        self, agent_id: int, brain: Brain, config: AgentConfig
     ) -> None:
         """创建做市商 Agent
 
-        调用父类构造函数，设置类型为 MARKET_MAKER，初始化买卖挂单列表和动作处理器。
+        调用父类构造函数，设置类型为 MARKET_MAKER，初始化买卖挂单列表。
 
         Args:
             agent_id: Agent ID
             brain: NEAT 神经网络
             config: Agent 配置
-            event_bus: 事件总线
         """
-        super().__init__(agent_id, AgentType.MARKET_MAKER, brain, config, event_bus)
+        super().__init__(agent_id, AgentType.MARKET_MAKER, brain, config)
 
         # 做市商每边（买/卖）可以挂1-10个订单
         self.bid_order_ids: list[int] = []
@@ -64,19 +59,6 @@ class MarketMakerAgent(Agent):
 
         # 做市商输入更大（634 = 604 + 30 挂单信息）
         self._input_buffer = np.zeros(634, dtype=np.float64)
-
-        # 初始化动作处理器
-        self._init_action_handlers()
-
-    def _init_action_handlers(self) -> None:
-        """初始化动作处理器字典
-
-        将动作类型映射到对应的处理方法。
-        """
-        self._action_handlers = {
-            ActionType.QUOTE: self._handle_quote,
-            ActionType.CLEAR_POSITION: self._handle_clear_position,
-        }
 
     def get_action_space(self) -> list[ActionType]:
         """获取做市商可用动作
@@ -276,19 +258,14 @@ class MarketMakerAgent(Agent):
 
         return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 
-    def _cancel_all_orders(self, event_bus: EventBus) -> None:
+    def _cancel_all_orders(self, matching_engine: "MatchingEngine") -> None:
         """撤销所有挂单
 
         Args:
-            event_bus: 事件总线
+            matching_engine: 撮合引擎
         """
         for order_id in self.bid_order_ids + self.ask_order_ids:
-            event = Event(
-                EventType.ORDER_CANCELLED,
-                0.0,
-                {"order_id": order_id, "agent_id": self.agent_id},
-            )
-            event_bus.publish(event)
+            matching_engine.cancel_order(order_id)
         self.bid_order_ids.clear()
         self.ask_order_ids.clear()
 
@@ -297,16 +274,20 @@ class MarketMakerAgent(Agent):
         orders: list[dict[str, float]],
         side: OrderSide,
         order_ids: list[int],
-        event_bus: EventBus,
-    ) -> None:
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
         """挂限价单并记录订单ID
 
         Args:
             orders: 订单列表，每个订单包含 price 和 quantity
             side: 订单方向（买/卖）
             order_ids: 用于存储订单ID的列表（将被修改）
-            event_bus: 事件总线
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
         """
+        all_trades: list[Trade] = []
         for order_spec in orders:
             order_id = self._generate_order_id()
             order = Order(
@@ -317,11 +298,17 @@ class MarketMakerAgent(Agent):
                 price=order_spec["price"],
                 quantity=order_spec["quantity"],
             )
-            event = Event(EventType.ORDER_PLACED, 0.0, {"order": order})
-            event_bus.publish(event)
+            trades = matching_engine.process_order(order)
+            self._process_trades(trades)
+            all_trades.extend(trades)
             order_ids.append(order_id)
+        return all_trades
 
-    def _handle_quote(self, params: dict[str, Any], event_bus: EventBus) -> None:
+    def _handle_quote(
+        self,
+        params: dict[str, Any],
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
         """处理 QUOTE 动作
 
         先撤掉所有旧挂单，然后双边各挂 1-5 单（每单价格和数量由神经网络决定）。
@@ -330,65 +317,64 @@ class MarketMakerAgent(Agent):
             params: 动作参数字典
                 {"bid_orders": [{"price": float, "quantity": float}, ...],
                  "ask_orders": [{"price": float, "quantity": float}, ...]}
-            event_bus: 事件总线
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
         """
-        self._cancel_all_orders(event_bus)
-        self._place_quote_orders(
-            params.get("bid_orders", []), OrderSide.BUY, self.bid_order_ids, event_bus
+        self._cancel_all_orders(matching_engine)
+        all_trades: list[Trade] = []
+        all_trades.extend(
+            self._place_quote_orders(
+                params.get("bid_orders", []),
+                OrderSide.BUY,
+                self.bid_order_ids,
+                matching_engine,
+            )
         )
-        self._place_quote_orders(
-            params.get("ask_orders", []), OrderSide.SELL, self.ask_order_ids, event_bus
+        all_trades.extend(
+            self._place_quote_orders(
+                params.get("ask_orders", []),
+                OrderSide.SELL,
+                self.ask_order_ids,
+                matching_engine,
+            )
         )
+        return all_trades
 
     def _handle_clear_position(
-        self, params: dict[str, Any], event_bus: EventBus
-    ) -> None:
-        """处理 CLEAR_POSITION 动作
+        self,
+        matching_engine: "MatchingEngine",
+    ) -> list[Trade]:
+        """处理做市商清仓
 
         先撤掉所有挂单，再根据持仓方向市价平仓。
 
         Args:
-            params: 动作参数字典（此动作不使用参数）
-            event_bus: 事件总线
+            matching_engine: 撮合引擎
+
+        Returns:
+            成交列表
         """
-        self._cancel_all_orders(event_bus)
+        self._cancel_all_orders(matching_engine)
         position_qty = self.account.position.quantity
         if position_qty > 0:
-            self._place_market_order(OrderSide.SELL, position_qty, event_bus)
+            return self._place_market_order(
+                OrderSide.SELL, position_qty, matching_engine
+            )
         elif position_qty < 0:
-            self._place_market_order(OrderSide.BUY, abs(position_qty), event_bus)
+            return self._place_market_order(
+                OrderSide.BUY, abs(position_qty), matching_engine
+            )
+        return []
 
     def execute_action(
-        self, action: ActionType, params: dict[str, Any], event_bus: EventBus
-    ) -> None:
-        """执行动作
-
-        做市商执行双边挂单或清仓动作。
-        - QUOTE: 先撤掉所有旧挂单，然后双边各挂 1-5 单（每单价格和数量由神经网络决定）
-        - CLEAR_POSITION: 先撤掉所有挂单，再根据持仓方向市价平仓
-
-        Args:
-            action: 动作类型
-            params: 动作参数字典
-                - QUOTE: {"bid_orders": [{"price": float, "quantity": float}, ...],
-                          "ask_orders": [{"price": float, "quantity": float}, ...]}
-                - CLEAR_POSITION: {}
-            event_bus: 事件总线
-        """
-        if self.is_liquidated:
-            return
-
-        handler = self._action_handlers.get(action)
-        if handler:
-            handler(params, event_bus)
-
-    def execute_action_direct(
         self,
         action: ActionType,
         params: dict[str, Any],
         matching_engine: "MatchingEngine",
     ) -> list[Trade]:
-        """直接执行动作（训练模式，绕过事件系统）
+        """执行动作
 
         做市商特定实现：QUOTE 先撤所有旧单再双边挂单，CLEAR_POSITION 先撤单再平仓。
 
@@ -406,114 +392,8 @@ class MarketMakerAgent(Agent):
         trades: list[Trade] = []
 
         if action == ActionType.QUOTE:
-            trades = self._handle_quote_direct(params, matching_engine)
+            trades = self._handle_quote(params, matching_engine)
         elif action == ActionType.CLEAR_POSITION:
-            trades = self._handle_clear_position_direct_mm(matching_engine)
+            trades = self._handle_clear_position(matching_engine)
 
         return trades
-
-    def _cancel_all_orders_direct(self, matching_engine: "MatchingEngine") -> None:
-        """直接撤销所有挂单（训练模式）
-
-        Args:
-            matching_engine: 撮合引擎
-        """
-        for order_id in self.bid_order_ids + self.ask_order_ids:
-            matching_engine.cancel_order_direct(order_id)
-        self.bid_order_ids.clear()
-        self.ask_order_ids.clear()
-
-    def _place_quote_orders_direct(
-        self,
-        orders: list[dict[str, float]],
-        side: OrderSide,
-        order_ids: list[int],
-        matching_engine: "MatchingEngine",
-    ) -> list[Trade]:
-        """直接挂限价单并记录订单ID（训练模式）
-
-        Args:
-            orders: 订单列表
-            side: 订单方向
-            order_ids: 用于存储订单ID的列表
-            matching_engine: 撮合引擎
-
-        Returns:
-            成交列表
-        """
-        all_trades: list[Trade] = []
-        for order_spec in orders:
-            order_id = self._generate_order_id()
-            order = Order(
-                order_id=order_id,
-                agent_id=self.agent_id,
-                side=side,
-                order_type=OrderType.LIMIT,
-                price=order_spec["price"],
-                quantity=order_spec["quantity"],
-            )
-            trades = matching_engine.process_order_direct(order)
-            self._process_trades_direct(trades)
-            all_trades.extend(trades)
-            order_ids.append(order_id)
-        return all_trades
-
-    def _handle_quote_direct(
-        self,
-        params: dict[str, Any],
-        matching_engine: "MatchingEngine",
-    ) -> list[Trade]:
-        """直接处理 QUOTE 动作（训练模式）
-
-        Args:
-            params: 动作参数字典
-            matching_engine: 撮合引擎
-
-        Returns:
-            成交列表
-        """
-        self._cancel_all_orders_direct(matching_engine)
-        all_trades: list[Trade] = []
-        all_trades.extend(
-            self._place_quote_orders_direct(
-                params.get("bid_orders", []),
-                OrderSide.BUY,
-                self.bid_order_ids,
-                matching_engine,
-            )
-        )
-        all_trades.extend(
-            self._place_quote_orders_direct(
-                params.get("ask_orders", []),
-                OrderSide.SELL,
-                self.ask_order_ids,
-                matching_engine,
-            )
-        )
-        return all_trades
-
-    def _handle_clear_position_direct_mm(
-        self,
-        matching_engine: "MatchingEngine",
-    ) -> list[Trade]:
-        """直接处理做市商清仓（训练模式）
-
-        先撤掉所有挂单，再根据持仓方向市价平仓。
-
-        Args:
-            matching_engine: 撮合引擎
-
-        Returns:
-            成交列表
-        """
-        self._cancel_all_orders_direct(matching_engine)
-        position_qty = self.account.position.quantity
-        if position_qty > 0:
-            return self._place_market_order_direct(
-                OrderSide.SELL, position_qty, matching_engine
-            )
-        elif position_qty < 0:
-            return self._place_market_order_direct(
-                OrderSide.BUY, abs(position_qty), matching_engine
-            )
-        return []

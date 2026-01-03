@@ -31,27 +31,27 @@
 
 ### Trainer (trainer.py)
 
-管理整体训练流程，协调种群和撮合引擎。训练模式使用直接调用，绕过事件系统。
+管理整体训练流程，协调种群和撮合引擎。
 
 **主要功能：**
 - 初始化训练环境（创建种群、撮合引擎）
 - 管理训练生命周期（tick、episode）
-- 直接调用模式处理成交和强平
+- 处理成交和强平
 - 保存/加载检查点
 - 支持暂停/恢复/停止控制
 
 **关键方法：**
-- `setup()` - 初始化训练环境（训练模式不订阅事件），创建 ADL 管理器
+- `setup()` - 初始化训练环境，创建 ADL 管理器
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
 - `_cancel_agent_orders()` - 撤销指定 Agent 的所有挂单（做市商撤多单，普通 Agent 撤单个挂单）
-- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓，若市价单无法完全成交则触发 ADL，强平完成后直接淘汰 Agent（调用前必须先撤销挂单）
-- `_execute_adl()` - 执行 ADL 自动减仓，直接在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty），ADL 后检查参与者的强平条件
+- `_handle_liquidation()` - 处理强平，提交市价单平仓，若市价单无法完全成交则触发 ADL，强平完成后淘汰 Agent（调用前必须先撤销挂单）
+- `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty），ADL 后检查参与者的强平条件
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_any_population_eliminated()` - O(1) 检查是否有任一种群被全部淘汰，返回被淘汰的种群类型
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
-- `run_tick()` - 执行单个 tick（直接调用模式），绕过事件系统
+- `run_tick()` - 执行单个 tick
 - `run_episode()` - 运行完整 episode（重置、运行、进化），若任一种群全部被淘汰则提前结束
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
@@ -62,7 +62,6 @@
 - 使用 `_pop_total_counts` 和 `_pop_liquidated_counts` 计数器实现 O(1) 种群淘汰检查，避免每 tick 遍历
 - 使用 `agent_execution_order` 预构建执行顺序，合并决策/执行和强平检查循环
 - 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
-- **直接调用模式**：训练时绕过事件系统，直接调用撮合引擎和 Agent 方法
 
 ## 训练流程
 
@@ -72,7 +71,7 @@
    - 创建 ADL 管理器
    - 注册所有 Agent 的费率到撮合引擎
    - 构建 Agent 映射表和执行顺序
-   - 做市商建立初始流动性（直接调用模式）
+   - 做市商建立初始流动性
 
 2. **Episode 循环** (`run_episode`)
    - 重置所有 Agent 账户
@@ -82,7 +81,7 @@
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
-3. **Tick 执行** (`run_tick` - 直接调用模式)
+3. **Tick 执行** (`run_tick`)
 
    **时序设计**：Agent 的下单操作影响的是下一个 tick，确保强平检查和数据采集使用同一价格
 
@@ -99,44 +98,25 @@
      - 下单产生的价格变动效果在下个 tick 被感知
      - 数据采集使用 `tick_start_price` 计算资产，与强平检查一致
 
-## 直接调用模式
-
-训练模式绕过事件系统，直接调用以提高性能：
-
-### Agent 方法
-- `execute_action_direct(action, params, matching_engine)` - 直接执行动作，返回成交列表
-- `_place_limit_order_direct()` - 直接下限价单
-- `_place_market_order_direct()` - 直接下市价单
-- `_process_trades_direct()` - 直接处理成交，更新账户
-
-### 撮合引擎方法
-- `process_order_direct(order)` - 直接处理订单，不发布事件
-- `cancel_order_direct(order_id)` - 直接撤单
-
-### Trainer 方法
-- `_init_market()` - 直接调用做市商初始化市场
-- `run_tick()` - 直接调用 Agent 和撮合引擎
-- `_handle_liquidation_direct()` - 直接处理强平
-
 ## 强平与淘汰机制（爆仓即淘汰）
 
 **强平即淘汰（Liquidation = Elimination）**：保证金率低于维持保证金率时触发，Agent 直接被淘汰
 
 **Tick 开始时的两阶段强平处理**：
 - **阶段1（统一撤单）**：遍历所有 Agent 检查强平条件，收集需要淘汰的 Agent，调用 `_cancel_agent_orders()` 统一撤销这些 Agent 的所有挂单
-- **阶段2（统一平仓）**：遍历需要淘汰的 Agent，调用 `_handle_liquidation_direct(skip_cancel_orders=True)` 执行平仓
+- **阶段2（统一平仓）**：遍历需要淘汰的 Agent，调用 `_handle_liquidation(skip_cancel_orders=True)` 执行平仓
 
 **设计原因**：先统一撤单可防止被淘汰的 Agent 在平仓过程中作为 maker 被成交，导致仓位增加
 
-**`_handle_liquidation_direct()` 执行流程**：
+**`_handle_liquidation()` 执行流程**：
 1. 重入保护检查（防止同一 Agent 被多次处理）
 2. 若 `skip_cancel_orders=False`，撤销所有挂单（ADL 递归调用时需要）：
    - 普通 Agent（散户/庄家）：撤销 `pending_order_id`
-   - **做市商**：调用 `_cancel_all_orders_direct()` 撤销所有买卖挂单
-3. 创建市价平仓单，直接调用撮合引擎处理
-4. 成交后直接更新 Agent 账户
+   - **做市商**：调用 `_cancel_all_orders()` 撤销所有买卖挂单
+3. 创建市价平仓单，调用撮合引擎处理
+4. 成交后更新 Agent 账户
 5. **若市价单无法完全成交**（订单簿流动性不足），剩余仓位触发 ADL 机制
-6. 强平完成后**直接标记 `is_liquidated = True`**，Agent 被淘汰
+6. 强平完成后**标记 `is_liquidated = True`**，Agent 被淘汰
 7. 处理穿仓（余额为负时归零），验证仓位已清零
 8. 移除重入保护标记
 
@@ -150,7 +130,7 @@
 5. **更新候选清单的 position_qty**：确保后续 ADL 不会重复使用已减掉的仓位
 6. **ADL 成交后处理**：
    - 检查参与者的强平条件（ADL 可能导致 candidate 爆仓）
-   - 如果 candidate 触发强平条件，调用 `_handle_liquidation_direct()` 淘汰该 candidate
+   - 如果 candidate 触发强平条件，调用 `_handle_liquidation()` 淘汰该 candidate
    - 如果 ADL 无法完全清零仓位，强制清零被淘汰者的仓位（兜底处理）
 7. 由于多空仓位完全对等，理论上不会出现候选不足的情况
 
@@ -165,14 +145,13 @@
 - 强平完成后从集合中移除
 
 **淘汰后状态**：
-- 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
+- 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action` 返回空列表）
 - 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
 
 ## 依赖关系
 
 - `src.bio.agents` - Agent 类
 - `src.config.config` - 配置类
-- `src.core.event_engine` - 事件系统（保留用于调试/UI模式）
 - `src.core.log_engine` - 日志系统
 - `src.market.adl` - ADL 管理器
 - `src.market.matching` - 撮合引擎

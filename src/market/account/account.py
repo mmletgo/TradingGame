@@ -3,11 +3,7 @@
 本模块定义账户(Account)类，用于记录 Agent 的交易账户状态。
 """
 
-import time
-
 from src.config.config import AgentConfig, AgentType
-from src.core.event_engine.events import Event, EventType
-from src.core.event_engine.event_bus import EventBus
 from src.market.account.position import Position
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import OrderSide
@@ -96,25 +92,6 @@ class Account:
         """
         margin_ratio = self.get_margin_ratio(current_price)
         return margin_ratio < self.maintenance_margin_rate
-
-    def liquidate(self, current_price: float, event_bus: EventBus) -> None:
-        """执行强制平仓
-
-        发布强平事件，通知训练引擎提交市价单平仓。
-
-        Args:
-            current_price: 当前市场价格
-            event_bus: 事件总线，用于发布强平事件
-        """
-        event_data = {
-            "agent_id": self.agent_id,
-            "agent_type": self.agent_type,
-            "current_price": current_price,
-            "position_quantity": self.position.quantity,
-            "position_avg_price": self.position.avg_price,
-        }
-        liquidation_event = Event(EventType.LIQUIDATION, time.time(), event_data)
-        event_bus.publish(liquidation_event)
 
     def on_trade(self, trade: Trade, is_buyer: bool) -> None:
         """处理成交回报
