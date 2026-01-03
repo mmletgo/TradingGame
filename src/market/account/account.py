@@ -27,7 +27,9 @@ class Account:
         pending_order_id: 当前挂单ID
     """
 
-    def __init__(self, agent_id: int, agent_type: AgentType, config: AgentConfig) -> None:
+    def __init__(
+        self, agent_id: int, agent_type: AgentType, config: AgentConfig
+    ) -> None:
         """创建账户
 
         初始化余额、持仓、杠杆、费率等账户属性。
