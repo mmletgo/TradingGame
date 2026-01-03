@@ -123,12 +123,19 @@ cdef class OrderBook:
         else:  # OrderSide.SELL
             side_book = self.asks
 
+        # 【修复浮点精度问题】将价格舍入到 tick_size 的整数倍
+        # 使用 round() 消除浮点精度误差（如 91.30000000000001 -> 91.3）
+        cdef double normalized_price = round(order.price / self.tick_size) * self.tick_size
+        # 再次舍入以消除乘法引入的微小误差
+        normalized_price = round(normalized_price, 10)
+        order.price = normalized_price
+
         # 检查价格档位是否存在，不存在则创建
-        if order.price not in side_book:
-            side_book[order.price] = PriceLevel(price=order.price)
+        if normalized_price not in side_book:
+            side_book[normalized_price] = PriceLevel(price=normalized_price)
 
         # 将订单添加到价格档位
-        side_book[order.price].add_order(order)
+        side_book[normalized_price].add_order(order)
 
         # 添加到订单映射表
         self.order_map[order.order_id] = order
@@ -160,13 +167,23 @@ cdef class OrderBook:
         else:  # OrderSide.SELL
             side_book = self.asks
 
+        # 【修复浮点精度问题】使用与 add_order 相同的归一化逻辑
+        cdef double normalized_price = round(order.price / self.tick_size) * self.tick_size
+        normalized_price = round(normalized_price, 10)
+
         # 3. 从价格档位移除订单
-        price_level = side_book[order.price]
+        if normalized_price not in side_book:
+            # 价格档位不存在，可能是数据不一致，仍需从 order_map 移除
+            del self.order_map[order_id]
+            self._depth_dirty = True
+            return order
+
+        price_level = side_book[normalized_price]
         removed_order = price_level.remove_order(order_id)
 
         # 4. 如果档位变空，删除档位
         if len(price_level.orders) == 0:
-            del side_book[order.price]
+            del side_book[normalized_price]
 
         # 5. 从 order_map 移除
         del self.order_map[order_id]

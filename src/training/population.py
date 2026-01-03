@@ -92,6 +92,15 @@ class Population:
             f"创建 {agent_type.value} 种群，初始 Agent 数量: {len(self.agents)}"
         )
 
+    # Agent ID 偏移量，确保不同种群的 agent_id 不冲突
+    # 每个种群类型使用不同的高位，每种群最多支持 100 万个 Agent
+    _AGENT_ID_OFFSET = {
+        AgentType.RETAIL: 0,
+        AgentType.RETAIL_PRO: 1_000_000,
+        AgentType.WHALE: 2_000_000,
+        AgentType.MARKET_MAKER: 3_000_000,
+    }
+
     def create_agents(
         self,
         genomes: list[tuple[int, neat.DefaultGenome]],
@@ -119,11 +128,16 @@ class Population:
         else:
             raise ValueError(f"未知的 Agent 类型: {self.agent_type}")
 
+        # 获取该种群类型的 agent_id 偏移量，确保全局唯一
+        agent_id_offset = self._AGENT_ID_OFFSET.get(self.agent_type, 0)
+
         agents: list[Agent] = []
 
-        for genome_id, genome in genomes:
+        for idx, (genome_id, genome) in enumerate(genomes):
             brain = Brain.from_genome(genome, self.neat_config)
-            agent = agent_class(genome_id, brain, self.agent_config)
+            # 使用 offset + 索引 作为 agent_id，确保全局唯一
+            unique_agent_id = agent_id_offset + idx
+            agent = agent_class(unique_agent_id, brain, self.agent_config)
             agents.append(agent)
 
         return agents

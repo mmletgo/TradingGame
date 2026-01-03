@@ -58,9 +58,9 @@ class TestPopulationCreateAgents:
         assert len(agents) == 2
         # 验证都是 RetailAgent
         assert all(isinstance(agent, RetailAgent) for agent in agents)
-        # 验证 agent_id 正确
-        assert agents[0].agent_id == 1
-        assert agents[1].agent_id == 2
+        # 验证 agent_id 正确（散户 offset=0，使用 idx 作为 agent_id）
+        assert agents[0].agent_id == 0
+        assert agents[1].agent_id == 1
         # 验证 Brain.from_genome 被调用了正确次数
         assert mock_from_genome.call_count == 2
 
@@ -94,8 +94,8 @@ class TestPopulationCreateAgents:
         assert len(agents) == 1
         # 验证是 WhaleAgent
         assert isinstance(agents[0], WhaleAgent)
-        # 验证 agent_id 正确
-        assert agents[0].agent_id == 100
+        # 验证 agent_id 正确（庄家 offset=2_000_000，idx=0）
+        assert agents[0].agent_id == 2_000_000
 
     @patch.object(Brain, 'from_genome')
     def test_create_market_maker_agents(self, mock_from_genome):
@@ -129,10 +129,10 @@ class TestPopulationCreateAgents:
         assert len(agents) == 3
         # 验证都是 MarketMakerAgent
         assert all(isinstance(agent, MarketMakerAgent) for agent in agents)
-        # 验证 agent_id 正确
-        assert agents[0].agent_id == 10
-        assert agents[1].agent_id == 20
-        assert agents[2].agent_id == 30
+        # 验证 agent_id 正确（做市商 offset=3_000_000，idx=0,1,2）
+        assert agents[0].agent_id == 3_000_000
+        assert agents[1].agent_id == 3_000_001
+        assert agents[2].agent_id == 3_000_002
 
     @patch.object(Brain, 'from_genome')
     def test_create_agents_empty_genomes(self, mock_from_genome):
@@ -719,8 +719,8 @@ class TestPopulationEvolve:
 
         # 验证 agents 列表被重建（不是同一个对象）
         assert population.agents is not initial_agents
-        # 验证新 agents 使用新的基因组 ID
-        assert population.agents[0].agent_id == 2
+        # 验证新 agents 的 agent_id 基于 offset + idx（散户 offset=0, idx=0）
+        assert population.agents[0].agent_id == 0
 
     @patch("src.training.population.get_logger")
     @patch("src.training.population.neat.Population")

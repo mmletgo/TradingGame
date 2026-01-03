@@ -180,20 +180,53 @@ class Trainer:
     def _cancel_agent_orders(self, agent: "Agent") -> None:
         """撤销 agent 的所有挂单
 
+        直接遍历订单簿撤销所有属于该 agent 的订单，确保不会遗漏任何订单。
+
         Args:
             agent: 要撤销挂单的 Agent
         """
         if not self.matching_engine:
             return
 
-        # 做市商有多个挂单（bid_order_ids 和 ask_order_ids），需要全部撤销
+        orderbook = self.matching_engine._orderbook
+
+        # 直接从订单簿中查找并撤销所有属于该 agent 的订单
+        # 注意：需要先复制 order_map.keys()，避免在迭代时修改字典
+        order_ids_to_cancel: list[int] = []
+        for order_id in list(orderbook.order_map.keys()):
+            order = orderbook.order_map.get(order_id)
+            if order is not None and order.agent_id == agent.agent_id:
+                order_ids_to_cancel.append(order_id)
+
+        # 【调试】记录撤单前的订单数量
+        before_count = len(order_ids_to_cancel)
+
+        for order_id in order_ids_to_cancel:
+            self.matching_engine.cancel_order(order_id)
+
+        # 【调试】验证撤单后该agent在订单簿中确实没有订单了
+        after_count = 0
+        remaining_ids = []
+        for order_id in list(orderbook.order_map.keys()):
+            order = orderbook.order_map.get(order_id)
+            if order is not None and order.agent_id == agent.agent_id:
+                after_count += 1
+                remaining_ids.append(order_id)
+
+        if after_count > 0:
+            self.logger.error(
+                f"[撤单异常] Agent {agent.agent_id} ({agent.agent_type.value}): "
+                f"撤销了 {before_count} 单，但 order_map 中仍有 {after_count} 单！"
+            )
+
+        # 如果是做市商，清空订单ID列表（保持列表与订单簿同步）
         if agent.agent_type == AgentType.MARKET_MAKER:
             from src.bio.agents.market_maker import MarketMakerAgent
 
             if isinstance(agent, MarketMakerAgent):
-                agent._cancel_all_orders(self.matching_engine)
+                agent.bid_order_ids.clear()
+                agent.ask_order_ids.clear()
         elif agent.account.pending_order_id is not None:
-            self.matching_engine.cancel_order(agent.account.pending_order_id)
             agent.account.pending_order_id = None
 
     def _handle_liquidation_direct(self, agent: "Agent", current_price: float) -> None:
@@ -259,6 +292,9 @@ class Trainer:
             maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
             maker_agent = self.agent_map.get(maker_id)
             if maker_agent is not None:
+                # 跳过已淘汰的 agent，防止更新其账户导致资产异常增加
+                if maker_agent.is_liquidated:
+                    continue
                 maker_is_buyer = not trade.is_buyer_taker
                 maker_agent.account.on_trade(trade, maker_is_buyer)
 
@@ -272,6 +308,11 @@ class Trainer:
         agent.is_liquidated = True
         self._pop_liquidated_counts[agent.agent_type] = (
             self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
+        )
+
+        # 【调试】记录淘汰时机
+        self.logger.info(
+            f"[淘汰] Agent {agent.agent_id} ({agent.agent_type.value}) 在 tick={self.tick} 被淘汰"
         )
 
         # 处理穿仓：如果余额为负，归零（由系统承担损失）
@@ -630,6 +671,9 @@ class Trainer:
                 # 因为 _process_trades 只更新了 taker 端（买或卖其中一方）
                 maker_agent = self.agent_map.get(maker_id)
                 if maker_agent is not None:
+                    # 跳过已淘汰的 agent，防止更新其账户
+                    if maker_agent.is_liquidated:
+                        continue
                     # maker 的方向与 taker 相反：taker 买则 maker 卖，taker 卖则 maker 买
                     is_buyer = not trade.is_buyer_taker
                     maker_agent.account.on_trade(trade, is_buyer)
