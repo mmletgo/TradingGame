@@ -24,10 +24,18 @@
 - 重置 Agent 账户状态
 
 **关键方法：**
-- `create_agents()` - 从基因组列表创建 Agent
+- `create_agents()` - 从基因组列表创建 Agent（小批量串行，大批量并行）
+- `_create_single_agent()` - 创建单个 Agent（线程安全）
 - `evaluate()` - 评估种群适应度并排序
 - `evolve()` - 执行一代 NEAT 进化
 - `reset_agents()` - 重置所有 Agent 账户
+- `_get_shared_executor()` - 获取类级别共享线程池
+- `shutdown_executor()` - 关闭共享线程池
+
+**多核并行化：**
+- 使用类级别共享 ThreadPoolExecutor（16个worker）
+- 小批量（<50）串行创建，避免线程池开销
+- 大批量并行调用 `Brain.from_genome`，按索引排序保证顺序
 
 ### Trainer (trainer.py)
 
@@ -62,6 +70,13 @@
 - 使用 `_pop_total_counts` 和 `_pop_liquidated_counts` 计数器实现 O(1) 种群淘汰检查，避免每 tick 遍历
 - 使用 `agent_execution_order` 预构建执行顺序，合并决策/执行和强平检查循环
 - 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
+
+**多核并行化优化：**
+- `_evolve_populations_parallel()` - 4个种群并行进化（使用 ThreadPoolExecutor，16个worker）
+- `_batch_decide_parallel()` - Agent 决策阶段并行执行（NEAT 的 Cython 代码释放 GIL）
+- `_check_liquidations_vectorized()` - 向量化强平检查（NumPy 批量计算）
+- 决策阶段并行，执行阶段串行（保证订单簿一致性）
+- 线程池惰性初始化，`stop()` 时自动清理
 
 ## 训练流程
 
