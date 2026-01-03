@@ -603,10 +603,12 @@ class Trainer:
         equities = balances + unrealized_pnl
         position_values = np.abs(quantities) * current_price
 
-        margin_ratios = np.where(
-            position_values > 0,
-            equities / position_values,
-            np.inf
+        # 使用 np.divide 的 where 参数避免除零警告
+        margin_ratios = np.divide(
+            equities,
+            position_values,
+            out=np.full_like(equities, np.inf),
+            where=position_values > 0
         )
 
         need_liquidation = margin_ratios < maintenance_rates
