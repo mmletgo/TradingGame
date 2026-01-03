@@ -68,7 +68,7 @@ def create_default_config(
 
     agents = {
         AgentType.RETAIL: AgentConfig(
-            count=1000,
+            count=10000,
             initial_balance=100000.0,  # 10万
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%

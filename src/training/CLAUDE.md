@@ -72,7 +72,8 @@
 - 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
 
 **多核并行化优化：**
-- `_evolve_populations_parallel()` - 4个种群并行进化（使用 ThreadPoolExecutor，16个worker）
+- `_create_populations_parallel()` - 4个种群并行初始化（使用 ThreadPoolExecutor，16个worker）
+- `_evolve_populations_parallel()` - 4个种群并行进化
 - `_batch_decide_parallel()` - Agent 决策阶段并行执行（NEAT 的 Cython 代码释放 GIL）
 - `_check_liquidations_vectorized()` - 向量化强平检查（NumPy 批量计算）
 - 决策阶段并行，执行阶段串行（保证订单簿一致性）
