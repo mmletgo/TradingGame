@@ -72,12 +72,13 @@
 - 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
 
 **多核并行化优化：**
-- `_create_populations_parallel()` - 4个种群并行初始化（使用 ThreadPoolExecutor，16个worker）
+- 种群初始化：串行创建种群，但每个种群内部的 Agent 创建是并行的（Agent维度并行）
 - `_evolve_populations_parallel()` - 4个种群并行进化
 - `_batch_decide_parallel()` - Agent 决策阶段并行执行（NEAT 的 Cython 代码释放 GIL）
 - `_check_liquidations_vectorized()` - 向量化强平检查（NumPy 批量计算）
 - 决策阶段并行，执行阶段串行（保证订单簿一致性）
 - 线程池惰性初始化，`stop()` 时自动清理
+- Population 类使用共享线程池（16个worker）处理 Agent 创建
 
 ## 训练流程
 

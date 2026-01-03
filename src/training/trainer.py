@@ -120,8 +120,9 @@ class Trainer:
         创建四种群、撮合引擎，初始化市场。
         训练模式使用直接调用。
         """
-        # 并行创建四种群
-        self._create_populations_parallel()
+        # 串行创建四种群（每个种群内部的Agent创建是并行的）
+        for agent_type in AgentType:
+            self.populations[agent_type] = Population(agent_type, self.config)
 
         # 创建撮合引擎
         self.matching_engine = MatchingEngine(self.config.market)
@@ -537,28 +538,6 @@ class Trainer:
             trade_prices=trade_prices,
             trade_quantities=trade_quantities,
         )
-
-    def _create_population(self, agent_type: AgentType) -> tuple[AgentType, "Population"]:
-        """创建单个种群（线程安全）"""
-        return (agent_type, Population(agent_type, self.config))
-
-    def _create_populations_parallel(self) -> None:
-        """并行创建所有种群"""
-        executor = self._get_executor()
-
-        futures = {
-            executor.submit(self._create_population, agent_type): agent_type
-            for agent_type in AgentType
-        }
-
-        for future in as_completed(futures):
-            agent_type = futures[future]
-            try:
-                _, population = future.result()
-                self.populations[agent_type] = population
-            except Exception as e:
-                self.logger.error(f"种群 {agent_type.value} 创建失败: {e}")
-                raise
 
     def _evolve_populations_parallel(self, current_price: float) -> None:
         """并行进化所有种群"""
