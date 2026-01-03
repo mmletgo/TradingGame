@@ -89,7 +89,7 @@ def create_default_config(
             initial_balance=10000000.0,  # 1000万
             leverage=10.0,
             maintenance_margin_rate=0.05,  # 5%
-            maker_fee_rate=0.0,
+            maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),
         AgentType.MARKET_MAKER: AgentConfig(
@@ -97,7 +97,7 @@ def create_default_config(
             initial_balance=10000000.0,  # 1000万
             leverage=10.0,
             maintenance_margin_rate=0.05,  # 5%
-            maker_fee_rate=0.0,
+            maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),
     }
