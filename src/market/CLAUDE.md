@@ -69,10 +69,7 @@ ADL（Auto-Deleveraging）自动减仓模块，在强平订单无法完全成交
 - `ADLManager` - ADL 管理器，负责计算排名和执行减仓
 
 **核心方法：**
-- `calculate_bankruptcy_price(agent, current_price)` - 计算破产价格
 - `calculate_adl_score(agent, current_price)` - 计算 ADL 排名分数
-- `get_adl_candidates(agents, current_price, target_side)` - 获取候选列表
-- `execute_adl(liquidated_agent, remaining_qty, candidates, bankruptcy_price)` - 执行 ADL 成交
 
 ## 依赖关系
 

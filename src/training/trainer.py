@@ -19,7 +19,7 @@ from src.config.config import Config
 from src.core.event_engine.event_bus import EventBus
 from src.core.event_engine.events import Event
 from src.core.log_engine.logger import get_logger
-from src.market.adl.adl_manager import ADLManager
+from src.market.adl.adl_manager import ADLCandidate, ADLManager
 from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
@@ -57,8 +57,17 @@ class Trainer:
     agent_map: dict[int, "Agent"]
     agent_execution_order: list["Agent"]
     _pop_total_counts: dict[AgentType, int]  # 各种群总数
-    _pop_liquidated_counts: dict[AgentType, int]  # 各种群当前 episode 已淘汰数量
+    _pop_liquidated_counts: dict[
+        AgentType, int
+    ]  # 各种群当前 episode 已淘汰数量（爆仓即淘汰）
     tick_start_price: float  # tick 开始时的价格，供数据采集使用
+    _eliminating_agents: set[int]  # 正在强平/淘汰的 Agent ID 集合（防止重入）
+    _adl_long_candidates: list[
+        ADLCandidate
+    ]  # 多头 ADL 候选（已排序，持仓数量会动态更新）
+    _adl_short_candidates: list[
+        ADLCandidate
+    ]  # 空头 ADL 候选（已排序，持仓数量会动态更新）
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -84,6 +93,9 @@ class Trainer:
         self._pop_total_counts = {}
         self._pop_liquidated_counts = {}
         self.tick_start_price = 0.0
+        self._eliminating_agents = set()
+        self._adl_long_candidates = []
+        self._adl_short_candidates = []
 
     def setup(self) -> None:
         """初始化训练环境
@@ -215,11 +227,33 @@ class Trainer:
             agent.is_liquidated = True
             self.logger.info(f"Agent {agent_id} 已被强平，本轮 episode 禁用")
 
+    def _cancel_agent_orders(self, agent: "Agent") -> None:
+        """撤销 agent 的所有挂单
+
+        Args:
+            agent: 要撤销挂单的 Agent
+        """
+        if not self.matching_engine:
+            return
+
+        # 做市商有多个挂单（bid_order_ids 和 ask_order_ids），需要全部撤销
+        if agent.agent_type == AgentType.MARKET_MAKER:
+            from src.bio.agents.market_maker import MarketMakerAgent
+
+            if isinstance(agent, MarketMakerAgent):
+                agent._cancel_all_orders_direct(self.matching_engine)
+        elif agent.account.pending_order_id is not None:
+            self.matching_engine.cancel_order_direct(agent.account.pending_order_id)
+            agent.account.pending_order_id = None
+
     def _handle_liquidation_direct(self, agent: "Agent", current_price: float) -> None:
         """直接处理强平（训练模式）
 
-        创建市价平仓单，直接调用撮合引擎处理，更新账户。
+        爆仓后直接淘汰：创建市价平仓单，直接调用撮合引擎处理，更新账户。
         如果市价单无法完全成交，触发 ADL 机制。
+        强平完成后标记 Agent 为淘汰状态。
+
+        注意：调用此方法前，必须已经撤销了 agent 的所有挂单。
 
         Args:
             agent: 被强平的 Agent
@@ -228,8 +262,19 @@ class Trainer:
         if not self.matching_engine or not self.adl_manager:
             return
 
+        # 重入保护：防止同一 Agent 被多次处理
+        if agent.agent_id in self._eliminating_agents:
+            return
+        self._eliminating_agents.add(agent.agent_id)
+
         position_qty = agent.account.position.quantity
         if position_qty == 0:
+            # 没有仓位，直接标记为淘汰
+            agent.is_liquidated = True
+            self._pop_liquidated_counts[agent.agent_type] = (
+                self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
+            )
+            self._eliminating_agents.discard(agent.agent_id)
             return
 
         # 记录原始持仓方向
@@ -251,27 +296,52 @@ class Trainer:
         trades = self.matching_engine.process_order_direct(order)
 
         # 计算已成交数量
-        filled_qty = sum(trade.quantity for trade in trades)
+        # filled_qty = sum(trade.quantity for trade in trades)
 
         # 更新账户（taker 和 maker）
+        # 注意：被淘汰 agent 的挂单已在外部统一撤销，不会作为 maker 被成交
         for trade in trades:
             # 使用 is_buyer_taker 判断 taker 是买方还是卖方
-            # 旧逻辑 `is_buyer = trade.buyer_id == agent.agent_id` 在自成交时会出错
             is_buyer = trade.is_buyer_taker
             agent.account.on_trade(trade, is_buyer)
             self.recent_trades.append(trade)
-            # 更新 maker 的账户（即使自成交也需要更新）
+            # 更新 maker 的账户
             maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
             maker_agent = self.agent_map.get(maker_id)
             if maker_agent is not None:
-                # maker 的方向与 taker 相反
                 maker_is_buyer = not trade.is_buyer_taker
                 maker_agent.account.on_trade(trade, maker_is_buyer)
 
         # 检查是否需要 ADL
-        remaining_qty = target_qty - filled_qty
-        if remaining_qty > 0:
-            self._execute_adl(agent, remaining_qty, current_price, is_long)
+        # 重要：使用当前仓位而非原始 target_qty，因为仓位可能在 maker 淘汰流程中被修改
+        current_position = abs(agent.account.position.quantity)
+        if current_position > 0:
+            self._execute_adl(agent, current_position, current_price, is_long)
+
+        # 强平完成后标记为淘汰
+        agent.is_liquidated = True
+        self._pop_liquidated_counts[agent.agent_type] = (
+            self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
+        )
+
+        # 处理穿仓：如果余额为负，归零（由系统承担损失）
+        if agent.account.balance < 0:
+            agent.account.balance = 0.0
+
+        # 验证仓位已清零
+        if agent.account.position.quantity != 0:
+            self.logger.error(
+                f"Agent {agent.agent_id} ({agent.agent_type.value}) 淘汰异常: "
+                f"仓位未清零！pos={agent.account.position.quantity}, "
+                f"avg_price={agent.account.position.avg_price:.2f}, "
+                f"balance={agent.account.balance:.2f}"
+            )
+            # 强制清零仓位
+            agent.account.position.quantity = 0
+            agent.account.position.avg_price = 0.0
+
+        # 移除重入保护标记
+        self._eliminating_agents.discard(agent.agent_id)
 
     def _execute_adl(
         self,
@@ -281,6 +351,9 @@ class Trainer:
         is_long: bool,
     ) -> None:
         """执行 ADL 自动减仓
+
+        使用 tick 开始时预计算的候选清单，避免重复计算 ADL 分数。
+        ADL 成交后更新候选清单中的 position_qty，确保后续 ADL 不会重复使用已减掉的仓位。
 
         Args:
             liquidated_agent: 被强平的 Agent
@@ -294,100 +367,72 @@ class Trainer:
         # ADL 成交价格：直接使用当前市场价格
         adl_price = self.adl_manager.get_adl_price(current_price)
 
-        # 获取所有 Agent
-        all_agents: list["Agent"] = []
-        for population in self.populations.values():
-            all_agents.extend(population.agents)
-
-        # 确定需要的对手方方向
-        # 被强平方是多头（需要卖出平仓），则需要空头对手（买入）
-        # 被强平方是空头（需要买入平仓），则需要多头对手（卖出）
-        target_side = -1 if is_long else 1
-
-        # 获取 ADL 候选列表
-        candidates = self.adl_manager.get_adl_candidates(
-            agents=all_agents,
-            current_price=current_price,
-            target_side=target_side,
-            exclude_agent_id=liquidated_agent.agent_id,
+        # 选择对应方向的预计算候选清单
+        # 被强平方是多头（需要卖出平仓），则需要空头对手
+        # 被强平方是空头（需要买入平仓），则需要多头对手
+        candidates = (
+            self._adl_short_candidates if is_long else self._adl_long_candidates
         )
 
-        # 执行 ADL（内部直接更新账户，返回剩余未平仓数量）
-        remaining_after_adl = self.adl_manager.execute_adl(
-            liquidated_agent=liquidated_agent,
-            remaining_qty=remaining_qty,
-            candidates=candidates,
-            adl_price=adl_price,
-            current_price=current_price,
+        self.logger.info(
+            f"ADL 触发: Agent {liquidated_agent.agent_id} "
+            f"剩余平仓量 {remaining_qty}, "
+            f"成交价 {adl_price:.2f}, "
+            f"候选人数 {len(candidates)}"
         )
 
-        # ADL 成交后检查 candidates 的强平和淘汰条件
-        # 注意：已淘汰的 candidate 不需要再检查（is_liquidated=True）
         for candidate in candidates:
-            candidate_agent = candidate.agent
-            if candidate_agent.is_liquidated:
-                continue  # 已淘汰，跳过检查
-            # 检查强平条件
-            if candidate_agent.account.check_liquidation(current_price):
-                self._handle_liquidation_direct(candidate_agent, current_price)
-            # 检查淘汰条件
-            self._check_elimination(candidate_agent, current_price)
+            if remaining_qty <= 0:
+                break
+            # 使用候选清单中的 position_qty（已被之前的 ADL 更新过）
+            # 同时也要检查实际仓位，取两者最小值
+            candidate_available_qty = abs(candidate.position_qty)
+            actual_position = abs(candidate.agent.account.position.quantity)
+            available_qty = min(candidate_available_qty, actual_position)
 
-        # 兜底处理：理论上不应该出现 ADL 候选不足的情况（多空对等）
-        # 如果出现，说明有其他 bug，记录错误日志并强制清零
-        if remaining_after_adl > 0:
-            self.logger.error(
-                f"ADL 异常: Agent {liquidated_agent.agent_id} "
-                f"剩余仓位 {remaining_after_adl} 无法匹配（多空应对等，请检查bug）, "
-                f"强制清零, 余额 {liquidated_agent.account.balance:.2f} → 0"
+            liquidated_actual_position = abs(liquidated_agent.account.position.quantity)
+            trade_qty = min(available_qty, remaining_qty, liquidated_actual_position)
+
+            if trade_qty <= 0:
+                continue
+
+            # 更新账户
+            liquidated_agent.account.on_adl_trade(trade_qty, adl_price, is_taker=True)
+            candidate.agent.account.on_adl_trade(trade_qty, adl_price, is_taker=False)
+
+            # 更新候选清单中的 position_qty，确保后续 ADL 不会重复使用
+            if candidate.position_qty > 0:
+                candidate.position_qty -= trade_qty
+            else:
+                candidate.position_qty += trade_qty
+
+            self.logger.info(
+                f"ADL 成交: Agent {liquidated_agent.agent_id} 与 Agent {candidate.agent.agent_id} "
+                f"成交 {trade_qty} @ {adl_price:.2f}, "
+                f"候选剩余持仓 {candidate.position_qty}"
             )
-            # 强制清零仓位和余额
+
+            remaining_qty -= trade_qty
+
+        if remaining_qty > 0:
+            self.logger.warning(
+                f"ADL 未能完全平仓: Agent {liquidated_agent.agent_id} "
+                f"剩余 {remaining_qty} 无法匹配 "
+                f"(盈利对手候选数={len(candidates)}, 将由系统兜底清零)"
+            )
+
+        # 兜底处理：确保 liquidated_agent 的仓位清零
+        actual_remaining = abs(liquidated_agent.account.position.quantity)
+        if actual_remaining > 0:
+            self.logger.warning(
+                f"ADL 兜底清零: Agent {liquidated_agent.agent_id} "
+                f"实际剩余仓位 {liquidated_agent.account.position.quantity}, "
+                f"强制清零"
+            )
             liquidated_agent.account.position.quantity = 0
             liquidated_agent.account.position.avg_price = 0.0
+        if liquidated_agent.account.balance < 0:
             liquidated_agent.account.balance = 0.0
-
-    def _check_elimination(self, agent: "Agent", current_price: float) -> None:
-        """检查并处理个体淘汰（资金不足时淘汰）
-
-        当 当前净值/初始资金 < 0.1 时：
-        1. 强平其持有的仓位（市价单 + ADL）
-        2. 标记个体为淘汰状态
-
-        Args:
-            agent: 要检查的 Agent
-            current_price: 当前价格
-        """
-        if agent.is_liquidated:
-            return  # 已淘汰，无需重复检查
-
-        if agent.account.check_elimination(current_price, threshold=0.1):
-            # 先撤销挂单（防止淘汰后仍被成交）
-            # 做市商有多个挂单（bid_order_ids 和 ask_order_ids），需要全部撤销
-            if agent.agent_type == AgentType.MARKET_MAKER and self.matching_engine:
-                # 类型检查：确保是 MarketMakerAgent
-                from src.bio.agents.market_maker import MarketMakerAgent
-                if isinstance(agent, MarketMakerAgent):
-                    agent._cancel_all_orders_direct(self.matching_engine)
-            elif agent.account.pending_order_id is not None and self.matching_engine:
-                self.matching_engine.cancel_order_direct(agent.account.pending_order_id)
-                agent.account.pending_order_id = None
-
-            # 再强平仓位（如果有的话）
-            if agent.account.position.quantity != 0:
-                self._handle_liquidation_direct(agent, current_price)
-
-            # 处理穿仓：如果余额为负，归零（由系统承担损失）
-            if agent.account.balance < 0:
-                agent.account.balance = 0.0
-
-            # 最后标记为淘汰
-            agent.is_liquidated = True
-            self._pop_liquidated_counts[agent.agent_type] = (
-                self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
-            )
-            self.logger.info(
-                f"Agent {agent.agent_id} 已淘汰（资金不足10%），本轮 episode 禁用"
-            )
 
     def _any_population_eliminated(self) -> AgentType | None:
         """检查是否有任一种群被全部淘汰（O(1) 复杂度）
@@ -494,12 +539,16 @@ class Trainer:
                 for trade in trades:
                     self.recent_trades.append(trade)
                     # 更新 maker 的账户（即使自成交也需要更新）
-                    maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+                    maker_id = (
+                        trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+                    )
                     maker_agent = self.agent_map.get(maker_id)
                     if maker_agent is not None:
                         # maker 的方向与 taker 相反
                         is_buyer = not trade.is_buyer_taker
                         maker_agent.account.on_trade(trade, is_buyer)
+
+                # 市场初始化阶段不检查淘汰（此时价格还未稳定）
 
     def _reset_market(self) -> None:
         """重置市场状态
@@ -533,7 +582,9 @@ class Trainer:
                 elif qty < 0:
                     short_qty += qty
         if total_position != 0:
-            self.logger.error(f"初始化后仓位不对等！总偏差={total_position}, 多头={long_qty}, 空头={short_qty}")
+            self.logger.error(
+                f"初始化后仓位不对等！总偏差={total_position}, 多头={long_qty}, 空头={short_qty}"
+            )
 
         # 初始化 tick_start_price，供数据采集使用
         self.tick_start_price = self.matching_engine._orderbook.last_price
@@ -542,12 +593,12 @@ class Trainer:
         """执行一个 tick（直接调用模式）
 
         时序设计：
-        1. Tick 开始：用当前价格检查所有 agent 的强平和淘汰条件
+        1. Tick 开始：用当前价格检查所有 agent 的强平条件（爆仓即淘汰）
         2. Tick 过程：Agent 按顺序决策和下单
         3. Tick 结束：下单效果（价格变动）在下个 tick 被感知
 
         这样设计确保：
-        - 淘汰检查和数据采集使用同一价格（tick 开始时的价格）
+        - 强平检查和数据采集使用同一价格（tick 开始时的价格）
         - 所有 agent 在同一价格基础上被检查，公平
         """
         if not self.matching_engine:
@@ -558,15 +609,53 @@ class Trainer:
         current_price = orderbook.last_price
         self.tick_start_price = current_price  # 保存 tick 开始时的价格
 
-        # === Tick 开始：检查所有 agent 的强平和淘汰条件 ===
+        # === Tick 开始：检查所有 agent 的强平条件（爆仓即淘汰）===
+        # 阶段1：收集需要淘汰的 agent，统一撤销挂单
+        agents_to_liquidate: list["Agent"] = []
+        agents_to_liquidate_ids: set[int] = set()
         for agent in self.agent_execution_order:
             if agent.is_liquidated:
                 continue
-            # 检查强平
             if agent.account.check_liquidation(current_price):
+                agents_to_liquidate.append(agent)
+                agents_to_liquidate_ids.add(agent.agent_id)
+                # 立即撤销挂单，防止在后续平仓过程中作为 maker 被成交
+                self._cancel_agent_orders(agent)
+
+        # 预计算本 tick 的 ADL 候选清单（按多头/空头分开，预排序）
+        # 筛选条件：未淘汰、本 tick 不会被淘汰、有持仓、盈利
+        # 这样 _execute_adl 可以直接使用，无需重复计算 ADL 分数
+        self._adl_long_candidates = []
+        self._adl_short_candidates = []
+        if len(agents_to_liquidate) > 0:
+            for agent in self.agent_execution_order:
+                if agent.is_liquidated:
+                    continue
+                if agent.agent_id in agents_to_liquidate_ids:
+                    continue
+
+                # 计算 ADL 候选信息
+                candidate = self.adl_manager.calculate_adl_score(agent, current_price)
+                if candidate is None:
+                    continue
+
+                # 只有盈利的 Agent 才能作为 ADL 对手方
+                if candidate.pnl_percent <= 0:
+                    continue
+
+                # 按持仓方向分类
+                if candidate.position_qty > 0:
+                    self._adl_long_candidates.append(candidate)
+                else:
+                    self._adl_short_candidates.append(candidate)
+
+            # 按 ADL 分数从高到低排序
+            self._adl_long_candidates.sort(key=lambda c: c.adl_score, reverse=True)
+            self._adl_short_candidates.sort(key=lambda c: c.adl_score, reverse=True)
+
+            # 阶段2：统一执行平仓（挂单已在阶段1撤销）
+            for agent in agents_to_liquidate:
                 self._handle_liquidation_direct(agent, current_price)
-            # 检查淘汰
-            self._check_elimination(agent, current_price)
 
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
@@ -580,9 +669,7 @@ class Trainer:
             action, params = agent.decide(market_state, orderbook)
 
             # 直接执行（绕过事件系统）
-            trades = agent.execute_action_direct(
-                action, params, self.matching_engine
-            )
+            trades = agent.execute_action_direct(action, params, self.matching_engine)
 
             # 记录成交并更新对手方账户（maker）
             for trade in trades:
@@ -593,11 +680,16 @@ class Trainer:
                 # 因为 _process_trades_direct 只更新了 taker 端（买或卖其中一方）
                 maker_agent = self.agent_map.get(maker_id)
                 if maker_agent is not None:
+                    # 如果 maker 已淘汰或正在淘汰，跳过仓位更新
+                    # 这防止淘汰中的 Agent 因为残留挂单被成交而增加仓位
+                    if (
+                        maker_agent.is_liquidated
+                        or maker_agent.agent_id in self._eliminating_agents
+                    ):
+                        continue
                     # maker 的方向与 taker 相反：taker 买则 maker 卖，taker 卖则 maker 买
                     is_buyer = not trade.is_buyer_taker
                     maker_agent.account.on_trade(trade, is_buyer)
-
-        # 强平和淘汰检查移到下个 tick 开始时执行
 
     def run_episode(self) -> None:
         """运行一个 episode
@@ -622,6 +714,7 @@ class Trainer:
         # 重置 tick 计数和各种群淘汰计数（每个 episode 从 0 开始）
         self.tick = 0
         self._pop_liquidated_counts.clear()
+        self._eliminating_agents.clear()  # 清空重入保护集合
 
         # 2. 运行 episode_length 个 tick
         for _ in range(episode_length):

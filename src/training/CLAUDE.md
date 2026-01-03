@@ -45,9 +45,9 @@
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
-- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓；若市价单无法完全成交则触发 ADL
-- `_execute_adl()` - 执行 ADL 自动减仓，计算破产价格、获取候选对手方、执行减仓并更新账户
-- `_check_elimination()` - 检查个体淘汰条件（净值/初始资金 < 10%），淘汰时标记 Agent 并增加种群淘汰计数
+- `_cancel_agent_orders()` - 撤销指定 Agent 的所有挂单（做市商撤多单，普通 Agent 撤单个挂单）
+- `_handle_liquidation_direct()` - 直接处理强平（训练模式），提交市价单平仓，若市价单无法完全成交则触发 ADL，强平完成后直接淘汰 Agent（调用前必须先撤销挂单）
+- `_execute_adl()` - 执行 ADL 自动减仓，直接在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty），ADL 后检查参与者的强平条件
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_any_population_eliminated()` - O(1) 检查是否有任一种群被全部淘汰，返回被淘汰的种群类型
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
@@ -84,18 +84,20 @@
 
 3. **Tick 执行** (`run_tick` - 直接调用模式)
 
-   **时序设计**：Agent 的下单操作影响的是下一个 tick，确保淘汰检查和数据采集使用同一价格
+   **时序设计**：Agent 的下单操作影响的是下一个 tick，确保强平检查和数据采集使用同一价格
 
-   - **Tick 开始**：
+   - **Tick 开始（强平处理分两阶段）**：
      - 保存 tick 开始时的价格到 `tick_start_price`（供数据采集使用）
-     - 遍历所有 Agent，用当前价格检查强平和淘汰条件
+     - **阶段1**：遍历所有 Agent 检查强平条件，收集需要淘汰的 Agent，**统一撤销这些 Agent 的所有挂单**
+     - **预计算 ADL 候选清单**：生成多头/空头两个候选清单（`_adl_long_candidates`、`_adl_short_candidates`），提前筛选（未淘汰、本 tick 不会被淘汰、有持仓、盈利）、计算 ADL 分数并排序，避免后续重复计算
+     - **阶段2**：遍历需要淘汰的 Agent，执行平仓（因挂单已撤，不会作为 maker 被成交）
    - **Tick 过程**：
      - 向量化计算归一化市场状态
      - Agent 按顺序决策和下单（做市商→庄家→高级散户→散户）
      - 记录成交到 `recent_trades`，更新 maker 账户
    - **Tick 结束**：
      - 下单产生的价格变动效果在下个 tick 被感知
-     - 数据采集使用 `tick_start_price` 计算资产，与淘汰检查一致
+     - 数据采集使用 `tick_start_price` 计算资产，与强平检查一致
 
 ## 直接调用模式
 
@@ -116,31 +118,55 @@
 - `run_tick()` - 直接调用 Agent 和撮合引擎
 - `_handle_liquidation_direct()` - 直接处理强平
 
-## 强平与淘汰机制
+## 强平与淘汰机制（爆仓即淘汰）
 
-**强平（Liquidation）**：保证金率低于维持保证金率时触发
-1. `_handle_liquidation_direct()` 创建市价平仓单，直接调用撮合引擎处理
-2. 成交后直接更新 Agent 账户
-3. **若市价单无法完全成交**（订单簿流动性不足），剩余仓位触发 ADL 机制
-4. 强平后 Agent **可以继续交易**（不自动淘汰）
+**强平即淘汰（Liquidation = Elimination）**：保证金率低于维持保证金率时触发，Agent 直接被淘汰
+
+**Tick 开始时的两阶段强平处理**：
+- **阶段1（统一撤单）**：遍历所有 Agent 检查强平条件，收集需要淘汰的 Agent，调用 `_cancel_agent_orders()` 统一撤销这些 Agent 的所有挂单
+- **阶段2（统一平仓）**：遍历需要淘汰的 Agent，调用 `_handle_liquidation_direct(skip_cancel_orders=True)` 执行平仓
+
+**设计原因**：先统一撤单可防止被淘汰的 Agent 在平仓过程中作为 maker 被成交，导致仓位增加
+
+**`_handle_liquidation_direct()` 执行流程**：
+1. 重入保护检查（防止同一 Agent 被多次处理）
+2. 若 `skip_cancel_orders=False`，撤销所有挂单（ADL 递归调用时需要）：
+   - 普通 Agent（散户/庄家）：撤销 `pending_order_id`
+   - **做市商**：调用 `_cancel_all_orders_direct()` 撤销所有买卖挂单
+3. 创建市价平仓单，直接调用撮合引擎处理
+4. 成交后直接更新 Agent 账户
+5. **若市价单无法完全成交**（订单簿流动性不足），剩余仓位触发 ADL 机制
+6. 强平完成后**直接标记 `is_liquidated = True`**，Agent 被淘汰
+7. 处理穿仓（余额为负时归零），验证仓位已清零
+8. 移除重入保护标记
 
 **ADL（自动减仓）**：市价强平无法完全成交时触发
-1. 计算被强平方的破产价格
-2. 筛选对手方候选（持有反向持仓的 Agent，**包括已淘汰的**），按盈利比例排序
-3. 依次与候选对手方以破产价格成交，直至剩余仓位清零
+1. **Tick 开始时预计算**：Trainer 遍历所有 Agent，筛选盈利的候选者，计算 ADL 分数，按多头/空头分类并排序
+2. 强平时使用预计算的候选清单（`_adl_long_candidates` 或 `_adl_short_candidates`）
+   - 被强平方是多头 → 使用空头候选清单
+   - 被强平方是空头 → 使用多头候选清单
+3. 在 `_execute_adl()` 中直接循环处理：依次与候选对手方以当前市场价格成交，直至剩余仓位清零
 4. 通过 `account.on_adl_trade()` 更新双方账户
-5. **ADL 成交后检查 candidate 的强平/淘汰条件**（ADL 可能导致 candidate 亏损）
-6. 由于多空仓位完全对等，理论上不会出现候选不足的情况
+5. **更新候选清单的 position_qty**：确保后续 ADL 不会重复使用已减掉的仓位
+6. **ADL 成交后处理**：
+   - 检查参与者的强平条件（ADL 可能导致 candidate 爆仓）
+   - 如果 candidate 触发强平条件，调用 `_handle_liquidation_direct()` 淘汰该 candidate
+   - 如果 ADL 无法完全清零仓位，强制清零被淘汰者的仓位（兜底处理）
+7. 由于多空仓位完全对等，理论上不会出现候选不足的情况
 
-**淘汰（Elimination）**：净值/初始资金 < 10% 时触发
-1. `_check_elimination()` 检查淘汰条件
-2. 满足条件时**先撤销所有挂单**：
-   - 普通 Agent（散户/庄家）：撤销 `pending_order_id`
-   - **做市商**：调用 `_cancel_all_orders_direct()` 撤销所有买卖挂单（`bid_order_ids` 和 `ask_order_ids`）
-3. 再**强平其持有的仓位**（通过 `_handle_liquidation_direct`，包含市价单和 ADL）
-4. 然后将 Agent 的 `is_liquidated` 标志设为 True
-5. 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
-6. 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
+**重入保护与 ADL 候选管理**：
+- 使用 `_eliminating_agents` 集合跟踪正在强平/淘汰过程中的 Agent
+- 使用 `_adl_long_candidates` 和 `_adl_short_candidates` 存储预计算的 ADL 候选清单
+  - 已提前筛选：未淘汰、本 tick 不会被淘汰、有持仓、盈利
+  - 已计算 ADL 分数并排序
+  - ADL 成交后动态更新 `position_qty`，避免重复使用已减掉的仓位
+- 防止在递归 ADL 过程中同一 Agent 被多次处理
+- 防止正在强平的 Agent 作为 maker 更新仓位（导致仓位增加）
+- 强平完成后从集合中移除
+
+**淘汰后状态**：
+- 被淘汰的 Agent 在本轮 episode 剩余时间内无法执行任何动作（`run_tick` 跳过，`execute_action_direct` 返回空列表）
+- 在下一轮 episode 开始时，`reset_agents()` 会重置 `is_liquidated` 标志
 
 ## 依赖关系
 

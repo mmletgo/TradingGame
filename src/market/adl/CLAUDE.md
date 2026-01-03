@@ -60,21 +60,6 @@ ADL 自动减仓管理器。
 
 无持仓时返回 None。
 
-#### `get_adl_candidates(agents, current_price, target_side, exclude_agent_id) -> list[ADLCandidate]`
-获取 ADL 候选列表。
-
-筛选条件：
-- 排除被强平的 Agent（exclude_agent_id，即当前正在处理的那个）
-- **不排除已淘汰的 Agent**（同一 tick 中可能存在竞态条件，已淘汰的 Agent 可能仍持有仓位）
-- 只筛选持有反方向仓位的 Agent
-
-返回按 ADL 分数从高到低排序的候选列表。
-
-#### `execute_adl(liquidated_agent, remaining_qty, candidates, adl_price, current_price) -> int`
-执行 ADL 成交。
-
-按候选列表顺序逐个减仓，直到剩余需求为零。返回剩余未平仓数量（理论上应为 0）。
-
 ## 排名算法说明
 
 ADL 排名算法的设计目标是优先选择高杠杆高盈利的交易者：
@@ -91,13 +76,16 @@ ADL 排名算法的设计目标是优先选择高杠杆高盈利的交易者：
 
 ## 执行流程
 
-1. 强平触发后，撮合引擎尝试用市价单平仓
-2. 如果市价单未能完全成交，计算剩余需平仓数量
-3. 获取持有反方向仓位的所有候选者，计算其 ADL 分数
-4. 按分数排序，从高到低依次减仓
+1. **Tick 开始时预计算**：Trainer 遍历所有 Agent，筛选盈利的候选者，计算 ADL 分数，按多头/空头分类并排序
+2. 强平触发后，撮合引擎尝试用市价单平仓
+3. 如果市价单未能完全成交，计算剩余需平仓数量
+4. 在 Trainer 的 `_execute_adl()` 中直接处理：
+   - 选择对应方向的预计算候选清单（被强平方是多头则使用空头候选，反之使用多头候选）
+   - 按排序顺序依次减仓，同时更新候选清单中的 `position_qty` 防止重复使用
+   - 通过 `account.on_adl_trade()` 更新账户
 5. **ADL 成交价格为当前市场价格**（简单公平，双方都以市价成交）
 
-**注**：由于多空仓位完全对等，理论上不会出现 ADL 候选不足的情况。
+**注**：由于只有盈利的 Agent 才能作为 ADL 对手方，当所有对手方都亏损时（如特殊入场价导致），ADL 可能无法匹配。此时由系统兜底处理，强制清零被淘汰者的仓位。
 
 ## 与其他模块的关系
 
@@ -112,37 +100,39 @@ ADL 排名算法的设计目标是优先选择高杠杆高盈利的交易者：
 
 ## 使用示例
 
+Trainer 在 tick 开始时预计算 ADL 候选清单（`_adl_long_candidates` 和 `_adl_short_candidates`）：
+
 ```python
 from src.market.adl import ADLManager
 
 # 创建管理器
 adl_manager = ADLManager()
 
-# 获取 ADL 成交价格（当前市场价格）
-adl_price = adl_manager.get_adl_price(current_price)
+# 预计算候选列表（在 tick 开始时执行）
+long_candidates = []
+short_candidates = []
+for agent in agents:
+    candidate = adl_manager.calculate_adl_score(agent, current_price)
+    if candidate and candidate.pnl_percent > 0:
+        if candidate.position_qty > 0:
+            long_candidates.append(candidate)
+        else:
+            short_candidates.append(candidate)
 
-# 获取候选列表（被强平者持有空头，需要找多头对手）
-candidates = adl_manager.get_adl_candidates(
-    agents=all_agents,
-    current_price=100.0,
-    target_side=1,  # 需要多头对手
-    exclude_agent_id=liquidated_agent.agent_id,
-)
+# 排序
+long_candidates.sort(key=lambda c: c.adl_score, reverse=True)
+short_candidates.sort(key=lambda c: c.adl_score, reverse=True)
 
-# 执行 ADL
-remaining = adl_manager.execute_adl(
-    liquidated_agent=liquidated_agent,
-    remaining_qty=100,
-    candidates=candidates,
-    adl_price=adl_price,
-    current_price=100.0,
-)
+# 然后在 Trainer 的 _execute_adl 中直接使用这些预计算的候选清单，
+# 直接在循环中处理 ADL 成交（更新账户、更新 position_qty）
 ```
 
 ## 注意事项
 
 1. **ADL 成交价格是当前市场价格**，简单公平
 2. ADL 成交不经过订单簿撮合，直接在对手方账户上执行减仓
-3. ADL 会记录详细日志，便于追踪和调试
-4. **已淘汰的 Agent 也参与 ADL**，因为同一 tick 中可能存在竞态条件导致已淘汰 Agent 仍持有仓位
-5. 由于多空对等，理论上不会出现候选不足的情况；如果出现则说明有其他 bug
+3. ADL 执行逻辑已完全移到 Trainer 的 `_execute_adl()` 中
+4. **ADL 候选清单在 Trainer 的 tick 开始时预计算**（`calculate_adl_score()`），避免重复计算 ADL 分数
+5. **候选清单中的 position_qty 会被动态更新**，防止多次 ADL 中的同一候选被重复使用
+6. 由于多空对等，理论上不会出现候选不足的情况；如果出现则说明有其他 bug
+7. ADL 会记录详细日志，便于追踪和调试
