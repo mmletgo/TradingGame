@@ -72,7 +72,7 @@ def create_profile_config() -> Config:
     }
 
     training = TrainingConfig(
-        episode_length=100,  # 减少到 100 ticks
+        episode_length=10,  # 减少到 10 ticks
         checkpoint_interval=0,  # 不保存检查点
         neat_config_path="config",
     )
@@ -117,8 +117,8 @@ def main() -> None:
     print("=" * 60)
     print("性能分析 - NEAT AI 交易模拟")
     print("=" * 60)
-    print("配置: 10000 散户, 100 高级散户, 10 庄家, 100 做市商")
-    print("运行: 1 episode x 100 ticks")
+    print("配置: 100000 散户, 100 高级散户, 10 庄家, 100 做市商")
+    print("运行: 1 episode x 10 ticks")
     print("=" * 60)
     print()
 
