@@ -1,7 +1,7 @@
 {
   "project_name": "NEAT AI 交易模拟竞技场",
   "created": "2025-12-29",
-  "overview": "基于 NEAT 算法的 AI 交易模拟平台，三种类型的 AI Agent（散户、庄家、做市商）在订单簿撮合市场中竞争进化",
+  "overview": "基于 NEAT 算法的 AI 交易模拟平台，四种类型的 AI Agent（散户、高级散户、庄家、做市商）在订单簿撮合市场中竞争进化",
   "technical_stack": {
     "language": "Python 3.11+",
     "libraries": [
@@ -28,194 +28,565 @@
       "file": "src/core/event_engine/events.py",
       "description": "事件类型枚举",
       "fields": [
-        {"name": "TICK_START", "type": "str", "description": "Tick 开始"},
-        {"name": "TICK_END", "type": "str", "description": "Tick 结束"},
-        {"name": "ORDER_PLACED", "type": "str", "description": "订单提交"},
-        {"name": "ORDER_CANCELLED", "type": "str", "description": "订单撤销"},
-        {"name": "ORDER_FILLED", "type": "str", "description": "订单成交"},
-        {"name": "TRADE_EXECUTED", "type": "str", "description": "交易执行"},
-        {"name": "AGENT_ELIMINATED", "type": "str", "description": "Agent 淘汰"},
-        {"name": "AGENT_SPAWNED", "type": "str", "description": "Agent 繁殖"},
-        {"name": "MARKET_INITIALIZED", "type": "str", "description": "市场初始化完成"},
-        {"name": "LIQUIDATION", "type": "str", "description": "强制平仓"}
+        {
+          "name": "TICK_START",
+          "type": "str",
+          "description": "Tick 开始"
+        },
+        {
+          "name": "TICK_END",
+          "type": "str",
+          "description": "Tick 结束"
+        },
+        {
+          "name": "ORDER_PLACED",
+          "type": "str",
+          "description": "订单提交"
+        },
+        {
+          "name": "ORDER_CANCELLED",
+          "type": "str",
+          "description": "订单撤销"
+        },
+        {
+          "name": "ORDER_FILLED",
+          "type": "str",
+          "description": "订单成交"
+        },
+        {
+          "name": "TRADE_EXECUTED",
+          "type": "str",
+          "description": "交易执行"
+        },
+        {
+          "name": "AGENT_ELIMINATED",
+          "type": "str",
+          "description": "Agent 淘汰"
+        },
+        {
+          "name": "AGENT_SPAWNED",
+          "type": "str",
+          "description": "Agent 繁殖"
+        },
+        {
+          "name": "MARKET_INITIALIZED",
+          "type": "str",
+          "description": "市场初始化完成"
+        },
+        {
+          "name": "LIQUIDATION",
+          "type": "str",
+          "description": "强制平仓"
+        }
       ],
-      "used_by": ["F1", "F2", "F3", "F4"]
+      "used_by": [
+        "F1",
+        "F2",
+        "F3",
+        "F4"
+      ]
     },
     {
       "name": "Event",
       "file": "src/core/event_engine/events.py",
       "description": "事件基类",
       "fields": [
-        {"name": "event_type", "type": "EventType", "description": "事件类型"},
-        {"name": "timestamp", "type": "float", "description": "时间戳"},
-        {"name": "data", "type": "dict[str, Any]", "description": "事件数据"}
+        {
+          "name": "event_type",
+          "type": "EventType",
+          "description": "事件类型"
+        },
+        {
+          "name": "timestamp",
+          "type": "float",
+          "description": "时间戳"
+        },
+        {
+          "name": "data",
+          "type": "dict[str, Any]",
+          "description": "事件数据"
+        }
       ],
-      "used_by": ["F1", "F2", "F3", "F4"]
+      "used_by": [
+        "F1",
+        "F2",
+        "F3",
+        "F4"
+      ]
     },
     {
       "name": "OrderSide",
       "file": "src/market/orderbook/order.py",
       "description": "订单方向枚举",
       "fields": [
-        {"name": "BUY", "type": "int", "description": "买入"},
-        {"name": "SELL", "type": "int", "description": "卖出"}
+        {
+          "name": "BUY",
+          "type": "int",
+          "description": "买入"
+        },
+        {
+          "name": "SELL",
+          "type": "int",
+          "description": "卖出"
+        }
       ],
-      "used_by": ["F8", "F14", "F22"]
+      "used_by": [
+        "F8",
+        "F14",
+        "F22"
+      ]
     },
     {
       "name": "OrderType",
       "file": "src/market/orderbook/order.py",
       "description": "订单类型枚举",
       "fields": [
-        {"name": "LIMIT", "type": "int", "description": "限价单"},
-        {"name": "MARKET", "type": "int", "description": "市价单"}
+        {
+          "name": "LIMIT",
+          "type": "int",
+          "description": "限价单"
+        },
+        {
+          "name": "MARKET",
+          "type": "int",
+          "description": "市价单"
+        }
       ],
-      "used_by": ["F8", "F22", "F23", "F24"]
+      "used_by": [
+        "F8",
+        "F22",
+        "F23",
+        "F24"
+      ]
     },
     {
       "name": "Order",
       "file": "src/market/orderbook/order.py",
       "description": "订单数据类",
       "fields": [
-        {"name": "order_id", "type": "int", "description": "订单ID"},
-        {"name": "agent_id", "type": "int", "description": "Agent ID"},
-        {"name": "side", "type": "OrderSide", "description": "买卖方向"},
-        {"name": "order_type", "type": "OrderType", "description": "订单类型"},
-        {"name": "price", "type": "float", "description": "价格"},
-        {"name": "quantity", "type": "float", "description": "数量"},
-        {"name": "filled_quantity", "type": "float", "description": "已成交数量"},
-        {"name": "timestamp", "type": "float", "description": "时间戳"}
+        {
+          "name": "order_id",
+          "type": "int",
+          "description": "订单ID"
+        },
+        {
+          "name": "agent_id",
+          "type": "int",
+          "description": "Agent ID"
+        },
+        {
+          "name": "side",
+          "type": "OrderSide",
+          "description": "买卖方向"
+        },
+        {
+          "name": "order_type",
+          "type": "OrderType",
+          "description": "订单类型"
+        },
+        {
+          "name": "price",
+          "type": "float",
+          "description": "价格"
+        },
+        {
+          "name": "quantity",
+          "type": "float",
+          "description": "数量"
+        },
+        {
+          "name": "filled_quantity",
+          "type": "float",
+          "description": "已成交数量"
+        },
+        {
+          "name": "timestamp",
+          "type": "float",
+          "description": "时间戳"
+        }
       ],
-      "used_by": ["F10", "F11", "F14", "F15", "F22"]
+      "used_by": [
+        "F10",
+        "F11",
+        "F14",
+        "F15",
+        "F22"
+      ]
     },
     {
       "name": "Trade",
       "file": "src/market/matching/trade.py",
       "description": "成交记录",
       "fields": [
-        {"name": "trade_id", "type": "int", "description": "成交ID"},
-        {"name": "price", "type": "float", "description": "成交价格"},
-        {"name": "quantity", "type": "float", "description": "成交数量"},
-        {"name": "buyer_id", "type": "int", "description": "买方Agent ID"},
-        {"name": "seller_id", "type": "int", "description": "卖方Agent ID"},
-        {"name": "buyer_fee", "type": "float", "description": "买方手续费"},
-        {"name": "seller_fee", "type": "float", "description": "卖方手续费"},
-        {"name": "timestamp", "type": "float", "description": "时间戳"}
+        {
+          "name": "trade_id",
+          "type": "int",
+          "description": "成交ID"
+        },
+        {
+          "name": "price",
+          "type": "float",
+          "description": "成交价格"
+        },
+        {
+          "name": "quantity",
+          "type": "float",
+          "description": "成交数量"
+        },
+        {
+          "name": "buyer_id",
+          "type": "int",
+          "description": "买方Agent ID"
+        },
+        {
+          "name": "seller_id",
+          "type": "int",
+          "description": "卖方Agent ID"
+        },
+        {
+          "name": "buyer_fee",
+          "type": "float",
+          "description": "买方手续费"
+        },
+        {
+          "name": "seller_fee",
+          "type": "float",
+          "description": "卖方手续费"
+        },
+        {
+          "name": "timestamp",
+          "type": "float",
+          "description": "时间戳"
+        }
       ],
-      "used_by": ["F23", "F24", "F36", "F74"]
+      "used_by": [
+        "F23",
+        "F24",
+        "F36",
+        "F74"
+      ]
     },
     {
       "name": "PriceLevel",
       "file": "src/market/orderbook/orderbook.pyx",
       "description": "价格档位（Cython）",
       "fields": [
-        {"name": "price", "type": "double", "description": "价格"},
-        {"name": "orders", "type": "list[Order]", "description": "该价格的订单队列"},
-        {"name": "total_quantity", "type": "double", "description": "总数量"}
+        {
+          "name": "price",
+          "type": "double",
+          "description": "价格"
+        },
+        {
+          "name": "orders",
+          "type": "list[Order]",
+          "description": "该价格的订单队列"
+        },
+        {
+          "name": "total_quantity",
+          "type": "double",
+          "description": "总数量"
+        }
       ],
-      "used_by": ["F13", "F14", "F15"]
+      "used_by": [
+        "F13",
+        "F14",
+        "F15"
+      ]
     },
     {
       "name": "OrderBook",
       "file": "src/market/orderbook/orderbook.pyx",
       "description": "订单簿（Cython）",
       "fields": [
-        {"name": "bids", "type": "dict[float, PriceLevel]", "description": "买盘"},
-        {"name": "asks", "type": "dict[float, PriceLevel]", "description": "卖盘"},
-        {"name": "order_map", "type": "dict[int, Order]", "description": "订单ID映射"},
-        {"name": "last_price", "type": "double", "description": "最新价"},
-        {"name": "tick_size", "type": "double", "description": "最小变动单位"}
+        {
+          "name": "bids",
+          "type": "dict[float, PriceLevel]",
+          "description": "买盘"
+        },
+        {
+          "name": "asks",
+          "type": "dict[float, PriceLevel]",
+          "description": "卖盘"
+        },
+        {
+          "name": "order_map",
+          "type": "dict[int, Order]",
+          "description": "订单ID映射"
+        },
+        {
+          "name": "last_price",
+          "type": "double",
+          "description": "最新价"
+        },
+        {
+          "name": "tick_size",
+          "type": "double",
+          "description": "最小变动单位"
+        }
       ],
-      "used_by": ["F21", "F22", "F75"]
+      "used_by": [
+        "F21",
+        "F22",
+        "F75"
+      ]
     },
     {
       "name": "Position",
       "file": "src/market/account/position.py",
       "description": "持仓",
       "fields": [
-        {"name": "quantity", "type": "float", "description": "持仓数量（正为多，负为空）"},
-        {"name": "avg_price", "type": "float", "description": "持仓均价"},
-        {"name": "realized_pnl", "type": "float", "description": "已实现盈亏"}
+        {
+          "name": "quantity",
+          "type": "float",
+          "description": "持仓数量（正为多，负为空）"
+        },
+        {
+          "name": "avg_price",
+          "type": "float",
+          "description": "持仓均价"
+        },
+        {
+          "name": "realized_pnl",
+          "type": "float",
+          "description": "已实现盈亏"
+        }
       ],
-      "used_by": ["F30", "F36"]
+      "used_by": [
+        "F30",
+        "F36"
+      ]
     },
     {
       "name": "Account",
       "file": "src/market/account/account.py",
       "description": "账户",
       "fields": [
-        {"name": "agent_id", "type": "int", "description": "Agent ID"},
-        {"name": "agent_type", "type": "AgentType", "description": "Agent 类型"},
-        {"name": "balance", "type": "float", "description": "余额"},
-        {"name": "position", "type": "Position", "description": "持仓"},
-        {"name": "leverage", "type": "float", "description": "杠杆倍数"},
-        {"name": "maintenance_margin_rate", "type": "float", "description": "维持保证金率"},
-        {"name": "maker_fee_rate", "type": "float", "description": "挂单费率"},
-        {"name": "taker_fee_rate", "type": "float", "description": "吃单费率"},
-        {"name": "pending_order_id", "type": "int | None", "description": "当前挂单ID"}
+        {
+          "name": "agent_id",
+          "type": "int",
+          "description": "Agent ID"
+        },
+        {
+          "name": "agent_type",
+          "type": "AgentType",
+          "description": "Agent 类型"
+        },
+        {
+          "name": "balance",
+          "type": "float",
+          "description": "余额"
+        },
+        {
+          "name": "position",
+          "type": "Position",
+          "description": "持仓"
+        },
+        {
+          "name": "leverage",
+          "type": "float",
+          "description": "杠杆倍数"
+        },
+        {
+          "name": "maintenance_margin_rate",
+          "type": "float",
+          "description": "维持保证金率"
+        },
+        {
+          "name": "maker_fee_rate",
+          "type": "float",
+          "description": "挂单费率"
+        },
+        {
+          "name": "taker_fee_rate",
+          "type": "float",
+          "description": "吃单费率"
+        },
+        {
+          "name": "pending_order_id",
+          "type": "int | None",
+          "description": "当前挂单ID"
+        }
       ],
-      "used_by": ["F36", "F41", "F42", "F45"]
+      "used_by": [
+        "F36",
+        "F41",
+        "F42",
+        "F45"
+      ]
     },
     {
       "name": "AgentType",
       "file": "src/bio/agents/base.py",
       "description": "Agent 类型枚举",
       "fields": [
-        {"name": "RETAIL", "type": "str", "description": "散户"},
-        {"name": "WHALE", "type": "str", "description": "庄家"},
-        {"name": "MARKET_MAKER", "type": "str", "description": "做市商"}
+        {
+          "name": "RETAIL",
+          "type": "str",
+          "description": "散户"
+        },
+        {
+          "name": "WHALE",
+          "type": "str",
+          "description": "庄家"
+        },
+        {
+          "name": "MARKET_MAKER",
+          "type": "str",
+          "description": "做市商"
+        }
       ],
-      "used_by": ["F30", "F41", "F47", "F50", "F53"]
+      "used_by": [
+        "F30",
+        "F41",
+        "F47",
+        "F50",
+        "F53"
+      ]
     },
     {
       "name": "ActionType",
       "file": "src/bio/agents/base.py",
       "description": "动作类型枚举",
       "fields": [
-        {"name": "HOLD", "type": "int", "description": "不动"},
-        {"name": "PLACE_BID", "type": "int", "description": "挂买单"},
-        {"name": "PLACE_ASK", "type": "int", "description": "挂卖单"},
-        {"name": "CANCEL", "type": "int", "description": "撤单"},
-        {"name": "MARKET_BUY", "type": "int", "description": "市价买入"},
-        {"name": "MARKET_SELL", "type": "int", "description": "市价卖出"},
-        {"name": "CLEAR_POSITION", "type": "int", "description": "清仓"},
-        {"name": "QUOTE", "type": "int", "description": "做市商双边挂单（每边1-10单）"}
+        {
+          "name": "HOLD",
+          "type": "int",
+          "description": "不动"
+        },
+        {
+          "name": "PLACE_BID",
+          "type": "int",
+          "description": "挂买单"
+        },
+        {
+          "name": "PLACE_ASK",
+          "type": "int",
+          "description": "挂卖单"
+        },
+        {
+          "name": "CANCEL",
+          "type": "int",
+          "description": "撤单"
+        },
+        {
+          "name": "MARKET_BUY",
+          "type": "int",
+          "description": "市价买入"
+        },
+        {
+          "name": "MARKET_SELL",
+          "type": "int",
+          "description": "市价卖出"
+        },
+        {
+          "name": "CLEAR_POSITION",
+          "type": "int",
+          "description": "清仓"
+        },
+        {
+          "name": "QUOTE",
+          "type": "int",
+          "description": "做市商双边挂单（每边1-10单）"
+        }
       ],
-      "used_by": ["F43", "F44", "F48", "F51", "F54"]
+      "used_by": [
+        "F43",
+        "F44",
+        "F48",
+        "F51",
+        "F54"
+      ]
     },
     {
       "name": "Brain",
       "file": "src/bio/brain/brain.py",
       "description": "NEAT 神经网络封装",
       "fields": [
-        {"name": "genome", "type": "neat.DefaultGenome", "description": "NEAT 基因组"},
-        {"name": "network", "type": "neat.nn.FeedForwardNetwork", "description": "前馈网络"},
-        {"name": "config", "type": "neat.Config", "description": "NEAT 配置"}
+        {
+          "name": "genome",
+          "type": "neat.DefaultGenome",
+          "description": "NEAT 基因组"
+        },
+        {
+          "name": "network",
+          "type": "neat.nn.FeedForwardNetwork",
+          "description": "前馈网络"
+        },
+        {
+          "name": "config",
+          "type": "neat.Config",
+          "description": "NEAT 配置"
+        }
       ],
-      "used_by": ["F41", "F43"]
+      "used_by": [
+        "F41",
+        "F43"
+      ]
     },
     {
       "name": "Agent",
       "file": "src/bio/agents/base.py",
       "description": "Agent 基类",
       "fields": [
-        {"name": "agent_id", "type": "int", "description": "Agent ID"},
-        {"name": "agent_type", "type": "AgentType", "description": "Agent 类型"},
-        {"name": "brain", "type": "Brain", "description": "神经网络"},
-        {"name": "account", "type": "Account", "description": "账户"}
+        {
+          "name": "agent_id",
+          "type": "int",
+          "description": "Agent ID"
+        },
+        {
+          "name": "agent_type",
+          "type": "AgentType",
+          "description": "Agent 类型"
+        },
+        {
+          "name": "brain",
+          "type": "Brain",
+          "description": "神经网络"
+        },
+        {
+          "name": "account",
+          "type": "Account",
+          "description": "账户"
+        }
       ],
-      "used_by": ["F47", "F50", "F53", "F56", "F57"]
+      "used_by": [
+        "F47",
+        "F50",
+        "F53",
+        "F56",
+        "F57"
+      ]
     },
     {
       "name": "MarketMakerAgent",
       "file": "src/bio/agents/market_maker.py",
       "description": "做市商 Agent，继承自 Agent，为市场提供流动性",
       "fields": [
-        {"name": "agent_id", "type": "int", "description": "Agent ID"},
-        {"name": "brain", "type": "Brain", "description": "神经网络"},
-        {"name": "account", "type": "Account", "description": "账户"},
-        {"name": "bid_order_ids", "type": "list[int]", "description": "买单订单ID列表（最多10个）"},
-        {"name": "ask_order_ids", "type": "list[int]", "description": "卖单订单ID列表（最多10个）"}
+        {
+          "name": "agent_id",
+          "type": "int",
+          "description": "Agent ID"
+        },
+        {
+          "name": "brain",
+          "type": "Brain",
+          "description": "神经网络"
+        },
+        {
+          "name": "account",
+          "type": "Account",
+          "description": "账户"
+        },
+        {
+          "name": "bid_order_ids",
+          "type": "list[int]",
+          "description": "买单订单ID列表（最多10个）"
+        },
+        {
+          "name": "ask_order_ids",
+          "type": "list[int]",
+          "description": "卖单订单ID列表（最多10个）"
+        }
       ],
       "methods": [
         {
@@ -229,8 +600,16 @@
           "signature": "def decide(self, orderbook: OrderBook, recent_trades: list[Trade]) -> tuple[ActionType, dict[str, Any]]",
           "description": "覆盖基类，做市商专用决策逻辑。神经网络输出 22 个值：动作选择(2) + 5买单(价格+数量权重) + 5卖单(价格+数量权重)。10 个订单的数量权重映射到 [0,1] 后归一化，确保总和为 1.0",
           "parameters": [
-            {"name": "orderbook", "type": "OrderBook", "description": "订单簿对象"},
-            {"name": "recent_trades", "type": "list[Trade]", "description": "最近成交记录"}
+            {
+              "name": "orderbook",
+              "type": "OrderBook",
+              "description": "订单簿对象"
+            },
+            {
+              "name": "recent_trades",
+              "type": "list[Trade]",
+              "description": "最近成交记录"
+            }
           ],
           "returns": "(ActionType, dict)"
         },
@@ -239,102 +618,280 @@
           "signature": "def execute_action(self, action: ActionType, params: dict[str, Any], event_bus: EventBus) -> None",
           "description": "执行 QUOTE 或 CLEAR_POSITION 动作",
           "parameters": [
-            {"name": "action", "type": "ActionType", "description": "动作类型"},
-            {"name": "params", "type": "dict", "description": "动作参数"},
-            {"name": "event_bus", "type": "EventBus", "description": "事件总线"}
+            {
+              "name": "action",
+              "type": "ActionType",
+              "description": "动作类型"
+            },
+            {
+              "name": "params",
+              "type": "dict",
+              "description": "动作参数"
+            },
+            {
+              "name": "event_bus",
+              "type": "EventBus",
+              "description": "事件总线"
+            }
           ]
         }
       ],
-      "used_by": ["F57", "F65"]
+      "used_by": [
+        "F57",
+        "F65"
+      ]
     },
     {
       "name": "Population",
       "file": "src/training/population.py",
       "description": "种群管理",
       "fields": [
-        {"name": "agent_type", "type": "AgentType", "description": "Agent 类型"},
-        {"name": "agents", "type": "list[Agent]", "description": "Agent 列表"},
-        {"name": "neat_pop", "type": "neat.Population", "description": "NEAT 种群"},
-        {"name": "generation", "type": "int", "description": "当前代数"}
+        {
+          "name": "agent_type",
+          "type": "AgentType",
+          "description": "Agent 类型"
+        },
+        {
+          "name": "agents",
+          "type": "list[Agent]",
+          "description": "Agent 列表"
+        },
+        {
+          "name": "neat_pop",
+          "type": "neat.Population",
+          "description": "NEAT 种群"
+        },
+        {
+          "name": "generation",
+          "type": "int",
+          "description": "当前代数"
+        }
       ],
-      "used_by": ["F63", "F64", "F65"]
+      "used_by": [
+        "F63",
+        "F64",
+        "F65"
+      ]
     },
     {
       "name": "Trainer",
       "file": "src/training/trainer.py",
       "description": "训练器",
       "fields": [
-        {"name": "populations", "type": "dict[AgentType, Population]", "description": "三种群"},
-        {"name": "event_bus", "type": "EventBus", "description": "事件总线"},
-        {"name": "matching_engine", "type": "MatchingEngine", "description": "撮合引擎"},
-        {"name": "tick", "type": "int", "description": "当前 tick"},
-        {"name": "config", "type": "Config", "description": "配置"},
-        {"name": "is_running", "type": "bool", "description": "是否运行中"},
-        {"name": "is_paused", "type": "bool", "description": "是否暂停"}
+        {
+          "name": "populations",
+          "type": "dict[AgentType, Population]",
+          "description": "四种群"
+        },
+        {
+          "name": "event_bus",
+          "type": "EventBus",
+          "description": "事件总线"
+        },
+        {
+          "name": "matching_engine",
+          "type": "MatchingEngine",
+          "description": "撮合引擎"
+        },
+        {
+          "name": "tick",
+          "type": "int",
+          "description": "当前 tick"
+        },
+        {
+          "name": "config",
+          "type": "Config",
+          "description": "配置"
+        },
+        {
+          "name": "is_running",
+          "type": "bool",
+          "description": "是否运行中"
+        },
+        {
+          "name": "is_paused",
+          "type": "bool",
+          "description": "是否暂停"
+        }
       ],
-      "used_by": ["F90", "F91", "F92"]
+      "used_by": [
+        "F90",
+        "F91",
+        "F92"
+      ]
     },
     {
       "name": "StateSnapshot",
       "file": "src/demo/state_manager.py",
       "description": "状态快照",
       "fields": [
-        {"name": "tick", "type": "int", "description": "当前 tick"},
-        {"name": "last_price", "type": "float", "description": "最新价"},
-        {"name": "orderbook", "type": "dict", "description": "订单簿快照"},
-        {"name": "recent_trades", "type": "list[Trade]", "description": "最近成交"},
-        {"name": "population_stats", "type": "dict", "description": "种群统计"}
+        {
+          "name": "tick",
+          "type": "int",
+          "description": "当前 tick"
+        },
+        {
+          "name": "last_price",
+          "type": "float",
+          "description": "最新价"
+        },
+        {
+          "name": "orderbook",
+          "type": "dict",
+          "description": "订单簿快照"
+        },
+        {
+          "name": "recent_trades",
+          "type": "list[Trade]",
+          "description": "最近成交"
+        },
+        {
+          "name": "population_stats",
+          "type": "dict",
+          "description": "种群统计"
+        }
       ],
-      "used_by": ["F71", "F72", "F80"]
+      "used_by": [
+        "F71",
+        "F72",
+        "F80"
+      ]
     },
     {
       "name": "Config",
       "file": "src/config/config.py",
       "description": "配置类",
       "fields": [
-        {"name": "market", "type": "MarketConfig", "description": "市场配置"},
-        {"name": "agents", "type": "dict[AgentType, AgentConfig]", "description": "Agent 配置"},
-        {"name": "training", "type": "TrainingConfig", "description": "训练配置"},
-        {"name": "demo", "type": "DemoConfig", "description": "演示配置"}
+        {
+          "name": "market",
+          "type": "MarketConfig",
+          "description": "市场配置"
+        },
+        {
+          "name": "agents",
+          "type": "dict[AgentType, AgentConfig]",
+          "description": "Agent 配置"
+        },
+        {
+          "name": "training",
+          "type": "TrainingConfig",
+          "description": "训练配置"
+        },
+        {
+          "name": "demo",
+          "type": "DemoConfig",
+          "description": "演示配置"
+        }
       ],
-      "used_by": ["F63", "F77", "F90", "F91", "F92"]
+      "used_by": [
+        "F63",
+        "F77",
+        "F90",
+        "F91",
+        "F92"
+      ]
     },
     {
       "name": "MarketConfig",
       "file": "src/config/config.py",
       "description": "市场配置",
       "fields": [
-        {"name": "initial_price", "type": "float", "description": "初始价格"},
-        {"name": "tick_size", "type": "float", "description": "最小变动单位"},
-        {"name": "lot_size", "type": "float", "description": "最小交易单位"},
-        {"name": "depth", "type": "int", "description": "盘口深度"}
+        {
+          "name": "initial_price",
+          "type": "float",
+          "description": "初始价格"
+        },
+        {
+          "name": "tick_size",
+          "type": "float",
+          "description": "最小变动单位"
+        },
+        {
+          "name": "lot_size",
+          "type": "float",
+          "description": "最小交易单位"
+        },
+        {
+          "name": "depth",
+          "type": "int",
+          "description": "盘口深度"
+        }
       ],
-      "used_by": ["F13", "F21", "F87"]
+      "used_by": [
+        "F13",
+        "F21",
+        "F87"
+      ]
     },
     {
       "name": "AgentConfig",
       "file": "src/config/config.py",
       "description": "Agent 配置",
       "fields": [
-        {"name": "count", "type": "int", "description": "数量"},
-        {"name": "initial_balance", "type": "float", "description": "初始资产"},
-        {"name": "leverage", "type": "float", "description": "杠杆倍数"},
-        {"name": "maintenance_margin_rate", "type": "float", "description": "维持保证金率"},
-        {"name": "maker_fee_rate", "type": "float", "description": "挂单费率"},
-        {"name": "taker_fee_rate", "type": "float", "description": "吃单费率"}
+        {
+          "name": "count",
+          "type": "int",
+          "description": "数量"
+        },
+        {
+          "name": "initial_balance",
+          "type": "float",
+          "description": "初始资产"
+        },
+        {
+          "name": "leverage",
+          "type": "float",
+          "description": "杠杆倍数"
+        },
+        {
+          "name": "maintenance_margin_rate",
+          "type": "float",
+          "description": "维持保证金率"
+        },
+        {
+          "name": "maker_fee_rate",
+          "type": "float",
+          "description": "挂单费率"
+        },
+        {
+          "name": "taker_fee_rate",
+          "type": "float",
+          "description": "吃单费率"
+        }
       ],
-      "used_by": ["F30", "F57", "F88"]
+      "used_by": [
+        "F30",
+        "F57",
+        "F88"
+      ]
     },
     {
       "name": "TrainingConfig",
       "file": "src/config/config.py",
       "description": "训练配置",
       "fields": [
-        {"name": "episode_length", "type": "int", "description": "每个 episode 的 tick 数量"},
-        {"name": "checkpoint_interval", "type": "int", "description": "检查点间隔"},
-        {"name": "neat_config_path", "type": "str", "description": "NEAT 配置文件路径"}
+        {
+          "name": "episode_length",
+          "type": "int",
+          "description": "每个 episode 的 tick 数量"
+        },
+        {
+          "name": "checkpoint_interval",
+          "type": "int",
+          "description": "检查点间隔"
+        },
+        {
+          "name": "neat_config_path",
+          "type": "str",
+          "description": "NEAT 配置文件路径"
+        }
       ],
-      "used_by": ["F66", "F67", "F68", "F89"]
+      "used_by": [
+        "F66",
+        "F67",
+        "F68",
+        "F89"
+      ]
     }
   ]
 }

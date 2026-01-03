@@ -28,11 +28,11 @@ from src.training.population import Population
 class Trainer:
     """训练器
 
-    管理 NEAT 进化训练流程，协调三种群在模拟市场中竞争。
+    管理 NEAT 进化训练流程，协调四种群在模拟市场中竞争。
 
     Attributes:
         config: 全局配置
-        populations: 三种群（散户/庄家/做市商）
+        populations: 四种群（散户/高级散户/庄家/做市商）
         matching_engine: 撮合引擎
         tick: 当前 tick
         episode: 当前 episode
@@ -95,10 +95,10 @@ class Trainer:
     def setup(self) -> None:
         """初始化训练环境
 
-        创建三种群、撮合引擎，初始化市场。
+        创建四种群、撮合引擎，初始化市场。
         训练模式使用直接调用。
         """
-        # 创建三种群
+        # 创建四种群
         for agent_type in AgentType:
             self.populations[agent_type] = Population(agent_type, self.config)
 
@@ -534,9 +534,7 @@ class Trainer:
                 market_state = self._compute_normalized_market_state()
                 action, params = agent.decide(market_state, orderbook)
                 # 直接执行（绕过事件系统）
-                trades = agent.execute_action(
-                    action, params, self.matching_engine
-                )
+                trades = agent.execute_action(action, params, self.matching_engine)
                 for trade in trades:
                     self.recent_trades.append(trade)
                     # 更新 maker 的账户（即使自成交也需要更新）
@@ -625,7 +623,9 @@ class Trainer:
 
         # === 三阶段强平处理 ===
         # 阶段2：统一执行市价单平仓，收集需要 ADL 的 Agent
-        agents_need_adl: list[tuple["Agent", int, bool]] = []  # (agent, remaining_qty, is_long)
+        agents_need_adl: list[tuple["Agent", int, bool]] = (
+            []
+        )  # (agent, remaining_qty, is_long)
         if len(agents_to_liquidate) > 0:
             for agent in agents_to_liquidate:
                 remaining_qty, is_long = self._execute_liquidation_market_order(agent)
@@ -655,7 +655,9 @@ class Trainer:
                         continue
 
                     # 用最新价格计算 ADL 候选信息
-                    candidate = self.adl_manager.calculate_adl_score(agent, latest_price)
+                    candidate = self.adl_manager.calculate_adl_score(
+                        agent, latest_price
+                    )
                     if candidate is None:
                         continue
 

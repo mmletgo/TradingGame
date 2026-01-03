@@ -39,7 +39,7 @@ class ActionType(Enum):
 class Agent:
     """Agent 基类
 
-    三种类型 AI Agent（散户、庄家、做市商）的基类，提供通用的属性和方法。
+    四种类型 AI Agent（散户、高级散户、庄家、做市商）的基类，提供通用的属性和方法。
 
     Attributes:
         agent_id: Agent ID
@@ -92,7 +92,9 @@ class Agent:
         # 初始化订单计数器
         self._order_counter = 0
 
-    def observe(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> np.ndarray:
+    def observe(
+        self, market_state: NormalizedMarketState, orderbook: OrderBook
+    ) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入
 
         Args:
@@ -108,7 +110,9 @@ class Agent:
         self._input_buffer[400:500] = market_state.trade_prices
         self._input_buffer[500:600] = market_state.trade_quantities
         self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
-        self._input_buffer[604:607] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
+        self._input_buffer[604:607] = self._get_pending_order_inputs(
+            market_state.mid_price, orderbook
+        )
         return self._input_buffer  # 不调用 .tolist()
 
     def _get_position_inputs(self, mid_price: float) -> np.ndarray:
@@ -135,18 +139,26 @@ class Agent:
         if self.account.position.quantity == 0:
             result[1] = 0.0
         else:
-            result[1] = (self.account.position.avg_price - mid_price) / mid_price if mid_price > 0 else 0.0
+            result[1] = (
+                (self.account.position.avg_price - mid_price) / mid_price
+                if mid_price > 0
+                else 0.0
+            )
 
         # 余额归一化
         initial_balance = self.account.initial_balance
-        result[2] = self.account.balance / initial_balance if initial_balance > 0 else 0.0
+        result[2] = (
+            self.account.balance / initial_balance if initial_balance > 0 else 0.0
+        )
 
         # 净值归一化
         result[3] = equity / initial_balance if initial_balance > 0 else 0.0
 
         return result
 
-    def _get_pending_order_inputs(self, mid_price: float, orderbook: OrderBook) -> np.ndarray:
+    def _get_pending_order_inputs(
+        self, mid_price: float, orderbook: OrderBook
+    ) -> np.ndarray:
         """获取挂单信息输入（3 个值：价格归一化、数量、方向）
 
         子类可重写此方法以支持不同的挂单格式。
@@ -180,7 +192,9 @@ class Agent:
         result[2] = 1.0 if order.side == OrderSide.BUY else -1.0
         return result
 
-    def decide(self, market_state: NormalizedMarketState, orderbook: OrderBook) -> tuple[ActionType, dict[str, Any]]:
+    def decide(
+        self, market_state: NormalizedMarketState, orderbook: OrderBook
+    ) -> tuple[ActionType, dict[str, Any]]:
         """决策下一步动作（接收预计算的市场状态）
 
         观察市场状态，通过神经网络前向传播，解析输出为动作类型和参数。
@@ -246,7 +260,9 @@ class Agent:
             # 确保价格至少为一个 tick_size，防止出现负价格或零价格
             params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
             # 数量由神经网络决定
-            params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
+            params["quantity"] = self._calculate_order_quantity(
+                mid_price, quantity_ratio
+            )
 
         elif action == ActionType.PLACE_ASK:
             # 挂卖单：价格由神经网络决定（相对 mid_price 的偏移）
@@ -256,11 +272,15 @@ class Agent:
             # 确保价格至少为一个 tick_size，防止出现负价格或零价格
             params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
             # 数量由神经网络决定
-            params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
+            params["quantity"] = self._calculate_order_quantity(
+                mid_price, quantity_ratio
+            )
 
         elif action == ActionType.MARKET_BUY:
             # 市价买入：数量由神经网络决定
-            params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
+            params["quantity"] = self._calculate_order_quantity(
+                mid_price, quantity_ratio
+            )
 
         elif action == ActionType.MARKET_SELL:
             # 市价卖出：数量由神经网络决定
@@ -273,7 +293,9 @@ class Agent:
                 params["quantity"] = min(sell_qty, int(position_qty))
             else:
                 # 空仓或无持仓，开空仓
-                params["quantity"] = self._calculate_order_quantity(mid_price, quantity_ratio)
+                params["quantity"] = self._calculate_order_quantity(
+                    mid_price, quantity_ratio
+                )
 
         elif action == ActionType.CANCEL:
             # 撤单：无参数
@@ -462,9 +484,13 @@ class Agent:
         """
         position_qty = self.account.position.quantity
         if position_qty > 0:
-            return self._place_market_order(OrderSide.SELL, position_qty, matching_engine)
+            return self._place_market_order(
+                OrderSide.SELL, position_qty, matching_engine
+            )
         elif position_qty < 0:
-            return self._place_market_order(OrderSide.BUY, abs(position_qty), matching_engine)
+            return self._place_market_order(
+                OrderSide.BUY, abs(position_qty), matching_engine
+            )
         return []
 
     def _process_trades(self, trades: list[Trade]) -> None:

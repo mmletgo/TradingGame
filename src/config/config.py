@@ -11,7 +11,7 @@ from enum import Enum
 class AgentType(Enum):
     """Agent 类型枚举
 
-    定义系统中三种 AI Agent 的类型。
+    定义系统中四种 AI Agent 的类型。
     """
 
     RETAIL = "RETAIL"  # 散户

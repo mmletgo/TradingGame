@@ -8,10 +8,17 @@
       "signature": "def __init__(self) -> None",
       "business_logic": "创建事件总线实例，用于模块间解耦通信",
       "code_logic": "初始化订阅者字典，键为事件类型，值为回调函数列表",
-      "test_cases": ["创建实例", "初始状态无订阅者"],
+      "test_cases": [
+        "创建实例",
+        "初始状态无订阅者"
+      ],
       "dependencies": [],
-      "called_by": ["F64"],
-      "uses": ["EventType"]
+      "called_by": [
+        "F64"
+      ],
+      "uses": [
+        "EventType"
+      ]
     },
     {
       "id": "F2",
@@ -21,10 +28,22 @@
       "signature": "def subscribe(self, event_type: EventType, handler: Callable[[Event], None]) -> None",
       "business_logic": "订阅指定类型的事件",
       "code_logic": "将处理函数添加到对应事件类型的处理函数列表",
-      "test_cases": ["正常订阅", "重复订阅同一处理函数", "订阅多个事件类型"],
+      "test_cases": [
+        "正常订阅",
+        "重复订阅同一处理函数",
+        "订阅多个事件类型"
+      ],
       "dependencies": [],
-      "called_by": ["F21", "F41", "F63", "F70"],
-      "uses": ["EventType", "Event"]
+      "called_by": [
+        "F21",
+        "F41",
+        "F63",
+        "F70"
+      ],
+      "uses": [
+        "EventType",
+        "Event"
+      ]
     },
     {
       "id": "F3",
@@ -34,10 +53,16 @@
       "signature": "def unsubscribe(self, event_type: EventType, handler: Callable[[Event], None]) -> None",
       "business_logic": "取消订阅指定类型的事件",
       "code_logic": "从对应事件类型的处理函数列表中移除指定处理函数",
-      "test_cases": ["正常取消订阅", "取消不存在的订阅"],
+      "test_cases": [
+        "正常取消订阅",
+        "取消不存在的订阅"
+      ],
       "dependencies": [],
       "called_by": [],
-      "uses": ["EventType", "Event"]
+      "uses": [
+        "EventType",
+        "Event"
+      ]
     },
     {
       "id": "F4",
@@ -47,10 +72,21 @@
       "signature": "def publish(self, event: Event) -> None",
       "business_logic": "发布事件，通知所有订阅者",
       "code_logic": "遍历该事件类型的所有处理函数并依次调用",
-      "test_cases": ["正常发布", "无订阅者时发布", "多订阅者接收"],
+      "test_cases": [
+        "正常发布",
+        "无订阅者时发布",
+        "多订阅者接收"
+      ],
       "dependencies": [],
-      "called_by": ["F22", "F35", "F44", "F65"],
-      "uses": ["Event"]
+      "called_by": [
+        "F22",
+        "F35",
+        "F44",
+        "F65"
+      ],
+      "uses": [
+        "Event"
+      ]
     },
     {
       "id": "F5",
@@ -60,9 +96,13 @@
       "signature": "def clear(self) -> None",
       "business_logic": "清除所有订阅",
       "code_logic": "清空订阅者字典",
-      "test_cases": ["清除后无订阅者"],
+      "test_cases": [
+        "清除后无订阅者"
+      ],
       "dependencies": [],
-      "called_by": ["F46"],
+      "called_by": [
+        "F46"
+      ],
       "uses": []
     },
     {
@@ -73,9 +113,17 @@
       "signature": "def setup_logging(log_dir: str = 'logs', console_level: int = logging.WARNING) -> None",
       "business_logic": "初始化日志系统，控制台只显示警告及以上，详细日志写入文件",
       "code_logic": "配置根日志器，添加文件处理器和控制台处理器，设置格式",
-      "test_cases": ["创建日志目录", "日志文件生成", "控制台级别正确"],
+      "test_cases": [
+        "创建日志目录",
+        "日志文件生成",
+        "控制台级别正确"
+      ],
       "dependencies": [],
-      "called_by": ["F90", "F91", "F92"],
+      "called_by": [
+        "F90",
+        "F91",
+        "F92"
+      ],
       "uses": []
     },
     {
@@ -86,9 +134,19 @@
       "signature": "def get_logger(name: str) -> logging.Logger",
       "business_logic": "获取指定模块的日志器",
       "code_logic": "返回命名日志器",
-      "test_cases": ["获取日志器", "同名返回相同实例"],
-      "dependencies": ["F6"],
-      "called_by": ["F21", "F56", "F63", "F77"],
+      "test_cases": [
+        "获取日志器",
+        "同名返回相同实例"
+      ],
+      "dependencies": [
+        "F6"
+      ],
+      "called_by": [
+        "F21",
+        "F56",
+        "F63",
+        "F77"
+      ],
       "uses": []
     },
     {
@@ -99,10 +157,19 @@
       "signature": "def __init__(self, order_id: int, agent_id: int, side: OrderSide, order_type: OrderType, price: float, quantity: float) -> None",
       "business_logic": "创建订单对象",
       "code_logic": "初始化订单属性，设置时间戳和已成交数量为0",
-      "test_cases": ["创建限价买单", "创建限价卖单", "创建市价单"],
+      "test_cases": [
+        "创建限价买单",
+        "创建限价卖单",
+        "创建市价单"
+      ],
       "dependencies": [],
-      "called_by": ["F44"],
-      "uses": ["OrderSide", "OrderType"]
+      "called_by": [
+        "F44"
+      ],
+      "uses": [
+        "OrderSide",
+        "OrderType"
+      ]
     },
     {
       "id": "F9",
@@ -112,9 +179,13 @@
       "signature": "def __init__(self, price: float) -> None",
       "business_logic": "创建价格档位",
       "code_logic": "初始化价格和空订单队列",
-      "test_cases": ["创建档位"],
+      "test_cases": [
+        "创建档位"
+      ],
       "dependencies": [],
-      "called_by": ["F14"],
+      "called_by": [
+        "F14"
+      ],
       "uses": []
     },
     {
@@ -125,10 +196,17 @@
       "signature": "def add_order(self, order: Order) -> None",
       "business_logic": "向价格档位添加订单",
       "code_logic": "将订单追加到队列尾部，更新总数量",
-      "test_cases": ["添加单个订单", "添加多个订单"],
+      "test_cases": [
+        "添加单个订单",
+        "添加多个订单"
+      ],
       "dependencies": [],
-      "called_by": ["F14"],
-      "uses": ["Order"]
+      "called_by": [
+        "F14"
+      ],
+      "uses": [
+        "Order"
+      ]
     },
     {
       "id": "F11",
@@ -138,10 +216,18 @@
       "signature": "def remove_order(self, order_id: int) -> Order | None",
       "business_logic": "从价格档位移除订单",
       "code_logic": "根据订单ID查找并移除，更新总数量，返回被移除的订单",
-      "test_cases": ["移除存在的订单", "移除不存在的订单"],
+      "test_cases": [
+        "移除存在的订单",
+        "移除不存在的订单"
+      ],
       "dependencies": [],
-      "called_by": ["F15", "F23"],
-      "uses": ["Order"]
+      "called_by": [
+        "F15",
+        "F23"
+      ],
+      "uses": [
+        "Order"
+      ]
     },
     {
       "id": "F12",
@@ -151,9 +237,14 @@
       "signature": "def get_volume(self) -> float",
       "business_logic": "获取该价格档位的总挂单量",
       "code_logic": "返回 total_quantity",
-      "test_cases": ["空档位返回0", "有订单返回总量"],
+      "test_cases": [
+        "空档位返回0",
+        "有订单返回总量"
+      ],
       "dependencies": [],
-      "called_by": ["F18"],
+      "called_by": [
+        "F18"
+      ],
       "uses": []
     },
     {
@@ -164,10 +255,17 @@
       "signature": "def __init__(self, tick_size: float = 0.1) -> None",
       "business_logic": "创建订单簿",
       "code_logic": "初始化买卖盘字典、订单映射、最新价",
-      "test_cases": ["创建空订单簿", "设置 tick_size"],
+      "test_cases": [
+        "创建空订单簿",
+        "设置 tick_size"
+      ],
       "dependencies": [],
-      "called_by": ["F21"],
-      "uses": ["MarketConfig"]
+      "called_by": [
+        "F21"
+      ],
+      "uses": [
+        "MarketConfig"
+      ]
     },
     {
       "id": "F14",
@@ -177,10 +275,22 @@
       "signature": "def add_order(self, order: Order) -> None",
       "business_logic": "向订单簿添加订单",
       "code_logic": "根据方向添加到买盘或卖盘，如果价格档位不存在则创建",
-      "test_cases": ["添加买单", "添加卖单", "添加到已有档位"],
-      "dependencies": ["F9", "F10"],
-      "called_by": ["F22"],
-      "uses": ["Order", "PriceLevel"]
+      "test_cases": [
+        "添加买单",
+        "添加卖单",
+        "添加到已有档位"
+      ],
+      "dependencies": [
+        "F9",
+        "F10"
+      ],
+      "called_by": [
+        "F22"
+      ],
+      "uses": [
+        "Order",
+        "PriceLevel"
+      ]
     },
     {
       "id": "F15",
@@ -190,10 +300,19 @@
       "signature": "def cancel_order(self, order_id: int) -> Order | None",
       "business_logic": "撤销订单",
       "code_logic": "根据订单ID查找并移除，如果档位变空则删除档位",
-      "test_cases": ["撤销存在的订单", "撤销不存在的订单"],
-      "dependencies": ["F11"],
-      "called_by": ["F22"],
-      "uses": ["Order"]
+      "test_cases": [
+        "撤销存在的订单",
+        "撤销不存在的订单"
+      ],
+      "dependencies": [
+        "F11"
+      ],
+      "called_by": [
+        "F22"
+      ],
+      "uses": [
+        "Order"
+      ]
     },
     {
       "id": "F16",
@@ -203,9 +322,16 @@
       "signature": "def get_best_bid(self) -> float | None",
       "business_logic": "获取最优买价",
       "code_logic": "返回买盘最高价，无买单返回 None",
-      "test_cases": ["有买单", "无买单"],
+      "test_cases": [
+        "有买单",
+        "无买单"
+      ],
       "dependencies": [],
-      "called_by": ["F19", "F23", "F42"],
+      "called_by": [
+        "F19",
+        "F23",
+        "F42"
+      ],
       "uses": []
     },
     {
@@ -216,9 +342,16 @@
       "signature": "def get_best_ask(self) -> float | None",
       "business_logic": "获取最优卖价",
       "code_logic": "返回卖盘最低价，无卖单返回 None",
-      "test_cases": ["有卖单", "无卖单"],
+      "test_cases": [
+        "有卖单",
+        "无卖单"
+      ],
       "dependencies": [],
-      "called_by": ["F19", "F24", "F42"],
+      "called_by": [
+        "F19",
+        "F24",
+        "F42"
+      ],
       "uses": []
     },
     {
@@ -229,9 +362,16 @@
       "signature": "def get_depth(self, levels: int = 100) -> dict[str, list[tuple[float, float]]]",
       "business_logic": "获取盘口深度",
       "code_logic": "返回买卖各 N 档的价格和数量",
-      "test_cases": ["获取完整深度", "深度不足时"],
-      "dependencies": ["F12"],
-      "called_by": ["F75"],
+      "test_cases": [
+        "获取完整深度",
+        "深度不足时"
+      ],
+      "dependencies": [
+        "F12"
+      ],
+      "called_by": [
+        "F75"
+      ],
       "uses": []
     },
     {
@@ -242,9 +382,18 @@
       "signature": "def get_mid_price(self) -> float | None",
       "business_logic": "获取中间价",
       "code_logic": "返回最优买卖价的平均值，无法计算返回 None",
-      "test_cases": ["正常计算", "只有买盘", "只有卖盘"],
-      "dependencies": ["F16", "F17"],
-      "called_by": ["F42"],
+      "test_cases": [
+        "正常计算",
+        "只有买盘",
+        "只有卖盘"
+      ],
+      "dependencies": [
+        "F16",
+        "F17"
+      ],
+      "called_by": [
+        "F42"
+      ],
       "uses": []
     },
     {
@@ -255,9 +404,14 @@
       "signature": "def __init__(self, trade_id: int, price: float, quantity: float, buyer_id: int, seller_id: int, buyer_fee: float, seller_fee: float) -> None",
       "business_logic": "创建成交记录",
       "code_logic": "初始化成交属性和时间戳",
-      "test_cases": ["创建成交记录"],
+      "test_cases": [
+        "创建成交记录"
+      ],
       "dependencies": [],
-      "called_by": ["F23", "F24"],
+      "called_by": [
+        "F23",
+        "F24"
+      ],
       "uses": []
     },
     {
@@ -268,10 +422,23 @@
       "signature": "def __init__(self, event_bus: EventBus, config: MarketConfig) -> None",
       "business_logic": "创建撮合引擎",
       "code_logic": "初始化订单簿，订阅订单事件",
-      "test_cases": ["创建引擎", "订阅事件"],
-      "dependencies": ["F2", "F7", "F13"],
-      "called_by": ["F64"],
-      "uses": ["EventBus", "OrderBook", "MarketConfig"]
+      "test_cases": [
+        "创建引擎",
+        "订阅事件"
+      ],
+      "dependencies": [
+        "F2",
+        "F7",
+        "F13"
+      ],
+      "called_by": [
+        "F64"
+      ],
+      "uses": [
+        "EventBus",
+        "OrderBook",
+        "MarketConfig"
+      ]
     },
     {
       "id": "F22",
@@ -281,10 +448,25 @@
       "signature": "def process_order(self, order: Order) -> list[Trade]",
       "business_logic": "处理订单，执行撮合",
       "code_logic": "根据订单类型调用限价或市价撮合，发布成交事件",
-      "test_cases": ["处理限价单", "处理市价单", "部分成交", "完全成交"],
-      "dependencies": ["F4", "F14", "F15", "F23", "F24"],
+      "test_cases": [
+        "处理限价单",
+        "处理市价单",
+        "部分成交",
+        "完全成交"
+      ],
+      "dependencies": [
+        "F4",
+        "F14",
+        "F15",
+        "F23",
+        "F24"
+      ],
       "called_by": [],
-      "uses": ["Order", "Trade", "OrderBook"]
+      "uses": [
+        "Order",
+        "Trade",
+        "OrderBook"
+      ]
     },
     {
       "id": "F23",
@@ -294,10 +476,24 @@
       "signature": "def match_limit_order(self, order: Order) -> list[Trade]",
       "business_logic": "限价单撮合",
       "code_logic": "价格优先时间优先，与对手盘撮合，剩余挂单",
-      "test_cases": ["买单与卖盘撮合", "卖单与买盘撮合", "无法撮合挂单"],
-      "dependencies": ["F11", "F16", "F20", "F25"],
-      "called_by": ["F22"],
-      "uses": ["Order", "Trade"]
+      "test_cases": [
+        "买单与卖盘撮合",
+        "卖单与买盘撮合",
+        "无法撮合挂单"
+      ],
+      "dependencies": [
+        "F11",
+        "F16",
+        "F20",
+        "F25"
+      ],
+      "called_by": [
+        "F22"
+      ],
+      "uses": [
+        "Order",
+        "Trade"
+      ]
     },
     {
       "id": "F24",
@@ -307,10 +503,23 @@
       "signature": "def match_market_order(self, order: Order) -> list[Trade]",
       "business_logic": "市价单撮合",
       "code_logic": "吃掉对手盘直到完全成交或对手盘为空",
-      "test_cases": ["完全成交", "部分成交（对手盘不足）"],
-      "dependencies": ["F11", "F17", "F20", "F25"],
-      "called_by": ["F22"],
-      "uses": ["Order", "Trade"]
+      "test_cases": [
+        "完全成交",
+        "部分成交（对手盘不足）"
+      ],
+      "dependencies": [
+        "F11",
+        "F17",
+        "F20",
+        "F25"
+      ],
+      "called_by": [
+        "F22"
+      ],
+      "uses": [
+        "Order",
+        "Trade"
+      ]
     },
     {
       "id": "F25",
@@ -320,9 +529,21 @@
       "signature": "def calculate_fee(self, agent_id: int, amount: float, is_maker: bool) -> float",
       "business_logic": "计算手续费",
       "code_logic": "根据 Agent 类型和挂单/吃单获取费率，计算手续费。使用内部缓存 _fee_rates 存储 agent_id -> (maker_rate, taker_rate) 映射，支持 register_agent/unregister_agent 动态管理",
-      "test_cases": ["散户挂单费（万2）", "散户吃单费（万5）", "庄家费用（挂单0，吃单万1）", "做市商费用（挂单0，吃单万1）", "未注册Agent默认费率", "零金额边界", "注册/注销Agent", "多Agent不同费率"],
+      "test_cases": [
+        "散户挂单费（万2）",
+        "散户吃单费（万5）",
+        "庄家费用（挂单0，吃单万1）",
+        "做市商费用（挂单0，吃单万1）",
+        "未注册Agent默认费率",
+        "零金额边界",
+        "注册/注销Agent",
+        "多Agent不同费率"
+      ],
       "dependencies": [],
-      "called_by": ["F23", "F24"],
+      "called_by": [
+        "F23",
+        "F24"
+      ],
       "uses": []
     },
     {
@@ -333,9 +554,13 @@
       "signature": "def __init__(self) -> None",
       "business_logic": "创建持仓对象",
       "code_logic": "初始化数量、均价、已实现盈亏为0",
-      "test_cases": ["创建空持仓"],
+      "test_cases": [
+        "创建空持仓"
+      ],
       "dependencies": [],
-      "called_by": ["F30"],
+      "called_by": [
+        "F30"
+      ],
       "uses": []
     },
     {
@@ -346,10 +571,20 @@
       "signature": "def update(self, side: OrderSide, quantity: float, price: float) -> float",
       "business_logic": "更新持仓，返回已实现盈亏",
       "code_logic": "计算新持仓数量和均价，平仓时计算已实现盈亏",
-      "test_cases": ["开多仓", "开空仓", "加仓", "减仓", "反向开仓"],
+      "test_cases": [
+        "开多仓",
+        "开空仓",
+        "加仓",
+        "减仓",
+        "反向开仓"
+      ],
       "dependencies": [],
-      "called_by": ["F36"],
-      "uses": ["OrderSide"]
+      "called_by": [
+        "F36"
+      ],
+      "uses": [
+        "OrderSide"
+      ]
     },
     {
       "id": "F28",
@@ -359,9 +594,16 @@
       "signature": "def get_unrealized_pnl(self, current_price: float) -> float",
       "business_logic": "计算浮动盈亏",
       "code_logic": "（当前价 - 均价）* 持仓数量",
-      "test_cases": ["多仓盈利", "多仓亏损", "空仓盈利", "空仓亏损"],
+      "test_cases": [
+        "多仓盈利",
+        "多仓亏损",
+        "空仓盈利",
+        "空仓亏损"
+      ],
       "dependencies": [],
-      "called_by": ["F31"],
+      "called_by": [
+        "F31"
+      ],
       "uses": []
     },
     {
@@ -372,9 +614,14 @@
       "signature": "def get_margin_used(self, current_price: float, leverage: float) -> float",
       "business_logic": "计算占用保证金",
       "code_logic": "abs(持仓数量) * 当前价 / 杠杆",
-      "test_cases": ["有持仓", "无持仓"],
+      "test_cases": [
+        "有持仓",
+        "无持仓"
+      ],
       "dependencies": [],
-      "called_by": ["F32"],
+      "called_by": [
+        "F32"
+      ],
       "uses": []
     },
     {
@@ -385,10 +632,22 @@
       "signature": "def __init__(self, agent_id: int, agent_type: AgentType, config: AgentConfig) -> None",
       "business_logic": "创建账户",
       "code_logic": "初始化余额、持仓、杠杆、费率等",
-      "test_cases": ["创建散户账户", "创建庄家账户", "创建做市商账户"],
-      "dependencies": ["F26"],
-      "called_by": ["F41"],
-      "uses": ["AgentType", "AgentConfig", "Position"]
+      "test_cases": [
+        "创建散户账户",
+        "创建庄家账户",
+        "创建做市商账户"
+      ],
+      "dependencies": [
+        "F26"
+      ],
+      "called_by": [
+        "F41"
+      ],
+      "uses": [
+        "AgentType",
+        "AgentConfig",
+        "Position"
+      ]
     },
     {
       "id": "F31",
@@ -398,9 +657,17 @@
       "signature": "def get_equity(self, current_price: float) -> float",
       "business_logic": "计算净值",
       "code_logic": "余额 + 浮动盈亏",
-      "test_cases": ["有持仓", "无持仓"],
-      "dependencies": ["F28"],
-      "called_by": ["F33", "F45"],
+      "test_cases": [
+        "有持仓",
+        "无持仓"
+      ],
+      "dependencies": [
+        "F28"
+      ],
+      "called_by": [
+        "F33",
+        "F45"
+      ],
       "uses": []
     },
     {
@@ -411,9 +678,17 @@
       "signature": "def get_available_margin(self, current_price: float) -> float",
       "business_logic": "计算可用保证金",
       "code_logic": "净值 - 占用保证金",
-      "test_cases": ["有剩余", "无剩余"],
-      "dependencies": ["F29", "F31"],
-      "called_by": ["F44"],
+      "test_cases": [
+        "有剩余",
+        "无剩余"
+      ],
+      "dependencies": [
+        "F29",
+        "F31"
+      ],
+      "called_by": [
+        "F44"
+      ],
       "uses": []
     },
     {
@@ -424,9 +699,16 @@
       "signature": "def get_margin_ratio(self, current_price: float) -> float",
       "business_logic": "计算保证金率",
       "code_logic": "净值 / 持仓市值，无持仓返回无穷大",
-      "test_cases": ["有持仓", "无持仓"],
-      "dependencies": ["F31"],
-      "called_by": ["F34"],
+      "test_cases": [
+        "有持仓",
+        "无持仓"
+      ],
+      "dependencies": [
+        "F31"
+      ],
+      "called_by": [
+        "F34"
+      ],
       "uses": []
     },
     {
@@ -437,9 +719,16 @@
       "signature": "def check_liquidation(self, current_price: float) -> bool",
       "business_logic": "检查是否需要强制平仓",
       "code_logic": "保证金率 < 维持保证金率",
-      "test_cases": ["需要平仓", "不需要平仓"],
-      "dependencies": ["F33"],
-      "called_by": ["F65"],
+      "test_cases": [
+        "需要平仓",
+        "不需要平仓"
+      ],
+      "dependencies": [
+        "F33"
+      ],
+      "called_by": [
+        "F65"
+      ],
       "uses": []
     },
     {
@@ -450,10 +739,20 @@
       "signature": "def liquidate(self, current_price: float, event_bus: EventBus) -> None",
       "business_logic": "发布强平事件，由训练引擎/演示引擎订阅后提交市价单平仓",
       "code_logic": "构建 LIQUIDATION 事件数据（包含 agent_id, agent_type, current_price, position_quantity, position_avg_price），通过 EventBus 发布事件",
-      "test_cases": ["多仓强平事件发布", "空仓强平事件发布", "无持仓时强平事件发布"],
-      "dependencies": ["F4"],
-      "called_by": ["F65"],
-      "uses": ["EventBus"]
+      "test_cases": [
+        "多仓强平事件发布",
+        "空仓强平事件发布",
+        "无持仓时强平事件发布"
+      ],
+      "dependencies": [
+        "F4"
+      ],
+      "called_by": [
+        "F65"
+      ],
+      "uses": [
+        "EventBus"
+      ]
     },
     {
       "id": "F36",
@@ -463,10 +762,18 @@
       "signature": "def on_trade(self, trade: Trade, is_buyer: bool) -> None",
       "business_logic": "处理成交回报",
       "code_logic": "更新持仓、扣除手续费、更新余额",
-      "test_cases": ["买入成交", "卖出成交"],
-      "dependencies": ["F27"],
+      "test_cases": [
+        "买入成交",
+        "卖出成交"
+      ],
+      "dependencies": [
+        "F27"
+      ],
       "called_by": [],
-      "uses": ["Trade", "Position"]
+      "uses": [
+        "Trade",
+        "Position"
+      ]
     },
     {
       "id": "F37",
@@ -476,10 +783,16 @@
       "signature": "def __init__(self, genome: neat.DefaultGenome, config: neat.Config) -> None",
       "business_logic": "创建神经网络封装",
       "code_logic": "保存基因组，创建前馈网络",
-      "test_cases": ["创建 Brain"],
+      "test_cases": [
+        "创建 Brain"
+      ],
       "dependencies": [],
-      "called_by": ["F40"],
-      "uses": ["Brain"]
+      "called_by": [
+        "F40"
+      ],
+      "uses": [
+        "Brain"
+      ]
     },
     {
       "id": "F38",
@@ -489,9 +802,14 @@
       "signature": "def forward(self, inputs: list[float]) -> list[float]",
       "business_logic": "前向传播",
       "code_logic": "调用 NEAT 网络的 activate 方法",
-      "test_cases": ["正常输入", "边界值输入"],
+      "test_cases": [
+        "正常输入",
+        "边界值输入"
+      ],
       "dependencies": [],
-      "called_by": ["F43"],
+      "called_by": [
+        "F43"
+      ],
       "uses": []
     },
     {
@@ -502,9 +820,14 @@
       "signature": "def get_genome(self) -> neat.DefaultGenome",
       "business_logic": "获取基因组",
       "code_logic": "返回保存的基因组",
-      "test_cases": ["获取基因组"],
+      "test_cases": [
+        "获取基因组"
+      ],
       "dependencies": [],
-      "called_by": ["F59", "F68"],
+      "called_by": [
+        "F59",
+        "F68"
+      ],
       "uses": []
     },
     {
@@ -515,10 +838,18 @@
       "signature": "@classmethod def from_genome(cls, genome: neat.DefaultGenome, config: neat.Config) -> Brain",
       "business_logic": "从基因组创建 Brain",
       "code_logic": "类方法，调用构造函数",
-      "test_cases": ["从基因组创建"],
-      "dependencies": ["F37"],
-      "called_by": ["F57"],
-      "uses": ["Brain"]
+      "test_cases": [
+        "从基因组创建"
+      ],
+      "dependencies": [
+        "F37"
+      ],
+      "called_by": [
+        "F57"
+      ],
+      "uses": [
+        "Brain"
+      ]
     },
     {
       "id": "F41",
@@ -528,10 +859,24 @@
       "signature": "def __init__(self, agent_id: int, agent_type: AgentType, brain: Brain, config: AgentConfig, event_bus: EventBus) -> None",
       "business_logic": "创建 Agent 基类",
       "code_logic": "初始化 ID、类型、神经网络、账户，订阅相关事件",
-      "test_cases": ["创建 Agent"],
-      "dependencies": ["F2", "F30"],
-      "called_by": ["F47", "F50", "F53"],
-      "uses": ["AgentType", "Brain", "Account", "EventBus"]
+      "test_cases": [
+        "创建 Agent"
+      ],
+      "dependencies": [
+        "F2",
+        "F30"
+      ],
+      "called_by": [
+        "F47",
+        "F50",
+        "F53"
+      ],
+      "uses": [
+        "AgentType",
+        "Brain",
+        "Account",
+        "EventBus"
+      ]
     },
     {
       "id": "F42",
@@ -541,10 +886,25 @@
       "signature": "def observe(self, orderbook: OrderBook, recent_trades: list[Trade]) -> list[float]",
       "business_logic": "观察市场状态，生成神经网络输入。输入包括上下100档订单簿的价格和数量、最近100笔成交、agent自身的持仓数量、余额信息",
       "code_logic": "归一化处理订单簿深度数据、成交记录、持仓、余额等信息，返回神经网络输入向量",
-      "test_cases": ["正常观察", "空订单簿", "空成交记录"],
-      "dependencies": ["F16", "F17", "F18", "F19"],
-      "called_by": ["F43"],
-      "uses": ["OrderBook", "Account", "Trade"]
+      "test_cases": [
+        "正常观察",
+        "空订单簿",
+        "空成交记录"
+      ],
+      "dependencies": [
+        "F16",
+        "F17",
+        "F18",
+        "F19"
+      ],
+      "called_by": [
+        "F43"
+      ],
+      "uses": [
+        "OrderBook",
+        "Account",
+        "Trade"
+      ]
     },
     {
       "id": "F43",
@@ -554,10 +914,23 @@
       "signature": "def decide(self, orderbook: OrderBook, recent_trades: list[Trade]) -> tuple[ActionType, dict]",
       "business_logic": "决策下一步动作",
       "code_logic": "观察市场（调用observe），神经网络前向传播，解析输出为动作",
-      "test_cases": ["正常决策", "各种动作输出"],
-      "dependencies": ["F38", "F42"],
-      "called_by": ["F65"],
-      "uses": ["OrderBook", "ActionType", "Brain", "Trade"]
+      "test_cases": [
+        "正常决策",
+        "各种动作输出"
+      ],
+      "dependencies": [
+        "F38",
+        "F42"
+      ],
+      "called_by": [
+        "F65"
+      ],
+      "uses": [
+        "OrderBook",
+        "ActionType",
+        "Brain",
+        "Trade"
+      ]
     },
     {
       "id": "F44",
@@ -567,10 +940,23 @@
       "signature": "def execute_action(self, action: ActionType, params: dict, event_bus: EventBus) -> None",
       "business_logic": "执行动作",
       "code_logic": "根据动作类型发布订单事件",
-      "test_cases": ["执行挂单", "执行撤单", "执行吃单"],
-      "dependencies": ["F4", "F8"],
-      "called_by": ["F65"],
-      "uses": ["ActionType", "EventBus", "Order"]
+      "test_cases": [
+        "执行挂单",
+        "执行撤单",
+        "执行吃单"
+      ],
+      "dependencies": [
+        "F4",
+        "F8"
+      ],
+      "called_by": [
+        "F65"
+      ],
+      "uses": [
+        "ActionType",
+        "EventBus",
+        "Order"
+      ]
     },
     {
       "id": "F45",
@@ -580,10 +966,19 @@
       "signature": "def get_fitness(self, current_price: float) -> float",
       "business_logic": "计算适应度",
       "code_logic": "返回账户净值",
-      "test_cases": ["计算适应度"],
-      "dependencies": ["F31"],
-      "called_by": ["F58", "F59"],
-      "uses": ["Account"]
+      "test_cases": [
+        "计算适应度"
+      ],
+      "dependencies": [
+        "F31"
+      ],
+      "called_by": [
+        "F58",
+        "F59"
+      ],
+      "uses": [
+        "Account"
+      ]
     },
     {
       "id": "F46",
@@ -593,10 +988,18 @@
       "signature": "def reset(self, config: AgentConfig) -> None",
       "business_logic": "重置 Agent 状态",
       "code_logic": "重置账户余额、持仓、挂单",
-      "test_cases": ["重置后状态正确"],
-      "dependencies": ["F5"],
-      "called_by": ["F60"],
-      "uses": ["AgentConfig"]
+      "test_cases": [
+        "重置后状态正确"
+      ],
+      "dependencies": [
+        "F5"
+      ],
+      "called_by": [
+        "F60"
+      ],
+      "uses": [
+        "AgentConfig"
+      ]
     },
     {
       "id": "F47",
@@ -606,10 +1009,21 @@
       "signature": "def __init__(self, agent_id: int, brain: Brain, config: AgentConfig, event_bus: EventBus) -> None",
       "business_logic": "创建散户 Agent",
       "code_logic": "调用父类构造函数，设置类型为 RETAIL",
-      "test_cases": ["创建散户"],
-      "dependencies": ["F41"],
-      "called_by": ["F57"],
-      "uses": ["AgentType", "Brain", "AgentConfig", "EventBus"]
+      "test_cases": [
+        "创建散户"
+      ],
+      "dependencies": [
+        "F41"
+      ],
+      "called_by": [
+        "F57"
+      ],
+      "uses": [
+        "AgentType",
+        "Brain",
+        "AgentConfig",
+        "EventBus"
+      ]
     },
     {
       "id": "F48",
@@ -619,10 +1033,16 @@
       "signature": "def get_action_space(self) -> list[ActionType]",
       "business_logic": "获取散户可用动作",
       "code_logic": "返回 [HOLD, PLACE_BID, PLACE_ASK, CANCEL, MARKET_BUY, MARKET_SELL]",
-      "test_cases": ["获取动作空间"],
+      "test_cases": [
+        "获取动作空间"
+      ],
       "dependencies": [],
-      "called_by": ["F43"],
-      "uses": ["ActionType"]
+      "called_by": [
+        "F43"
+      ],
+      "uses": [
+        "ActionType"
+      ]
     },
     {
       "id": "F49",
@@ -632,10 +1052,20 @@
       "signature": "def execute_action(self, action: ActionType, params: dict, event_bus: EventBus) -> None",
       "business_logic": "散户执行动作",
       "code_logic": "检查是否已有挂单，执行动作",
-      "test_cases": ["有挂单时再挂单", "正常执行"],
-      "dependencies": ["F44"],
-      "called_by": ["F65"],
-      "uses": ["ActionType", "EventBus"]
+      "test_cases": [
+        "有挂单时再挂单",
+        "正常执行"
+      ],
+      "dependencies": [
+        "F44"
+      ],
+      "called_by": [
+        "F65"
+      ],
+      "uses": [
+        "ActionType",
+        "EventBus"
+      ]
     },
     {
       "id": "F50",
@@ -645,10 +1075,21 @@
       "signature": "def __init__(self, agent_id: int, brain: Brain, config: AgentConfig, event_bus: EventBus) -> None",
       "business_logic": "创建庄家 Agent",
       "code_logic": "调用父类构造函数，设置类型为 WHALE",
-      "test_cases": ["创建庄家"],
-      "dependencies": ["F41"],
-      "called_by": ["F57"],
-      "uses": ["AgentType", "Brain", "AgentConfig", "EventBus"]
+      "test_cases": [
+        "创建庄家"
+      ],
+      "dependencies": [
+        "F41"
+      ],
+      "called_by": [
+        "F57"
+      ],
+      "uses": [
+        "AgentType",
+        "Brain",
+        "AgentConfig",
+        "EventBus"
+      ]
     },
     {
       "id": "F51",
@@ -658,10 +1099,16 @@
       "signature": "def get_action_space(self) -> list[ActionType]",
       "business_logic": "获取庄家可用动作",
       "code_logic": "返回 [PLACE_BID, PLACE_ASK, MARKET_BUY, MARKET_SELL]（无 HOLD，无 CANCEL）",
-      "test_cases": ["获取动作空间"],
+      "test_cases": [
+        "获取动作空间"
+      ],
       "dependencies": [],
-      "called_by": ["F43"],
-      "uses": ["ActionType"]
+      "called_by": [
+        "F43"
+      ],
+      "uses": [
+        "ActionType"
+      ]
     },
     {
       "id": "F52",
@@ -671,10 +1118,20 @@
       "signature": "def execute_action(self, action: ActionType, params: dict, event_bus: EventBus) -> None",
       "business_logic": "庄家执行动作",
       "code_logic": "下单时检查是否有旧挂单，如果有则先自动撤单再执行新动作",
-      "test_cases": ["正常执行", "有旧挂单时先撤单再下单"],
-      "dependencies": ["F44"],
-      "called_by": ["F65"],
-      "uses": ["ActionType", "EventBus"]
+      "test_cases": [
+        "正常执行",
+        "有旧挂单时先撤单再下单"
+      ],
+      "dependencies": [
+        "F44"
+      ],
+      "called_by": [
+        "F65"
+      ],
+      "uses": [
+        "ActionType",
+        "EventBus"
+      ]
     },
     {
       "id": "F53",
@@ -684,10 +1141,21 @@
       "signature": "def __init__(self, agent_id: int, brain: Brain, config: AgentConfig, event_bus: EventBus) -> None",
       "business_logic": "创建做市商 Agent",
       "code_logic": "调用父类构造函数，设置类型为 MARKET_MAKER，维护买卖挂单",
-      "test_cases": ["创建做市商"],
-      "dependencies": ["F41"],
-      "called_by": ["F57"],
-      "uses": ["AgentType", "Brain", "AgentConfig", "EventBus"]
+      "test_cases": [
+        "创建做市商"
+      ],
+      "dependencies": [
+        "F41"
+      ],
+      "called_by": [
+        "F57"
+      ],
+      "uses": [
+        "AgentType",
+        "Brain",
+        "AgentConfig",
+        "EventBus"
+      ]
     },
     {
       "id": "F54",
@@ -697,10 +1165,16 @@
       "signature": "def get_action_space(self) -> list[ActionType]",
       "business_logic": "获取做市商可用动作",
       "code_logic": "返回 [QUOTE, CLEAR_POSITION]（双边挂单和清仓）",
-      "test_cases": ["获取动作空间"],
+      "test_cases": [
+        "获取动作空间"
+      ],
       "dependencies": [],
-      "called_by": ["F43"],
-      "uses": ["ActionType"]
+      "called_by": [
+        "F43"
+      ],
+      "uses": [
+        "ActionType"
+      ]
     },
     {
       "id": "F55",
@@ -710,10 +1184,20 @@
       "signature": "def execute_action(self, action: ActionType, params: dict, event_bus: EventBus) -> None",
       "business_logic": "做市商执行动作",
       "code_logic": "QUOTE 动作：先撤掉所有旧挂单，然后双边各挂 1-10 单（每单价格和数量由神经网络决定）。CLEAR_POSITION：先撤掉所有挂单，再根据持仓方向市价平仓",
-      "test_cases": ["双边挂单", "清仓"],
-      "dependencies": ["F44"],
-      "called_by": ["F65"],
-      "uses": ["ActionType", "EventBus"]
+      "test_cases": [
+        "双边挂单",
+        "清仓"
+      ],
+      "dependencies": [
+        "F44"
+      ],
+      "called_by": [
+        "F65"
+      ],
+      "uses": [
+        "ActionType",
+        "EventBus"
+      ]
     },
     {
       "id": "F56",
@@ -723,10 +1207,24 @@
       "signature": "def __init__(self, agent_type: AgentType, config: Config, event_bus: EventBus) -> None",
       "business_logic": "创建种群",
       "code_logic": "初始化 NEAT 种群，创建 Agent 列表",
-      "test_cases": ["创建散户种群", "创建庄家种群", "创建做市商种群"],
-      "dependencies": ["F7", "F57"],
-      "called_by": ["F64"],
-      "uses": ["AgentType", "Config", "EventBus", "Agent"]
+      "test_cases": [
+        "创建散户种群",
+        "创建庄家种群",
+        "创建做市商种群"
+      ],
+      "dependencies": [
+        "F7",
+        "F57"
+      ],
+      "called_by": [
+        "F64"
+      ],
+      "uses": [
+        "AgentType",
+        "Config",
+        "EventBus",
+        "Agent"
+      ]
     },
     {
       "id": "F57",
@@ -736,10 +1234,24 @@
       "signature": "def create_agents(self, genomes: list[tuple[int, neat.DefaultGenome]], event_bus: EventBus) -> list[Agent]",
       "business_logic": "从基因组创建 Agent 列表",
       "code_logic": "遍历基因组，创建 Brain 和对应类型的 Agent",
-      "test_cases": ["创建多个 Agent"],
-      "dependencies": ["F40", "F47", "F50", "F53"],
-      "called_by": ["F56", "F59"],
-      "uses": ["Agent", "Brain", "EventBus"]
+      "test_cases": [
+        "创建多个 Agent"
+      ],
+      "dependencies": [
+        "F40",
+        "F47",
+        "F50",
+        "F53"
+      ],
+      "called_by": [
+        "F56",
+        "F59"
+      ],
+      "uses": [
+        "Agent",
+        "Brain",
+        "EventBus"
+      ]
     },
     {
       "id": "F58",
@@ -749,10 +1261,18 @@
       "signature": "def evaluate(self, current_price: float) -> list[tuple[Agent, float]]",
       "business_logic": "评估种群适应度",
       "code_logic": "计算每个 Agent 的适应度并排序",
-      "test_cases": ["评估种群"],
-      "dependencies": ["F45"],
-      "called_by": ["F59"],
-      "uses": ["Agent"]
+      "test_cases": [
+        "评估种群"
+      ],
+      "dependencies": [
+        "F45"
+      ],
+      "called_by": [
+        "F59"
+      ],
+      "uses": [
+        "Agent"
+      ]
     },
     {
       "id": "F59",
@@ -762,9 +1282,19 @@
       "signature": "def evolve(self, current_price: float) -> None",
       "business_logic": "进化种群",
       "code_logic": "为每个 Agent 的基因组设置适应度，调用 NEAT 种群的 run 方法进行一代进化，用新基因组创建新 Agent",
-      "test_cases": ["进化一代", "适应度正确设置", "新 Agent 创建"],
-      "dependencies": ["F39", "F45", "F57"],
-      "called_by": ["F66"],
+      "test_cases": [
+        "进化一代",
+        "适应度正确设置",
+        "新 Agent 创建"
+      ],
+      "dependencies": [
+        "F39",
+        "F45",
+        "F57"
+      ],
+      "called_by": [
+        "F66"
+      ],
       "uses": []
     },
     {
@@ -775,10 +1305,18 @@
       "signature": "def reset_agents(self) -> None",
       "business_logic": "重置所有 Agent 状态",
       "code_logic": "遍历所有 Agent，调用其 reset 方法重置账户和持仓",
-      "test_cases": ["重置后所有 Agent 状态正确"],
-      "dependencies": ["F46"],
-      "called_by": ["F66"],
-      "uses": ["Agent"]
+      "test_cases": [
+        "重置后所有 Agent 状态正确"
+      ],
+      "dependencies": [
+        "F46"
+      ],
+      "called_by": [
+        "F66"
+      ],
+      "uses": [
+        "Agent"
+      ]
     },
     {
       "id": "F62",
@@ -788,9 +1326,15 @@
       "signature": "def get_stats(self, current_price: float) -> dict",
       "business_logic": "获取种群统计信息",
       "code_logic": "计算平均适应度、最大最小值、分布等",
-      "test_cases": ["获取统计"],
-      "dependencies": ["F45"],
-      "called_by": ["F76"],
+      "test_cases": [
+        "获取统计"
+      ],
+      "dependencies": [
+        "F45"
+      ],
+      "called_by": [
+        "F76"
+      ],
       "uses": []
     },
     {
@@ -800,11 +1344,25 @@
       "test_file": "tests/training/test_trainer.py",
       "signature": "def __init__(self, config: Config) -> None",
       "business_logic": "创建训练器",
-      "code_logic": "初始化事件总线、三种群、撮合引擎",
-      "test_cases": ["创建训练器"],
-      "dependencies": ["F2", "F7"],
-      "called_by": ["F90", "F91", "F92"],
-      "uses": ["Config", "EventBus", "Population", "MatchingEngine"]
+      "code_logic": "初始化事件总线、四种群、撮合引擎",
+      "test_cases": [
+        "创建训练器"
+      ],
+      "dependencies": [
+        "F2",
+        "F7"
+      ],
+      "called_by": [
+        "F90",
+        "F91",
+        "F92"
+      ],
+      "uses": [
+        "Config",
+        "EventBus",
+        "Population",
+        "MatchingEngine"
+      ]
     },
     {
       "id": "F64",
@@ -814,10 +1372,23 @@
       "signature": "def setup(self) -> None",
       "business_logic": "初始化训练环境",
       "code_logic": "创建事件总线、种群、撮合引擎，做市商初始化市场",
-      "test_cases": ["初始化环境"],
-      "dependencies": ["F1", "F21", "F56"],
-      "called_by": ["F67", "F69"],
-      "uses": ["EventBus", "Population", "MatchingEngine"]
+      "test_cases": [
+        "初始化环境"
+      ],
+      "dependencies": [
+        "F1",
+        "F21",
+        "F56"
+      ],
+      "called_by": [
+        "F67",
+        "F69"
+      ],
+      "uses": [
+        "EventBus",
+        "Population",
+        "MatchingEngine"
+      ]
     },
     {
       "id": "F65",
@@ -827,10 +1398,24 @@
       "signature": "def run_tick(self) -> None",
       "business_logic": "执行一个 tick",
       "code_logic": "做市商→庄家→散户依次决策执行，检查强平",
-      "test_cases": ["正常 tick", "有强平"],
-      "dependencies": ["F4", "F34", "F35", "F43", "F44"],
-      "called_by": ["F66"],
-      "uses": ["Agent", "EventBus"]
+      "test_cases": [
+        "正常 tick",
+        "有强平"
+      ],
+      "dependencies": [
+        "F4",
+        "F34",
+        "F35",
+        "F43",
+        "F44"
+      ],
+      "called_by": [
+        "F66"
+      ],
+      "uses": [
+        "Agent",
+        "EventBus"
+      ]
     },
     {
       "id": "F66",
@@ -840,9 +1425,17 @@
       "signature": "def run_episode(self, ticks: int) -> None",
       "business_logic": "运行一个训练回合",
       "code_logic": "循环执行 tick，回合结束后进化",
-      "test_cases": ["运行回合"],
-      "dependencies": ["F59", "F60", "F65"],
-      "called_by": ["F67"],
+      "test_cases": [
+        "运行回合"
+      ],
+      "dependencies": [
+        "F59",
+        "F60",
+        "F65"
+      ],
+      "called_by": [
+        "F67"
+      ],
       "uses": []
     },
     {
@@ -853,9 +1446,19 @@
       "signature": "def train(self, episodes: int, ticks_per_episode: int, state_callback: Callable | None = None) -> None",
       "business_logic": "主训练循环",
       "code_logic": "循环运行回合，定期保存检查点，可选回调更新UI",
-      "test_cases": ["训练多回合", "带回调训练"],
-      "dependencies": ["F64", "F66", "F68"],
-      "called_by": ["F90", "F91"],
+      "test_cases": [
+        "训练多回合",
+        "带回调训练"
+      ],
+      "dependencies": [
+        "F64",
+        "F66",
+        "F68"
+      ],
+      "called_by": [
+        "F90",
+        "F91"
+      ],
       "uses": []
     },
     {
@@ -865,10 +1468,16 @@
       "test_file": "tests/training/test_trainer.py",
       "signature": "def save_checkpoint(self, path: str) -> None",
       "business_logic": "保存检查点",
-      "code_logic": "序列化三种群基因组和训练状态",
-      "test_cases": ["保存检查点"],
-      "dependencies": ["F39"],
-      "called_by": ["F67"],
+      "code_logic": "序列化四种群基因组和训练状态",
+      "test_cases": [
+        "保存检查点"
+      ],
+      "dependencies": [
+        "F39"
+      ],
+      "called_by": [
+        "F67"
+      ],
       "uses": []
     },
     {
@@ -879,9 +1488,17 @@
       "signature": "def load_checkpoint(self, path: str) -> None",
       "business_logic": "加载检查点",
       "code_logic": "反序列化并恢复种群和训练状态",
-      "test_cases": ["加载检查点"],
-      "dependencies": ["F64"],
-      "called_by": ["F90", "F91", "F82"],
+      "test_cases": [
+        "加载检查点"
+      ],
+      "dependencies": [
+        "F64"
+      ],
+      "called_by": [
+        "F90",
+        "F91",
+        "F82"
+      ],
       "uses": []
     },
     {
@@ -892,10 +1509,18 @@
       "signature": "def __init__(self, event_bus: EventBus) -> None",
       "business_logic": "创建状态管理器",
       "code_logic": "初始化状态缓存，订阅事件",
-      "test_cases": ["创建状态管理器"],
-      "dependencies": ["F2"],
-      "called_by": ["F77"],
-      "uses": ["EventBus"]
+      "test_cases": [
+        "创建状态管理器"
+      ],
+      "dependencies": [
+        "F2"
+      ],
+      "called_by": [
+        "F77"
+      ],
+      "uses": [
+        "EventBus"
+      ]
     },
     {
       "id": "F71",
@@ -905,10 +1530,16 @@
       "signature": "def update(self, event: Event) -> None",
       "business_logic": "根据事件更新状态",
       "code_logic": "根据事件类型更新对应状态",
-      "test_cases": ["更新价格", "更新成交"],
+      "test_cases": [
+        "更新价格",
+        "更新成交"
+      ],
       "dependencies": [],
       "called_by": [],
-      "uses": ["Event", "StateSnapshot"]
+      "uses": [
+        "Event",
+        "StateSnapshot"
+      ]
     },
     {
       "id": "F72",
@@ -918,10 +1549,16 @@
       "signature": "def get_state(self) -> StateSnapshot",
       "business_logic": "获取当前状态快照",
       "code_logic": "返回状态快照",
-      "test_cases": ["获取状态"],
+      "test_cases": [
+        "获取状态"
+      ],
       "dependencies": [],
-      "called_by": ["F80"],
-      "uses": ["StateSnapshot"]
+      "called_by": [
+        "F80"
+      ],
+      "uses": [
+        "StateSnapshot"
+      ]
     },
     {
       "id": "F73",
@@ -931,9 +1568,13 @@
       "signature": "def get_price_history(self, limit: int = 1000) -> list[tuple[int, float, float]]",
       "business_logic": "获取价格历史",
       "code_logic": "返回 [(tick, price, volume), ...]",
-      "test_cases": ["获取历史"],
+      "test_cases": [
+        "获取历史"
+      ],
       "dependencies": [],
-      "called_by": ["F80"],
+      "called_by": [
+        "F80"
+      ],
       "uses": []
     },
     {
@@ -944,10 +1585,16 @@
       "signature": "def get_trade_history(self, limit: int = 100) -> list[Trade]",
       "business_logic": "获取最近成交",
       "code_logic": "返回最近 N 笔成交",
-      "test_cases": ["获取成交"],
+      "test_cases": [
+        "获取成交"
+      ],
       "dependencies": [],
-      "called_by": ["F80"],
-      "uses": ["Trade"]
+      "called_by": [
+        "F80"
+      ],
+      "uses": [
+        "Trade"
+      ]
     },
     {
       "id": "F75",
@@ -957,10 +1604,18 @@
       "signature": "def get_orderbook_snapshot(self, orderbook: OrderBook) -> dict",
       "business_logic": "获取订单簿快照",
       "code_logic": "调用 OrderBook.get_depth 并格式化",
-      "test_cases": ["获取快照"],
-      "dependencies": ["F18"],
-      "called_by": ["F80"],
-      "uses": ["OrderBook"]
+      "test_cases": [
+        "获取快照"
+      ],
+      "dependencies": [
+        "F18"
+      ],
+      "called_by": [
+        "F80"
+      ],
+      "uses": [
+        "OrderBook"
+      ]
     },
     {
       "id": "F76",
@@ -970,10 +1625,19 @@
       "signature": "def get_population_stats(self, populations: dict[AgentType, Population], current_price: float) -> dict",
       "business_logic": "获取种群统计",
       "code_logic": "调用各种群的 get_stats 并汇总",
-      "test_cases": ["获取统计"],
-      "dependencies": ["F62"],
-      "called_by": ["F80"],
-      "uses": ["Population", "AgentType"]
+      "test_cases": [
+        "获取统计"
+      ],
+      "dependencies": [
+        "F62"
+      ],
+      "called_by": [
+        "F80"
+      ],
+      "uses": [
+        "Population",
+        "AgentType"
+      ]
     },
     {
       "id": "F77",
@@ -983,10 +1647,22 @@
       "signature": "def __init__(self, trainer: Trainer, config: Config) -> None",
       "business_logic": "创建演示服务器",
       "code_logic": "初始化 FastAPI 应用，创建状态管理器",
-      "test_cases": ["创建服务器"],
-      "dependencies": ["F7", "F70"],
-      "called_by": ["F90", "F92"],
-      "uses": ["Trainer", "Config", "StateManager"]
+      "test_cases": [
+        "创建服务器"
+      ],
+      "dependencies": [
+        "F7",
+        "F70"
+      ],
+      "called_by": [
+        "F90",
+        "F92"
+      ],
+      "uses": [
+        "Trainer",
+        "Config",
+        "StateManager"
+      ]
     },
     {
       "id": "F78",
@@ -996,9 +1672,14 @@
       "signature": "async def start(self, host: str = '0.0.0.0', port: int = 8000) -> None",
       "business_logic": "启动服务器",
       "code_logic": "启动 uvicorn 服务器",
-      "test_cases": ["启动服务器"],
+      "test_cases": [
+        "启动服务器"
+      ],
       "dependencies": [],
-      "called_by": ["F90", "F92"],
+      "called_by": [
+        "F90",
+        "F92"
+      ],
       "uses": []
     },
     {
@@ -1009,7 +1690,9 @@
       "signature": "async def stop(self) -> None",
       "business_logic": "停止服务器",
       "code_logic": "关闭所有 WebSocket 连接，停止服务器",
-      "test_cases": ["停止服务器"],
+      "test_cases": [
+        "停止服务器"
+      ],
       "dependencies": [],
       "called_by": [],
       "uses": []
@@ -1022,10 +1705,22 @@
       "signature": "async def broadcast_state(self) -> None",
       "business_logic": "广播状态到所有客户端",
       "code_logic": "获取状态快照，JSON 序列化后发送",
-      "test_cases": ["广播状态"],
-      "dependencies": ["F72", "F73", "F74", "F75", "F76"],
-      "called_by": ["F81"],
-      "uses": ["StateSnapshot"]
+      "test_cases": [
+        "广播状态"
+      ],
+      "dependencies": [
+        "F72",
+        "F73",
+        "F74",
+        "F75",
+        "F76"
+      ],
+      "called_by": [
+        "F81"
+      ],
+      "uses": [
+        "StateSnapshot"
+      ]
     },
     {
       "id": "F81",
@@ -1035,8 +1730,14 @@
       "signature": "async def handle_websocket(self, websocket: WebSocket) -> None",
       "business_logic": "处理 WebSocket 连接",
       "code_logic": "接受连接，发送初始状态，处理控制命令",
-      "test_cases": ["连接处理", "暂停命令", "恢复命令"],
-      "dependencies": ["F80"],
+      "test_cases": [
+        "连接处理",
+        "暂停命令",
+        "恢复命令"
+      ],
+      "dependencies": [
+        "F80"
+      ],
       "called_by": [],
       "uses": []
     },
@@ -1048,9 +1749,15 @@
       "signature": "def load_model(self, path: str) -> None",
       "business_logic": "加载训练好的模型",
       "code_logic": "调用 Trainer.load_checkpoint",
-      "test_cases": ["加载模型"],
-      "dependencies": ["F69"],
-      "called_by": ["F92"],
+      "test_cases": [
+        "加载模型"
+      ],
+      "dependencies": [
+        "F69"
+      ],
+      "called_by": [
+        "F92"
+      ],
       "uses": []
     },
     {
@@ -1061,9 +1768,16 @@
       "signature": "async def run_simulation(self) -> None",
       "business_logic": "运行模拟",
       "code_logic": "循环执行 tick，每 tick 后广播状态",
-      "test_cases": ["运行模拟"],
-      "dependencies": ["F65", "F80"],
-      "called_by": ["F92"],
+      "test_cases": [
+        "运行模拟"
+      ],
+      "dependencies": [
+        "F65",
+        "F80"
+      ],
+      "called_by": [
+        "F92"
+      ],
       "uses": []
     },
     {
@@ -1074,9 +1788,13 @@
       "signature": "def __init__(self) -> None",
       "business_logic": "创建配置对象",
       "code_logic": "初始化默认配置",
-      "test_cases": ["创建配置"],
+      "test_cases": [
+        "创建配置"
+      ],
       "dependencies": [],
-      "called_by": ["F85"],
+      "called_by": [
+        "F85"
+      ],
       "uses": []
     },
     {
@@ -1087,9 +1805,18 @@
       "signature": "@classmethod def load(cls, path: str = 'config.yaml') -> Config",
       "business_logic": "从文件加载配置",
       "code_logic": "读取 YAML 文件，解析并验证",
-      "test_cases": ["加载配置", "配置文件不存在"],
-      "dependencies": ["F84"],
-      "called_by": ["F90", "F91", "F92"],
+      "test_cases": [
+        "加载配置",
+        "配置文件不存在"
+      ],
+      "dependencies": [
+        "F84"
+      ],
+      "called_by": [
+        "F90",
+        "F91",
+        "F92"
+      ],
       "uses": []
     },
     {
@@ -1100,7 +1827,9 @@
       "signature": "def save(self, path: str = 'config.yaml') -> None",
       "business_logic": "保存配置到文件",
       "code_logic": "序列化为 YAML 并写入",
-      "test_cases": ["保存配置"],
+      "test_cases": [
+        "保存配置"
+      ],
       "dependencies": [],
       "called_by": [],
       "uses": []
@@ -1113,10 +1842,16 @@
       "signature": "def get_market_config(self) -> MarketConfig",
       "business_logic": "获取市场配置",
       "code_logic": "返回市场配置对象",
-      "test_cases": ["获取配置"],
+      "test_cases": [
+        "获取配置"
+      ],
       "dependencies": [],
-      "called_by": ["F21"],
-      "uses": ["MarketConfig"]
+      "called_by": [
+        "F21"
+      ],
+      "uses": [
+        "MarketConfig"
+      ]
     },
     {
       "id": "F88",
@@ -1126,10 +1861,20 @@
       "signature": "def get_agent_config(self, agent_type: AgentType) -> AgentConfig",
       "business_logic": "获取指定类型 Agent 配置",
       "code_logic": "返回对应类型的 Agent 配置",
-      "test_cases": ["获取散户配置", "获取庄家配置", "获取做市商配置"],
+      "test_cases": [
+        "获取散户配置",
+        "获取庄家配置",
+        "获取做市商配置"
+      ],
       "dependencies": [],
-      "called_by": ["F30", "F57"],
-      "uses": ["AgentType", "AgentConfig"]
+      "called_by": [
+        "F30",
+        "F57"
+      ],
+      "uses": [
+        "AgentType",
+        "AgentConfig"
+      ]
     },
     {
       "id": "F89",
@@ -1139,10 +1884,19 @@
       "signature": "def get_training_config(self) -> TrainingConfig",
       "business_logic": "获取训练配置",
       "code_logic": "返回训练配置对象",
-      "test_cases": ["获取配置"],
+      "test_cases": [
+        "获取配置"
+      ],
       "dependencies": [],
-      "called_by": ["F60", "F61", "F67", "F68"],
-      "uses": ["TrainingConfig"]
+      "called_by": [
+        "F60",
+        "F61",
+        "F67",
+        "F68"
+      ],
+      "uses": [
+        "TrainingConfig"
+      ]
     },
     {
       "id": "F90",
@@ -1152,10 +1906,23 @@
       "signature": "def main() -> None",
       "business_logic": "训练模式（带UI）入口",
       "code_logic": "加载配置，初始化日志，创建训练器和演示服务器，并行运行训练和服务器",
-      "test_cases": ["启动训练UI模式"],
-      "dependencies": ["F6", "F63", "F67", "F77", "F78", "F85"],
+      "test_cases": [
+        "启动训练UI模式"
+      ],
+      "dependencies": [
+        "F6",
+        "F63",
+        "F67",
+        "F77",
+        "F78",
+        "F85"
+      ],
       "called_by": [],
-      "uses": ["Config", "Trainer", "DemoServer"]
+      "uses": [
+        "Config",
+        "Trainer",
+        "DemoServer"
+      ]
     },
     {
       "id": "F91",
@@ -1165,10 +1932,20 @@
       "signature": "def main() -> None",
       "business_logic": "训练模式（无UI）入口",
       "code_logic": "加载配置，初始化日志，创建训练器，运行训练",
-      "test_cases": ["启动纯训练模式"],
-      "dependencies": ["F6", "F63", "F67", "F85"],
+      "test_cases": [
+        "启动纯训练模式"
+      ],
+      "dependencies": [
+        "F6",
+        "F63",
+        "F67",
+        "F85"
+      ],
       "called_by": [],
-      "uses": ["Config", "Trainer"]
+      "uses": [
+        "Config",
+        "Trainer"
+      ]
     },
     {
       "id": "F92",
@@ -1178,10 +1955,24 @@
       "signature": "def main() -> None",
       "business_logic": "演示模式入口",
       "code_logic": "加载配置和模型，创建演示服务器，运行模拟",
-      "test_cases": ["启动演示模式"],
-      "dependencies": ["F6", "F63", "F77", "F78", "F82", "F83", "F85"],
+      "test_cases": [
+        "启动演示模式"
+      ],
+      "dependencies": [
+        "F6",
+        "F63",
+        "F77",
+        "F78",
+        "F82",
+        "F83",
+        "F85"
+      ],
       "called_by": [],
-      "uses": ["Config", "Trainer", "DemoServer"]
+      "uses": [
+        "Config",
+        "Trainer",
+        "DemoServer"
+      ]
     },
     {
       "id": "F93",
@@ -1191,10 +1982,26 @@
       "signature": "def decide(self, orderbook: OrderBook, recent_trades: list[Trade]) -> tuple[ActionType, dict[str, Any]]",
       "business_logic": "做市商决策下一步动作",
       "code_logic": "观察市场状态，通过神经网络前向传播，解析输出为 QUOTE 或 CLEAR_POSITION 动作。QUOTE 动作返回 bid_orders 和 ask_orders 各 1-5 单。10 个订单的数量权重映射到 [0,1] 后归一化，确保总和为 1.0（总购买力不超过净值*杠杆）",
-      "test_cases": ["决策 QUOTE 动作", "决策 CLEAR_POSITION 动作", "神经网络输出维度验证", "生成订单在不同价位", "数量比例归一化"],
-      "dependencies": ["F38", "F42"],
-      "called_by": ["F65"],
-      "uses": ["ActionType", "Brain", "OrderBook", "Trade"]
+      "test_cases": [
+        "决策 QUOTE 动作",
+        "决策 CLEAR_POSITION 动作",
+        "神经网络输出维度验证",
+        "生成订单在不同价位",
+        "数量比例归一化"
+      ],
+      "dependencies": [
+        "F38",
+        "F42"
+      ],
+      "called_by": [
+        "F65"
+      ],
+      "uses": [
+        "ActionType",
+        "Brain",
+        "OrderBook",
+        "Trade"
+      ]
     }
   ],
   "dependency_graph": {
@@ -1204,111 +2011,353 @@
     "F4": [],
     "F5": [],
     "F6": [],
-    "F7": ["F6"],
+    "F7": [
+      "F6"
+    ],
     "F8": [],
     "F9": [],
     "F10": [],
     "F11": [],
     "F12": [],
     "F13": [],
-    "F14": ["F9", "F10"],
-    "F15": ["F11"],
+    "F14": [
+      "F9",
+      "F10"
+    ],
+    "F15": [
+      "F11"
+    ],
     "F16": [],
     "F17": [],
-    "F18": ["F12"],
-    "F19": ["F16", "F17"],
+    "F18": [
+      "F12"
+    ],
+    "F19": [
+      "F16",
+      "F17"
+    ],
     "F20": [],
-    "F21": ["F2", "F7", "F13"],
-    "F22": ["F4", "F14", "F15", "F23", "F24"],
-    "F23": ["F11", "F16", "F20", "F25"],
-    "F24": ["F11", "F17", "F20", "F25"],
+    "F21": [
+      "F2",
+      "F7",
+      "F13"
+    ],
+    "F22": [
+      "F4",
+      "F14",
+      "F15",
+      "F23",
+      "F24"
+    ],
+    "F23": [
+      "F11",
+      "F16",
+      "F20",
+      "F25"
+    ],
+    "F24": [
+      "F11",
+      "F17",
+      "F20",
+      "F25"
+    ],
     "F25": [],
     "F26": [],
     "F27": [],
     "F28": [],
     "F29": [],
-    "F30": ["F26"],
-    "F31": ["F28"],
-    "F32": ["F29", "F31"],
-    "F33": ["F31"],
-    "F34": ["F33"],
-    "F35": ["F4"],
-    "F36": ["F27"],
+    "F30": [
+      "F26"
+    ],
+    "F31": [
+      "F28"
+    ],
+    "F32": [
+      "F29",
+      "F31"
+    ],
+    "F33": [
+      "F31"
+    ],
+    "F34": [
+      "F33"
+    ],
+    "F35": [
+      "F4"
+    ],
+    "F36": [
+      "F27"
+    ],
     "F37": [],
     "F38": [],
     "F39": [],
-    "F40": ["F37"],
-    "F41": ["F2", "F30"],
-    "F42": ["F16", "F17", "F19"],
-    "F43": ["F38", "F42"],
-    "F44": ["F4", "F8"],
-    "F45": ["F31"],
-    "F46": ["F5"],
-    "F47": ["F41"],
+    "F40": [
+      "F37"
+    ],
+    "F41": [
+      "F2",
+      "F30"
+    ],
+    "F42": [
+      "F16",
+      "F17",
+      "F19"
+    ],
+    "F43": [
+      "F38",
+      "F42"
+    ],
+    "F44": [
+      "F4",
+      "F8"
+    ],
+    "F45": [
+      "F31"
+    ],
+    "F46": [
+      "F5"
+    ],
+    "F47": [
+      "F41"
+    ],
     "F48": [],
-    "F49": ["F44"],
-    "F50": ["F41"],
+    "F49": [
+      "F44"
+    ],
+    "F50": [
+      "F41"
+    ],
     "F51": [],
-    "F52": ["F44"],
-    "F53": ["F41"],
+    "F52": [
+      "F44"
+    ],
+    "F53": [
+      "F41"
+    ],
     "F54": [],
-    "F55": ["F44"],
-    "F56": ["F7", "F57"],
-    "F57": ["F40", "F47", "F50", "F53"],
-    "F58": ["F45"],
-    "F59": ["F39", "F45", "F57"],
-    "F60": ["F46"],
-    "F62": ["F45"],
-    "F63": ["F2", "F7"],
-    "F64": ["F1", "F21", "F56"],
-    "F65": ["F4", "F34", "F35", "F43", "F44"],
-    "F66": ["F59", "F60", "F65"],
-    "F67": ["F64", "F66", "F68"],
-    "F68": ["F39"],
-    "F69": ["F64"],
-    "F70": ["F2"],
+    "F55": [
+      "F44"
+    ],
+    "F56": [
+      "F7",
+      "F57"
+    ],
+    "F57": [
+      "F40",
+      "F47",
+      "F50",
+      "F53"
+    ],
+    "F58": [
+      "F45"
+    ],
+    "F59": [
+      "F39",
+      "F45",
+      "F57"
+    ],
+    "F60": [
+      "F46"
+    ],
+    "F62": [
+      "F45"
+    ],
+    "F63": [
+      "F2",
+      "F7"
+    ],
+    "F64": [
+      "F1",
+      "F21",
+      "F56"
+    ],
+    "F65": [
+      "F4",
+      "F34",
+      "F35",
+      "F43",
+      "F44"
+    ],
+    "F66": [
+      "F59",
+      "F60",
+      "F65"
+    ],
+    "F67": [
+      "F64",
+      "F66",
+      "F68"
+    ],
+    "F68": [
+      "F39"
+    ],
+    "F69": [
+      "F64"
+    ],
+    "F70": [
+      "F2"
+    ],
     "F71": [],
     "F72": [],
     "F73": [],
     "F74": [],
-    "F75": ["F18"],
-    "F76": ["F62"],
-    "F77": ["F7", "F70"],
+    "F75": [
+      "F18"
+    ],
+    "F76": [
+      "F62"
+    ],
+    "F77": [
+      "F7",
+      "F70"
+    ],
     "F78": [],
     "F79": [],
-    "F80": ["F72", "F73", "F74", "F75", "F76"],
-    "F81": ["F80"],
-    "F82": ["F69"],
-    "F83": ["F65", "F80"],
+    "F80": [
+      "F72",
+      "F73",
+      "F74",
+      "F75",
+      "F76"
+    ],
+    "F81": [
+      "F80"
+    ],
+    "F82": [
+      "F69"
+    ],
+    "F83": [
+      "F65",
+      "F80"
+    ],
     "F84": [],
-    "F85": ["F84"],
+    "F85": [
+      "F84"
+    ],
     "F86": [],
     "F87": [],
     "F88": [],
     "F89": [],
-    "F90": ["F6", "F63", "F67", "F77", "F78", "F85"],
-    "F91": ["F6", "F63", "F67", "F85"],
-    "F92": ["F6", "F63", "F77", "F78", "F82", "F83", "F85"],
-    "F93": ["F38", "F42"]
+    "F90": [
+      "F6",
+      "F63",
+      "F67",
+      "F77",
+      "F78",
+      "F85"
+    ],
+    "F91": [
+      "F6",
+      "F63",
+      "F67",
+      "F85"
+    ],
+    "F92": [
+      "F6",
+      "F63",
+      "F77",
+      "F78",
+      "F82",
+      "F83",
+      "F85"
+    ],
+    "F93": [
+      "F38",
+      "F42"
+    ]
   },
   "implementation_order": [
-    "F1", "F2", "F3", "F4", "F5",
-    "F6", "F7",
-    "F8", "F9", "F10", "F11", "F12", "F13", "F14", "F15", "F16", "F17", "F18", "F19",
-    "F20", "F25",
-    "F21", "F23", "F24", "F22",
-    "F26", "F27", "F28", "F29",
-    "F30", "F31", "F32", "F33", "F34", "F35", "F36",
-    "F37", "F38", "F39", "F40",
-    "F41", "F42", "F43", "F44", "F45", "F46",
-    "F47", "F48", "F49",
-    "F50", "F51", "F52",
-    "F53", "F54", "F55", "F93",
-    "F56", "F57", "F58", "F59", "F60", "F62",
-    "F63", "F64", "F65", "F66", "F67", "F68", "F69",
-    "F70", "F71", "F72", "F73", "F74", "F75", "F76",
-    "F77", "F78", "F79", "F80", "F81", "F82", "F83",
-    "F84", "F85", "F86", "F87", "F88", "F89",
-    "F90", "F91", "F92"
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
+    "F20",
+    "F25",
+    "F21",
+    "F23",
+    "F24",
+    "F22",
+    "F26",
+    "F27",
+    "F28",
+    "F29",
+    "F30",
+    "F31",
+    "F32",
+    "F33",
+    "F34",
+    "F35",
+    "F36",
+    "F37",
+    "F38",
+    "F39",
+    "F40",
+    "F41",
+    "F42",
+    "F43",
+    "F44",
+    "F45",
+    "F46",
+    "F47",
+    "F48",
+    "F49",
+    "F50",
+    "F51",
+    "F52",
+    "F53",
+    "F54",
+    "F55",
+    "F93",
+    "F56",
+    "F57",
+    "F58",
+    "F59",
+    "F60",
+    "F62",
+    "F63",
+    "F64",
+    "F65",
+    "F66",
+    "F67",
+    "F68",
+    "F69",
+    "F70",
+    "F71",
+    "F72",
+    "F73",
+    "F74",
+    "F75",
+    "F76",
+    "F77",
+    "F78",
+    "F79",
+    "F80",
+    "F81",
+    "F82",
+    "F83",
+    "F84",
+    "F85",
+    "F86",
+    "F87",
+    "F88",
+    "F89",
+    "F90",
+    "F91",
+    "F92"
   ]
 }

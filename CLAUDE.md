@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于 NEAT (NeuroEvolution of Augmenting Topologies) 算法的 AI 交易模拟竞技场。三种类型的 AI Agent（散户、庄家、做市商）通过神经网络进化算法学习交易策略，在模拟订单簿市场中竞争。
+基于 NEAT (NeuroEvolution of Augmenting Topologies) 算法的 AI 交易模拟竞技场。四类型的 AI Agent（散户、高级散户、庄家、做市商）通过神经网络进化算法学习交易策略，在模拟订单簿市场中竞争。
 
 ## 常用命令
 
@@ -57,7 +57,7 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 
 **src/bio/** - 生物系统
 - `brain/` - NEAT 神经网络封装
-- `agents/` - 三种 Agent 类型，继承自 `Agent` 基类
+- `agents/` - 四种 Agent 类型，继承自 `Agent` 基类
 
 **src/training/** - 训练引擎
 - `Population` - 种群管理，从 NEAT 基因组创建 Agent
@@ -90,9 +90,9 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 相关模块：`src/market/adl/`
 
 ### 训练流程
-1. **初始化**: 创建三种群、撮合引擎、做市商建立初始流动性
+1. **初始化**: 创建四种群、撮合引擎、做市商建立初始流动性
 2. **Episode 循环**: 重置账户/市场 → 运行 N 个 tick → NEAT 进化
-3. **Tick 执行**: 检查强平 → 做市商 → 庄家 → 散户
+3. **Tick 执行**: 检查强平 → 做市商 → 庄家 → 高级散户 → 散户
 
 ### NEAT 配置
 - `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）

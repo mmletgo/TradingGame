@@ -38,7 +38,7 @@ def create_profile_config() -> Config:
 
     agents = {
         AgentType.RETAIL: AgentConfig(
-            count=100000,
+            count=10000,
             initial_balance=100000.0,  # 10万
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%
@@ -117,7 +117,7 @@ def main() -> None:
     print("=" * 60)
     print("性能分析 - NEAT AI 交易模拟")
     print("=" * 60)
-    print("配置: 100000 散户, 100 高级散户, 10 庄家, 100 做市商")
+    print("配置: 10000 散户, 100 高级散户, 100 庄家, 100 做市商")
     print("运行: 1 episode x 10 ticks")
     print("=" * 60)
     print()

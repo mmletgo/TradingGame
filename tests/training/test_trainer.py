@@ -70,14 +70,18 @@ class TestTrainerInit:
     """测试 Trainer.__init__"""
 
     @patch("src.training.trainer.get_logger")
-    def test_init_sets_config(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_init_sets_config(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """初始化设置配置"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
         assert trainer.config == mock_config
 
     @patch("src.training.trainer.get_logger")
-    def test_init_sets_default_state(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_init_sets_default_state(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """初始化设置默认状态"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
@@ -87,21 +91,27 @@ class TestTrainerInit:
         assert trainer.is_paused is False
 
     @patch("src.training.trainer.get_logger")
-    def test_init_empty_populations(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_init_empty_populations(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """初始化时种群为空（需要调用 setup 才创建）"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
         assert trainer.populations == {}
 
     @patch("src.training.trainer.get_logger")
-    def test_init_matching_engine_none(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_init_matching_engine_none(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """初始化时撮合引擎为 None"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
         assert trainer.matching_engine is None
 
     @patch("src.training.trainer.get_logger")
-    def test_init_empty_recent_trades(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_init_empty_recent_trades(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """初始化时最近成交列表为空"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
@@ -121,7 +131,7 @@ class TestTrainerSetup:
         mock_get_logger: MagicMock,
         mock_config: Config,
     ) -> None:
-        """setup 创建三种群"""
+        """setup 创建四种群"""
         mock_get_logger.return_value = MagicMock()
         mock_population_class.return_value = MagicMock()
         mock_engine_instance = MagicMock()
@@ -166,11 +176,14 @@ class TestTrainerSetup:
         mock_matching_engine_class.assert_called_once()
         assert trainer.matching_engine is mock_engine_instance
 
+
 class TestTrainerControl:
     """测试训练控制方法"""
 
     @patch("src.training.trainer.get_logger")
-    def test_pause_sets_flag(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_pause_sets_flag(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """pause 设置暂停标志"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
@@ -178,7 +191,9 @@ class TestTrainerControl:
         assert trainer.is_paused is True
 
     @patch("src.training.trainer.get_logger")
-    def test_resume_clears_flag(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_resume_clears_flag(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """resume 清除暂停标志"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
@@ -187,7 +202,9 @@ class TestTrainerControl:
         assert trainer.is_paused is False
 
     @patch("src.training.trainer.get_logger")
-    def test_stop_clears_running(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_stop_clears_running(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """stop 清除运行标志"""
         mock_get_logger.return_value = MagicMock()
         trainer = Trainer(mock_config)
@@ -196,7 +213,9 @@ class TestTrainerControl:
         assert trainer.is_running is False
 
     @patch("src.training.trainer.get_logger")
-    def test_pause_logs_message(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_pause_logs_message(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """pause 记录日志"""
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
@@ -205,7 +224,9 @@ class TestTrainerControl:
         mock_logger.info.assert_called()
 
     @patch("src.training.trainer.get_logger")
-    def test_resume_logs_message(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_resume_logs_message(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """resume 记录日志"""
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
@@ -214,7 +235,9 @@ class TestTrainerControl:
         mock_logger.info.assert_called()
 
     @patch("src.training.trainer.get_logger")
-    def test_stop_logs_message(self, mock_get_logger: MagicMock, mock_config: Config) -> None:
+    def test_stop_logs_message(
+        self, mock_get_logger: MagicMock, mock_config: Config
+    ) -> None:
         """stop 记录日志"""
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
