@@ -48,7 +48,7 @@ def create_default_config(
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
-        ema_alpha=0.3,
+        ema_alpha=0.1,
     )
     maker_initial_balance = 50_000_000.0  # 做市商初始资金 5000万
     maker_leverage = 10.0
@@ -85,6 +85,7 @@ def create_default_config(
             maintenance_margin_rate=0.5 / maker_leverage,
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
+            position_limit_ratio=0.1,
         ),
     }
 

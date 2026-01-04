@@ -60,7 +60,10 @@
 - `_handle_liquidation()` - 处理强平，提交市价单平仓，若市价单无法完全成交则触发 ADL，强平完成后淘汰 Agent（调用前必须先撤销挂单）
 - `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty），ADL 后检查参与者的强平条件
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
-- `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件：任意种群存活少于 1/4
+- `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件，返回 `tuple[str, AgentType | None] | None`
+  - 触发条件1：任意种群存活少于初始值的 1/4，返回 `("population_depleted", agent_type)`
+  - 触发条件2：订单簿只有单边挂单（只有 bid 或只有 ask），返回 `("one_sided_orderbook", None)`
+  - 不触发时返回 `None`
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态，使用 EMA 平滑后的 mid_price
 - `run_tick()` - 执行单个 tick，鲶鱼行动在Agent决策之前执行
 - `run_episode()` - 运行完整 episode（重置、运行、进化），若满足提前结束条件则提前结束
@@ -106,7 +109,9 @@
    - 重置所有 Agent 账户
    - 重置市场状态（包括重置 EMA 平滑价格）
    - 运行 episode_length 个 tick
-   - **提前结束条件**：若任意种群存活少于初始值的 1/4，则立即结束当前 episode（确保有足够的幸存者用于 NEAT 进化）
+   - **提前结束条件**：
+     - 任意种群存活少于初始值的 1/4（确保有足够的幸存者用于 NEAT 进化）
+     - 订单簿只有单边挂单（确保市场流动性正常）
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 

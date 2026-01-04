@@ -73,7 +73,7 @@ class AgentConfig:
     maintenance_margin_rate: float
     maker_fee_rate: float
     taker_fee_rate: float
-    position_limit_ratio: float = 1.0  # 默认1.0表示不限制
+    position_limit_ratio: float = 0.1  # 默认1.0表示不限制
 
 
 @dataclass

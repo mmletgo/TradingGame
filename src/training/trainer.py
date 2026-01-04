@@ -428,24 +428,34 @@ class Trainer:
         if liquidated_agent.account.balance < 0:
             liquidated_agent.account.balance = 0.0
 
-    def _should_end_episode_early(self) -> AgentType | None:
+    def _should_end_episode_early(self) -> tuple[str, AgentType | None] | None:
         """检查是否满足提前结束 episode 的条件（O(1) 复杂度）
 
         触发条件：
         - 任意种群的存活数量少于初始值的 1/4
+        - 订单簿只有单边挂单（只有 bid 或只有 ask）
 
-        这确保每个种群都有足够的个体用于 NEAT 进化。
+        这确保每个种群都有足够的个体用于 NEAT 进化，以及市场流动性正常。
 
         Returns:
-            AgentType | None: 满足条件的种群类型，如果没有则返回 None
+            tuple[str, AgentType | None] | None: (原因, 种群类型)，如果没有则返回 None
         """
+        # 检查种群存活数量
         for agent_type, total in self._pop_total_counts.items():
             if total > 0:
                 liquidated = self._pop_liquidated_counts.get(agent_type, 0)
                 alive = total - liquidated
                 # 任意种群存活少于初始值的 1/4 时触发早停
                 if alive < total / 4:
-                    return agent_type
+                    return ("population_depleted", agent_type)
+
+        # 检查订单簿单边挂单
+        orderbook = self.matching_engine._orderbook
+        has_bids = orderbook.get_best_bid() is not None
+        has_asks = orderbook.get_best_ask() is not None
+        if has_bids != has_asks:  # 只有一边有挂单
+            return ("one_sided_orderbook", None)
+
         return None
 
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
@@ -894,15 +904,23 @@ class Trainer:
             self.run_tick()
 
             # 检查是否满足提前结束条件
-            early_end_type = self._should_end_episode_early()
-            if early_end_type is not None:
-                total = self._pop_total_counts[early_end_type]
-                liquidated = self._pop_liquidated_counts.get(early_end_type, 0)
-                alive = total - liquidated
-                self.logger.warning(
-                    f"Episode {self.episode} 提前结束：{early_end_type.value} "
-                    f"存活不足 1/4 ({alive}/{total}) (tick={self.tick})"
-                )
+            early_end_result = self._should_end_episode_early()
+            if early_end_result is not None:
+                reason, agent_type = early_end_result
+                if reason == "population_depleted" and agent_type is not None:
+                    total = self._pop_total_counts[agent_type]
+                    liquidated = self._pop_liquidated_counts.get(agent_type, 0)
+                    alive = total - liquidated
+                    self.logger.warning(
+                        f"Episode {self.episode} 提前结束：{agent_type.value} "
+                        f"存活不足 1/4 ({alive}/{total}) (tick={self.tick})"
+                    )
+                elif reason == "one_sided_orderbook":
+                    orderbook = self.matching_engine._orderbook
+                    side = "只有买盘" if orderbook.get_best_bid() else "只有卖盘"
+                    self.logger.warning(
+                        f"Episode {self.episode} 提前结束：订单簿{side} (tick={self.tick})"
+                    )
                 break
 
         # 3. 进化（仅在正常完成 episode 时）
