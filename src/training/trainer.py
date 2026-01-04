@@ -805,6 +805,20 @@ class Trainer:
             if should_act and direction != 0:
                 catfish_trades = catfish.execute(direction, self.matching_engine)
                 catfish.record_action(self.tick)
+                # 记录鲶鱼行动日志
+                if catfish_trades:
+                    total_qty = sum(t.quantity for t in catfish_trades)
+                    avg_price = (
+                        sum(t.price * t.quantity for t in catfish_trades) / total_qty
+                        if total_qty > 0
+                        else 0
+                    )
+                    direction_str = "买入" if direction > 0 else "卖出"
+                    self.logger.info(
+                        f"鲶鱼行动: {catfish.__class__.__name__} "
+                        f"{direction_str} {total_qty} @ {avg_price:.2f} "
+                        f"(tick={self.tick})"
+                    )
                 # 鲶鱼无限资金模式：只更新 maker 账户
                 for trade in catfish_trades:
                     self.recent_trades.append(trade)

@@ -64,7 +64,7 @@ def create_default_config(
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
-        ema_alpha=0.2,
+        ema_alpha=1.0,
     )
 
     agents = {
