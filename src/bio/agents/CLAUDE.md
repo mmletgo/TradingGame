@@ -91,7 +91,7 @@ Agent 基类，提供通用属性和方法。
 **注意**: Agent 基类不包含 `decide` 方法。`decide` 方法由各子类根据自己的动作空间实现：
 - **RetailProAgent**: 实现散户/高级散户通用的 decide 方法（9个输出节点，7种动作）
 - **RetailAgent**: 继承 RetailProAgent 的 decide 方法
-- **WhaleBaseAgent**: 实现庄家专用的 decide 方法（5个输出节点：HOLD/限价/市价得分 + 价格偏移 + 数量比例）
+- **WhaleBaseAgent**: 实现庄家专用的 decide 方法（6个输出节点：HOLD/限价/市价/CANCEL得分 + 价格偏移 + 数量比例）
 - **MarketMakerAgent**: 实现做市商专用的 decide 方法（22个输出节点）
 
 **订单数量约束：** 所有订单数量（quantity）均为 int 类型，最小单位为 1。`_calculate_order_quantity` 方法会将计算结果取整并确保至少为 1。
@@ -206,16 +206,17 @@ Agent 基类，提供通用属性和方法。
 | 7 | 价格偏移（-1 到 1）|
 | 8 | 数量比例（-1 到 1）|
 
-### 多头庄家/空头庄家神经网络输出（5 个值）
+### 多头庄家/空头庄家神经网络输出（6 个值）
 | 索引 | 说明 |
 |------|------|
 | 0 | HOLD 动作得分 |
 | 1 | 限价单动作得分 |
 | 2 | 市价单动作得分 |
-| 3 | 价格偏移（-1 到 1，映射到 ±100 个 tick）|
-| 4 | 数量比例（-1 到 1，映射到 0.1-1.0）|
+| 3 | CANCEL 动作得分 |
+| 4 | 价格偏移（-1 到 1，映射到 ±100 个 tick）|
+| 5 | 数量比例（-1 到 1，映射到 0.1-1.0）|
 
-多头庄家只做买入方向（PLACE_BID/MARKET_BUY/HOLD），空头庄家只做卖出方向（PLACE_ASK/MARKET_SELL/HOLD）。
+多头庄家只做买入方向（PLACE_BID/MARKET_BUY/HOLD/CANCEL），空头庄家只做卖出方向（PLACE_ASK/MARKET_SELL/HOLD/CANCEL）。
 
 ### 做市商神经网络输出（22 个值）
 | 索引 | 说明 |

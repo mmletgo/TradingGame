@@ -110,14 +110,15 @@ class WhaleBaseAgent(Agent):
     ) -> tuple[ActionType, dict[str, Any]]:
         """决策下一步动作
 
-        神经网络输出变为 5 节点：
+        神经网络输出变为 6 节点：
         - outputs[0]: HOLD 动作得分
         - outputs[1]: 限价单动作得分
         - outputs[2]: 市价单动作得分
-        - outputs[3]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
-        - outputs[4]: 数量比例（-1 到 1，映射到 0.1-1.0）
+        - outputs[3]: CANCEL 动作得分
+        - outputs[4]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
+        - outputs[5]: 数量比例（-1 到 1，映射到 0.1-1.0）
 
-        通过比较前三个得分决定是 HOLD、限价单还是市价单。
+        通过比较前四个得分决定是 HOLD、限价单、市价单还是 CANCEL。
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -136,28 +137,33 @@ class WhaleBaseAgent(Agent):
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
 
-        # 3. 验证输出维度（需要 5 个值：HOLD得分 + 限价得分 + 市价得分 + 价格偏移 + 数量比例）
-        if len(outputs) < 5:
-            raise ValueError(f"神经网络输出维度不足，期望 5，实际 {len(outputs)}")
+        # 3. 验证输出维度（需要 6 个值：HOLD得分 + 限价得分 + 市价得分 + CANCEL得分 + 价格偏移 + 数量比例）
+        if len(outputs) < 6:
+            raise ValueError(f"神经网络输出维度不足，期望 6，实际 {len(outputs)}")
 
-        # 4. 解析动作类型（比较 HOLD、限价单和市价单得分）
+        # 4. 解析动作类型（比较 HOLD、限价单、市价单和 CANCEL 得分）
         hold_score = outputs[0]
         limit_score = outputs[1]
         market_score = outputs[2]
+        cancel_score = outputs[3]
 
         # 找出得分最高的动作
-        if hold_score >= limit_score and hold_score >= market_score:
+        scores = [hold_score, limit_score, market_score, cancel_score]
+        max_score = max(scores)
+        if hold_score == max_score:
             action = ActionType.HOLD
+        elif cancel_score == max_score:
+            action = ActionType.CANCEL
         elif limit_score >= market_score:
             action = self._get_limit_action()
         else:
             action = self._get_market_action()
 
         # 5. 解析参数
-        # 输出[3]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
-        # 输出[4]: 数量比例（-1 到 1，映射到 0.1-1.0）
-        price_offset_norm = max(-1.0, min(1.0, outputs[3]))
-        quantity_ratio_norm = max(-1.0, min(1.0, outputs[4]))
+        # 输出[4]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
+        # 输出[5]: 数量比例（-1 到 1，映射到 0.1-1.0）
+        price_offset_norm = max(-1.0, min(1.0, outputs[4]))
+        quantity_ratio_norm = max(-1.0, min(1.0, outputs[5]))
 
         # 获取参考价格
         mid_price = market_state.mid_price
@@ -205,6 +211,7 @@ class WhaleBaseAgent(Agent):
 
         庄家特定实现：
         - HOLD 动作：不执行任何操作，不撤旧单
+        - CANCEL 动作：仅撤销当前挂单，不下新单
         - 限价单/市价单动作：先撤旧单再执行
 
         Args:
@@ -224,7 +231,14 @@ class WhaleBaseAgent(Agent):
         if action == ActionType.HOLD:
             return trades
 
-        # 非 HOLD 动作先撤旧单
+        # CANCEL 动作：仅撤销挂单，不下新单
+        if action == ActionType.CANCEL:
+            if self.account.pending_order_id is not None:
+                matching_engine.cancel_order(self.account.pending_order_id)
+                self.account.pending_order_id = None
+            return trades
+
+        # 限价单/市价单动作：先撤旧单再执行
         if self.account.pending_order_id is not None:
             matching_engine.cancel_order(self.account.pending_order_id)
             self.account.pending_order_id = None  # 清除旧挂单ID

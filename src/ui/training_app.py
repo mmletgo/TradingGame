@@ -78,7 +78,7 @@ class TrainingUIApp:
         dpg.create_viewport(
             title="NEAT Trading Simulator - Training Mode",
             width=1920,
-            height=1080,
+            height=1200,
         )
         dpg.setup_dearpygui()
 

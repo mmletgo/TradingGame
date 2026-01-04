@@ -71,7 +71,7 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 |------|------|------|
 | 散户 | 挂单/撤单/吃单/不动 | 同时只挂一单，100倍杠杆 |
 | 高级散户 | 挂单/撤单/吃单/不动 | 同时只挂一单，100倍杠杆（可观察完整100档订单簿） |
-| 庄家 | 挂单/吃单/不动 | 同时只挂一单，下单时自动撤旧单，10倍杠杆 |
+| 庄家 | 挂单/撤单/吃单/不动 | 同时只挂一单，10倍杠杆 |
 | 做市商 | 双边挂单/清仓 | 每 tick 必然双边挂单（每边1-5单），先撤旧单再挂新单，10倍杠杆 |
 
 ### ADL (自动减仓) 机制
@@ -97,8 +97,8 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 ### NEAT 配置
 - `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）
 - `config/neat_retail_pro.cfg` - 高级散户（607 个输入节点，9 个输出节点）
-- `config/neat_bull_whale.cfg` - 多头庄家（607 个输入节点，5 个输出节点）
-- `config/neat_bear_whale.cfg` - 空头庄家（607 个输入节点，5 个输出节点）
+- `config/neat_bull_whale.cfg` - 多头庄家（607 个输入节点，6 个输出节点）
+- `config/neat_bear_whale.cfg` - 空头庄家（607 个输入节点，6 个输出节点）
 - `config/neat_market_maker.cfg` - 做市商（634 个输入节点，22 个输出节点）
 
 ## 目录级 CLAUDE.md 系统
