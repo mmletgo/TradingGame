@@ -197,6 +197,23 @@ class MarketMakerAgent(Agent):
 
         tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
+        # 检查仓位限制：持仓市值超过购买力的一定比例时，只挂平仓方向的单
+        equity = self.account.get_equity(mid_price)
+        position_qty = self.account.position.quantity
+        position_value = abs(position_qty) * mid_price
+        max_position_value = equity * self.account.leverage
+        limit_ratio = self.config.position_limit_ratio
+
+        only_close_position = False
+        close_direction: str | None = None  # "buy" 或 "sell"
+
+        if position_value > max_position_value * limit_ratio and position_qty != 0:
+            only_close_position = True
+            if position_qty > 0:
+                close_direction = "sell"  # 多头只能卖出平仓
+            else:
+                close_direction = "buy"  # 空头只能买入平仓
+
         # 向量化收集数量比例
         outputs_arr = np.array(outputs)
         bid_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[7:12], -1, 1) + 1) / 2)
@@ -228,14 +245,15 @@ class MarketMakerAgent(Agent):
         )
 
         bid_orders: list[dict[str, float]] = []
-        # 构建买单列表（仍需循环计算数量，但价格已向量化）
-        for i in range(5):
-            quantity = self._calculate_order_quantity(
-                float(bid_prices[i]), float(bid_ratios[i]), is_buy=True
-            )
-            # 只添加数量 > 0 的订单
-            if quantity > 0:
-                bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
+        # 构建买单列表（仓位限制时如果只能卖出则跳过买单）
+        if not (only_close_position and close_direction == "sell"):
+            for i in range(5):
+                quantity = self._calculate_order_quantity(
+                    float(bid_prices[i]), float(bid_ratios[i]), is_buy=True
+                )
+                # 只添加数量 > 0 的订单
+                if quantity > 0:
+                    bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
         # 卖单价格偏移完全由神经网络决定
         ask_price_offsets = np.clip(outputs_arr[12:17], -1, 1)
@@ -249,14 +267,15 @@ class MarketMakerAgent(Agent):
         )
 
         ask_orders: list[dict[str, float]] = []
-        # 构建卖单列表（仍需循环计算数量，但价格已向量化）
-        for i in range(5):
-            quantity = self._calculate_order_quantity(
-                float(ask_prices[i]), float(ask_ratios[i]), is_buy=False
-            )
-            # 只添加数量 > 0 的订单
-            if quantity > 0:
-                ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
+        # 构建卖单列表（仓位限制时如果只能买入则跳过卖单）
+        if not (only_close_position and close_direction == "buy"):
+            for i in range(5):
+                quantity = self._calculate_order_quantity(
+                    float(ask_prices[i]), float(ask_ratios[i]), is_buy=False
+                )
+                # 只添加数量 > 0 的订单
+                if quantity > 0:
+                    ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
 
         return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 

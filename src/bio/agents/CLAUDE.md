@@ -130,6 +130,32 @@ Agent 基类，提供通用属性和方法。
 - `_handle_quote(params, matching_engine)` - 处理 QUOTE 动作
 - `_handle_clear_position(matching_engine)` - 重写基类方法，先撤销所有挂单（买卖双边）再平仓
 
+## 做市商仓位控制机制
+
+做市商在 `decide()` 方法中实现仓位控制逻辑，防止前期积累过多仓位导致后期资金不足。
+
+**触发条件**：
+```
+持仓市值 > 购买力 × position_limit_ratio
+其中：
+- 持仓市值 = abs(position.quantity) × current_price
+- 购买力 = equity × leverage
+- position_limit_ratio 通过 AgentConfig.position_limit_ratio 配置（默认1.0表示不限制）
+```
+
+**行为**：
+- 当触发条件满足且持有多头时：只挂卖单（平仓方向），跳过买单构建
+- 当触发条件满足且持有空头时：只挂买单（平仓方向），跳过卖单构建
+- 未触发时：正常双边挂单
+
+**配置示例**：
+```python
+AgentConfig(
+    # ... 其他参数 ...
+    position_limit_ratio=0.1,  # 持仓超过购买力10%时只挂平仓单
+)
+```
+
 ## 输入输出规范
 
 ### 归一化方法说明

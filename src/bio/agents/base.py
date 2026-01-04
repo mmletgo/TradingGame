@@ -52,6 +52,7 @@ class Agent:
     agent_type: AgentType
     brain: Brain
     account: Account
+    config: AgentConfig
     is_liquidated: bool
     _order_counter: int
 
@@ -75,6 +76,7 @@ class Agent:
         self.agent_id = agent_id
         self.agent_type = agent_type
         self.brain = brain
+        self.config = config
         self.account = Account(agent_id, agent_type, config)
 
         # 预分配神经网络输入缓冲区（607 = 200 + 200 + 100 + 100 + 4 + 3）

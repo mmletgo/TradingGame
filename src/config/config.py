@@ -64,6 +64,7 @@ class AgentConfig:
         maintenance_margin_rate: 维持保证金率
         maker_fee_rate: 挂单费率
         taker_fee_rate: 吃单费率
+        position_limit_ratio: 持仓限制比例，持仓市值超过购买力此比例时触发限制
     """
 
     count: int
@@ -72,6 +73,7 @@ class AgentConfig:
     maintenance_margin_rate: float
     maker_fee_rate: float
     taker_fee_rate: float
+    position_limit_ratio: float = 1.0  # 默认1.0表示不限制
 
 
 @dataclass
@@ -135,8 +137,8 @@ class CatfishConfig:
         mode: 单模式时的鲶鱼行为模式
 
         # 资金参数
-        fund_multiplier: 资金乘数（相对于庄家基础资金）
-        whale_base_fund: 庄家基础资金
+        fund_multiplier: 资金乘数（相对于做市商基础资金）
+        market_maker_base_fund: 做市商基础资金
 
         # 趋势追踪参数（TREND_FOLLOWING 模式）
         lookback_period: 回看周期（tick数）
@@ -159,8 +161,8 @@ class CatfishConfig:
     mode: CatfishMode = CatfishMode.TREND_FOLLOWING  # 单模式时使用
 
     # 资金参数
-    fund_multiplier: float = 2.5
-    whale_base_fund: float = 10_000_000.0
+    fund_multiplier: float = 3.0
+    market_maker_base_fund: float = 20_000_000.0
 
     # 趋势追踪参数
     lookback_period: int = 50

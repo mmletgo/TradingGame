@@ -110,8 +110,8 @@ if should_act:
 | enabled | bool | False | 是否启用鲶鱼 |
 | multi_mode | bool | True | 是否同时启用三种模式 |
 | mode | CatfishMode | TREND_FOLLOWING | 单模式时的鲶鱼行为模式 |
-| fund_multiplier | float | 2.5 | 资金乘数 |
-| whale_base_fund | float | 10,000,000 | 庄家基础资金 |
+| fund_multiplier | float | 3.0 | 资金乘数（相对于做市商） |
+| market_maker_base_fund | float | 20,000,000 | 做市商基础资金 |
 | lookback_period | int | 50 | 趋势追踪回看周期 |
 | trend_threshold | float | 0.02 | 趋势阈值 |
 | half_cycle_length | int | 100 | 周期摆动半周期长度 |

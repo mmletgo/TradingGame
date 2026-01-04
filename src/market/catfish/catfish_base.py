@@ -126,7 +126,7 @@ class CatfishBase(ABC):
             return 0
 
         # 计算鲶鱼资金
-        fund = self.config.fund_multiplier * self.config.whale_base_fund
+        fund = self.config.fund_multiplier * self.config.market_maker_base_fund
 
         # 计算可买数量（简单计算，不考虑杠杆）
         quantity = int(fund / mid_price)
