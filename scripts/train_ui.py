@@ -34,6 +34,8 @@ sys.path.insert(0, str(project_root))
 from src.config.config import (
     AgentConfig,
     AgentType,
+    CatfishConfig,
+    CatfishMode,
     Config,
     DemoConfig,
     MarketConfig,
@@ -48,6 +50,9 @@ def create_default_config(
     episode_length: int = 1000,
     checkpoint_interval: int = 10,
     config_dir: str = "config",
+    catfish_enabled: bool = True,
+    catfish_mode: str = "trend_following",
+    catfish_fund_multiplier: float = 2.5,
 ) -> Config:
     """创建默认配置
 
@@ -55,6 +60,9 @@ def create_default_config(
         episode_length: 每个 episode 的 tick 数量
         checkpoint_interval: 检查点间隔（episode 数）
         config_dir: 配置文件目录（Population 会在此目录下查找对应的 NEAT 配置）
+        catfish_enabled: 是否启用鲶鱼
+        catfish_mode: 鲶鱼行为模式
+        catfish_fund_multiplier: 鲶鱼资金倍数
 
     Returns:
         默认配置对象
@@ -64,7 +72,7 @@ def create_default_config(
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
-        ema_alpha=1.0,
+        ema_alpha=0.5,
     )
 
     agents = {
@@ -122,7 +130,24 @@ def create_default_config(
         tick_interval=100,
     )
 
-    return Config(market=market, agents=agents, training=training, demo=demo)
+    # 鲶鱼配置（如果启用）
+    catfish: CatfishConfig | None = None
+    if catfish_enabled:
+        mode_map = {
+            "trend_following": CatfishMode.TREND_FOLLOWING,
+            "cycle_swing": CatfishMode.CYCLE_SWING,
+            "mean_reversion": CatfishMode.MEAN_REVERSION,
+        }
+        catfish = CatfishConfig(
+            enabled=True,
+            mode=mode_map.get(catfish_mode, CatfishMode.TREND_FOLLOWING),
+            fund_multiplier=catfish_fund_multiplier,
+            whale_base_fund=10_000_000.0,  # 与庄家初始资金一致
+        )
+
+    return Config(
+        market=market, agents=agents, training=training, demo=demo, catfish=catfish
+    )
 
 
 def main() -> None:
@@ -167,6 +192,24 @@ def main() -> None:
         default="logs",
         help="日志目录（默认: logs）",
     )
+    parser.add_argument(
+        "--no-catfish",
+        action="store_true",
+        help="禁用鲶鱼机制（默认启用）",
+    )
+    parser.add_argument(
+        "--catfish-mode",
+        type=str,
+        default="trend_following",
+        choices=["trend_following", "cycle_swing", "mean_reversion"],
+        help="鲶鱼行为模式（默认: trend_following）",
+    )
+    parser.add_argument(
+        "--catfish-fund-multiplier",
+        type=float,
+        default=2.5,
+        help="鲶鱼资金倍数（相对于庄家，默认: 2.5）",
+    )
 
     args = parser.parse_args()
 
@@ -181,6 +224,13 @@ def main() -> None:
     print(f"Checkpoint Interval: {args.checkpoint_interval}", flush=True)
     if args.resume:
         print(f"Resume From: {args.resume}", flush=True)
+    if not args.no_catfish:
+        print(
+            f"Catfish: enabled, mode={args.catfish_mode}, multiplier={args.catfish_fund_multiplier}x",
+            flush=True,
+        )
+    else:
+        print("Catfish: disabled", flush=True)
     print("=" * 60, flush=True)
 
     # 创建配置
@@ -188,6 +238,9 @@ def main() -> None:
         episode_length=args.episode_length,
         checkpoint_interval=args.checkpoint_interval,
         config_dir=args.config_dir,
+        catfish_enabled=not args.no_catfish,
+        catfish_mode=args.catfish_mode,
+        catfish_fund_multiplier=args.catfish_fund_multiplier,
     )
 
     # 创建训练器

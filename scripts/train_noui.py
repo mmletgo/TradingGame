@@ -70,7 +70,7 @@ def create_default_config(
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
-        ema_alpha=0.2,
+        ema_alpha=0.5,
     )
 
     agents = {
@@ -143,7 +143,9 @@ def create_default_config(
             whale_base_fund=10_000_000.0,  # 与庄家初始资金一致
         )
 
-    return Config(market=market, agents=agents, training=training, demo=demo, catfish=catfish)
+    return Config(
+        market=market, agents=agents, training=training, demo=demo, catfish=catfish
+    )
 
 
 def progress_callback(state: dict[str, Any]) -> None:
@@ -239,7 +241,9 @@ def main() -> None:
     if args.resume:
         print(f"Resume From: {args.resume}")
     if not args.no_catfish:
-        print(f"Catfish: enabled, mode={args.catfish_mode}, multiplier={args.catfish_fund_multiplier}x")
+        print(
+            f"Catfish: enabled, mode={args.catfish_mode}, multiplier={args.catfish_fund_multiplier}x"
+        )
     else:
         print("Catfish: disabled")
     print("=" * 60)
