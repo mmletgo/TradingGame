@@ -26,13 +26,17 @@ UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 
 **属性：**
 - `history_length: int` - 历史数据长度限制
-- `price_history: deque[float]` - 价格历史缓冲区
+- `price_history: deque[float]` - 价格历史缓冲区（存储 orderbook.last_price，与盘口一致）
 - `equity_history: dict[AgentType, deque[float]]` - 各种群所有个体平均资产历史缓冲区
 - `alive_equity_history: dict[AgentType, deque[float]]` - 各种群存活个体平均资产历史缓冲区
 
 **方法：**
 - `collect_tick_data(trainer) -> UIDataSnapshot` - 收集当前tick数据快照
 - `reset() -> None` - 重置历史数据（新episode开始时调用）
+
+**价格处理说明：**
+- `last_price`: 使用 `orderbook.last_price`（tick 结束后的实际价格），用于价格图表显示，与盘口保持一致
+- `price_for_equity`: 使用 `tick_start_price`（tick 开始时的价格），用于资产计算，确保与淘汰检查使用同一价格
 
 ### UIDataSnapshot
 
@@ -41,7 +45,7 @@ UI数据快照，每个tick的完整数据。
 **字段：**
 - `tick: int` - 当前tick
 - `episode: int` - 当前episode
-- `last_price: float` - 最新成交价
+- `last_price: float` - 最新成交价（tick 结束后的 orderbook.last_price，与盘口一致）
 - `mid_price: float` - 中间价
 - `bids: list[tuple[float, float]]` - 买盘100档 [(price, qty), ...]
 - `asks: list[tuple[float, float]]` - 卖盘100档 [(price, qty), ...]
