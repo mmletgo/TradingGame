@@ -12,6 +12,7 @@
 - `matching/` - 撮合引擎
 - `account/` - 账户管理（持仓、余额、保证金、强平）
 - `adl/` - ADL 自动减仓模块
+- `catfish/` - 鲶鱼模块（市场扰动器）
 
 ## 核心类
 
@@ -75,6 +76,19 @@ ADL（Auto-Deleveraging）自动减仓模块，在强平订单无法完全成交
 
 **核心方法：**
 - `calculate_adl_score(agent, current_price)` - 计算 ADL 排名分数
+
+### catfish/
+
+鲶鱼（Catfish）模块，提供市场扰动机制。
+
+**核心类：**
+- `CatfishBase` - 鲶鱼抽象基类
+- `TrendFollowingCatfish` - 趋势追踪型鲶鱼
+- `CycleSwingCatfish` - 周期摆动型鲶鱼
+- `MeanReversionCatfish` - 逆势操作型鲶鱼
+
+**工厂函数：**
+- `create_catfish(catfish_id, config)` - 根据配置创建鲶鱼实例
 
 ## 依赖关系
 

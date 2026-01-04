@@ -21,6 +21,14 @@ class AgentType(Enum):
     MARKET_MAKER = "MARKET_MAKER"  # 做市商
 
 
+class CatfishMode(Enum):
+    """鲶鱼行为模式"""
+
+    TREND_FOLLOWING = "trend_following"  # 趋势追踪
+    CYCLE_SWING = "cycle_swing"  # 周期摆动
+    MEAN_REVERSION = "mean_reversion"  # 逆势操作
+
+
 @dataclass
 class MarketConfig:
     """
@@ -115,6 +123,61 @@ class DemoConfig:
 
 
 @dataclass
+class CatfishConfig:
+    """
+    鲶鱼配置
+
+    定义鲶鱼（Catfish）的行为参数。鲶鱼是一种特殊的市场参与者，
+    用于在训练中引入外部扰动，增加市场动态性。
+
+    Attributes:
+        enabled: 是否启用鲶鱼
+        mode: 鲶鱼行为模式
+
+        # 资金参数
+        fund_multiplier: 资金乘数（相对于庄家基础资金）
+        whale_base_fund: 庄家基础资金
+
+        # 趋势追踪参数（TREND_FOLLOWING 模式）
+        lookback_period: 回看周期（tick数）
+        trend_threshold: 趋势阈值（价格变化率）
+
+        # 周期摆动参数（CYCLE_SWING 模式）
+        half_cycle_length: 半周期长度（tick数）
+        action_interval: 行动间隔（tick数）
+
+        # 逆势操作参数（MEAN_REVERSION 模式）
+        ma_period: 均线周期
+        deviation_threshold: 偏离阈值
+
+        # 通用参数
+        action_cooldown: 行动冷却时间（tick数）
+    """
+
+    enabled: bool = False
+    mode: CatfishMode = CatfishMode.TREND_FOLLOWING
+
+    # 资金参数
+    fund_multiplier: float = 2.5
+    whale_base_fund: float = 10_000_000.0
+
+    # 趋势追踪参数
+    lookback_period: int = 50
+    trend_threshold: float = 0.02
+
+    # 周期摆动参数
+    half_cycle_length: int = 100
+    action_interval: int = 5
+
+    # 逆势操作参数
+    ma_period: int = 200
+    deviation_threshold: float = 0.03
+
+    # 通用参数
+    action_cooldown: int = 10
+
+
+@dataclass
 class Config:
     """
     全局配置
@@ -126,9 +189,11 @@ class Config:
         agents: Agent 配置（按类型）
         training: 训练配置
         demo: 演示配置
+        catfish: 鲶鱼配置（可选）
     """
 
     market: MarketConfig
     agents: dict[AgentType, AgentConfig]
     training: TrainingConfig
     demo: DemoConfig
+    catfish: CatfishConfig | None = None
