@@ -104,8 +104,7 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
 ### NEAT 配置
 - `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）
 - `config/neat_retail_pro.cfg` - 高级散户（607 个输入节点，9 个输出节点）
-- `config/neat_bull_whale.cfg` - 多头庄家（607 个输入节点，6 个输出节点）
-- `config/neat_bear_whale.cfg` - 空头庄家（607 个输入节点，6 个输出节点）
+- `config/neat_whale.cfg` - 庄家（607 个输入节点，9 个输出节点）
 - `config/neat_market_maker.cfg` - 做市商（634 个输入节点，22 个输出节点）
 
 ## 目录级 CLAUDE.md 系统

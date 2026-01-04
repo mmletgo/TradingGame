@@ -6,6 +6,7 @@ import numpy as np
 
 from src.bio.agents.base import Agent, ActionType
 from src.bio.agents.retail import RetailAgent
+from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.agents.whale import WhaleAgent
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.config.config import AgentConfig, AgentType
@@ -303,8 +304,8 @@ class TestAgentObserve:
         assert abs(inputs[position_start_idx + 0] - 0.01) < 0.01
 
 
-class TestAgentDecide:
-    """测试 Agent.decide"""
+class TestRetailProAgentDecide:
+    """测试 RetailProAgent.decide"""
 
     def test_decide_hold_action(self):
         """测试 HOLD 动作决策"""
@@ -323,10 +324,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -365,10 +365,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -412,10 +411,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -458,10 +456,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -499,10 +496,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -542,10 +538,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -585,10 +580,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -626,10 +620,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -666,10 +659,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -715,10 +707,9 @@ class TestAgentDecide:
             taker_fee_rate=0.0005,
         )
 
-        # 创建 Agent
-        agent = Agent(
+        # 创建 RetailProAgent
+        agent = RetailProAgent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
             brain=mock_brain,
             config=config,
         )
@@ -1723,23 +1714,29 @@ class TestWhaleAgentGetActionSpace:
         # 获取动作空间
         action_space = agent.get_action_space()
 
-        # 验证返回 4 种动作（庄家不能 HOLD，不能单纯撤单）
-        assert len(action_space) == 4
+        # 验证返回 7 种动作（与散户相同，包含 CLEAR_POSITION）
+        assert len(action_space) == 7
+        assert ActionType.HOLD in action_space
         assert ActionType.PLACE_BID in action_space
         assert ActionType.PLACE_ASK in action_space
+        assert ActionType.CANCEL in action_space
         assert ActionType.MARKET_BUY in action_space
         assert ActionType.MARKET_SELL in action_space
+        assert ActionType.CLEAR_POSITION in action_space
 
         # 验证动作顺序
         assert action_space == [
+            ActionType.HOLD,
             ActionType.PLACE_BID,
             ActionType.PLACE_ASK,
+            ActionType.CANCEL,
             ActionType.MARKET_BUY,
             ActionType.MARKET_SELL,
+            ActionType.CLEAR_POSITION,
         ]
 
-    def test_get_action_space_excludes_hold(self):
-        """测试庄家动作空间不包含 HOLD（庄家绝不不动）"""
+    def test_get_action_space_includes_hold(self):
+        """测试庄家动作空间包含 HOLD"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -1763,11 +1760,11 @@ class TestWhaleAgentGetActionSpace:
         # 获取动作空间
         action_space = agent.get_action_space()
 
-        # 验证不包含 HOLD
-        assert ActionType.HOLD not in action_space
+        # 验证包含 HOLD
+        assert ActionType.HOLD in action_space
 
-    def test_get_action_space_excludes_cancel(self):
-        """测试庄家动作空间不包含 CANCEL（庄家不能单纯撤单）"""
+    def test_get_action_space_includes_cancel(self):
+        """测试庄家动作空间包含 CANCEL"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -1791,11 +1788,11 @@ class TestWhaleAgentGetActionSpace:
         # 获取动作空间
         action_space = agent.get_action_space()
 
-        # 验证不包含 CANCEL
-        assert ActionType.CANCEL not in action_space
+        # 验证包含 CANCEL
+        assert ActionType.CANCEL in action_space
 
-    def test_get_action_space_excludes_clear_position(self):
-        """测试庄家动作空间不包含 CLEAR_POSITION（做市商专用）"""
+    def test_get_action_space_includes_clear_position(self):
+        """测试庄家动作空间包含 CLEAR_POSITION"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -1819,8 +1816,8 @@ class TestWhaleAgentGetActionSpace:
         # 获取动作空间
         action_space = agent.get_action_space()
 
-        # 验证不包含 CLEAR_POSITION
-        assert ActionType.CLEAR_POSITION not in action_space
+        # 验证包含 CLEAR_POSITION
+        assert ActionType.CLEAR_POSITION in action_space
 
 
 class TestWhaleAgentExecuteAction:
@@ -1914,7 +1911,7 @@ class TestWhaleAgentExecuteAction:
         assert trades == []
 
     def test_market_buy_with_existing_order(self):
-        """测试有挂单时市价买入：先撤旧单再市价买入"""
+        """测试有挂单时市价买入：市价买入不撤旧单（因为市价单会立即成交）"""
         # 创建 mock Brain 和 matching_engine
         mock_brain = MagicMock(spec=Brain)
         mock_engine = create_mock_matching_engine()
@@ -1944,8 +1941,8 @@ class TestWhaleAgentExecuteAction:
         params = {"quantity": 150}
         trades = agent.execute_action(action, params, mock_engine)
 
-        # 验证调用了 cancel_order 撤销旧单
-        mock_engine.cancel_order.assert_called_once_with(99999)
+        # 验证没有调用 cancel_order（市价单不需要先撤旧单）
+        mock_engine.cancel_order.assert_not_called()
         # 验证调用了 process_order 市价单
         mock_engine.process_order.assert_called_once()
         order = mock_engine.process_order.call_args[0][0]

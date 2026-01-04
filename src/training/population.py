@@ -11,11 +11,10 @@ import neat
 import numpy as np
 
 from src.bio.agents.base import Agent
-from src.bio.agents.bear_whale import BearWhaleAgent
-from src.bio.agents.bull_whale import BullWhaleAgent
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
+from src.bio.agents.whale import WhaleAgent
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType, Config
 from src.core.log_engine.logger import get_logger
@@ -86,10 +85,8 @@ class Population:
         config_dir = Path(config.training.neat_config_path)
         if agent_type == AgentType.MARKET_MAKER:
             neat_config_path = config_dir / "neat_market_maker.cfg"
-        elif agent_type == AgentType.BULL_WHALE:
-            neat_config_path = config_dir / "neat_bull_whale.cfg"
-        elif agent_type == AgentType.BEAR_WHALE:
-            neat_config_path = config_dir / "neat_bear_whale.cfg"
+        elif agent_type == AgentType.WHALE:
+            neat_config_path = config_dir / "neat_whale.cfg"
         elif agent_type == AgentType.RETAIL_PRO:
             neat_config_path = config_dir / "neat_retail_pro.cfg"
         else:
@@ -123,9 +120,8 @@ class Population:
     _AGENT_ID_OFFSET = {
         AgentType.RETAIL: 0,
         AgentType.RETAIL_PRO: 1_000_000,
-        AgentType.BULL_WHALE: 2_000_000,
-        AgentType.BEAR_WHALE: 3_000_000,
-        AgentType.MARKET_MAKER: 4_000_000,
+        AgentType.WHALE: 2_000_000,
+        AgentType.MARKET_MAKER: 3_000_000,
     }
 
     def _create_single_agent(
@@ -174,10 +170,8 @@ class Population:
             agent_class: type[Agent] = RetailAgent
         elif self.agent_type == AgentType.RETAIL_PRO:
             agent_class = RetailProAgent
-        elif self.agent_type == AgentType.BULL_WHALE:
-            agent_class = BullWhaleAgent
-        elif self.agent_type == AgentType.BEAR_WHALE:
-            agent_class = BearWhaleAgent
+        elif self.agent_type == AgentType.WHALE:
+            agent_class = WhaleAgent
         elif self.agent_type == AgentType.MARKET_MAKER:
             agent_class = MarketMakerAgent
         else:
