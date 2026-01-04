@@ -387,12 +387,21 @@ class Agent:
     ) -> list[Trade]:
         """处理清仓
 
+        先撤掉挂单，再根据持仓方向市价平仓。
+        做市商重写此方法以处理多个挂单。
+
         Args:
             matching_engine: 撮合引擎
 
         Returns:
             成交列表
         """
+        # 先撤掉挂单
+        if self.account.pending_order_id is not None:
+            matching_engine.cancel_order(self.account.pending_order_id)
+            self.account.pending_order_id = None
+
+        # 再根据持仓方向市价平仓
         position_qty = self.account.position.quantity
         if position_qty > 0:
             return self._place_market_order(

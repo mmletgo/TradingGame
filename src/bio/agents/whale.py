@@ -195,7 +195,8 @@ class WhaleAgent(Agent):
     ) -> list[Trade]:
         """执行动作
 
-        庄家特定实现：PLACE_BID/PLACE_ASK 会先撤旧单再挂新单，CLEAR_POSITION 会先撤单再清仓。
+        庄家特定实现：PLACE_BID/PLACE_ASK 会先撤旧单再挂新单。
+        其他动作（包括 CLEAR_POSITION）使用父类实现。
 
         Args:
             action: 动作类型
@@ -219,32 +220,9 @@ class WhaleAgent(Agent):
             trades = self._place_limit_order(
                 side, params["price"], params["quantity"], matching_engine
             )
-        elif action == ActionType.CLEAR_POSITION:
-            # 庄家特定：先撤单再清仓
-            trades = self._handle_clear_position(matching_engine)
         else:
-            # 其他动作使用父类实现
+            # 其他动作（包括 CLEAR_POSITION）使用父类实现
+            # 父类的 _handle_clear_position 已经包含先撤单再平仓的逻辑
             trades = super().execute_action(action, params, matching_engine)
 
         return trades
-
-    def _handle_clear_position(
-        self,
-        matching_engine: "MatchingEngine",
-    ) -> list[Trade]:
-        """处理清仓 - 先撤单再平仓
-
-        庄家清仓时，需要先撤掉挂单，再根据持仓方向市价平仓。
-
-        Args:
-            matching_engine: 撮合引擎
-
-        Returns:
-            成交列表
-        """
-        # 先撤掉挂单
-        if self.account.pending_order_id is not None:
-            matching_engine.cancel_order(self.account.pending_order_id)
-            self.account.pending_order_id = None
-        # 然后调用父类的清仓逻辑
-        return super()._handle_clear_position(matching_engine)

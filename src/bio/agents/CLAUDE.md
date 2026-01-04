@@ -106,7 +106,7 @@ Agent 基类，提供通用属性和方法。
 处理撤单动作。使用账户的 pending_order_id，直接调用撮合引擎撤单。
 
 #### `_handle_clear_position(matching_engine: MatchingEngine) -> list[Trade]`
-处理清仓动作。根据当前持仓方向下市价单平仓（多仓卖出，空仓买入）。返回成交列表。
+处理清仓动作。先撤掉挂单（`pending_order_id`），再根据当前持仓方向下市价单平仓（多仓卖出，空仓买入）。返回成交列表。做市商重写此方法以处理多个挂单。
 
 #### `execute_action(action, params, matching_engine) -> list[Trade]`
 执行动作。直接调用撮合引擎处理订单，成交后直接更新账户。如果已被强平（`is_liquidated=True`），不执行任何动作直接返回空列表。返回成交列表。
@@ -115,7 +115,7 @@ Agent 基类，提供通用属性和方法。
 - **RetailAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单
 - **RetailProAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单
 - **WhaleAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单（与散户相同行为）
-- **MarketMakerAgent**: QUOTE 先撤所有旧单再双边挂单，CLEAR_POSITION 先撤单再平仓
+- **MarketMakerAgent**: QUOTE 先撤所有旧单再双边挂单，重写 `_handle_clear_position` 以处理多个挂单
 
 #### `_process_trades(trades: list[Trade]) -> None`
 处理成交列表，更新账户。遍历成交列表，调用 `account.on_trade` 更新账户。
@@ -128,7 +128,7 @@ Agent 基类，提供通用属性和方法。
 - `_cancel_all_orders(matching_engine)` - 撤销所有挂单
 - `_place_quote_orders(orders, side, order_ids, matching_engine)` - 挂多个限价单
 - `_handle_quote(params, matching_engine)` - 处理 QUOTE 动作
-- `_handle_clear_position_mm(matching_engine)` - 做市商清仓（先撤单再平仓）
+- `_handle_clear_position(matching_engine)` - 重写基类方法，先撤销所有挂单（买卖双边）再平仓
 
 ## 输入输出规范
 
