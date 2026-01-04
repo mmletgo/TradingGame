@@ -38,10 +38,10 @@ def create_profile_config() -> Config:
 
     agents = {
         AgentType.RETAIL: AgentConfig(
-            count=1000,
+            count=10000,
             initial_balance=100000.0,  # 10万
             leverage=1.0,
-            maintenance_margin_rate=0.5,  # 50%
+            maintenance_margin_rate=0.1,  # 10%
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
@@ -49,7 +49,7 @@ def create_profile_config() -> Config:
             count=100,
             initial_balance=100000.0,  # 10万
             leverage=1.0,
-            maintenance_margin_rate=0.5,  # 0%
+            maintenance_margin_rate=0.1,  # 10%
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
@@ -57,7 +57,7 @@ def create_profile_config() -> Config:
             count=100,
             initial_balance=10000000.0,  # 1000万
             leverage=1.0,
-            maintenance_margin_rate=0.5,  # 50%
+            maintenance_margin_rate=0.1,  # 10%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),
@@ -65,7 +65,7 @@ def create_profile_config() -> Config:
             count=100,
             initial_balance=10000000.0,  # 1000万
             leverage=1.0,
-            maintenance_margin_rate=0.5,  # 50%
+            maintenance_margin_rate=0.1,  # 10%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),
