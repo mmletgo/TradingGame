@@ -32,6 +32,12 @@ python scripts/train_noui.py --episodes 100
 
 # 从检查点恢复
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
+
+# 启用鲶鱼机制训练
+python scripts/train_noui.py --episodes 100 --catfish
+
+# 指定鲶鱼模式
+python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
 ```
 
 ### 代码修改后必须执行（清理缓存 + 重新编译）
@@ -54,6 +60,7 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - `orderbook/` - 订单簿（Cython 实现，买卖各100档）
 - `matching/` - 撮合引擎（价格优先、时间优先）
 - `account/` - 账户管理（持仓、余额、保证金、强平）
+- `catfish/` - 鲶鱼机制（规则驱动的市场波动制造者）
 
 **src/bio/** - 生物系统
 - `brain/` - NEAT 神经网络封装

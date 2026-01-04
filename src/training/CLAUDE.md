@@ -50,7 +50,7 @@
 - 支持暂停/恢复/停止控制
 
 **关键方法：**
-- `setup()` - 初始化训练环境，创建 ADL 管理器，初始化 EMA 平滑价格
+- `setup()` - 初始化训练环境，创建 ADL 管理器，初始化 EMA 平滑价格，如果配置启用鲶鱼则初始化
 - `_init_ema_price()` - 初始化 EMA 平滑价格（在 episode 开始时调用）
 - `_update_ema_price()` - 更新 EMA 平滑价格（每 tick 调用）
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
@@ -62,7 +62,7 @@
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件：任意种群存活少于 1/4
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态，使用 EMA 平滑后的 mid_price
-- `run_tick()` - 执行单个 tick
+- `run_tick()` - 执行单个 tick，鲶鱼行动在Agent决策之前执行
 - `run_episode()` - 运行完整 episode（重置、运行、进化），若满足提前结束条件则提前结束
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
@@ -120,6 +120,7 @@
      - **阶段2（统一市价单平仓）**：遍历需要淘汰的 Agent，执行市价单平仓（不触发 ADL），收集需要 ADL 的 Agent
      - **阶段3（用最新价格计算 ADL 候选并执行）**：获取订单簿最新价格，计算 ADL 候选清单，执行 ADL
    - **Tick 过程**：
+     - 鲶鱼行动（如果启用）
      - 向量化计算归一化市场状态
      - Agent 按顺序决策和下单（做市商→空头庄家→多头庄家→高级散户→散户）
      - 记录成交到 `recent_trades`，更新 maker 账户
@@ -228,3 +229,23 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - `--resume`: 从指定检查点恢复训练
 - `--config-dir`: 配置文件目录（默认: config）
 - `--log-dir`: 日志目录（默认: logs）
+
+## 鲶鱼机制
+
+鲶鱼（Catfish）是规则驱动的市场参与者，用于增加市场波动性。
+
+**特点：**
+- 不使用神经网络，规则驱动
+- 无限资金模式，不参与强平/ADL
+- 纯市价单操作
+- 在所有Agent之前行动
+
+**行为模式：**
+- `trend_following`：趋势追踪，顺势推动价格
+- `cycle_swing`：周期摆动，交替买卖形成波动
+- `mean_reversion`：逆势操作，均值回归
+
+**配置：**
+通过 `CatfishConfig` 配置，包括资金倍数、触发阈值等参数。
+
+详见：`src/market/catfish/CLAUDE.md`
