@@ -44,7 +44,7 @@ def create_default_config(
         默认配置对象
     """
     market = MarketConfig(
-        initial_price=100.0,
+        initial_price=1000.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,

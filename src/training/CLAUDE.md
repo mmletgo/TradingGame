@@ -57,8 +57,7 @@
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
 - `_cancel_agent_orders()` - 撤销指定 Agent 的所有挂单（做市商撤多单，普通 Agent 撤单个挂单）
-- `_handle_liquidation()` - 处理强平，提交市价单平仓，若市价单无法完全成交则触发 ADL，强平完成后淘汰 Agent（调用前必须先撤销挂单）
-- `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty），ADL 后检查参与者的强平条件
+- `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty）
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件，返回 `tuple[str, AgentType | None] | None`
   - 触发条件1：任意种群存活少于初始值的 1/4，返回 `("population_depleted", agent_type)`
@@ -133,32 +132,28 @@
      - 下单产生的价格变动效果在下个 tick 被感知
      - 数据采集使用 `tick_start_price` 计算资产，与强平检查一致
 
-## 强平与淘汰机制（爆仓即淘汰）
+## 强平与淘汰机制（爆仓即淘汰，直接 ADL）
 
 **强平即淘汰（Liquidation = Elimination）**：保证金率低于维持保证金率时触发，Agent 直接被淘汰
 
-**Tick 开始时的三阶段强平处理**：
-- **阶段1（统一撤单）**：遍历所有 Agent 检查强平条件，收集需要淘汰的 Agent，调用 `_cancel_agent_orders()` 统一撤销这些 Agent 的所有挂单
-- **阶段2（统一市价单平仓）**：遍历需要淘汰的 Agent，调用 `_execute_liquidation_market_order()` 执行市价单平仓（不触发 ADL），标记淘汰并穿仓兜底，收集需要 ADL 的 Agent
-- **阶段3（用最新价格计算 ADL 候选并执行）**：获取订单簿最新价格（强平市价单执行后的价格），用最新价格计算 ADL 候选清单，执行 ADL
+**设计原则**：爆仓时直接进入 ADL 处理，**跳过市价单平仓**，避免对订单簿价格造成冲击
+
+**Tick 开始时的强平处理**：
+1. **撤单阶段**：遍历所有 Agent 检查强平条件，收集需要淘汰的 Agent，调用 `_cancel_agent_orders()` 统一撤销这些 Agent 的所有挂单
+2. **ADL 阶段**：直接用当前价格计算 ADL 候选清单并执行 ADL（不执行市价单平仓）
 
 **设计原因**：
-- 先统一撤单可防止被淘汰的 Agent 在平仓过程中作为 maker 被成交，导致仓位增加
-- **用最新价格计算 ADL 候选**：强平市价单执行后订单簿价格已变化，用最新价格计算候选确保 ADL 候选在当前价格下确实盈利，避免 candidate 因 ADL 出现负 balance
+- 先统一撤单可防止被淘汰的 Agent 在 ADL 过程中作为 maker 被成交
+- **跳过市价单平仓**：避免强平市价单对订单簿价格造成冲击，保持价格曲线稳定
+- 直接通过 ADL 以当前市场价格与盈利对手方成交
 
-**`_execute_liquidation_market_order()` 执行流程**（阶段2）：
-1. 获取 Agent 当前持仓方向和数量
-2. 创建市价平仓单，调用撮合引擎处理
-3. 成交后更新 Agent 账户（taker）和 maker 账户
-4. 返回剩余未平仓数量和持仓方向
-
-**ADL（自动减仓）**：市价强平无法完全成交时触发（阶段3）
-1. **获取最新价格**：强平市价单执行后，订单簿价格已变化，获取最新价格
-2. **用最新价格计算候选清单**：遍历所有存活 Agent，用最新价格计算 ADL 分数，筛选盈利候选者，按多头/空头分类并排序
+**ADL（自动减仓）执行流程**：
+1. **收集需要 ADL 的 Agent**：所有有持仓的被强平 Agent
+2. **用当前价格计算候选清单**：遍历所有存活 Agent，用当前价格计算 ADL 分数，筛选盈利候选者，按多头/空头分类并排序
 3. 使用候选清单（`_adl_long_candidates` 或 `_adl_short_candidates`）
    - 被强平方是多头 → 使用空头候选清单
    - 被强平方是空头 → 使用多头候选清单
-4. 在 `_execute_adl()` 中直接循环处理：依次与候选对手方以最新市场价格成交，直至剩余仓位清零
+4. 在 `_execute_adl()` 中直接循环处理：依次与候选对手方以当前市场价格成交，直至仓位清零
 5. 通过 `account.on_adl_trade()` 更新双方账户（含穿仓兜底）
 6. **更新候选清单的 position_qty**：确保后续 ADL 不会重复使用已减掉的仓位
 7. **兜底处理**：如果 ADL 无法完全清零仓位，强制清零被淘汰者的仓位

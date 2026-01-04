@@ -186,28 +186,34 @@ class MarketMakerAgent(Agent):
         quote_score = outputs[0]
         clear_score = outputs[1]
 
-        if clear_score > quote_score:
-            return ActionType.CLEAR_POSITION, {}
-
-        # 5. QUOTE 动作：解析买卖单参数
-        # 获取参考价格
+        # 5. 获取参考价格并计算仓位信息
         mid_price = market_state.mid_price
         if mid_price == 0:
             mid_price = 100.0
 
         tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
-        # 检查仓位限制：持仓市值超过购买力的一定比例时，只挂平仓方向的单
+        # 检查仓位限制：持仓市值超过购买力的一定比例时
         equity = self.account.get_equity(mid_price)
         position_qty = self.account.position.quantity
         position_value = abs(position_qty) * mid_price
         max_position_value = equity * self.account.leverage
         limit_ratio = self.config.position_limit_ratio
 
+        # 判断是否超过仓位限制
+        over_position_limit = (
+            position_value > max_position_value * limit_ratio and position_qty != 0
+        )
+
+        # 只有超过仓位限制时才允许选择 CLEAR_POSITION 动作
+        if over_position_limit and clear_score > quote_score:
+            return ActionType.CLEAR_POSITION, {}
+
+        # 6. QUOTE 动作：解析买卖单参数
         only_close_position = False
         close_direction: str | None = None  # "buy" 或 "sell"
 
-        if position_value > max_position_value * limit_ratio and position_qty != 0:
+        if over_position_limit:
             only_close_position = True
             if position_qty > 0:
                 close_direction = "sell"  # 多头只能卖出平仓
