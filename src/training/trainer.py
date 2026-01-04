@@ -16,7 +16,9 @@ from src.bio.agents.base import AgentType
 
 if TYPE_CHECKING:
     from src.bio.agents.base import ActionType, Agent
-    from src.market.market_state import NormalizedMarketState as NormalizedMarketStateType
+    from src.market.market_state import (
+        NormalizedMarketState as NormalizedMarketStateType,
+    )
     from src.market.orderbook.orderbook import OrderBook
 from src.config.config import Config
 from src.core.log_engine.logger import get_logger
@@ -103,8 +105,7 @@ class Trainer:
         """获取或创建线程池（惰性初始化）"""
         if self._executor is None:
             self._executor = ThreadPoolExecutor(
-                max_workers=self._num_workers,
-                thread_name_prefix="neat_worker"
+                max_workers=self._num_workers, thread_name_prefix="neat_worker"
             )
         return self._executor
 
@@ -427,29 +428,29 @@ class Trainer:
             else:
                 candidate.position_qty += trade_qty
 
-            self.logger.info(
-                f"ADL 成交: Agent {liquidated_agent.agent_id} 与 Agent {candidate.agent.agent_id} "
-                f"成交 {trade_qty} @ {adl_price:.2f}, "
-                f"候选剩余持仓 {candidate.position_qty}"
-            )
+            # self.logger.info(
+            #     f"ADL 成交: Agent {liquidated_agent.agent_id} 与 Agent {candidate.agent.agent_id} "
+            #     f"成交 {trade_qty} @ {adl_price:.2f}, "
+            #     f"候选剩余持仓 {candidate.position_qty}"
+            # )
 
             remaining_qty -= trade_qty
 
-        if remaining_qty > 0:
-            self.logger.warning(
-                f"ADL 未能完全平仓: Agent {liquidated_agent.agent_id} "
-                f"剩余 {remaining_qty} 无法匹配 "
-                f"(盈利对手候选数={len(candidates)}, 将由系统兜底清零)"
-            )
+        # if remaining_qty > 0:
+        #     self.logger.warning(
+        #         f"ADL 未能完全平仓: Agent {liquidated_agent.agent_id} "
+        #         f"剩余 {remaining_qty} 无法匹配 "
+        #         f"(盈利对手候选数={len(candidates)}, 将由系统兜底清零)"
+        #     )
 
         # 兜底处理：确保 liquidated_agent 的仓位清零
         actual_remaining = abs(liquidated_agent.account.position.quantity)
         if actual_remaining > 0:
-            self.logger.warning(
-                f"ADL 兜底清零: Agent {liquidated_agent.agent_id} "
-                f"实际剩余仓位 {liquidated_agent.account.position.quantity}, "
-                f"强制清零"
-            )
+            # self.logger.warning(
+            #     f"ADL 兜底清零: Agent {liquidated_agent.agent_id} "
+            #     f"实际剩余仓位 {liquidated_agent.account.position.quantity}, "
+            #     f"强制清零"
+            # )
             liquidated_agent.account.position.quantity = 0
             liquidated_agent.account.position.avg_price = 0.0
         if liquidated_agent.account.balance < 0:
@@ -545,8 +546,7 @@ class Trainer:
         populations = list(self.populations.values())
 
         futures = {
-            executor.submit(pop.evolve, current_price): pop
-            for pop in populations
+            executor.submit(pop.evolve, current_price): pop for pop in populations
         }
 
         for future in as_completed(futures):
@@ -566,13 +566,17 @@ class Trainer:
         """并行执行所有 Agent 的决策"""
         executor = self._get_executor()
 
-        future_to_idx: dict[Future[tuple["ActionType", dict[str, Any]]], tuple[int, "Agent"]] = {}
+        future_to_idx: dict[
+            Future[tuple["ActionType", dict[str, Any]]], tuple[int, "Agent"]
+        ] = {}
         for idx, agent in enumerate(agents):
             if not agent.is_liquidated:
                 future = executor.submit(agent.decide, market_state, orderbook)
                 future_to_idx[future] = (idx, agent)
 
-        results: list[tuple["Agent", "ActionType", dict[str, Any]] | None] = [None] * len(agents)
+        results: list[tuple["Agent", "ActionType", dict[str, Any]] | None] = [
+            None
+        ] * len(agents)
         for future in as_completed(future_to_idx):
             idx, agent = future_to_idx[future]
             try:
@@ -591,12 +595,17 @@ class Trainer:
         if n == 0:
             return []
 
-        balances = np.array([a.account.balance for a in active_agents], dtype=np.float64)
-        quantities = np.array([a.account.position.quantity for a in active_agents], dtype=np.float64)
-        avg_prices = np.array([a.account.position.avg_price for a in active_agents], dtype=np.float64)
+        balances = np.array(
+            [a.account.balance for a in active_agents], dtype=np.float64
+        )
+        quantities = np.array(
+            [a.account.position.quantity for a in active_agents], dtype=np.float64
+        )
+        avg_prices = np.array(
+            [a.account.position.avg_price for a in active_agents], dtype=np.float64
+        )
         maintenance_rates = np.array(
-            [a.account.maintenance_margin_rate for a in active_agents],
-            dtype=np.float64
+            [a.account.maintenance_margin_rate for a in active_agents], dtype=np.float64
         )
 
         unrealized_pnl = (current_price - avg_prices) * quantities
@@ -608,7 +617,7 @@ class Trainer:
             equities,
             position_values,
             out=np.full_like(equities, np.inf),
-            where=position_values > 0
+            where=position_values > 0,
         )
 
         need_liquidation = margin_ratios < maintenance_rates
