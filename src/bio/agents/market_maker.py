@@ -4,8 +4,13 @@
 """
 
 from typing import TYPE_CHECKING, Any
+import logging
 
 import numpy as np
+
+# 调试日志开关
+_DEBUG_EMPTY_ORDERS = False
+_debug_logger = logging.getLogger("market_maker_debug")
 
 from src.bio.agents.base import Agent, ActionType
 from src.bio.brain.brain import Brain
@@ -144,6 +149,104 @@ class MarketMakerAgent(Agent):
         self._fill_order_inputs(inputs, self.ask_order_ids, 15, mid_price, orderbook)
         return inputs
 
+    def _calculate_skew_factor(self, mid_price: float) -> float:
+        """计算仓位倾斜因子
+
+        根据当前仓位计算倾斜因子，范围 [-1, 1]。
+        - 多头仓位 -> 负值（减少买单权重，增加卖单权重）
+        - 空头仓位 -> 正值（增加买单权重，减少卖单权重）
+
+        Args:
+            mid_price: 中间价
+
+        Returns:
+            倾斜因子，范围 [-1, 1]
+        """
+        equity = self.account.get_equity(mid_price)
+        if equity <= 0:
+            return 0.0
+
+        position_qty = self.account.position.quantity
+        if position_qty == 0:
+            return 0.0
+
+        # 计算仓位比例（0 到 1）
+        position_value = abs(position_qty) * mid_price
+        max_position_value = equity * self.account.leverage
+        pos_ratio = (
+            min(1.0, position_value / max_position_value)
+            if max_position_value > 0
+            else 0.0
+        )
+
+        # 多头为负（倾向卖出），空头为正（倾向买入）
+        if position_qty > 0:
+            return -pos_ratio
+        else:
+            return pos_ratio
+
+    def _apply_position_skew(
+        self,
+        bid_raw_ratios: np.ndarray,
+        ask_raw_ratios: np.ndarray,
+        skew_factor: float,
+        min_side_weight: float = 0.1,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """应用仓位倾斜到买卖权重
+
+        Args:
+            bid_raw_ratios: 买单原始权重
+            ask_raw_ratios: 卖单原始权重
+            skew_factor: 倾斜因子 [-1, 1]
+            min_side_weight: 单边最小权重比例
+
+        Returns:
+            (bid_ratios, ask_ratios): 调整后的买卖权重，总和为 1.0
+        """
+        # 计算倾斜乘数
+        bid_multiplier = 1.0 + skew_factor  # 范围 [0, 2]
+        ask_multiplier = 1.0 - skew_factor  # 范围 [0, 2]
+
+        # 应用乘数
+        bid_adjusted = bid_raw_ratios * bid_multiplier
+        ask_adjusted = ask_raw_ratios * ask_multiplier
+
+        # 计算调整后的总权重
+        total_bid = bid_adjusted.sum()
+        total_ask = ask_adjusted.sum()
+        total = total_bid + total_ask
+
+        if total <= 0:
+            return np.full(5, 0.1), np.full(5, 0.1)
+
+        # 计算双边比例
+        bid_side_ratio = total_bid / total
+        ask_side_ratio = total_ask / total
+
+        # 确保最小权重
+        if bid_side_ratio < min_side_weight:
+            target_bid_total = min_side_weight
+            target_ask_total = 1.0 - min_side_weight
+        elif ask_side_ratio < min_side_weight:
+            target_ask_total = min_side_weight
+            target_bid_total = 1.0 - min_side_weight
+        else:
+            target_bid_total = bid_side_ratio
+            target_ask_total = ask_side_ratio
+
+        # 内部归一化
+        if total_bid > 0:
+            bid_ratios = bid_adjusted / total_bid * target_bid_total
+        else:
+            bid_ratios = np.full(5, target_bid_total / 5)
+
+        if total_ask > 0:
+            ask_ratios = ask_adjusted / total_ask * target_ask_total
+        else:
+            ask_ratios = np.full(5, target_ask_total / 5)
+
+        return bid_ratios, ask_ratios
+
     def decide(
         self, market_state: NormalizedMarketState, orderbook: OrderBook
     ) -> tuple[ActionType, dict[str, Any]]:
@@ -193,32 +296,13 @@ class MarketMakerAgent(Agent):
 
         tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
-        # 检查仓位限制：持仓市值超过购买力的一定比例时
-        equity = self.account.get_equity(mid_price)
+        # 计算仓位倾斜因子
+        skew_factor = self._calculate_skew_factor(mid_price)
         position_qty = self.account.position.quantity
-        position_value = abs(position_qty) * mid_price
-        max_position_value = equity * self.account.leverage
-        limit_ratio = self.config.position_limit_ratio
 
-        # 判断是否超过仓位限制
-        over_position_limit = (
-            position_value > max_position_value * limit_ratio and position_qty != 0
-        )
-
-        # 只有超过仓位限制时才允许选择 CLEAR_POSITION 动作
-        if over_position_limit and clear_score > quote_score:
+        # 有仓位时允许 CLEAR_POSITION
+        if clear_score > quote_score and position_qty != 0:
             return ActionType.CLEAR_POSITION, {}
-
-        # 6. QUOTE 动作：解析买卖单参数
-        only_close_position = False
-        close_direction: str | None = None  # "buy" 或 "sell"
-
-        if over_position_limit:
-            only_close_position = True
-            if position_qty > 0:
-                close_direction = "sell"  # 多头只能卖出平仓
-            else:
-                close_direction = "buy"  # 空头只能买入平仓
 
         # 向量化收集数量比例
         outputs_arr = np.array(outputs)
@@ -233,6 +317,11 @@ class MarketMakerAgent(Agent):
         else:
             bid_ratios = np.zeros(5)
             ask_ratios = np.zeros(5)
+
+        # 应用仓位倾斜
+        bid_ratios, ask_ratios = self._apply_position_skew(
+            bid_ratios, ask_ratios, skew_factor
+        )
 
         # 价格偏移完全由神经网络决定，映射到 [1, 100] ticks
         max_offset_ticks = 100.0
@@ -251,15 +340,12 @@ class MarketMakerAgent(Agent):
         )
 
         bid_orders: list[dict[str, float]] = []
-        # 构建买单列表（仓位限制时如果只能卖出则跳过买单）
-        if not (only_close_position and close_direction == "sell"):
-            for i in range(5):
-                quantity = self._calculate_order_quantity(
-                    float(bid_prices[i]), float(bid_ratios[i]), is_buy=True
-                )
-                # 只添加数量 > 0 的订单
-                if quantity > 0:
-                    bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
+        for i in range(5):
+            quantity = self._calculate_order_quantity(
+                float(bid_prices[i]), float(bid_ratios[i]), is_buy=True
+            )
+            if quantity > 0:
+                bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
         # 卖单价格偏移完全由神经网络决定
         ask_price_offsets = np.clip(outputs_arr[12:17], -1, 1)
@@ -273,15 +359,24 @@ class MarketMakerAgent(Agent):
         )
 
         ask_orders: list[dict[str, float]] = []
-        # 构建卖单列表（仓位限制时如果只能买入则跳过卖单）
-        if not (only_close_position and close_direction == "buy"):
-            for i in range(5):
-                quantity = self._calculate_order_quantity(
-                    float(ask_prices[i]), float(ask_ratios[i]), is_buy=False
-                )
-                # 只添加数量 > 0 的订单
-                if quantity > 0:
-                    ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
+        for i in range(5):
+            quantity = self._calculate_order_quantity(
+                float(ask_prices[i]), float(ask_ratios[i]), is_buy=False
+            )
+            if quantity > 0:
+                ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
+
+        # 调试日志：检测空订单列表
+        if _DEBUG_EMPTY_ORDERS and (len(bid_orders) == 0 or len(ask_orders) == 0):
+            equity = self.account.get_equity(mid_price)
+            max_pos = equity * self.account.leverage if equity > 0 else 0
+            _debug_logger.warning(
+                f"MM {self.agent_id} 空订单: "
+                f"bid_orders={len(bid_orders)}, ask_orders={len(ask_orders)}, "
+                f"pos={position_qty}, equity={equity:.0f}, max_pos={max_pos:.0f}, "
+                f"skew={skew_factor:.2f}, "
+                f"bid_ratios={bid_ratios.tolist()}, ask_ratios={ask_ratios.tolist()}"
+            )
 
         return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 

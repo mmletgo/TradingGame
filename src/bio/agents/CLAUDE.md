@@ -130,31 +130,39 @@ Agent 基类，提供通用属性和方法。
 - `_handle_quote(params, matching_engine)` - 处理 QUOTE 动作
 - `_handle_clear_position(matching_engine)` - 重写基类方法，先撤销所有挂单（买卖双边）再平仓
 
-## 做市商仓位控制机制
+## 做市商仓位倾斜挂单机制
 
-做市商在 `decide()` 方法中实现仓位控制逻辑，防止前期积累过多仓位导致后期资金不足。
+做市商在 `decide()` 方法中实现仓位倾斜逻辑，根据当前持仓动态调整买卖双边的挂单权重比例。
 
-**触发条件**：
-```
-持仓市值 > 购买力 × position_limit_ratio
-其中：
-- 持仓市值 = abs(position.quantity) × current_price
-- 购买力 = equity × leverage
-- position_limit_ratio 通过 AgentConfig.position_limit_ratio 配置（默认1.0表示不限制）
-```
+**核心思路**：
+- 多头仓位 → 卖单权重增加，买单权重减少（倾向平仓）
+- 空头仓位 → 买单权重增加，卖单权重减少（倾向平仓）
+- 仓位越大，倾斜程度越大
+- 始终保持双边挂单，只是比例不同
 
-**行为**：
-- 当触发条件满足且持有多头时：只挂卖单（平仓方向），跳过买单构建
-- 当触发条件满足且持有空头时：只挂买单（平仓方向），跳过卖单构建
-- 未触发时：正常双边挂单
-
-**配置示例**：
+**倾斜因子计算**：
 ```python
-AgentConfig(
-    # ... 其他参数 ...
-    position_limit_ratio=0.1,  # 持仓超过购买力10%时只挂平仓单
-)
+pos_ratio = position_value / (equity * leverage)  # 0 = 无仓位，1 = 杠杆满
+skew_factor = -pos_ratio if position_qty > 0 else pos_ratio  # [-1, 1]
 ```
+
+**权重调整**：
+```python
+bid_multiplier = 1.0 + skew_factor  # 多头时减少买单
+ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
+```
+
+**效果示例**：
+
+| 仓位状态 | 倾斜因子 | 买单权重 | 卖单权重 |
+|----------|----------|----------|----------|
+| 无仓位   | 0.0      | 0.50     | 0.50     |
+| 多头 50% | -0.5     | 0.25     | 0.75     |
+| 多头 100%| -1.0     | 0.10     | 0.90     |
+| 空头 50% | +0.5     | 0.75     | 0.25     |
+| 空头 100%| +1.0     | 0.90     | 0.10     |
+
+**保护机制**：单边最小权重为 10%，确保任何情况下都保持双边挂单。
 
 ## 输入输出规范
 

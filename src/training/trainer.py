@@ -180,9 +180,7 @@ class Trainer:
                         0.0,  # maker fee
                         0.0,  # taker fee
                     )
-                self.logger.info(
-                    f"鲶鱼已启用: 多模式（三种鲶鱼同时运行，相位错开）"
-                )
+                self.logger.info(f"鲶鱼已启用: 多模式（三种鲶鱼同时运行，相位错开）")
             else:
                 # 单模式：只创建一种鲶鱼
                 catfish = create_catfish(-1, self.config.catfish)
@@ -192,9 +190,7 @@ class Trainer:
                     0.0,  # maker fee
                     0.0,  # taker fee
                 )
-                self.logger.info(
-                    f"鲶鱼已启用: 模式={self.config.catfish.mode.value}"
-                )
+                self.logger.info(f"鲶鱼已启用: 模式={self.config.catfish.mode.value}")
 
         # 注册所有 Agent 的费率
         self._register_all_agents()
@@ -319,12 +315,12 @@ class Trainer:
             self._adl_short_candidates if is_long else self._adl_long_candidates
         )
 
-        self.logger.info(
-            f"ADL 触发: Agent {liquidated_agent.agent_id} "
-            f"剩余平仓量 {remaining_qty}, "
-            f"成交价 {adl_price:.2f}, "
-            f"候选人数 {len(candidates)}"
-        )
+        # self.logger.info(
+        #     f"ADL 触发: Agent {liquidated_agent.agent_id} "
+        #     f"剩余平仓量 {remaining_qty}, "
+        #     f"成交价 {adl_price:.2f}, "
+        #     f"候选人数 {len(candidates)}"
+        # )
 
         for candidate in candidates:
             if remaining_qty <= 0:
@@ -408,6 +404,56 @@ class Trainer:
             return ("one_sided_orderbook", None)
 
         return None
+
+    def _log_market_maker_status(self) -> None:
+        """调试日志：输出做市商状态，帮助排查单边挂单问题"""
+        mm_population = self.populations.get(AgentType.MARKET_MAKER)
+        if not mm_population:
+            self.logger.warning("没有做市商种群")
+            return
+
+        orderbook = self.matching_engine._orderbook
+        current_price = orderbook.last_price
+
+        self.logger.warning("=== 做市商状态调试 ===")
+        alive_count = 0
+        for agent in mm_population.agents:
+            if agent.is_liquidated:
+                self.logger.warning(f"  MM {agent.agent_id}: 已被强平")
+                continue
+
+            alive_count += 1
+            equity = agent.account.get_equity(current_price)
+            position_qty = agent.account.position.quantity
+            position_value = abs(position_qty) * current_price
+            max_pos_value = equity * agent.account.leverage
+
+            # 检查杠杆上限
+            leverage_full = (
+                position_value >= max_pos_value if max_pos_value > 0 else False
+            )
+
+            # 检查订单状态
+            bid_count = len(agent.bid_order_ids)
+            ask_count = len(agent.ask_order_ids)
+
+            self.logger.warning(
+                f"  MM {agent.agent_id}: "
+                f"pos={position_qty}, equity={equity:.0f}, "
+                f"pos_value={position_value:.0f}, max_pos={max_pos_value:.0f}, "
+                f"杠杆满={leverage_full}, "
+                f"bid_orders={bid_count}, ask_orders={ask_count}"
+            )
+
+        self.logger.warning(f"存活做市商: {alive_count}/{len(mm_population.agents)}")
+
+        # 输出订单簿状态
+        best_bid = orderbook.get_best_bid()
+        best_ask = orderbook.get_best_ask()
+        self.logger.warning(
+            f"订单簿: best_bid={best_bid}, best_ask={best_ask}, "
+            f"last_price={current_price}"
+        )
 
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
         """预计算归一化的公共市场数据
@@ -761,26 +807,25 @@ class Trainer:
                 catfish_trades = catfish.execute(direction, self.matching_engine)
                 catfish.record_action(self.tick)
                 # 记录鲶鱼行动日志
-                if catfish_trades:
-                    total_qty = sum(t.quantity for t in catfish_trades)
-                    avg_price = (
-                        sum(t.price * t.quantity for t in catfish_trades) / total_qty
-                        if total_qty > 0
-                        else 0
-                    )
-                    direction_str = "买入" if direction > 0 else "卖出"
-                    self.logger.info(
-                        f"鲶鱼行动: {catfish.__class__.__name__} "
-                        f"{direction_str} {total_qty} @ {avg_price:.2f} "
-                        f"(tick={self.tick})"
-                    )
+                # if catfish_trades:
+                #     total_qty = sum(t.quantity for t in catfish_trades)
+                #     avg_price = (
+                #         sum(t.price * t.quantity for t in catfish_trades) / total_qty
+                #         if total_qty > 0
+                #         else 0
+                #     )
+                #     direction_str = "买入" if direction > 0 else "卖出"
+                #     self.logger.info(
+                #         f"鲶鱼行动: {catfish.__class__.__name__} "
+                #         f"{direction_str} {total_qty} @ {avg_price:.2f} "
+                #         f"(tick={self.tick})"
+                #     )
                 # 鲶鱼无限资金模式：只更新 maker 账户
                 for trade in catfish_trades:
                     self.recent_trades.append(trade)
                     # 确定 maker（与鲶鱼成交的对手方）
                     maker_id = (
-                        trade.seller_id if trade.is_buyer_taker
-                        else trade.buyer_id
+                        trade.seller_id if trade.is_buyer_taker else trade.buyer_id
                     )
                     # 只有正数 ID 的 maker 才需要更新账户
                     if maker_id > 0:
@@ -867,6 +912,8 @@ class Trainer:
                     self.logger.warning(
                         f"Episode {self.episode} 提前结束：订单簿{side} (tick={self.tick})"
                     )
+                    # 调试日志：输出做市商状态
+                    self._log_market_maker_status()
                 break
 
         # 3. 进化（仅在正常完成 episode 时）

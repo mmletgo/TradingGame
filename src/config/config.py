@@ -64,7 +64,6 @@ class AgentConfig:
         maintenance_margin_rate: 维持保证金率
         maker_fee_rate: 挂单费率
         taker_fee_rate: 吃单费率
-        position_limit_ratio: 持仓限制比例，持仓市值超过购买力此比例时触发限制
     """
 
     count: int
@@ -73,7 +72,6 @@ class AgentConfig:
     maintenance_margin_rate: float
     maker_fee_rate: float
     taker_fee_rate: float
-    position_limit_ratio: float = 0.1  # 默认1.0表示不限制
 
 
 @dataclass
