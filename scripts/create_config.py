@@ -44,11 +44,11 @@ def create_default_config(
         默认配置对象
     """
     market = MarketConfig(
-        initial_price=1000.0,
+        initial_price=100.0,
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
-        ema_alpha=0.1,
+        ema_alpha=1.0,
     )
     maker_initial_balance = 50_000_000.0  # 做市商初始资金 5000万
     maker_leverage = 10.0

@@ -417,9 +417,12 @@ class Trainer:
 
         self.logger.warning("=== 做市商状态调试 ===")
         alive_count = 0
+        total_long_pos = 0
+        total_short_pos = 0
+        leverage_full_count = 0
+
         for agent in mm_population.agents:
             if agent.is_liquidated:
-                self.logger.warning(f"  MM {agent.agent_id}: 已被强平")
                 continue
 
             alive_count += 1
@@ -428,31 +431,71 @@ class Trainer:
             position_value = abs(position_qty) * current_price
             max_pos_value = equity * agent.account.leverage
 
+            if position_qty > 0:
+                total_long_pos += position_qty
+            elif position_qty < 0:
+                total_short_pos += abs(position_qty)
+
             # 检查杠杆上限
             leverage_full = (
-                position_value >= max_pos_value if max_pos_value > 0 else False
+                position_value >= max_pos_value * 0.99 if max_pos_value > 0 else False
             )
+            if leverage_full:
+                leverage_full_count += 1
 
             # 检查订单状态
             bid_count = len(agent.bid_order_ids)
             ask_count = len(agent.ask_order_ids)
 
-            self.logger.warning(
-                f"  MM {agent.agent_id}: "
-                f"pos={position_qty}, equity={equity:.0f}, "
-                f"pos_value={position_value:.0f}, max_pos={max_pos_value:.0f}, "
-                f"杠杆满={leverage_full}, "
-                f"bid_orders={bid_count}, ask_orders={ask_count}"
-            )
+            # 只输出问题做市商（杠杆满或无双边订单）
+            if leverage_full or bid_count == 0 or ask_count == 0:
+                self.logger.warning(
+                    f"  MM {agent.agent_id}: "
+                    f"pos={position_qty}, equity={equity:.0f}, "
+                    f"pos_value={position_value:.0f}, max_pos={max_pos_value:.0f}, "
+                    f"杠杆满={leverage_full}, "
+                    f"bid_orders={bid_count}, ask_orders={ask_count}"
+                )
 
-        self.logger.warning(f"存活做市商: {alive_count}/{len(mm_population.agents)}")
+        # 统计被强平的做市商
+        liquidated_count = sum(1 for a in mm_population.agents if a.is_liquidated)
+
+        self.logger.warning(
+            f"存活做市商: {alive_count}/{len(mm_population.agents)}, "
+            f"被强平: {liquidated_count}, 杠杆满: {leverage_full_count}"
+        )
+        self.logger.warning(
+            f"多头总仓位: {total_long_pos}, 空头总仓位: {total_short_pos}, "
+            f"净仓位: {total_long_pos - total_short_pos}"
+        )
 
         # 输出订单簿状态
         best_bid = orderbook.get_best_bid()
         best_ask = orderbook.get_best_ask()
+        bid_volume = sum(pl.total_quantity for pl in orderbook.bids.values()) if orderbook.bids else 0
+        ask_volume = sum(pl.total_quantity for pl in orderbook.asks.values()) if orderbook.asks else 0
         self.logger.warning(
             f"订单簿: best_bid={best_bid}, best_ask={best_ask}, "
+            f"bid_volume={bid_volume}, ask_volume={ask_volume}, "
             f"last_price={current_price}"
+        )
+
+        # 输出其他物种的净仓位
+        other_long = 0
+        other_short = 0
+        for agent_type in [AgentType.RETAIL, AgentType.RETAIL_PRO, AgentType.WHALE]:
+            pop = self.populations.get(agent_type)
+            if pop:
+                for agent in pop.agents:
+                    if not agent.is_liquidated:
+                        qty = agent.account.position.quantity
+                        if qty > 0:
+                            other_long += qty
+                        elif qty < 0:
+                            other_short += abs(qty)
+        self.logger.warning(
+            f"其他物种仓位: 多头={other_long}, 空头={other_short}, "
+            f"净仓位={other_long - other_short}"
         )
 
     def _compute_normalized_market_state(self) -> NormalizedMarketState:

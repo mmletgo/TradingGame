@@ -9,8 +9,9 @@ import logging
 import numpy as np
 
 # 调试日志开关
-_DEBUG_EMPTY_ORDERS = False
+_DEBUG_EMPTY_ORDERS = False  # 关闭调试日志
 _debug_logger = logging.getLogger("market_maker_debug")
+_debug_logger.setLevel(logging.WARNING)
 
 from src.bio.agents.base import Agent, ActionType
 from src.bio.brain.brain import Brain
@@ -300,9 +301,11 @@ class MarketMakerAgent(Agent):
         skew_factor = self._calculate_skew_factor(mid_price)
         position_qty = self.account.position.quantity
 
-        # 有仓位时允许 CLEAR_POSITION
-        if clear_score > quote_score and position_qty != 0:
-            return ActionType.CLEAR_POSITION, {}
+        # 做市商禁止选择 CLEAR_POSITION，必须始终提供双边流动性
+        # 风险管理通过 skew_factor 调整买卖权重来实现
+        # 注释掉原有的清仓逻辑：
+        # if clear_score > quote_score and position_qty != 0:
+        #     return ActionType.CLEAR_POSITION, {}
 
         # 向量化收集数量比例
         outputs_arr = np.array(outputs)
@@ -342,7 +345,7 @@ class MarketMakerAgent(Agent):
         bid_orders: list[dict[str, float]] = []
         for i in range(5):
             quantity = self._calculate_order_quantity(
-                float(bid_prices[i]), float(bid_ratios[i]), is_buy=True
+                float(bid_prices[i]), float(bid_ratios[i]), is_buy=True, ref_price=mid_price
             )
             if quantity > 0:
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
@@ -361,21 +364,38 @@ class MarketMakerAgent(Agent):
         ask_orders: list[dict[str, float]] = []
         for i in range(5):
             quantity = self._calculate_order_quantity(
-                float(ask_prices[i]), float(ask_ratios[i]), is_buy=False
+                float(ask_prices[i]), float(ask_ratios[i]), is_buy=False, ref_price=mid_price
             )
             if quantity > 0:
                 ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
 
-        # 调试日志：检测空订单列表
-        if _DEBUG_EMPTY_ORDERS and (len(bid_orders) == 0 or len(ask_orders) == 0):
+        # 调试日志：检测空订单列表或无仓位但订单为空的情况
+        should_log = (len(bid_orders) == 0 or len(ask_orders) == 0)
+        if _DEBUG_EMPTY_ORDERS and should_log:
             equity = self.account.get_equity(mid_price)
             max_pos = equity * self.account.leverage if equity > 0 else 0
+            current_pos_value = abs(position_qty) * mid_price
+
+            # 计算买卖方向的可用空间
+            if position_qty >= 0:  # 多头或空仓
+                buy_available = max(0, max_pos - current_pos_value)
+                sell_available = current_pos_value + max_pos
+            else:  # 空头
+                buy_available = current_pos_value + max_pos
+                sell_available = max(0, max_pos - current_pos_value)
+
+            # 额外输出 raw ratios 信息，帮助排查
             _debug_logger.warning(
                 f"MM {self.agent_id} 空订单: "
                 f"bid_orders={len(bid_orders)}, ask_orders={len(ask_orders)}, "
-                f"pos={position_qty}, equity={equity:.0f}, max_pos={max_pos:.0f}, "
+                f"pos={position_qty}, equity={equity:.0f}, "
+                f"pos_value={current_pos_value:.0f}, max_pos={max_pos:.0f}, "
+                f"buy_avail={buy_available:.0f}, sell_avail={sell_available:.0f}, "
                 f"skew={skew_factor:.2f}, "
-                f"bid_ratios={bid_ratios.tolist()}, ask_ratios={ask_ratios.tolist()}"
+                f"bid_ratios=[{', '.join(f'{r:.4f}' for r in bid_ratios)}], "
+                f"ask_ratios=[{', '.join(f'{r:.4f}' for r in ask_ratios)}], "
+                f"bid_prices=[{', '.join(f'{p:.1f}' for p in bid_prices)}], "
+                f"ask_prices=[{', '.join(f'{p:.1f}' for p in ask_prices)}]"
             )
 
         return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}

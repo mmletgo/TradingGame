@@ -199,7 +199,7 @@ class Agent:
     MAX_ORDER_QUANTITY: int = 100_000_000
 
     def _calculate_order_quantity(
-        self, price: float, ratio: float, is_buy: bool = True
+        self, price: float, ratio: float, is_buy: bool = True, ref_price: float = 0.0
     ) -> int:
         """计算订单数量
 
@@ -207,14 +207,17 @@ class Agent:
         确保下单后的总持仓市值不超过 equity * leverage。
 
         Args:
-            price: 价格
+            price: 订单价格（用于计算最终数量）
             ratio: 数量比例（0.1 到 1.0，表示使用可用空间的比例）
             is_buy: 是否为买入方向
+            ref_price: 参考价格（用于计算 equity 和仓位价值，默认为 0 则使用 price）
 
         Returns:
             订单数量（整数），如果净值为负或可用空间不足则返回 0
         """
-        equity = self.account.get_equity(price)
+        # 如果未指定参考价格，使用订单价格
+        calc_price = ref_price if ref_price > 0 else price
+        equity = self.account.get_equity(calc_price)
 
         # 净值非正时不允许下单
         if equity <= 0:
@@ -225,7 +228,7 @@ class Agent:
 
         # 当前持仓情况
         current_pos = self.account.position.quantity  # 正数为多头，负数为空头
-        current_pos_value = abs(current_pos) * price
+        current_pos_value = abs(current_pos) * calc_price
 
         # 计算剩余可用持仓空间
         if is_buy:
