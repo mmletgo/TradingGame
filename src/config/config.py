@@ -132,7 +132,8 @@ class CatfishConfig:
 
     Attributes:
         enabled: 是否启用鲶鱼
-        mode: 鲶鱼行为模式
+        multi_mode: 是否同时启用三种模式（默认True）
+        mode: 单模式时的鲶鱼行为模式
 
         # 资金参数
         fund_multiplier: 资金乘数（相对于庄家基础资金）
@@ -155,7 +156,8 @@ class CatfishConfig:
     """
 
     enabled: bool = False
-    mode: CatfishMode = CatfishMode.TREND_FOLLOWING
+    multi_mode: bool = True  # 默认同时启用三种模式
+    mode: CatfishMode = CatfishMode.TREND_FOLLOWING  # 单模式时使用
 
     # 资金参数
     fund_multiplier: float = 2.5

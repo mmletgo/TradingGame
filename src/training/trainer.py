@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
-from src.market.catfish import CatfishBase, create_catfish
+from src.market.catfish import CatfishBase, create_all_catfish, create_catfish
 from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
@@ -72,7 +72,7 @@ class Trainer:
     ]  # 空头 ADL 候选（已排序，持仓数量会动态更新）
     _executor: ThreadPoolExecutor | None
     _num_workers: int
-    catfish: "CatfishBase | None"
+    catfish_list: list["CatfishBase"]
     _price_history: list[float]
 
     def __init__(self, config: Config) -> None:
@@ -109,7 +109,7 @@ class Trainer:
         self._ema_alpha: float = 0.1
 
         # 鲶鱼相关
-        self.catfish = None
+        self.catfish_list = []
         self._price_history = []
 
     def _init_ema_price(self, initial_price: float) -> None:
@@ -171,14 +171,30 @@ class Trainer:
 
         # 初始化鲶鱼（如果配置中启用）
         if self.config.catfish and self.config.catfish.enabled:
-            self.catfish = create_catfish(self.config.catfish)
-            # 注册鲶鱼费率（免手续费）
-            self.matching_engine.register_agent(
-                self.catfish.catfish_id,
-                0.0,  # maker fee
-                0.0,  # taker fee
-            )
-            self.logger.info(f"鲶鱼已启用: 模式={self.config.catfish.mode.value}")
+            if self.config.catfish.multi_mode:
+                # 多模式：同时创建三种鲶鱼
+                self.catfish_list = create_all_catfish(self.config.catfish)
+                for catfish in self.catfish_list:
+                    self.matching_engine.register_agent(
+                        catfish.catfish_id,
+                        0.0,  # maker fee
+                        0.0,  # taker fee
+                    )
+                self.logger.info(
+                    f"鲶鱼已启用: 多模式（三种鲶鱼同时运行，相位错开）"
+                )
+            else:
+                # 单模式：只创建一种鲶鱼
+                catfish = create_catfish(-1, self.config.catfish)
+                self.catfish_list = [catfish]
+                self.matching_engine.register_agent(
+                    catfish.catfish_id,
+                    0.0,  # maker fee
+                    0.0,  # taker fee
+                )
+                self.logger.info(
+                    f"鲶鱼已启用: 模式={self.config.catfish.mode.value}"
+                )
 
         # 注册所有 Agent 的费率
         self._register_all_agents()
@@ -780,14 +796,15 @@ class Trainer:
                         agent.account.balance = 0.0
 
         # === 鲶鱼行动（在 Agent 之前）===
-        if self.catfish is not None:
-            should_act, direction = self.catfish.decide(
+        for catfish in self.catfish_list:
+            should_act, direction = catfish.decide(
                 orderbook,
                 self.tick,
                 self._price_history,
             )
             if should_act and direction != 0:
-                catfish_trades = self.catfish.execute(direction, self.matching_engine)
+                catfish_trades = catfish.execute(direction, self.matching_engine)
+                catfish.record_action(self.tick)
                 # 鲶鱼无限资金模式：只更新 maker 账户
                 for trade in catfish_trades:
                     self.recent_trades.append(trade)

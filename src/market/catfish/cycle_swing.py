@@ -28,15 +28,18 @@ class CycleSwingCatfish(CatfishBase):
         _current_direction: 当前方向（1=买，-1=卖）
     """
 
-    def __init__(self, catfish_id: int, config: CatfishConfig) -> None:
+    def __init__(
+        self, catfish_id: int, config: CatfishConfig, phase_offset: int = 0
+    ) -> None:
         """
         初始化周期摆动型鲶鱼
 
         Args:
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
+            phase_offset: 相位偏移（用于错开触发时间）
         """
-        super().__init__(catfish_id, config)
+        super().__init__(catfish_id, config, phase_offset)
         self._current_direction: int = 1  # 初始方向为买入
 
     def decide(

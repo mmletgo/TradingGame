@@ -31,19 +31,23 @@ class CatfishBase(ABC):
         _last_action_tick: 上次行动的tick
     """
 
-    def __init__(self, catfish_id: int, config: CatfishConfig) -> None:
+    def __init__(
+        self, catfish_id: int, config: CatfishConfig, phase_offset: int = 0
+    ) -> None:
         """
         初始化鲶鱼
 
         Args:
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
+            phase_offset: 相位偏移（用于错开多个鲶鱼的触发时间）
         """
         if catfish_id >= 0:
             raise ValueError(f"鲶鱼ID必须为负数，当前值: {catfish_id}")
 
         self.catfish_id: int = catfish_id
         self.config: CatfishConfig = config
+        self.phase_offset: int = phase_offset
         self._next_order_id: int = catfish_id * 1_000_000  # 负数空间的订单ID
         self._last_action_tick: int = -1000  # 初始值设为很早，确保首次可以行动
 
@@ -142,7 +146,7 @@ class CatfishBase(ABC):
 
     def can_act(self, tick: int) -> bool:
         """
-        检查是否可以行动（冷却时间检查）
+        检查是否可以行动（冷却时间检查 + 相位偏移）
 
         Args:
             tick: 当前tick
@@ -150,6 +154,10 @@ class CatfishBase(ABC):
         Returns:
             是否可以行动
         """
+        # 考虑相位偏移：(tick - phase_offset) 必须是冷却周期的整数倍
+        effective_tick = tick - self.phase_offset
+        if effective_tick < 0:
+            return False
         return tick - self._last_action_tick >= self.config.action_cooldown
 
     def record_action(self, tick: int) -> None:

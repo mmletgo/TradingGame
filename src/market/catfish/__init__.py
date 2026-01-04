@@ -24,6 +24,7 @@ from src.market.catfish.mean_reversion import MeanReversionCatfish
 def create_catfish(
     catfish_id: int,
     config: CatfishConfig,
+    phase_offset: int = 0,
 ) -> CatfishBase:
     """
     根据配置创建鲶鱼实例
@@ -33,6 +34,7 @@ def create_catfish(
     Args:
         catfish_id: 鲶鱼ID（应为负数）
         config: 鲶鱼配置
+        phase_offset: 相位偏移（用于错开触发时间）
 
     Returns:
         对应类型的鲶鱼实例
@@ -41,13 +43,38 @@ def create_catfish(
         ValueError: 如果 mode 不是有效的 CatfishMode
     """
     if config.mode == CatfishMode.TREND_FOLLOWING:
-        return TrendFollowingCatfish(catfish_id, config)
+        return TrendFollowingCatfish(catfish_id, config, phase_offset)
     elif config.mode == CatfishMode.CYCLE_SWING:
-        return CycleSwingCatfish(catfish_id, config)
+        return CycleSwingCatfish(catfish_id, config, phase_offset)
     elif config.mode == CatfishMode.MEAN_REVERSION:
-        return MeanReversionCatfish(catfish_id, config)
+        return MeanReversionCatfish(catfish_id, config, phase_offset)
     else:
         raise ValueError(f"未知的鲶鱼模式: {config.mode}")
+
+
+def create_all_catfish(config: CatfishConfig) -> list[CatfishBase]:
+    """
+    创建所有三种鲶鱼实例（相位错开）
+
+    每种鲶鱼使用不同的相位偏移，确保触发时间错开。
+
+    Args:
+        config: 鲶鱼配置
+
+    Returns:
+        三种鲶鱼实例的列表
+    """
+    cooldown = config.action_cooldown
+    # 三种鲶鱼的相位偏移：0, cooldown/3, cooldown*2/3
+    phase_offsets = [0, cooldown // 3, cooldown * 2 // 3]
+
+    catfish_list: list[CatfishBase] = [
+        TrendFollowingCatfish(-1, config, phase_offsets[0]),
+        CycleSwingCatfish(-2, config, phase_offsets[1]),
+        MeanReversionCatfish(-3, config, phase_offsets[2]),
+    ]
+
+    return catfish_list
 
 
 __all__ = [
@@ -56,4 +83,5 @@ __all__ = [
     "CycleSwingCatfish",
     "MeanReversionCatfish",
     "create_catfish",
+    "create_all_catfish",
 ]

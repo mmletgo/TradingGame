@@ -29,15 +29,18 @@ class MeanReversionCatfish(CatfishBase):
         _ema_initialized: EMA是否已初始化
     """
 
-    def __init__(self, catfish_id: int, config: CatfishConfig) -> None:
+    def __init__(
+        self, catfish_id: int, config: CatfishConfig, phase_offset: int = 0
+    ) -> None:
         """
         初始化逆势操作型鲶鱼
 
         Args:
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
+            phase_offset: 相位偏移（用于错开触发时间）
         """
-        super().__init__(catfish_id, config)
+        super().__init__(catfish_id, config, phase_offset)
         self._ema: float = 0.0
         self._ema_initialized: bool = False
 
