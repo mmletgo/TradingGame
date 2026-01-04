@@ -779,6 +779,30 @@ class Trainer:
                     if agent.account.balance < 0:
                         agent.account.balance = 0.0
 
+        # === 鲶鱼行动（在 Agent 之前）===
+        if self.catfish is not None:
+            should_act, direction = self.catfish.decide(
+                orderbook,
+                self.tick,
+                self._price_history,
+            )
+            if should_act and direction != 0:
+                catfish_trades = self.catfish.execute(direction, self.matching_engine)
+                # 鲶鱼无限资金模式：只更新 maker 账户
+                for trade in catfish_trades:
+                    self.recent_trades.append(trade)
+                    # 确定 maker（与鲶鱼成交的对手方）
+                    maker_id = (
+                        trade.seller_id if trade.is_buyer_taker
+                        else trade.buyer_id
+                    )
+                    # 只有正数 ID 的 maker 才需要更新账户
+                    if maker_id > 0:
+                        maker_agent = self.agent_map.get(maker_id)
+                        if maker_agent is not None:
+                            is_buyer = not trade.is_buyer_taker
+                            maker_agent.account.on_trade(trade, is_buyer)
+
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
 
@@ -798,6 +822,15 @@ class Trainer:
                 if maker_agent is not None:
                     is_buyer = not trade.is_buyer_taker
                     maker_agent.account.on_trade(trade, is_buyer)
+
+        # 记录价格历史（tick 结束时）
+        current_price = orderbook.get_mid_price()
+        if current_price is None:
+            current_price = orderbook.last_price
+        self._price_history.append(current_price)
+        # 限制历史长度（避免内存无限增长）
+        if len(self._price_history) > 1000:
+            self._price_history = self._price_history[-1000:]
 
     def run_episode(self) -> None:
         """运行一个 episode
