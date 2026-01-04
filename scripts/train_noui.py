@@ -51,7 +51,7 @@ def create_default_config(
     episode_length: int = 1000,
     checkpoint_interval: int = 10,
     config_dir: str = "config",
-    catfish_enabled: bool = False,
+    catfish_enabled: bool = True,
     catfish_mode: str = "trend_following",
     catfish_fund_multiplier: float = 2.5,
 ) -> Config:
@@ -207,9 +207,9 @@ def main() -> None:
         help="日志目录（默认: logs）",
     )
     parser.add_argument(
-        "--catfish",
+        "--no-catfish",
         action="store_true",
-        help="启用鲶鱼机制增加市场波动",
+        help="禁用鲶鱼机制（默认启用）",
     )
     parser.add_argument(
         "--catfish-mode",
@@ -238,8 +238,10 @@ def main() -> None:
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
     if args.resume:
         print(f"Resume From: {args.resume}")
-    if args.catfish:
+    if not args.no_catfish:
         print(f"Catfish: enabled, mode={args.catfish_mode}, multiplier={args.catfish_fund_multiplier}x")
+    else:
+        print("Catfish: disabled")
     print("=" * 60)
 
     # 创建配置
@@ -247,7 +249,7 @@ def main() -> None:
         episode_length=args.episode_length,
         checkpoint_interval=args.checkpoint_interval,
         config_dir=args.config_dir,
-        catfish_enabled=args.catfish,
+        catfish_enabled=not args.no_catfish,
         catfish_mode=args.catfish_mode,
         catfish_fund_multiplier=args.catfish_fund_multiplier,
     )
