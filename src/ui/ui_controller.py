@@ -151,9 +151,9 @@ class UIController:
                         self._tick_counter = 0
                         self._collect_and_send_data()
 
-                    # 检查是否有任一种群存活不足一半
-                    below_half_type = self.trainer._any_population_below_half()
-                    if below_half_type is not None:
+                    # 检查是否满足提前结束条件
+                    early_end_type = self.trainer._should_end_episode_early()
+                    if early_end_type is not None:
                         # 采集最后一次数据再退出
                         self._collect_and_send_data()
                         break
@@ -214,9 +214,9 @@ class UIController:
                 # 每tick都采集数据（演示模式）
                 self._collect_and_send_data()
 
-                # 检查是否有任一种群存活不足一半
-                below_half_type = self.trainer._any_population_below_half()
-                if below_half_type is not None:
+                # 检查是否满足提前结束条件
+                early_end_type = self.trainer._should_end_episode_early()
+                if early_end_type is not None:
                     break
 
     def _collect_and_send_data(self) -> None:
