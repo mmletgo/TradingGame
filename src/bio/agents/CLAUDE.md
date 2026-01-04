@@ -2,14 +2,26 @@
 
 ## 模块概述
 
-Agent 模块定义了五种类型的 AI 交易代理：散户、高级散户、多头庄家、空头庄家、做市商。所有 Agent 继承自 `Agent` 基类，通过 NEAT 神经网络进化学习交易策略。
+Agent 模块定义了五种类型的 AI 交易代理：散户、高级散户、多头庄家、空头庄家、做市商。通过 NEAT 神经网络进化学习交易策略。
+
+## 继承结构
+
+```
+Agent (base.py)
+├── RetailProAgent (retail_pro.py) - 高级散户，实现散户动作空间的 decide 方法
+│   └── RetailAgent (retail.py) - 散户，仅重写 observe 方法
+├── WhaleBaseAgent (whale.py) - 庄家抽象基类
+│   ├── BullWhaleAgent (bull_whale.py) - 多头庄家
+│   └── BearWhaleAgent (bear_whale.py) - 空头庄家
+└── MarketMakerAgent (market_maker.py) - 做市商
+```
 
 ## 文件结构
 
 - `__init__.py` - 模块导出
-- `base.py` - Agent 基类和动作类型定义
-- `retail.py` - 散户 Agent（继承基类，只能看到10档订单簿和10笔成交）
-- `retail_pro.py` - 高级散户 Agent（继承基类，可以看到完整100档订单簿和100笔成交）
+- `base.py` - Agent 基类和动作类型定义（不含 decide 方法）
+- `retail_pro.py` - 高级散户 Agent（继承基类，实现散户/高级散户通用的 decide 方法）
+- `retail.py` - 散户 Agent（继承 RetailProAgent，仅重写 observe 方法限制可见市场数据）
 - `whale.py` - 庄家 Agent 抽象基类（定义庄家公共逻辑）
 - `bull_whale.py` - 多头庄家 Agent（继承 WhaleBaseAgent，只做买入方向）
 - `bear_whale.py` - 空头庄家 Agent（继承 WhaleBaseAgent，只做卖出方向）
@@ -76,13 +88,11 @@ Agent 基类，提供通用属性和方法。
 #### `_place_quote_orders(orders, side, order_ids, matching_engine) -> list[Trade]` (做市商私有)
 挂限价单并记录订单ID到指定列表，返回成交列表。被 `execute_action` 的 QUOTE 动作调用。
 
-#### `decide(market_state: NormalizedMarketState, orderbook: OrderBook) -> tuple[ActionType, dict[str, Any]]`
-决策下一步动作。如果已被强平（`is_liquidated=True`），直接返回 HOLD。否则接收预计算的市场状态，调用 `observe` 获取神经网络输入，前向传播得到输出，解析为动作类型和参数。
-
-神经网络输出结构：
-- 输出[0-6]: 7 种动作类型的得分（选择最大值）
-- 输出[7]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
-- 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
+**注意**: Agent 基类不包含 `decide` 方法。`decide` 方法由各子类根据自己的动作空间实现：
+- **RetailProAgent**: 实现散户/高级散户通用的 decide 方法（9个输出节点，7种动作）
+- **RetailAgent**: 继承 RetailProAgent 的 decide 方法
+- **WhaleBaseAgent**: 实现庄家专用的 decide 方法（5个输出节点：HOLD/限价/市价得分 + 价格偏移 + 数量比例）
+- **MarketMakerAgent**: 实现做市商专用的 decide 方法（22个输出节点）
 
 **订单数量约束：** 所有订单数量（quantity）均为 int 类型，最小单位为 1。`_calculate_order_quantity` 方法会将计算结果取整并确保至少为 1。
 
@@ -196,15 +206,16 @@ Agent 基类，提供通用属性和方法。
 | 7 | 价格偏移（-1 到 1）|
 | 8 | 数量比例（-1 到 1）|
 
-### 多头庄家/空头庄家神经网络输出（4 个值）
+### 多头庄家/空头庄家神经网络输出（5 个值）
 | 索引 | 说明 |
 |------|------|
-| 0 | 限价单动作得分 |
-| 1 | 市价单动作得分 |
-| 2 | 价格偏移（-1 到 1，映射到 ±100 个 tick）|
-| 3 | 数量比例（-1 到 1，映射到 0.1-1.0）|
+| 0 | HOLD 动作得分 |
+| 1 | 限价单动作得分 |
+| 2 | 市价单动作得分 |
+| 3 | 价格偏移（-1 到 1，映射到 ±100 个 tick）|
+| 4 | 数量比例（-1 到 1，映射到 0.1-1.0）|
 
-多头庄家只做买入方向（PLACE_BID/MARKET_BUY），空头庄家只做卖出方向（PLACE_ASK/MARKET_SELL）。
+多头庄家只做买入方向（PLACE_BID/MARKET_BUY/HOLD），空头庄家只做卖出方向（PLACE_ASK/MARKET_SELL/HOLD）。
 
 ### 做市商神经网络输出（22 个值）
 | 索引 | 说明 |
