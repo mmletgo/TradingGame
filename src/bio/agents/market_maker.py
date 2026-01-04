@@ -231,7 +231,7 @@ class MarketMakerAgent(Agent):
         # 构建买单列表（仍需循环计算数量，但价格已向量化）
         for i in range(5):
             quantity = self._calculate_order_quantity(
-                float(bid_prices[i]), float(bid_ratios[i])
+                float(bid_prices[i]), float(bid_ratios[i]), is_buy=True
             )
             # 只添加数量 > 0 的订单
             if quantity > 0:
@@ -252,7 +252,7 @@ class MarketMakerAgent(Agent):
         # 构建卖单列表（仍需循环计算数量，但价格已向量化）
         for i in range(5):
             quantity = self._calculate_order_quantity(
-                float(ask_prices[i]), float(ask_ratios[i])
+                float(ask_prices[i]), float(ask_ratios[i]), is_buy=False
             )
             # 只添加数量 > 0 的订单
             if quantity > 0:

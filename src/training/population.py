@@ -261,6 +261,8 @@ class Population:
         3. 调用 NEAT 种群的 run 方法进行一代进化
         4. 从新基因组重建 Agent 列表
 
+        当 NEAT 进化失败（如种群灭绝）时，自动重置种群并重新开始。
+
         Args:
             current_price: 当前市场价格，用于计算适应度
         """
@@ -279,7 +281,16 @@ class Population:
             # 适应度已经在上面设置好了，这里不需要再计算
             pass
 
-        self.neat_pop.run(eval_genomes, n=1)
+        try:
+            self.neat_pop.run(eval_genomes, n=1)
+        except RuntimeError as e:
+            # NEAT 进化失败（通常是因为种群灭绝或无法繁殖足够后代）
+            # 重置种群并重新开始
+            self.logger.warning(
+                f"{self.agent_type.value} 种群进化失败: {e}，正在重置种群..."
+            )
+            self._reset_neat_population()
+            return
 
         # 4. 增加代数计数
         self.generation += 1
@@ -291,6 +302,19 @@ class Population:
         self.logger.info(
             f"{self.agent_type.value} 种群完成第 {self.generation} 代进化，"
             f"Agent 数量: {len(self.agents)}"
+        )
+
+    def _reset_neat_population(self) -> None:
+        """重置 NEAT 种群
+
+        当进化失败时调用，创建一个全新的随机种群。
+        """
+        self.neat_pop = neat.Population(self.neat_config)
+        genomes = list(self.neat_pop.population.items())
+        self.agents = self.create_agents(genomes)
+        # 重置后代数不变，表示这是一次意外重置
+        self.logger.info(
+            f"{self.agent_type.value} 种群已重置，新 Agent 数量: {len(self.agents)}"
         )
 
     def reset_agents(self) -> None:

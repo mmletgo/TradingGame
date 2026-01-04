@@ -101,6 +101,37 @@ class Trainer:
         self._executor = None
         self._num_workers = 16
 
+        # EMA 平滑价格相关
+        self._smooth_mid_price: float = 0.0
+        self._ema_alpha: float = 0.1
+
+    def _init_ema_price(self, initial_price: float) -> None:
+        """初始化 EMA 平滑价格
+
+        在 episode 开始时调用，使用初始价格作为 EMA 的初始值。
+
+        Args:
+            initial_price: 初始价格
+        """
+        self._smooth_mid_price = initial_price
+
+    def _update_ema_price(self, current_mid_price: float) -> float:
+        """更新 EMA 平滑价格
+
+        公式: smooth = alpha * current + (1 - alpha) * prev_smooth
+
+        Args:
+            current_mid_price: 当前实时 mid_price
+
+        Returns:
+            更新后的 smooth_mid_price
+        """
+        self._smooth_mid_price = (
+            self._ema_alpha * current_mid_price
+            + (1 - self._ema_alpha) * self._smooth_mid_price
+        )
+        return self._smooth_mid_price
+
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取或创建线程池（惰性初始化）"""
         if self._executor is None:
@@ -140,6 +171,10 @@ class Trainer:
 
         # 记录各种群总数
         self._update_pop_total_counts()
+
+        # 读取 EMA 配置并初始化
+        self._ema_alpha = self.config.market.ema_alpha
+        self._init_ema_price(self.config.market.initial_price)
 
         # 初始化市场（做市商先行动）
         self._init_market()
@@ -460,8 +495,9 @@ class Trainer:
         """检查是否满足提前结束 episode 的条件（O(1) 复杂度）
 
         触发条件：
-        - 庄家(WHALE)或做市商(MARKET_MAKER)的种群存活少于初始值的 1/4
-        - 散户(RETAIL)或高级散户(RETAIL_PRO)被淘汰到 0 人口
+        - 任意种群的存活数量少于初始值的 1/4
+
+        这确保每个种群都有足够的个体用于 NEAT 进化。
 
         Returns:
             AgentType | None: 满足条件的种群类型，如果没有则返回 None
@@ -470,58 +506,56 @@ class Trainer:
             if total > 0:
                 liquidated = self._pop_liquidated_counts.get(agent_type, 0)
                 alive = total - liquidated
-
-                if agent_type in (AgentType.WHALE, AgentType.MARKET_MAKER):
-                    # 庄家或做市商：存活少于初始值的 1/4 时触发
-                    if alive < total / 4:
-                        return agent_type
-                else:
-                    # 散户或高级散户：被淘汰到 0 人口时触发
-                    if alive == 0:
-                        return agent_type
+                # 任意种群存活少于初始值的 1/4 时触发早停
+                if alive < total / 4:
+                    return agent_type
         return None
 
     def _compute_normalized_market_state(self) -> NormalizedMarketState:
         """预计算归一化的公共市场数据
 
         在每个 tick 开始时调用，避免每个 Agent 重复计算相同的归一化数据。
+        使用 EMA 平滑后的 mid_price 作为参考价格，减缓价格变化传导速度。
 
         Returns:
             NormalizedMarketState: 归一化后的市场状态
         """
         orderbook = self.matching_engine._orderbook
 
-        # 获取参考价格
-        mid_price = orderbook.get_mid_price()
-        if mid_price is None:
-            mid_price = orderbook.last_price
-        if mid_price == 0:
-            mid_price = 100.0
+        # 获取实时参考价格
+        current_mid_price = orderbook.get_mid_price()
+        if current_mid_price is None:
+            current_mid_price = orderbook.last_price
+        if current_mid_price == 0:
+            current_mid_price = 100.0
+
+        # 更新 EMA 平滑价格，用于 Agent 报价和归一化计算
+        smooth_mid_price = self._update_ema_price(current_mid_price)
 
         tick_size = orderbook.tick_size
         depth = orderbook.get_depth(levels=100)
 
-        # 向量化买盘：100档 × 2 = 200
+        # 向量化买盘：100档 × 2 = 200（使用平滑价格归一化）
         bid_data = np.zeros(200, dtype=np.float32)
         bids = depth["bids"]
         if bids:
             bid_prices = np.array([p for p, _ in bids], dtype=np.float32)
             bid_qtys = np.array([q for _, q in bids], dtype=np.float32)
             n = len(bids)
-            if mid_price > 0:
-                bid_data[0 : n * 2 : 2] = (bid_prices - mid_price) / mid_price
+            if smooth_mid_price > 0:
+                bid_data[0 : n * 2 : 2] = (bid_prices - smooth_mid_price) / smooth_mid_price
             # 数量使用对数归一化：log10(qty + 1) / 10，将 1e10 压缩到 ~1.0
             bid_data[1 : n * 2 : 2] = np.log10(bid_qtys + 1) / 10.0
 
-        # 向量化卖盘：100档 × 2 = 200
+        # 向量化卖盘：100档 × 2 = 200（使用平滑价格归一化）
         ask_data = np.zeros(200, dtype=np.float32)
         asks = depth["asks"]
         if asks:
             ask_prices = np.array([p for p, _ in asks], dtype=np.float32)
             ask_qtys = np.array([q for _, q in asks], dtype=np.float32)
             n = len(asks)
-            if mid_price > 0:
-                ask_data[0 : n * 2 : 2] = (ask_prices - mid_price) / mid_price
+            if smooth_mid_price > 0:
+                ask_data[0 : n * 2 : 2] = (ask_prices - smooth_mid_price) / smooth_mid_price
             # 数量使用对数归一化
             ask_data[1 : n * 2 : 2] = np.log10(ask_qtys + 1) / 10.0
 
@@ -536,13 +570,13 @@ class Trainer:
                 dtype=np.float32,
             )
             n = len(trades)
-            if mid_price > 0:
-                trade_prices[:n] = (prices - mid_price) / mid_price
+            if smooth_mid_price > 0:
+                trade_prices[:n] = (prices - smooth_mid_price) / smooth_mid_price
             # 成交数量带方向的对数归一化：sign(qty) * log10(|qty| + 1) / 10
             trade_quantities[:n] = np.sign(qtys) * np.log10(np.abs(qtys) + 1) / 10.0
 
         return NormalizedMarketState(
-            mid_price=mid_price,
+            mid_price=smooth_mid_price,  # 使用 EMA 平滑后的价格
             tick_size=tick_size,
             bid_data=bid_data,
             ask_data=ask_data,
@@ -684,6 +718,9 @@ class Trainer:
         # 清空最近成交
         self.recent_trades.clear()
 
+        # 重置 EMA 平滑价格
+        self._init_ema_price(self.config.market.initial_price)
+
         # 做市商重新初始化
         self._init_market()
 
@@ -711,12 +748,12 @@ class Trainer:
         """执行一个 tick（直接调用模式）
 
         时序设计：
-        1. Tick 开始：用当前价格检查所有 agent 的强平条件（爆仓即淘汰）
+        1. Tick 开始：用 smooth_mid_price 检查所有 agent 的强平条件（爆仓即淘汰）
         2. Tick 过程：Agent 按顺序决策和下单
         3. Tick 结束：下单效果（价格变动）在下个 tick 被感知
 
         这样设计确保：
-        - 强平检查和数据采集使用同一价格（tick 开始时的价格）
+        - 强平检查和 Agent 报价使用同一价格基准（smooth_mid_price）
         - 所有 agent 在同一价格基础上被检查，公平
         """
         if not self.matching_engine:
@@ -724,7 +761,11 @@ class Trainer:
 
         self.tick += 1
         orderbook = self.matching_engine._orderbook
-        current_price = orderbook.last_price
+
+        # 使用 smooth_mid_price 作为强平检查的价格依据，与 Agent 报价逻辑一致
+        # 注意：smooth_mid_price 在 _compute_normalized_market_state() 中更新
+        # 这里先获取当前的平滑价格用于强平检查
+        current_price = self._smooth_mid_price if self._smooth_mid_price > 0 else orderbook.last_price
         self.tick_start_price = current_price  # 保存 tick 开始时的价格
 
         # === Tick 开始：检查所有 agent 的强平条件（爆仓即淘汰）===
@@ -861,13 +902,9 @@ class Trainer:
                 total = self._pop_total_counts[early_end_type]
                 liquidated = self._pop_liquidated_counts.get(early_end_type, 0)
                 alive = total - liquidated
-                if early_end_type in (AgentType.WHALE, AgentType.MARKET_MAKER):
-                    reason = f"存活不足 1/4 ({alive}/{total})"
-                else:
-                    reason = f"全部淘汰 ({alive}/{total})"
                 self.logger.warning(
-                    f"Episode {self.episode} 提前结束：{early_end_type.value} {reason} "
-                    f"(tick={self.tick})"
+                    f"Episode {self.episode} 提前结束：{early_end_type.value} "
+                    f"存活不足 1/4 ({alive}/{total}) (tick={self.tick})"
                 )
                 break
 

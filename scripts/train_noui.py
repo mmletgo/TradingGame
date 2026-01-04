@@ -65,6 +65,7 @@ def create_default_config(
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
+        ema_alpha=0.1,  # EMA 平滑系数，减缓价格变化传导
     )
 
     agents = {

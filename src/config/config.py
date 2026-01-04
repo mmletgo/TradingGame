@@ -32,12 +32,14 @@ class MarketConfig:
         tick_size: 最小变动单位
         lot_size: 最小交易单位
         depth: 盘口深度（买卖各多少档）
+        ema_alpha: EMA 平滑系数（0-1，值越小价格变化越平滑）
     """
 
     initial_price: float
     tick_size: float
     lot_size: float
     depth: int
+    ema_alpha: float = 0.1
 
 
 @dataclass

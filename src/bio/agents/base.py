@@ -260,9 +260,9 @@ class Agent:
             # 舍入到 tick_size 的整数倍，避免浮点数精度问题
             # 确保价格至少为一个 tick_size，防止出现负价格或零价格
             params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
-            # 数量由神经网络决定
+            # 数量由神经网络决定（买入方向，限制总持仓）
             params["quantity"] = self._calculate_order_quantity(
-                mid_price, quantity_ratio
+                mid_price, quantity_ratio, is_buy=True
             )
 
         elif action == ActionType.PLACE_ASK:
@@ -272,15 +272,15 @@ class Agent:
             # 舍入到 tick_size 的整数倍，避免浮点数精度问题
             # 确保价格至少为一个 tick_size，防止出现负价格或零价格
             params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
-            # 数量由神经网络决定
+            # 数量由神经网络决定（卖出方向，限制总持仓）
             params["quantity"] = self._calculate_order_quantity(
-                mid_price, quantity_ratio
+                mid_price, quantity_ratio, is_buy=False
             )
 
         elif action == ActionType.MARKET_BUY:
-            # 市价买入：数量由神经网络决定
+            # 市价买入：数量由神经网络决定（买入方向，限制总持仓）
             params["quantity"] = self._calculate_order_quantity(
-                mid_price, quantity_ratio
+                mid_price, quantity_ratio, is_buy=True
             )
 
         elif action == ActionType.MARKET_SELL:
@@ -293,9 +293,9 @@ class Agent:
                 # 但不能超过持仓量
                 params["quantity"] = min(sell_qty, int(position_qty))
             else:
-                # 空仓或无持仓，开空仓
+                # 空仓或无持仓，开空仓（卖出方向，限制总持仓）
                 params["quantity"] = self._calculate_order_quantity(
-                    mid_price, quantity_ratio
+                    mid_price, quantity_ratio, is_buy=False
                 )
 
         elif action == ActionType.CANCEL:
@@ -315,17 +315,21 @@ class Agent:
     # 订单数量上限，防止 int 溢出
     MAX_ORDER_QUANTITY: int = 100_000_000
 
-    def _calculate_order_quantity(self, price: float, ratio: float) -> int:
+    def _calculate_order_quantity(
+        self, price: float, ratio: float, is_buy: bool = True
+    ) -> int:
         """计算订单数量
 
-        根据账户净值、杠杆倍数和数量比例计算订单数量。
+        根据账户净值、杠杆倍数、当前持仓和数量比例计算订单数量。
+        确保下单后的总持仓市值不超过 equity * leverage。
 
         Args:
             price: 价格
-            ratio: 数量比例（0.1 到 1.0，表示使用购买力的比例）
+            ratio: 数量比例（0.1 到 1.0，表示使用可用空间的比例）
+            is_buy: 是否为买入方向
 
         Returns:
-            订单数量（整数），如果净值为负或不足则返回 0
+            订单数量（整数），如果净值为负或可用空间不足则返回 0
         """
         equity = self.account.get_equity(price)
 
@@ -333,14 +337,39 @@ class Agent:
         if equity <= 0:
             return 0
 
-        # 可用购买力 = 净值 * 杠杆
-        buying_power = equity * self.account.leverage
+        # 最大允许持仓市值 = 净值 * 杠杆
+        max_pos_value = equity * self.account.leverage
+
+        # 当前持仓情况
+        current_pos = self.account.position.quantity  # 正数为多头，负数为空头
+        current_pos_value = abs(current_pos) * price
+
+        # 计算剩余可用持仓空间
+        if is_buy:
+            if current_pos >= 0:
+                # 当前是多头或空仓，买入是同向加仓
+                available_pos_value = max(0, max_pos_value - current_pos_value)
+            else:
+                # 当前是空头，买入是反向平仓+可能开多仓
+                # 剩余可用 = 可平仓市值 + 最大可开多仓市值
+                available_pos_value = current_pos_value + max_pos_value
+        else:
+            if current_pos <= 0:
+                # 当前是空头或空仓，卖出是同向加仓
+                available_pos_value = max(0, max_pos_value - current_pos_value)
+            else:
+                # 当前是多头，卖出是反向平仓+可能开空仓
+                # 剩余可用 = 可平仓市值 + 最大可开空仓市值
+                available_pos_value = current_pos_value + max_pos_value
+
         # 限制比例在合理范围
-        ratio = max(0.1, min(1.0, ratio))
-        quantity = (buying_power * ratio) / price if price > 0 else 0.0
+        ratio = min(1.0, ratio)
+        quantity = (available_pos_value * ratio) / price if price > 0 else 0.0
 
         # 确保数量为整数且至少为1（最小交易单位），同时限制最大值防止溢出
-        quantity = max(1, min(self.MAX_ORDER_QUANTITY, int(quantity)))
+        if quantity < 1:
+            return 0
+        quantity = min(self.MAX_ORDER_QUANTITY, int(quantity))
 
         return quantity
 

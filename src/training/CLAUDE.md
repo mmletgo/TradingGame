@@ -27,7 +27,8 @@
 - `create_agents()` - 从基因组列表创建 Agent（小批量串行，大批量并行）
 - `_create_single_agent()` - 创建单个 Agent（线程安全）
 - `evaluate()` - 评估种群适应度并排序
-- `evolve()` - 执行一代 NEAT 进化
+- `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError 并在进化失败时自动重置种群
+- `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
 - `reset_agents()` - 重置所有 Agent 账户
 - `_get_shared_executor()` - 获取类级别共享线程池
 - `shutdown_executor()` - 关闭共享线程池
@@ -49,7 +50,9 @@
 - 支持暂停/恢复/停止控制
 
 **关键方法：**
-- `setup()` - 初始化训练环境，创建 ADL 管理器
+- `setup()` - 初始化训练环境，创建 ADL 管理器，初始化 EMA 平滑价格
+- `_init_ema_price()` - 初始化 EMA 平滑价格（在 episode 开始时调用）
+- `_update_ema_price()` - 更新 EMA 平滑价格（每 tick 调用）
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
@@ -57,8 +60,8 @@
 - `_handle_liquidation()` - 处理强平，提交市价单平仓，若市价单无法完全成交则触发 ADL，强平完成后淘汰 Agent（调用前必须先撤销挂单）
 - `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty），ADL 后检查参与者的强平条件
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
-- `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件：庄家/做市商存活少于 1/4 或散户/高级散户被完全淘汰
-- `_compute_normalized_market_state()` - 向量化计算归一化市场状态
+- `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件：任意种群存活少于 1/4
+- `_compute_normalized_market_state()` - 向量化计算归一化市场状态，使用 EMA 平滑后的 mid_price
 - `run_tick()` - 执行单个 tick
 - `run_episode()` - 运行完整 episode（重置、运行、进化），若满足提前结束条件则提前结束
 - `train()` - 主训练循环
@@ -70,6 +73,14 @@
 - 使用 `_pop_total_counts` 和 `_pop_liquidated_counts` 计数器实现 O(1) 种群淘汰检查，避免每 tick 遍历
 - 使用 `agent_execution_order` 预构建执行顺序，合并决策/执行和强平检查循环
 - 向量化市场状态计算，使用 NumPy 数组操作替代 Python 循环
+
+**价格稳定机制（EMA 平滑）：**
+- 使用 EMA（指数移动平均）平滑 mid_price，减缓价格变化传导速度
+- 公式：`smooth_mid_price = α × current_mid_price + (1-α) × prev_smooth_mid_price`
+- 参数 `ema_alpha`（默认 0.1）可通过 `MarketConfig.ema_alpha` 配置
+- Agent 报价、归一化计算、强平检查使用 `smooth_mid_price`（保持一致性）
+- ADL 计算使用实时 `last_price`（实际市场操作需要准确价格）
+- 解决了价格在短时间内极端波动的正反馈循环问题
 
 **多核并行化优化：**
 - 种群初始化：串行创建种群，但每个种群内部的 Agent 创建是并行的（Agent维度并行）
@@ -88,13 +99,14 @@
    - 创建 ADL 管理器
    - 注册所有 Agent 的费率到撮合引擎
    - 构建 Agent 映射表和执行顺序
+   - 初始化 EMA 平滑价格（使用 initial_price）
    - 做市商建立初始流动性
 
 2. **Episode 循环** (`run_episode`)
    - 重置所有 Agent 账户
-   - 重置市场状态
+   - 重置市场状态（包括重置 EMA 平滑价格）
    - 运行 episode_length 个 tick
-   - **提前结束条件**：若庄家/做市商存活少于初始值的 1/4，或散户/高级散户被完全淘汰，则立即结束当前 episode
+   - **提前结束条件**：若任意种群存活少于初始值的 1/4，则立即结束当前 episode（确保有足够的幸存者用于 NEAT 进化）
    - 各种群进化
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
@@ -178,6 +190,13 @@
 - `config/neat_market_maker.cfg` - 做市商（634 个输入节点，22 个输出节点）
 
 散户只能看到买卖各10档订单簿和最近10笔成交，高级散户和庄家可以看到完整的100档订单簿和100笔成交。
+
+**关键配置参数（防止种群灭绝）：**
+- `reset_on_extinction = True` - 当所有物种灭绝时自动重置种群
+- `survival_threshold = 0.5` - 每个物种的前 50% 个体可以参与繁殖
+- `compatibility_threshold = 4.0` - 物种兼容性阈值，较高的值减少物种数量
+- `elitism = 1` - 每个物种保留 1 个最优个体不变
+- `species_elitism = 2` - 保留 2 个最优物种不被移除
 
 **注意：**
 - NEAT 配置文件中的 `pop_size` 会被 `AgentConfig.count` 动态覆盖，即种群数量由脚本中的配置决定，而非 NEAT 配置文件。
