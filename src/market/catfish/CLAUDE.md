@@ -21,11 +21,12 @@
 **属性：**
 - `catfish_id: int` - 鲶鱼ID（使用负数避免与Agent冲突）
 - `config: CatfishConfig` - 鲶鱼配置
+- `phase_offset: int` - 相位偏移（用于错开多个鲶鱼的触发时间）
 
 **核心方法：**
 - `decide(orderbook, tick, price_history) -> tuple[bool, int]` - 抽象方法，决策是否行动和方向
 - `execute(direction, matching_engine) -> list[Trade]` - 执行市价单
-- `can_act(tick) -> bool` - 检查冷却时间
+- `can_act(tick) -> bool` - 检查冷却时间（考虑相位偏移）
 - `record_action(tick)` - 记录行动时间
 
 ### TrendFollowingCatfish (trend_following.py)
@@ -58,13 +59,25 @@
 
 ## 工厂函数
 
-### create_catfish(catfish_id, config) -> CatfishBase
+### create_catfish(catfish_id, config, phase_offset=0) -> CatfishBase
 
 根据 `config.mode` 创建对应类型的鲶鱼实例。
 
 **参数：**
 - `catfish_id: int` - 鲶鱼ID（应为负数）
 - `config: CatfishConfig` - 鲶鱼配置
+- `phase_offset: int` - 相位偏移（默认0）
+
+### create_all_catfish(config) -> list[CatfishBase]
+
+创建所有三种鲶鱼实例，相位错开以避免同时触发。
+
+**参数：**
+- `config: CatfishConfig` - 鲶鱼配置
+
+**返回：**
+- 三种鲶鱼实例的列表：[TrendFollowing, CycleSwing, MeanReversion]
+- 相位偏移分别为：0, cooldown/3, cooldown*2/3
 
 ## 使用示例
 
@@ -95,7 +108,8 @@ if should_act:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | enabled | bool | False | 是否启用鲶鱼 |
-| mode | CatfishMode | TREND_FOLLOWING | 鲶鱼行为模式 |
+| multi_mode | bool | True | 是否同时启用三种模式 |
+| mode | CatfishMode | TREND_FOLLOWING | 单模式时的鲶鱼行为模式 |
 | fund_multiplier | float | 2.5 | 资金乘数 |
 | whale_base_fund | float | 10,000,000 | 庄家基础资金 |
 | lookback_period | int | 50 | 趋势追踪回看周期 |
