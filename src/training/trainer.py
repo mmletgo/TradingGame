@@ -207,11 +207,12 @@ class Trainer:
                 self.agent_map[agent.agent_id] = agent
 
     def _build_execution_order(self) -> None:
-        """构建 Agent 执行顺序列表（做市商 -> 庄家 -> 高级散户 -> 散户）"""
+        """构建 Agent 执行顺序列表（做市商 -> 空头庄家 -> 多头庄家 -> 高级散户 -> 散户）"""
         self.agent_execution_order.clear()
         for agent_type in [
             AgentType.MARKET_MAKER,
-            AgentType.WHALE,
+            AgentType.BEAR_WHALE,
+            AgentType.BULL_WHALE,
             AgentType.RETAIL_PRO,
             AgentType.RETAIL,
         ]:

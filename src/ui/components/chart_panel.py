@@ -22,25 +22,28 @@ if TYPE_CHECKING:
 
 # 种群颜色配置
 POPULATION_COLORS: dict[AgentType, tuple[int, int, int]] = {
-    AgentType.RETAIL: (100, 200, 100),      # 绿色
-    AgentType.RETAIL_PRO: (100, 150, 255),  # 蓝色
-    AgentType.WHALE: (255, 200, 100),       # 橙色
-    AgentType.MARKET_MAKER: (200, 100, 255) # 紫色
+    AgentType.RETAIL: (100, 200, 100),       # 绿色
+    AgentType.RETAIL_PRO: (100, 150, 255),   # 蓝色
+    AgentType.BULL_WHALE: (255, 100, 100),   # 红色（做多=看涨）
+    AgentType.BEAR_WHALE: (100, 255, 255),   # 青色（做空=看跌）
+    AgentType.MARKET_MAKER: (200, 100, 255), # 紫色
 }
 
 # 种群中文名称
 POPULATION_NAMES: dict[AgentType, str] = {
     AgentType.RETAIL: "散户",
     AgentType.RETAIL_PRO: "高级散户",
-    AgentType.WHALE: "庄家",
-    AgentType.MARKET_MAKER: "做市商"
+    AgentType.BULL_WHALE: "多头庄家",
+    AgentType.BEAR_WHALE: "空头庄家",
+    AgentType.MARKET_MAKER: "做市商",
 }
 
 # 纵向布局的种群顺序
 VERTICAL_LAYOUT: list[AgentType] = [
     AgentType.RETAIL,
     AgentType.RETAIL_PRO,
-    AgentType.WHALE,
+    AgentType.BULL_WHALE,
+    AgentType.BEAR_WHALE,
     AgentType.MARKET_MAKER,
 ]
 

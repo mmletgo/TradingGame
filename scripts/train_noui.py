@@ -33,9 +33,9 @@ importlib.invalidate_caches()
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.bio.agents.base import AgentType
 from src.config.config import (
     AgentConfig,
+    AgentType,
     Config,
     DemoConfig,
     MarketConfig,
@@ -85,8 +85,16 @@ def create_default_config(
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
-        AgentType.WHALE: AgentConfig(
-            count=100,
+        AgentType.BULL_WHALE: AgentConfig(
+            count=50,  # 多头庄家
+            initial_balance=10000000.0,  # 1000万
+            leverage=1.0,
+            maintenance_margin_rate=0.1,  # 10%
+            maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
+            taker_fee_rate=0.0001,  # 万1
+        ),
+        AgentType.BEAR_WHALE: AgentConfig(
+            count=50,  # 空头庄家
             initial_balance=10000000.0,  # 1000万
             leverage=1.0,
             maintenance_margin_rate=0.1,  # 10%
