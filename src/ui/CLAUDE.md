@@ -246,30 +246,29 @@ controller.stop()
 
 ### ChartPanel
 
-图表面板，显示价格曲线、种群资产曲线和资产分布小提琴图。
+图表面板，显示价格曲线、种群存活个体平均资产曲线和资产分布小提琴图。
 
 **构造参数：**
 - 无参数，组件会自动添加到当前DearPyGui上下文中
 
 **类常量：**
-- `PANEL_WIDTH: int = 1150` - 面板总宽度
+- `PANEL_WIDTH: int = 1360` - 面板总宽度
 - `EQUITY_PLOT_HEIGHT: int = 140` - 每个资产图表高度
-- `EQUITY_PLOT_WIDTH: int = 560` - 每个资产图表宽度（两张并排）
 - `PRICE_PLOT_HEIGHT: int = 140` - 价格图表高度
 - `VIOLIN_PLOT_HEIGHT: int = 120` - 小提琴图高度
-- `VIOLIN_PLOT_WIDTH: int = 280` - 每个小提琴图宽度（4个并排）
+- `VIOLIN_PLOT_WIDTH: int = 340` - 每个小提琴图宽度（4个并排）
 - `KDE_POINTS: int = 50` - KDE曲线采样点数
 
 **方法：**
 - `update_price(price_history) -> None` - 更新价格曲线
   - `price_history: list[float]` - 价格历史列表
 - `update_equity(equity_history, alive_equity_history, population_stats) -> None` - 更新资产曲线、统计和小提琴图
-  - `equity_history: dict[AgentType, list[float]]` - 各种群所有个体平均资产历史
-  - `alive_equity_history: dict[AgentType, list[float]]` - 各种群存活个体平均资产历史
+  - `equity_history: dict[AgentType, list[float]]` - 各种群所有个体平均资产历史（保留参数兼容性，但不再显示）
+  - `alive_equity_history: dict[AgentType, list[float]]` - 各种群存活个体平均资产历史（用于显示）
   - `population_stats: dict[AgentType, PopulationStats]` - 各种群统计信息
 
 **私有方法：**
-- `_create_equity_row(agent_type) -> None` - 创建单个种群的资产图表行（所有个体+存活个体两张图）
+- `_create_equity_row(agent_type) -> None` - 创建单个种群的存活个体资产图表
 - `_create_violin_plots() -> None` - 创建4个并排的小提琴图
 - `_setup_violin_themes() -> None` - 设置小提琴图颜色主题
 - `_gaussian_kde(data, x_grid, bandwidth) -> np.ndarray` - 高斯核密度估计（纯NumPy实现）
@@ -277,16 +276,16 @@ controller.stop()
 
 **布局：**
 - 价格走势图：高度140px，宽度自适应
-- 4行资产图表，每行2张图并排（左：所有个体平均  右：存活个体平均）：
-  - 第1行：散户平均资产图（全部均值 + 存活均值）
-  - 第2行：高级散户平均资产图（全部均值 + 存活均值）
-  - 第3行：庄家平均资产图（全部均值 + 存活均值）
-  - 第4行：做市商平均资产图（全部均值 + 存活均值）
-- 每个资产图表：高度140px，宽度560px
-- 每个图表标题显示种群名称+类型（全部均值/存活均值）
+- 4行资产图表，每行1张图（存活个体平均资产）：
+  - 第1行：散户存活个体平均资产图
+  - 第2行：高级散户存活个体平均资产图
+  - 第3行：庄家存活个体平均资产图
+  - 第4行：做市商存活个体平均资产图
+- 每个资产图表：高度140px，宽度自适应
+- 每个图表标题显示种群名称
 - 统计文字水平排列显示在4个图表下方（节省垂直空间）
 - 小提琴图区域（4个并排，高度120px）：
-  - 每个图表宽度280px
+  - 每个图表宽度340px
   - 显示KDE密度曲线形成的小提琴形状
   - 中位数线（白色）和四分位线（灰色）
 
@@ -304,8 +303,7 @@ controller.stop()
 
 **Tag命名规则：**
 - 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`
-- 所有个体平均资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
-- 存活个体平均资产图：`alive_equity_plot_{agent_type}`, `alive_equity_series_{agent_type}`, `alive_equity_x_axis_{agent_type}`, `alive_equity_y_axis_{agent_type}`
+- 存活个体平均资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
 - 统计文本：`stat_{agent_type}`
 - 小提琴图：`violin_plot_{agent_type}`, `violin_area_{agent_type}`, `violin_median_{agent_type}`, `violin_q1_{agent_type}`, `violin_q3_{agent_type}`
 

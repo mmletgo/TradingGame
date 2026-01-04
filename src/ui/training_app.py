@@ -137,7 +137,6 @@ class TrainingUIApp:
                 on_start=self._on_start,
                 on_pause=self._on_pause,
                 on_stop=self._on_stop,
-                on_speed_change=self._on_speed_change,
             )
 
             dpg.add_separator()
@@ -178,16 +177,6 @@ class TrainingUIApp:
         停止训练并清理资源。
         """
         self.controller.stop()
-
-    def _on_speed_change(self, _speed: float) -> None:
-        """速度变化回调（训练模式不使用）
-
-        训练模式以最大速度运行，不需要速度控制。
-
-        Args:
-            _speed: 速度倍率（忽略）
-        """
-        pass
 
     def _update_ui(self) -> None:
         """更新UI（每帧调用）

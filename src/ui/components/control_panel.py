@@ -15,7 +15,6 @@ class ControlPanel:
         on_start: Callable[[], None] | None = None,
         on_pause: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
-        on_speed_change: Callable[[float], None] | None = None,
     ):
         """初始化控制面板
 
@@ -25,12 +24,10 @@ class ControlPanel:
             on_start: 开始按钮回调
             on_pause: 暂停/继续按钮回调
             on_stop: 停止按钮回调
-            on_speed_change: 速度滑块变化回调
         """
         self.on_start = on_start
         self.on_pause = on_pause
         self.on_stop = on_stop
-        self.on_speed_change = on_speed_change
         self._is_paused: bool = False
         self._setup_ui()
 
@@ -43,13 +40,6 @@ class ControlPanel:
                           width=60)
             dpg.add_button(label="停止", callback=self._on_stop_click, tag="btn_stop",
                           width=60)
-
-            dpg.add_spacer(width=20)
-
-            dpg.add_text("速度:")
-            dpg.add_slider_float(label="", default_value=1.0, min_value=0.1, max_value=10.0,
-                width=100, callback=self._on_speed_slider, tag="speed_slider",
-                format="%.1fx")
 
             dpg.add_spacer(width=20)
 
@@ -86,11 +76,6 @@ class ControlPanel:
         dpg.configure_item("btn_start", enabled=True)
         dpg.set_item_label("btn_pause", "暂停")
         self._is_paused = False
-
-    def _on_speed_slider(self, sender: int | str, value: float) -> None:
-        """速度滑块变化处理"""
-        if self.on_speed_change:
-            self.on_speed_change(value)
 
     def update_status(self, episode: int, tick: int, total_ticks: int, price: float) -> None:
         """更新状态显示

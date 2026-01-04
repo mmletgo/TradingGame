@@ -140,7 +140,6 @@ class DemoUIApp:
                 on_start=self._on_start,
                 on_pause=self._on_pause,
                 on_stop=self._on_stop,
-                on_speed_change=self._on_speed_change,
             )
 
             dpg.add_separator()
@@ -181,16 +180,6 @@ class DemoUIApp:
         停止演示并清理资源。
         """
         self.controller.stop()
-
-    def _on_speed_change(self, speed: float) -> None:
-        """速度变化回调
-
-        演示模式支持速度控制，调整tick间隔。
-
-        Args:
-            speed: 速度倍率（1.0=正常，10.0=10倍速）
-        """
-        self.controller.set_speed(speed)
 
     def _update_ui(self) -> None:
         """更新UI（每帧调用）
