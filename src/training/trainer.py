@@ -303,103 +303,6 @@ class Trainer:
         remaining_qty = abs(agent.account.position.quantity)
         return remaining_qty, is_long
 
-    def _handle_liquidation_direct(self, agent: "Agent", current_price: float) -> None:
-        """直接处理强平（训练模式）
-
-        爆仓后直接淘汰：创建市价平仓单，直接调用撮合引擎处理，更新账户。
-        如果市价单无法完全成交，触发 ADL 机制。
-        强平完成后标记 Agent 为淘汰状态。
-
-        注意：调用此方法前，必须已经撤销了 agent 的所有挂单。
-
-        Args:
-            agent: 被强平的 Agent
-            current_price: 当前价格
-        """
-        if not self.matching_engine or not self.adl_manager:
-            return
-
-        # 重入保护：防止同一 Agent 被多次处理
-        if agent.agent_id in self._eliminating_agents:
-            return
-        self._eliminating_agents.add(agent.agent_id)
-
-        position_qty = agent.account.position.quantity
-        if position_qty == 0:
-            # 没有仓位，直接标记为淘汰
-            agent.is_liquidated = True
-            self._pop_liquidated_counts[agent.agent_type] = (
-                self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
-            )
-            self._eliminating_agents.discard(agent.agent_id)
-            return
-
-        # 记录原始持仓方向
-        is_long = position_qty > 0
-        target_qty = abs(position_qty)
-
-        # 创建市价平仓单
-        side = OrderSide.SELL if is_long else OrderSide.BUY
-        order = Order(
-            order_id=agent._generate_order_id(),
-            agent_id=agent.agent_id,
-            side=side,
-            order_type=OrderType.MARKET,
-            price=0.0,
-            quantity=target_qty,
-        )
-
-        # 直接撮合
-        trades = self.matching_engine.process_order(order)
-
-        # 计算已成交数量
-        # filled_qty = sum(trade.quantity for trade in trades)
-
-        # 更新账户（taker 和 maker）
-        # 注意：被淘汰 agent 的挂单已在外部统一撤销，不会作为 maker 被成交
-        for trade in trades:
-            # 使用 is_buyer_taker 判断 taker 是买方还是卖方
-            is_buyer = trade.is_buyer_taker
-            agent.account.on_trade(trade, is_buyer)
-            self.recent_trades.append(trade)
-            # 更新 maker 的账户
-            maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-            maker_agent = self.agent_map.get(maker_id)
-            if maker_agent is not None:
-                maker_is_buyer = not trade.is_buyer_taker
-                maker_agent.account.on_trade(trade, maker_is_buyer)
-
-        # 检查是否需要 ADL
-        # 重要：使用当前仓位而非原始 target_qty，因为仓位可能在 maker 淘汰流程中被修改
-        current_position = abs(agent.account.position.quantity)
-        if current_position > 0:
-            self._execute_adl(agent, current_position, current_price, is_long)
-
-        # 强平完成后标记为淘汰
-        agent.is_liquidated = True
-        self._pop_liquidated_counts[agent.agent_type] = (
-            self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
-        )
-
-        # 处理穿仓：如果余额为负，归零（由系统承担损失）
-        if agent.account.balance < 0:
-            agent.account.balance = 0.0
-
-        # 验证仓位已清零
-        if agent.account.position.quantity != 0:
-            self.logger.error(
-                f"Agent {agent.agent_id} ({agent.agent_type.value}) 淘汰异常: "
-                f"仓位未清零！pos={agent.account.position.quantity}, "
-                f"avg_price={agent.account.position.avg_price:.2f}, "
-                f"balance={agent.account.balance:.2f}"
-            )
-            # 强制清零仓位
-            agent.account.position.quantity = 0
-            agent.account.position.avg_price = 0.0
-
-        # 移除重入保护标记
-        self._eliminating_agents.discard(agent.agent_id)
-
     def _execute_adl(
         self,
         liquidated_agent: "Agent",
@@ -543,7 +446,9 @@ class Trainer:
             bid_qtys = np.array([q for _, q in bids], dtype=np.float32)
             n = len(bids)
             if smooth_mid_price > 0:
-                bid_data[0 : n * 2 : 2] = (bid_prices - smooth_mid_price) / smooth_mid_price
+                bid_data[0 : n * 2 : 2] = (
+                    bid_prices - smooth_mid_price
+                ) / smooth_mid_price
             # 数量使用对数归一化：log10(qty + 1) / 10，将 1e10 压缩到 ~1.0
             bid_data[1 : n * 2 : 2] = np.log10(bid_qtys + 1) / 10.0
 
@@ -555,7 +460,9 @@ class Trainer:
             ask_qtys = np.array([q for _, q in asks], dtype=np.float32)
             n = len(asks)
             if smooth_mid_price > 0:
-                ask_data[0 : n * 2 : 2] = (ask_prices - smooth_mid_price) / smooth_mid_price
+                ask_data[0 : n * 2 : 2] = (
+                    ask_prices - smooth_mid_price
+                ) / smooth_mid_price
             # 数量使用对数归一化
             ask_data[1 : n * 2 : 2] = np.log10(ask_qtys + 1) / 10.0
 
@@ -765,7 +672,11 @@ class Trainer:
         # 使用 smooth_mid_price 作为强平检查的价格依据，与 Agent 报价逻辑一致
         # 注意：smooth_mid_price 在 _compute_normalized_market_state() 中更新
         # 这里先获取当前的平滑价格用于强平检查
-        current_price = self._smooth_mid_price if self._smooth_mid_price > 0 else orderbook.last_price
+        current_price = (
+            self._smooth_mid_price
+            if self._smooth_mid_price > 0
+            else orderbook.last_price
+        )
         self.tick_start_price = current_price  # 保存 tick 开始时的价格
 
         # === Tick 开始：检查所有 agent 的强平条件（爆仓即淘汰）===
