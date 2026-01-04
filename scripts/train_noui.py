@@ -36,6 +36,8 @@ sys.path.insert(0, str(project_root))
 from src.config.config import (
     AgentConfig,
     AgentType,
+    CatfishConfig,
+    CatfishMode,
     Config,
     DemoConfig,
     MarketConfig,
@@ -49,6 +51,9 @@ def create_default_config(
     episode_length: int = 1000,
     checkpoint_interval: int = 10,
     config_dir: str = "config",
+    catfish_enabled: bool = False,
+    catfish_mode: str = "trend_following",
+    catfish_fund_multiplier: float = 2.5,
 ) -> Config:
     """创建默认配置
 
@@ -123,7 +128,22 @@ def create_default_config(
         tick_interval=100,
     )
 
-    return Config(market=market, agents=agents, training=training, demo=demo)
+    # 鲶鱼配置（如果启用）
+    catfish: CatfishConfig | None = None
+    if catfish_enabled:
+        mode_map = {
+            "trend_following": CatfishMode.TREND_FOLLOWING,
+            "cycle_swing": CatfishMode.CYCLE_SWING,
+            "mean_reversion": CatfishMode.MEAN_REVERSION,
+        }
+        catfish = CatfishConfig(
+            enabled=True,
+            mode=mode_map.get(catfish_mode, CatfishMode.TREND_FOLLOWING),
+            fund_multiplier=catfish_fund_multiplier,
+            whale_base_fund=10_000_000.0,  # 与庄家初始资金一致
+        )
+
+    return Config(market=market, agents=agents, training=training, demo=demo, catfish=catfish)
 
 
 def progress_callback(state: dict[str, Any]) -> None:
@@ -186,6 +206,24 @@ def main() -> None:
         default="logs",
         help="日志目录（默认: logs）",
     )
+    parser.add_argument(
+        "--catfish",
+        action="store_true",
+        help="启用鲶鱼机制增加市场波动",
+    )
+    parser.add_argument(
+        "--catfish-mode",
+        type=str,
+        default="trend_following",
+        choices=["trend_following", "cycle_swing", "mean_reversion"],
+        help="鲶鱼行为模式（默认: trend_following）",
+    )
+    parser.add_argument(
+        "--catfish-fund-multiplier",
+        type=float,
+        default=2.5,
+        help="鲶鱼资金倍数（相对于庄家，默认: 2.5）",
+    )
 
     args = parser.parse_args()
 
@@ -200,6 +238,8 @@ def main() -> None:
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
     if args.resume:
         print(f"Resume From: {args.resume}")
+    if args.catfish:
+        print(f"Catfish: enabled, mode={args.catfish_mode}, multiplier={args.catfish_fund_multiplier}x")
     print("=" * 60)
 
     # 创建配置
@@ -207,6 +247,9 @@ def main() -> None:
         episode_length=args.episode_length,
         checkpoint_interval=args.checkpoint_interval,
         config_dir=args.config_dir,
+        catfish_enabled=args.catfish,
+        catfish_mode=args.catfish_mode,
+        catfish_fund_multiplier=args.catfish_fund_multiplier,
     )
 
     # 创建训练器

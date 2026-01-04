@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
+from src.market.catfish import CatfishBase, create_catfish
 from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
@@ -71,6 +72,8 @@ class Trainer:
     ]  # 空头 ADL 候选（已排序，持仓数量会动态更新）
     _executor: ThreadPoolExecutor | None
     _num_workers: int
+    catfish: "CatfishBase | None"
+    _price_history: list[float]
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -104,6 +107,10 @@ class Trainer:
         # EMA 平滑价格相关
         self._smooth_mid_price: float = 0.0
         self._ema_alpha: float = 0.1
+
+        # 鲶鱼相关
+        self.catfish = None
+        self._price_history = []
 
     def _init_ema_price(self, initial_price: float) -> None:
         """初始化 EMA 平滑价格
@@ -161,6 +168,17 @@ class Trainer:
 
         # 创建 ADL 管理器
         self.adl_manager = ADLManager()
+
+        # 初始化鲶鱼（如果配置中启用）
+        if self.config.catfish and self.config.catfish.enabled:
+            self.catfish = create_catfish(self.config.catfish)
+            # 注册鲶鱼费率（免手续费）
+            self.matching_engine.register_agent(
+                self.catfish.catfish_id,
+                0.0,  # maker fee
+                0.0,  # taker fee
+            )
+            self.logger.info(f"鲶鱼已启用: 模式={self.config.catfish.mode.value}")
 
         # 注册所有 Agent 的费率
         self._register_all_agents()
@@ -625,6 +643,10 @@ class Trainer:
 
         # 清空最近成交
         self.recent_trades.clear()
+
+        # 重置价格历史
+        self._price_history.clear()
+        self._price_history.append(self.config.market.initial_price)
 
         # 重置 EMA 平滑价格
         self._init_ema_price(self.config.market.initial_price)
