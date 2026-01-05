@@ -14,3 +14,4 @@ false
 *.so
 logs
 *.prof
+checkpoints/

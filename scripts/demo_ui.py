@@ -19,97 +19,22 @@
 """
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
+
+# 关键：在导入任何项目模块之前，先清除 importlib 缓存
+importlib.invalidate_caches()
 
 # 将项目根目录添加到 Python 路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.config.config import (
-    AgentConfig,
-    AgentType,
-    Config,
-    DemoConfig,
-    MarketConfig,
-    TrainingConfig,
-)
 from src.core.log_engine.logger import setup_logging
 from src.training.trainer import Trainer
 from src.ui.demo_app import DemoUIApp
 
-
-def create_demo_config(
-    episode_length: int = 1000,
-    config_dir: str = "config",
-) -> Config:
-    """创建演示配置
-
-    与训练配置相同，用于演示模式。
-
-    Args:
-        episode_length: 每个 episode 的 tick 数量
-        config_dir: 配置文件目录
-
-    Returns:
-        演示配置对象
-    """
-    market = MarketConfig(
-        initial_price=100.0,
-        tick_size=0.1,
-        lot_size=1.0,
-        depth=100,
-        ema_alpha=0.5,
-    )
-
-    agents = {
-        AgentType.RETAIL: AgentConfig(
-            count=10000,
-            initial_balance=200000.0,  # 20万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=0.0002,  # 万2
-            taker_fee_rate=0.0005,  # 万5
-        ),
-        AgentType.RETAIL_PRO: AgentConfig(
-            count=100,
-            initial_balance=200000.0,  # 20万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=0.0002,  # 万2
-            taker_fee_rate=0.0005,  # 万5
-        ),
-        AgentType.WHALE: AgentConfig(
-            count=200,  # 庄家（合并多空）
-            initial_balance=10000000.0,  # 1000万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
-            taker_fee_rate=0.0001,  # 万1
-        ),
-        AgentType.MARKET_MAKER: AgentConfig(
-            count=100,
-            initial_balance=20000000.0,  # 2000万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
-            taker_fee_rate=0.0001,  # 万1
-        ),
-    }
-
-    training = TrainingConfig(
-        episode_length=episode_length,
-        checkpoint_interval=0,  # 演示模式不需要保存检查点
-        neat_config_path=config_dir,
-    )
-
-    demo = DemoConfig(
-        host="localhost",
-        port=8000,
-        tick_interval=100,
-    )
-
-    return Config(market=market, agents=agents, training=training, demo=demo)
+from create_config import create_default_config
 
 
 def main() -> None:
@@ -165,9 +90,10 @@ def main() -> None:
             print(f"错误: 检查点文件不存在: {args.checkpoint}")
             sys.exit(1)
 
-    # 创建配置
-    config = create_demo_config(
+    # 创建配置（使用与训练相同的默认配置，但不保存检查点）
+    config = create_default_config(
         episode_length=args.episode_length,
+        checkpoint_interval=0,  # 演示模式不保存检查点
         config_dir=args.config_dir,
     )
 

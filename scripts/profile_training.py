@@ -5,86 +5,24 @@
 """
 
 import cProfile
+import importlib
 import pstats
 import sys
 import time
 from pathlib import Path
 from io import StringIO
 
+# 关键：在导入任何项目模块之前，先清除 importlib 缓存
+importlib.invalidate_caches()
+
 # 将项目根目录添加到 Python 路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.bio.agents.base import AgentType
-from src.config.config import (
-    AgentConfig,
-    Config,
-    DemoConfig,
-    MarketConfig,
-    TrainingConfig,
-)
 from src.core.log_engine.logger import setup_logging
 from src.training.trainer import Trainer
 
-
-def create_profile_config() -> Config:
-    """创建用于性能分析的配置（较小规模以加快分析）"""
-    market = MarketConfig(
-        initial_price=100.0,
-        tick_size=0.1,
-        lot_size=1.0,
-        depth=100,
-        ema_alpha=0.5,
-    )
-
-    agents = {
-        AgentType.RETAIL: AgentConfig(
-            count=10000,
-            initial_balance=200000.0,  # 20万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=0.0002,  # 万2
-            taker_fee_rate=0.0005,  # 万5
-        ),
-        AgentType.RETAIL_PRO: AgentConfig(
-            count=100,
-            initial_balance=200000.0,  # 20万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=0.0002,  # 万2
-            taker_fee_rate=0.0005,  # 万5
-        ),
-        AgentType.WHALE: AgentConfig(
-            count=200,  # 庄家（合并多空）
-            initial_balance=10000000.0,  # 1000万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
-            taker_fee_rate=0.0001,  # 万1
-        ),
-        AgentType.MARKET_MAKER: AgentConfig(
-            count=100,
-            initial_balance=20000000.0,  # 2000万
-            leverage=1.0,
-            maintenance_margin_rate=0.1,  # 10%
-            maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
-            taker_fee_rate=0.0001,  # 万1
-        ),
-    }
-
-    training = TrainingConfig(
-        episode_length=10,  # 减少到 10 ticks
-        checkpoint_interval=0,  # 不保存检查点
-        neat_config_path="config",
-    )
-
-    demo = DemoConfig(
-        host="localhost",
-        port=8000,
-        tick_interval=100,
-    )
-
-    return Config(market=market, agents=agents, training=training, demo=demo)
+from create_config import create_default_config
 
 
 def run_training() -> tuple[float, float]:
@@ -93,7 +31,11 @@ def run_training() -> tuple[float, float]:
     Returns:
         tuple[float, float]: (初始化耗时, tick+进化耗时)
     """
-    config = create_profile_config()
+    # 使用与训练相同的默认配置，但减少 episode_length 以加快分析
+    config = create_default_config(
+        episode_length=10,  # 减少到 10 ticks
+        checkpoint_interval=0,  # 不保存检查点
+    )
     trainer = Trainer(config)
 
     # 计时初始化阶段
