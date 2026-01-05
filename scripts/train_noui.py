@@ -3,12 +3,13 @@
 
 用于高性能后台训练，不启动 WebUI。
 支持命令行参数配置和检查点恢复。
+支持多竞技场并行训练模式。
 
 使用方法:
     python scripts/train_noui.py [选项]
 
 示例:
-    # 训练 100 个 episode
+    # 训练 100 个 episode（单竞技场）
     python scripts/train_noui.py --episodes 100
 
     # 从检查点恢复训练
@@ -16,6 +17,13 @@
 
     # 自定义参数
     python scripts/train_noui.py --episodes 500 --checkpoint-interval 50
+
+    # 多竞技场并行训练
+    python scripts/train_noui.py --multi-arena --num-arenas 10 --episodes 100
+
+    # 多竞技场训练（自定义迁移参数）
+    python scripts/train_noui.py --multi-arena --num-arenas 10 --migration-interval 10 \
+        --migration-count 5 --migration-strategy ring --episodes 100
 """
 
 import argparse
@@ -41,7 +49,7 @@ from create_config import create_default_config
 
 
 def progress_callback(state: dict[str, Any]) -> None:
-    """训练进度回调函数
+    """单竞技场训练进度回调函数
 
     Args:
         state: 训练状态字典
@@ -57,6 +65,33 @@ def progress_callback(state: dict[str, Any]) -> None:
         count = pop_info.get("count", 0)
         info_parts.append(f"{agent_type}: gen={gen}, count={count}")
     info_parts.append(f"high={high_price:.2f}, low={low_price:.2f}")
+
+    print(" | ".join(info_parts))
+
+
+def multi_arena_progress_callback(state: dict[str, Any]) -> None:
+    """多竞技场训练进度回调函数
+
+    Args:
+        state: 训练状态字典
+    """
+    episode = state.get("episode", 0)
+    total_episodes = state.get("total_episodes", 0)
+    num_arenas = state.get("total_arenas", 0)
+    avg_volatility = state.get("avg_volatility", 0.0)
+    total_volume = state.get("avg_volume", 0.0)
+    avg_fitness = state.get("avg_fitness", {})
+
+    info_parts = [f"Episode {episode}/{total_episodes}"]
+    info_parts.append(f"Arenas: {num_arenas}")
+    info_parts.append(f"Vol: {avg_volatility:.4f}")
+    info_parts.append(f"Volume: {total_volume:.0f}")
+
+    if avg_fitness:
+        fitness_str = ", ".join(
+            f"{k}: {v:.3f}" for k, v in list(avg_fitness.items())[:2]
+        )
+        info_parts.append(f"Fitness: [{fitness_str}]")
 
     print(" | ".join(info_parts))
 
@@ -117,17 +152,58 @@ def main() -> None:
         help="鲶鱼资金倍数（相对于做市商，默认: 3.0）",
     )
 
+    # 多竞技场参数
+    parser.add_argument(
+        "--multi-arena",
+        action="store_true",
+        help="启用多竞技场并行训练模式",
+    )
+    parser.add_argument(
+        "--num-arenas",
+        type=int,
+        default=10,
+        help="竞技场数量（默认: 10）",
+    )
+    parser.add_argument(
+        "--migration-interval",
+        type=int,
+        default=10,
+        help="迁移间隔（episode 数，默认: 10）",
+    )
+    parser.add_argument(
+        "--migration-count",
+        type=int,
+        default=5,
+        help="每次迁移的 Agent 数量（每种群，默认: 5）",
+    )
+    parser.add_argument(
+        "--migration-strategy",
+        type=str,
+        default="ring",
+        choices=["ring", "random", "best_to_worst"],
+        help="迁移策略（默认: ring）",
+    )
+
     args = parser.parse_args()
 
     # 设置日志
     setup_logging(args.log_dir)
 
     print("=" * 60)
-    print("NEAT AI 交易模拟竞技场 - 无 UI 训练模式")
+    if args.multi_arena:
+        print("NEAT AI 交易模拟竞技场 - 多竞技场并行训练模式")
+    else:
+        print("NEAT AI 交易模拟竞技场 - 无 UI 训练模式")
     print("=" * 60)
     print(f"Episodes: {args.episodes}")
     print(f"Episode Length: {args.episode_length} ticks")
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
+    if args.multi_arena:
+        print(f"Multi-Arena Mode: enabled")
+        print(f"  Arenas: {args.num_arenas}")
+        print(f"  Migration Interval: {args.migration_interval} episodes")
+        print(f"  Migration Count: {args.migration_count} agents/population")
+        print(f"  Migration Strategy: {args.migration_strategy}")
     if args.resume:
         print(f"Resume From: {args.resume}")
 
@@ -153,6 +229,20 @@ def main() -> None:
         print("Catfish: disabled")
     print("=" * 60)
 
+    # 多竞技场模式
+    if args.multi_arena:
+        _run_multi_arena_training(args, config)
+    else:
+        _run_single_arena_training(args, config)
+
+
+def _run_single_arena_training(args: argparse.Namespace, config: Any) -> None:
+    """运行单竞技场训练
+
+    Args:
+        args: 命令行参数
+        config: 训练配置
+    """
     # 创建训练器
     trainer = Trainer(config)
 
@@ -193,6 +283,93 @@ def main() -> None:
     print("-" * 60)
     print("训练完成！")
     print(f"总 Episode: {trainer.episode}")
+    print(f"总耗时: {train_time:.2f}s")
+    print(f"平均每 Episode: {train_time / max(args.episodes, 1):.2f}s")
+    print("=" * 60)
+
+
+def _run_multi_arena_training(args: argparse.Namespace, config: Any) -> None:
+    """运行多竞技场训练
+
+    Args:
+        args: 命令行参数
+        config: 训练配置
+    """
+    from src.training.arena import ArenaManager, MultiArenaConfig, MigrationStrategy
+
+    # 解析迁移策略
+    strategy_map = {
+        "ring": MigrationStrategy.RING,
+        "random": MigrationStrategy.RANDOM,
+        "best_to_worst": MigrationStrategy.BEST_TO_WORST,
+    }
+    migration_strategy = strategy_map[args.migration_strategy]
+
+    # 创建多竞技场配置
+    multi_config = MultiArenaConfig(
+        num_arenas=args.num_arenas,
+        base_config=config,
+        migration_interval=args.migration_interval,
+        migration_count=args.migration_count,
+        migration_strategy=migration_strategy,
+        checkpoint_interval=args.checkpoint_interval,
+    )
+
+    # 创建竞技场管理器
+    manager = ArenaManager(multi_config)
+
+    # 初始化
+    print("初始化多竞技场训练环境...")
+    start_time = time.time()
+    manager.setup()
+    init_time = time.time() - start_time
+    print(f"竞技场进程创建完成（耗时: {init_time:.2f}s）")
+
+    # 启动竞技场进程
+    print("启动竞技场进程...")
+    start_time = time.time()
+    manager.start()
+    start_time_elapsed = time.time() - start_time
+    print(f"所有竞技场启动完成（耗时: {start_time_elapsed:.2f}s）")
+
+    # 恢复检查点
+    if args.resume:
+        resume_path = Path(args.resume)
+        if resume_path.exists():
+            print(f"正在从检查点恢复: {args.resume}")
+            manager.load_checkpoint(args.resume)
+            print("检查点已恢复")
+        else:
+            print(f"警告: 检查点文件不存在: {args.resume}")
+            manager.stop()
+            sys.exit(1)
+
+    # 开始训练
+    print("\n开始多竞技场训练...")
+    print("-" * 60)
+
+    train_start = time.time()
+    try:
+        manager.train(
+            episodes=args.episodes,
+            progress_callback=multi_arena_progress_callback,
+        )
+    except KeyboardInterrupt:
+        print("\n\n训练被用户中断")
+        # 保存紧急检查点
+        emergency_path = "checkpoints/multi_arena_emergency.pkl"
+        manager.save_checkpoint(emergency_path)
+        print(f"紧急检查点已保存: {emergency_path}")
+    finally:
+        # 确保停止所有进程
+        manager.stop()
+
+    train_time = time.time() - train_start
+
+    print("-" * 60)
+    print("多竞技场训练完成！")
+    print(f"竞技场数量: {args.num_arenas}")
+    print(f"总 Episode: {args.episodes}")
     print(f"总耗时: {train_time:.2f}s")
     print(f"平均每 Episode: {train_time / max(args.episodes, 1):.2f}s")
     print("=" * 60)

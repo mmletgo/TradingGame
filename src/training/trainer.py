@@ -81,14 +81,17 @@ class Trainer:
     _tick_history_amounts: list[float]
     _episode_high_price: float  # 当前 episode 最高价
     _episode_low_price: float  # 当前 episode 最低价
+    arena_id: int | None  # 竞技场 ID（多竞技场场景）
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, arena_id: int | None = None) -> None:
         """创建训练器
 
         Args:
             config: 全局配置对象
+            arena_id: 竞技场 ID（多竞技场场景，默认 None）
         """
         self.config = config
+        self.arena_id = arena_id
         self.logger = get_logger("trainer")
 
         self.tick = 0
@@ -1382,6 +1385,73 @@ class Trainer:
             "low_price": self._episode_low_price,
         }
 
+    def get_price_stats(self) -> dict:
+        """获取当前 episode 的价格统计
+
+        Returns:
+            价格统计字典
+        """
+        total_volume = 0.0
+        if self._tick_history_volumes:
+            total_volume = sum(abs(v) for v in self._tick_history_volumes)
+
+        return {
+            "tick_count": self.tick,
+            "high_price": self._episode_high_price,
+            "low_price": self._episode_low_price,
+            "final_price": (
+                self.matching_engine._orderbook.last_price
+                if self.matching_engine
+                else 0.0
+            ),
+            "total_volume": total_volume,
+        }
+
+    def get_population_stats(self) -> dict:
+        """获取当前种群统计
+
+        Returns:
+            种群统计字典，包含淘汰数和平均适应度
+        """
+        stats: dict = {
+            "liquidations": dict(self._pop_liquidated_counts),
+            "avg_fitness": {},
+        }
+
+        if not self.matching_engine:
+            return stats
+
+        current_price = self.matching_engine._orderbook.last_price
+
+        for agent_type, pop in self.populations.items():
+            agent_fitnesses = pop.evaluate(current_price)
+            if agent_fitnesses:
+                stats["avg_fitness"][agent_type] = (
+                    sum(f for _, f in agent_fitnesses) / len(agent_fitnesses)
+                )
+
+        return stats
+
+    def save_checkpoint_data(self) -> dict:
+        """返回检查点数据（不写入文件）
+
+        用于多竞技场场景下由 ArenaManager 统一保存。
+
+        Returns:
+            检查点数据字典
+        """
+        return {
+            "tick": self.tick,
+            "episode": self.episode,
+            "populations": {
+                agent_type: {
+                    "generation": pop.generation,
+                    "neat_pop": pop.neat_pop,
+                }
+                for agent_type, pop in self.populations.items()
+            },
+        }
+
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
 
@@ -1436,6 +1506,30 @@ class Trainer:
         self._update_pop_total_counts()
 
         self.logger.info(f"检查点已加载: {path}")
+
+    def load_checkpoint_data(self, checkpoint: dict) -> None:
+        """从检查点数据恢复（不读取文件）
+
+        用于多竞技场场景下由 ArenaManager 统一加载。
+
+        Args:
+            checkpoint: 检查点数据字典
+        """
+        self.tick = checkpoint["tick"]
+        self.episode = checkpoint["episode"]
+
+        for agent_type, pop_data in checkpoint["populations"].items():
+            if agent_type in self.populations:
+                pop = self.populations[agent_type]
+                pop.generation = pop_data["generation"]
+                pop.neat_pop = pop_data["neat_pop"]
+                genomes = list(pop.neat_pop.population.items())
+                pop.agents = pop.create_agents(genomes)
+
+        self._register_all_agents()
+        self._build_agent_map()
+        self._build_execution_order()
+        self._update_pop_total_counts()
 
     def pause(self) -> None:
         """暂停训练"""

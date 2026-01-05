@@ -9,6 +9,12 @@
 - `__init__.py` - 模块导出
 - `population.py` - 种群管理类
 - `trainer.py` - 训练器类
+- `arena/` - 多竞技场并行训练子模块（详见 `arena/CLAUDE.md`）
+  - `config.py` - 配置类（ArenaConfig, MultiArenaConfig）
+  - `arena.py` - 单个竞技场封装
+  - `arena_manager.py` - 竞技场管理器
+  - `migration.py` - 迁移系统
+  - `metrics.py` - 指标收集
 
 ## 核心类
 
@@ -30,13 +36,14 @@
 - `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError 并在进化失败时自动重置种群
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
 - `reset_agents()` - 重置所有 Agent 账户
-- `_get_shared_executor()` - 获取类级别共享线程池（所有 Population 实例共享）
-- `shutdown_executor()` - 关闭共享线程池（类方法）
+- `_get_executor()` - 获取实例级别线程池
+- `shutdown_executor()` - 关闭实例级别线程池
 
 **多核并行化：**
-- 使用类级别共享 ThreadPoolExecutor（16个worker）
+- 使用实例级别 ThreadPoolExecutor（8个worker）
 - 小批量（<50）串行创建，避免线程池开销
 - 大批量并行调用 `Brain.from_genome`，按索引排序保证顺序
+- **实例级别线程池设计**：支持多进程架构，每个进程有独立的线程池
 
 ### Trainer (trainer.py)
 
@@ -73,6 +80,14 @@
 - `run_episode()` - 运行完整 episode（重置、运行、进化），若满足提前结束条件则提前结束
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
+- `save_checkpoint_data()` - 返回检查点数据（不写入文件，用于多竞技场模式）
+- `load_checkpoint_data()` - 从检查点数据恢复（不读取文件）
+- `get_price_stats()` - 获取价格统计（高/低/最终价格）
+- `get_population_stats()` - 获取种群统计（适应度、淘汰数等）
+
+**多竞技场支持：**
+- `arena_id: int | None` - 竞技场 ID（多竞技场模式时设置）
+- 检查点数据方法支持序列化传输到主进程
 
 **性能优化：**
 - 使用 `deque(maxlen=100)` 自动管理成交记录，避免列表切片开销
@@ -96,7 +111,7 @@
 - `_check_liquidations_vectorized()` - 向量化强平检查（NumPy 批量计算）
 - 决策阶段并行，执行阶段串行（保证订单簿一致性）
 - 线程池惰性初始化，`stop()` 时自动清理
-- Population 类使用类级别共享线程池（16个worker，所有Population实例共享）处理 Agent 创建
+- Population 类使用实例级别线程池（8个worker）处理 Agent 创建，支持多进程架构
 - Trainer 类使用独立线程池（16个worker）处理进化和决策并行
 
 ## 训练流程
@@ -229,7 +244,7 @@
 ### train_noui.py 使用方法
 
 ```bash
-# 基本训练（100 个 episode）
+# 基本训练（100 个 episode，单竞技场）
 python scripts/train_noui.py --episodes 100
 
 # 自定义参数
@@ -237,15 +252,31 @@ python scripts/train_noui.py --episodes 500 --episode-length 1000 --checkpoint-i
 
 # 从检查点恢复训练
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
+
+# 多竞技场并行训练
+python scripts/train_noui.py --multi-arena --num-arenas 10 --episodes 100
+
+# 多竞技场训练（自定义迁移参数）
+python scripts/train_noui.py --multi-arena --num-arenas 10 --migration-interval 10 \
+    --migration-count 5 --migration-strategy ring --episodes 100
 ```
 
 命令行参数：
-- `--episodes`: 训练的 episode 数量（默认: 100）
-- `--episode-length`: 每个 episode 的 tick 数量（默认: 1000）
+- `--episodes`: 训练的 episode 数量（默认: 4000）
+- `--episode-length`: 每个 episode 的 tick 数量（默认: 100）
 - `--checkpoint-interval`: 检查点保存间隔（默认: 10，0 表示不保存）
 - `--resume`: 从指定检查点恢复训练
 - `--config-dir`: 配置文件目录（默认: config）
 - `--log-dir`: 日志目录（默认: logs）
+- `--catfish`: 启用鲶鱼机制
+- `--catfish-fund-multiplier`: 鲶鱼资金倍数（默认: 3.0）
+
+多竞技场参数：
+- `--multi-arena`: 启用多竞技场并行训练模式
+- `--num-arenas`: 竞技场数量（默认: 10）
+- `--migration-interval`: 迁移间隔（episode 数，默认: 10）
+- `--migration-count`: 每次迁移的 Agent 数量（每种群，默认: 5）
+- `--migration-strategy`: 迁移策略（ring/random/best_to_worst，默认: ring）
 
 ## 鲶鱼机制
 

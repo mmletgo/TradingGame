@@ -5,8 +5,6 @@
 
 import logging
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import ClassVar
-
 import neat
 import numpy as np
 
@@ -35,10 +33,6 @@ class Population:
         logger: 日志器
     """
 
-    # 类级别线程池（所有 Population 实例共享）
-    _shared_executor: ClassVar[ThreadPoolExecutor | None] = None
-    _num_workers: ClassVar[int] = 16
-
     agent_type: AgentType
     agents: list[Agent]
     neat_pop: neat.Population
@@ -46,23 +40,23 @@ class Population:
     agent_config: AgentConfig
     generation: int
     logger: logging.Logger
+    _executor: ThreadPoolExecutor | None
+    _num_workers: int
 
-    @classmethod
-    def _get_shared_executor(cls) -> ThreadPoolExecutor:
-        """获取共享线程池"""
-        if cls._shared_executor is None:
-            cls._shared_executor = ThreadPoolExecutor(
-                max_workers=cls._num_workers,
-                thread_name_prefix="agent_creator"
+    def _get_executor(self) -> ThreadPoolExecutor:
+        """获取实例级别线程池"""
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(
+                max_workers=self._num_workers,
+                thread_name_prefix=f"pop_{self.agent_type.value}"
             )
-        return cls._shared_executor
+        return self._executor
 
-    @classmethod
-    def shutdown_executor(cls) -> None:
-        """关闭共享线程池"""
-        if cls._shared_executor is not None:
-            cls._shared_executor.shutdown(wait=True)
-            cls._shared_executor = None
+    def shutdown_executor(self) -> None:
+        """关闭实例级别线程池"""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def __init__(self, agent_type: AgentType, config: Config) -> None:
         """创建种群
@@ -77,6 +71,8 @@ class Population:
         self.agent_config = config.agents[agent_type]
         self.generation = 0
         self.logger = get_logger("population")
+        self._executor = None
+        self._num_workers = 8
 
         # 根据 Agent 类型选择 NEAT 配置文件
         # 散户使用 67 个输入（10档订单簿 + 10笔成交），庄家使用 607 个输入，做市商使用 634 个输入
@@ -190,7 +186,7 @@ class Population:
             return agents
 
         # 大批量并行创建
-        executor = self._get_shared_executor()
+        executor = self._get_executor()
         futures: dict[Future[tuple[int, Agent]], int] = {}
 
         for idx, (genome_id, genome) in enumerate(genomes):
