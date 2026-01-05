@@ -315,8 +315,10 @@ class MarketMakerAgent(Agent):
         )
 
         # 解析总下单比例基准
-        # 输出[20]: -1 到 1，映射到 0 到 1
-        total_ratio_base = (np.clip(outputs_arr[20], -1, 1) + 1) / 2  # [0, 1]
+        # 输出[20]: -1 到 1，映射到 0.01 到 1
+        total_ratio_base = (
+            0.01 + (np.clip(outputs_arr[20], -1, 1) + 1) / 2 * 0.99
+        )  # [0.01, 1]
 
         # 应用总下单比例基准到权重
         bid_ratios = bid_ratios * total_ratio_base
@@ -341,7 +343,10 @@ class MarketMakerAgent(Agent):
         bid_orders: list[dict[str, float]] = []
         for i in range(5):
             quantity = self._calculate_order_quantity(
-                float(bid_prices[i]), float(bid_ratios[i]), is_buy=True, ref_price=mid_price
+                float(bid_prices[i]),
+                float(bid_ratios[i]),
+                is_buy=True,
+                ref_price=mid_price,
             )
             if quantity > 0:
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
@@ -360,13 +365,16 @@ class MarketMakerAgent(Agent):
         ask_orders: list[dict[str, float]] = []
         for i in range(5):
             quantity = self._calculate_order_quantity(
-                float(ask_prices[i]), float(ask_ratios[i]), is_buy=False, ref_price=mid_price
+                float(ask_prices[i]),
+                float(ask_ratios[i]),
+                is_buy=False,
+                ref_price=mid_price,
             )
             if quantity > 0:
                 ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
 
         # 调试日志：检测空订单列表或无仓位但订单为空的情况
-        should_log = (len(bid_orders) == 0 or len(ask_orders) == 0)
+        should_log = len(bid_orders) == 0 or len(ask_orders) == 0
         if _DEBUG_EMPTY_ORDERS and should_log:
             equity = self.account.get_equity(mid_price)
             max_pos = equity * self.account.leverage if equity > 0 else 0

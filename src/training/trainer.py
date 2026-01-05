@@ -238,7 +238,8 @@ class Trainer:
             else:
                 # 单模式：只创建一种鲶鱼
                 catfish = create_catfish(
-                    -1, self.config.catfish,
+                    -1,
+                    self.config.catfish,
                     initial_balance=catfish_initial_balance,
                     leverage=catfish_leverage,
                     maintenance_margin_rate=catfish_mmr,
@@ -333,7 +334,9 @@ class Trainer:
                 AgentType.MARKET_MAKER: "做市商",
             }.get(agent.agent_type, str(agent.agent_type.value))
 
-            self.logger.info(f"{type_name} Agent {agent_id} 已被强平，本轮 episode 禁用")
+            self.logger.info(
+                f"{type_name} Agent {agent_id} 已被强平，本轮 episode 禁用"
+            )
 
     def _cancel_agent_orders(self, agent: "Agent") -> None:
         """撤销 agent 的所有挂单
@@ -593,8 +596,16 @@ class Trainer:
         # 输出订单簿状态
         best_bid = orderbook.get_best_bid()
         best_ask = orderbook.get_best_ask()
-        bid_volume = sum(pl.total_quantity for pl in orderbook.bids.values()) if orderbook.bids else 0
-        ask_volume = sum(pl.total_quantity for pl in orderbook.asks.values()) if orderbook.asks else 0
+        bid_volume = (
+            sum(pl.total_quantity for pl in orderbook.bids.values())
+            if orderbook.bids
+            else 0
+        )
+        ask_volume = (
+            sum(pl.total_quantity for pl in orderbook.asks.values())
+            if orderbook.asks
+            else 0
+        )
         self.logger.warning(
             f"订单簿: best_bid={best_bid}, best_ask={best_ask}, "
             f"bid_volume={bid_volume}, ask_volume={ask_volume}, "
@@ -959,18 +970,15 @@ class Trainer:
                     # 计算 ADL 分数
                     equity = catfish.account.get_equity(latest_price)
                     pnl_percent = (
-                        (equity - catfish.account.initial_balance)
-                        / catfish.account.initial_balance
-                    )
+                        equity - catfish.account.initial_balance
+                    ) / catfish.account.initial_balance
 
                     # 只有盈利的才能作为 ADL 候选
                     if pnl_percent <= 0:
                         continue
 
                     position_value = abs(position_qty) * latest_price
-                    effective_leverage = (
-                        position_value / equity if equity > 0 else 0.0
-                    )
+                    effective_leverage = position_value / equity if equity > 0 else 0.0
                     adl_score = pnl_percent * effective_leverage
 
                     candidate = ADLCandidate(
