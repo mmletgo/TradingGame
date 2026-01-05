@@ -53,6 +53,7 @@
 - `setup()` - 初始化训练环境，创建种群、撮合引擎、ADL 管理器，初始化鲶鱼（如启用），初始化 EMA 平滑价格
 - `_init_ema_price()` - 初始化 EMA 平滑价格（在 episode 开始时调用）
 - `_update_ema_price()` - 更新 EMA 平滑价格（每 tick 调用）
+- `_aggregate_tick_trades()` - 聚合本 tick 的成交量和成交额（符号+总量方式）
 - `_calculate_catfish_initial_balance()` - 计算鲶鱼初始资金（做市商杠杆后资金 - 其他物种杠杆后资金）/ 3
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
@@ -112,7 +113,7 @@
 2. **Episode 循环** (`run_episode`)
    - 重置所有 Agent 账户
    - 重置鲶鱼状态和强平标志
-   - 重置市场状态（包括重置 EMA 平滑价格和价格历史）
+   - 重置市场状态（包括重置 EMA 平滑价格、价格历史和 tick 历史数据）
    - 重置各种群淘汰计数和重入保护集合
    - 运行 episode_length 个 tick
    - **提前结束条件**：
@@ -140,6 +141,7 @@
    - **Tick 结束**：
      - 下单产生的价格变动效果在下个 tick 被感知
      - 记录当前价格到 `_price_history`（鲶鱼决策使用，最多保留1000个历史价格）
+     - 记录 tick 历史数据（价格、成交量、成交额，最多保留100条）
      - 检查鲶鱼强平（鲶鱼强平则立即结束 episode）
      - 数据采集使用 `tick_start_price` 计算资产，与强平检查一致
 
@@ -201,10 +203,10 @@
 ## NEAT 配置
 
 不同 Agent 类型使用不同的 NEAT 配置文件（由 Population 自动选择）：
-- `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）
-- `config/neat_retail_pro.cfg` - 高级散户（607 个输入节点，9 个输出节点）
-- `config/neat_whale.cfg` - 庄家（607 个输入节点，9 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（634 个输入节点，22 个输出节点）
+- `config/neat_retail.cfg` - 散户（127 个输入节点，9 个输出节点）
+- `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，9 个输出节点）
+- `config/neat_whale.cfg` - 庄家（907 个输入节点，9 个输出节点）
+- `config/neat_market_maker.cfg` - 做市商（934 个输入节点，21 个输出节点）
 
 散户只能看到买卖各10档订单簿和最近10笔成交，高级散户和庄家可以看到完整的100档订单簿和100笔成交。
 

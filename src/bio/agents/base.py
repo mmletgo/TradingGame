@@ -79,8 +79,9 @@ class Agent:
         self.config = config
         self.account = Account(agent_id, agent_type, config)
 
-        # 预分配神经网络输入缓冲区（607 = 200 + 200 + 100 + 100 + 4 + 3）
-        self._input_buffer: np.ndarray = np.zeros(607, dtype=np.float64)
+        # 预分配神经网络输入缓冲区（907 = 200 + 200 + 100 + 100 + 4 + 3 + 300）
+        # 其中 300 = 100 tick历史价格 + 100 tick历史成交量 + 100 tick历史成交额
+        self._input_buffer: np.ndarray = np.zeros(907, dtype=np.float64)
 
         # 预分配持仓信息缓冲区（4 个值）
         self._position_buffer: np.ndarray = np.zeros(4, dtype=np.float64)
@@ -104,7 +105,7 @@ class Agent:
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（ndarray）
+            神经网络输入向量（907维 ndarray）
         """
         # 直接复制到预分配数组，避免 np.concatenate 创建新数组
         self._input_buffer[:200] = market_state.bid_data
@@ -115,6 +116,10 @@ class Agent:
         self._input_buffer[604:607] = self._get_pending_order_inputs(
             market_state.mid_price, orderbook
         )
+        # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
+        self._input_buffer[607:707] = market_state.tick_history_prices
+        self._input_buffer[707:807] = market_state.tick_history_volumes
+        self._input_buffer[807:907] = market_state.tick_history_amounts
         return self._input_buffer  # 不调用 .tolist()
 
     def _get_position_inputs(self, mid_price: float) -> np.ndarray:

@@ -61,8 +61,9 @@ class MarketMakerAgent(Agent):
         self.bid_order_ids: list[int] = []
         self.ask_order_ids: list[int] = []
 
-        # 做市商输入更大（634 = 604 + 30 挂单信息）
-        self._input_buffer = np.zeros(634, dtype=np.float64)
+        # 做市商输入更大（934 = 604 + 30 挂单信息 + 300 tick 历史数据）
+        # tick 历史数据：100 个价格 + 100 个成交量 + 100 个成交额
+        self._input_buffer = np.zeros(934, dtype=np.float64)
 
     def get_action_space(self) -> list[ActionType]:
         """获取做市商可用动作
@@ -79,14 +80,14 @@ class MarketMakerAgent(Agent):
     ) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入
 
-        做市商覆盖基类方法，使用更大的输入缓冲区（634 = 604 + 30 挂单信息）。
+        做市商覆盖基类方法，使用更大的输入缓冲区（934 = 604 + 30 挂单信息 + 300 tick 历史数据）。
 
         Args:
             market_state: 预计算的归一化市场数据
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（ndarray）
+            神经网络输入向量（934 维 ndarray）
         """
         # 直接复制到预分配数组
         self._input_buffer[:200] = market_state.bid_data
@@ -97,6 +98,10 @@ class MarketMakerAgent(Agent):
         self._input_buffer[604:634] = self._get_pending_order_inputs(
             market_state.mid_price, orderbook
         )
+        # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
+        self._input_buffer[634:734] = market_state.tick_history_prices
+        self._input_buffer[734:834] = market_state.tick_history_volumes
+        self._input_buffer[834:934] = market_state.tick_history_amounts
         return self._input_buffer  # 不调用 .tolist()
 
     def _fill_order_inputs(

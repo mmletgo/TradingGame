@@ -20,6 +20,9 @@ class NormalizedMarketState:
         ask_data: 卖盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
         trade_prices: 成交价格归一化，shape (100,)
         trade_quantities: 成交数量（带方向），shape (100,)，正数表示taker是买方，负数表示taker是卖方
+        tick_history_prices: Tick 历史价格（以第一个价格为基准归一化），shape (100,)，最新数据在末尾
+        tick_history_volumes: Tick 历史成交量（带方向，正=taker买入为主），shape (100,)，最新数据在末尾
+        tick_history_amounts: Tick 历史成交额（带方向，正=taker买入为主），shape (100,)，最新数据在末尾
     """
     mid_price: float
     tick_size: float
@@ -27,3 +30,6 @@ class NormalizedMarketState:
     ask_data: NDArray[np.float32]      # shape: (200,)
     trade_prices: NDArray[np.float32]  # shape: (100,)
     trade_quantities: NDArray[np.float32]  # shape: (100,)
+    tick_history_prices: NDArray[np.float32]   # shape: (100,) - tick 历史价格（以第一个价格为基准归一化）
+    tick_history_volumes: NDArray[np.float32]  # shape: (100,) - tick 历史成交量（带方向）
+    tick_history_amounts: NDArray[np.float32]  # shape: (100,) - tick 历史成交额（带方向）
