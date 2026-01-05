@@ -25,7 +25,7 @@ def create_default_config(
     episode_length: int = 1000,
     checkpoint_interval: int = 10,
     config_dir: str = "config",
-    catfish_enabled: bool = True,
+    catfish_enabled: bool = False,
     catfish_fund_multiplier: float = 3.0,
 ) -> Config:
     """创建默认配置
@@ -47,7 +47,7 @@ def create_default_config(
         depth=100,
         ema_alpha=1.0,
     )
-    maker_initial_balance = 50_000_000.0  # 做市商初始资金 5000万
+    maker_initial_balance = 50_000_000.0  # 做市商初始资金 50M
     maker_leverage = 10.0
 
     agents = {

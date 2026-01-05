@@ -325,7 +325,15 @@ class Trainer:
         agent = self.agent_map.get(agent_id)
         if agent and not agent.is_liquidated:
             agent.is_liquidated = True
-            self.logger.info(f"Agent {agent_id} 已被强平，本轮 episode 禁用")
+            # 根据类型输出不同的日志
+            type_name = {
+                AgentType.RETAIL: "散户",
+                AgentType.RETAIL_PRO: "高级散户",
+                AgentType.WHALE: "庄家",
+                AgentType.MARKET_MAKER: "做市商",
+            }.get(agent.agent_type, str(agent.agent_type.value))
+
+            self.logger.info(f"{type_name} Agent {agent_id} 已被强平，本轮 episode 禁用")
 
     def _cancel_agent_orders(self, agent: "Agent") -> None:
         """撤销 agent 的所有挂单

@@ -163,16 +163,16 @@ class CatfishConfig:
     market_maker_base_fund: float = 20_000_000.0
 
     # 趋势追踪参数
-    lookback_period: int = 50
-    trend_threshold: float = 0.02
+    lookback_period: int = 10
+    trend_threshold: float = 0.002
 
     # 周期摆动参数
-    half_cycle_length: int = 100
+    half_cycle_length: int = 10
     action_interval: int = 5
 
     # 逆势操作参数
-    ma_period: int = 200
-    deviation_threshold: float = 0.03
+    ma_period: int = 20
+    deviation_threshold: float = 0.003
 
     # 通用参数
     action_cooldown: int = 10
