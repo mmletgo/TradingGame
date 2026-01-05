@@ -30,8 +30,8 @@
 - `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError 并在进化失败时自动重置种群
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
 - `reset_agents()` - 重置所有 Agent 账户
-- `_get_shared_executor()` - 获取类级别共享线程池
-- `shutdown_executor()` - 关闭共享线程池
+- `_get_shared_executor()` - 获取类级别共享线程池（所有 Population 实例共享）
+- `shutdown_executor()` - 关闭共享线程池（类方法）
 
 **多核并行化：**
 - 使用类级别共享 ThreadPoolExecutor（16个worker）
@@ -50,15 +50,18 @@
 - 支持暂停/恢复/停止控制
 
 **关键方法：**
-- `setup()` - 初始化训练环境，创建 ADL 管理器，初始化 EMA 平滑价格，如果配置启用鲶鱼则初始化
+- `setup()` - 初始化训练环境，创建种群、撮合引擎、ADL 管理器，初始化鲶鱼（如启用），初始化 EMA 平滑价格
 - `_init_ema_price()` - 初始化 EMA 平滑价格（在 episode 开始时调用）
 - `_update_ema_price()` - 更新 EMA 平滑价格（每 tick 调用）
+- `_calculate_catfish_initial_balance()` - 计算鲶鱼初始资金（做市商杠杆后资金 - 其他物种杠杆后资金）/ 3
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
 - `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
 - `_cancel_agent_orders()` - 撤销指定 Agent 的所有挂单（做市商撤多单，普通 Agent 撤单个挂单）
 - `_execute_liquidation_market_order()` - 执行强平市价单，提交市价单平仓，若市价单无法完全成交则返回剩余数量（调用前必须先撤销挂单）
 - `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty）
+- `_check_catfish_liquidation()` - 检查鲶鱼强平，鲶鱼强平后设置 `_catfish_liquidated` 标志（触发 episode 结束）
+- `_execute_catfish_liquidation()` - 执行鲶鱼强平市价单
 - `_update_pop_total_counts()` - 更新各种群总数（在 setup/evolve/load_checkpoint 后调用）
 - `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件，返回 `tuple[str, AgentType | None] | None`
   - 触发条件1：任意种群存活少于初始值的 1/4，返回 `("population_depleted", agent_type)`
@@ -87,12 +90,13 @@
 
 **多核并行化优化：**
 - 种群初始化：串行创建种群，但每个种群内部的 Agent 创建是并行的（Agent维度并行）
-- `_evolve_populations_parallel()` - 5个种群并行进化
+- `_evolve_populations_parallel()` - 4个种群并行进化
 - `_batch_decide_parallel()` - Agent 决策阶段并行执行（NEAT 的 Cython 代码释放 GIL）
 - `_check_liquidations_vectorized()` - 向量化强平检查（NumPy 批量计算）
 - 决策阶段并行，执行阶段串行（保证订单簿一致性）
 - 线程池惰性初始化，`stop()` 时自动清理
-- Population 类使用共享线程池（16个worker）处理 Agent 创建
+- Population 类使用类级别共享线程池（16个worker，所有Population实例共享）处理 Agent 创建
+- Trainer 类使用独立线程池（16个worker）处理进化和决策并行
 
 ## 训练流程
 
@@ -107,9 +111,12 @@
 
 2. **Episode 循环** (`run_episode`)
    - 重置所有 Agent 账户
-   - 重置市场状态（包括重置 EMA 平滑价格）
+   - 重置鲶鱼状态和强平标志
+   - 重置市场状态（包括重置 EMA 平滑价格和价格历史）
+   - 重置各种群淘汰计数和重入保护集合
    - 运行 episode_length 个 tick
    - **提前结束条件**：
+     - 鲶鱼被强平（立即结束 episode）
      - 任意种群存活少于初始值的 1/4（确保有足够的幸存者用于 NEAT 进化）
      - 订单簿只有单边挂单（确保市场流动性正常）
    - 各种群进化
@@ -131,6 +138,8 @@
      - 记录成交到 `recent_trades`，更新 maker 账户
    - **Tick 结束**：
      - 下单产生的价格变动效果在下个 tick 被感知
+     - 记录当前价格到 `_price_history`（鲶鱼决策使用，最多保留1000个历史价格）
+     - 检查鲶鱼强平（鲶鱼强平则立即结束 episode）
      - 数据采集使用 `tick_start_price` 计算资产，与强平检查一致
 
 ## 强平与淘汰机制（爆仓即淘汰）
@@ -155,19 +164,21 @@
 **ADL（自动减仓）**：市价强平无法完全成交时触发（阶段3）
 1. **获取最新价格**：强平市价单执行后，订单簿价格已变化，获取最新价格
 2. **用最新价格计算候选清单**：遍历所有存活 Agent，用最新价格计算 ADL 分数，筛选盈利候选者，按多头/空头分类并排序
-3. 使用候选清单（`_adl_long_candidates` 或 `_adl_short_candidates`）
+3. **将鲶鱼加入候选清单**：遍历所有未被强平的鲶鱼，计算其 ADL 分数（使用庄家的杠杆率），盈利的鲶鱼按持仓方向加入对应候选清单
+4. 使用候选清单（`_adl_long_candidates` 或 `_adl_short_candidates`）
    - 被强平方是多头 → 使用空头候选清单
    - 被强平方是空头 → 使用多头候选清单
-4. 在 `_execute_adl()` 中直接循环处理：依次与候选对手方以最新市场价格成交，直至剩余仓位清零
-5. 通过 `account.on_adl_trade()` 更新双方账户（含穿仓兜底）
-6. **更新候选清单的 position_qty**：确保后续 ADL 不会重复使用已减掉的仓位
-7. **兜底处理**：如果 ADL 无法完全清零仓位，强制清零被淘汰者的仓位
+5. 在 `_execute_adl()` 中直接循环处理：依次与候选对手方以最新市场价格成交，直至剩余仓位清零
+6. 通过 `account.on_adl_trade()` 更新双方账户（含穿仓兜底）
+7. **更新候选清单的 position_qty**：确保后续 ADL 不会重复使用已减掉的仓位
+8. **兜底处理**：如果 ADL 无法完全清零仓位，强制清零被淘汰者的仓位
 
 **重入保护与 ADL 候选管理**：
 - 使用 `_eliminating_agents` 集合跟踪正在强平/淘汰过程中的 Agent
 - 使用 `_adl_long_candidates` 和 `_adl_short_candidates` 存储预计算的 ADL 候选清单
   - 已提前筛选：未淘汰、本 tick 不会被淘汰、有持仓、盈利
   - 已计算 ADL 分数并排序
+  - **包含 Agent 和鲶鱼**：盈利的鲶鱼也会被加入候选清单
   - ADL 成交后动态更新 `position_qty`，避免重复使用已减掉的仓位
 - 防止在递归 ADL 过程中同一 Agent 被多次处理
 - 防止正在强平的 Agent 作为 maker 更新仓位（导致仓位增加）
@@ -239,12 +250,14 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 
 **特点：**
 - 不使用神经网络，规则驱动
-- 有限资金模式（初始资金 = 做市商杠杆后资金 - 其他物种杠杆后资金）
-- 参与强平和 ADL 机制
+- **资金计算**：每条鲶鱼初始资金 = (做市商杠杆后资金 - 其他物种杠杆后资金) / 3，支持多模式（3条鲶鱼同时运行）和单模式（1条鲶鱼）
+- 参与强平和 ADL 机制（作为盈利方可作为 ADL 候选）
 - 鲶鱼被强平后 Episode 立即结束
 - 下单量按盘口计算（吃掉前3档），不按自身资金计算
 - 手续费为 0（maker 和 taker）
-- 在所有Agent之前行动，强平检查在所有Agent之后
+- 在所有 Agent 之前行动，强平检查在所有 Agent 之后
+- 使用庄家的杠杆率和维持保证金率
+- 使用 `_price_history`（最多1000个历史价格）进行决策
 
 **行为模式：**
 - `trend_following`：趋势追踪，顺势推动价格
@@ -252,6 +265,6 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - `mean_reversion`：逆势操作，均值回归
 
 **配置：**
-通过 `CatfishConfig` 配置，包括触发阈值等参数。
+通过 `CatfishConfig` 配置，包括触发阈值、模式选择、多模式开关等参数。
 
 详见：`src/market/catfish/CLAUDE.md`

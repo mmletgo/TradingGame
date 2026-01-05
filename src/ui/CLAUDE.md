@@ -14,7 +14,7 @@
 - `components/` - UI组件目录
   - `__init__.py` - 组件导出
   - `orderbook_panel.py` - 订单簿面板（深度图+价格列表）
-  - `chart_panel.py` - 图表面板（价格曲线+资产曲线+种群统计）
+  - `chart_panel.py` - 图表面板（价格曲线+存活个体资产曲线+种群统计+小提琴图+鲶鱼图表）
   - `trades_panel.py` - 成交记录面板
   - `control_panel.py` - 控制面板（开始/暂停/停止按钮+状态显示）
 
@@ -34,6 +34,10 @@ UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 **方法：**
 - `collect_tick_data(trainer) -> UIDataSnapshot` - 收集当前tick数据快照
 - `reset() -> None` - 重置历史数据（新episode开始时调用）
+
+**私有方法：**
+- `_compute_population_stats(population, current_price) -> PopulationStats` - 向量化计算种群统计（使用NumPy）
+- `_collect_catfish_data(trainer, current_price) -> list[CatfishInfo]` - 收集鲶鱼数据
 
 **价格处理说明：**
 - `last_price`: 使用 `orderbook.last_price`（tick 结束后的实际价格），用于价格图表显示，与盘口保持一致
@@ -73,7 +77,7 @@ UI数据快照，每个tick的完整数据。
 鲶鱼信息（UI展示用）。
 
 **字段：**
-- `name: str` - 鲶鱼类型名称（如 "TrendFollowingCatfish"）
+- `name: str` - 鲶鱼类型名称（如 "TrendFollowingCatfish", "CycleSwingCatfish", "MeanReversionCatfish"）
 - `equity: float` - 净值
 - `position_qty: int` - 持仓数量（正数做多，负数做空，0为空仓）
 - `position_value: float` - 持仓市值 = abs(position_qty) * current_price
@@ -107,20 +111,29 @@ UI控制器，管理训练线程与UI线程的交互。
 - `trainer: Trainer` - 训练器实例
 - `data_collector: UIDataCollector` - 数据采集器
 - `sample_rate: int` - 采样率，每N个tick采集一次数据
-- `data_queue: Queue[UIDataSnapshot]` - 数据队列（主线程消费）
+- `data_queue: Queue[UIDataSnapshot]` - 数据队列（主线程消费，maxsize=10）
+- `_speed_factor: float` - 演示速度倍率（范围0.1-100.0）
+- `_is_demo_mode: bool` - 是否为演示模式
+- `_training_thread: Thread | None` - 训练/演示线程
+- `_tick_counter: int` - tick计数器（用于采样率控制）
 
 **方法：**
 - `start_training(episodes: int) -> None` - 启动训练模式（后台线程，会进化）
 - `start_demo() -> None` - 启动演示模式（后台线程，不进化，受速度控制）
 - `pause() -> None` - 暂停训练/演示
 - `resume() -> None` - 恢复训练/演示
-- `stop() -> None` - 停止训练/演示（等待线程结束）
-- `set_speed(factor: float) -> None` - 设置演示速度（1.0=正常，10.0=10倍速）
+- `stop() -> None` - 停止训练/演示（等待线程结束，超时2秒）
+- `set_speed(factor: float) -> None` - 设置演示速度（范围0.1-100.0，1.0=正常，10.0=10倍速）
 - `get_latest_data() -> UIDataSnapshot | None` - 非阻塞获取最新数据快照
 - `is_running() -> bool` - 检查是否正在运行
 - `is_paused() -> bool` - 检查是否暂停
 - `get_speed() -> float` - 获取当前速度倍率
 - `is_demo_mode() -> bool` - 检查是否为演示模式
+
+**私有方法：**
+- `_training_loop(episodes: int) -> None` - 训练主循环（后台线程）
+- `_demo_loop() -> None` - 演示循环（后台线程，无限循环）
+- `_collect_and_send_data() -> None` - 采集数据并发送到队列
 
 **控制信号：**
 - `_pause_event: threading.Event` - 暂停事件
@@ -131,6 +144,24 @@ UI控制器，管理训练线程与UI线程的交互。
 2. 数据采集器收集快照，放入队列
 3. UI主线程调用`get_latest_data()`获取数据更新渲染
 4. 队列满时丢弃最旧数据，保证UI总能获取最新数据
+
+**训练模式流程：**
+1. 按episode循环运行
+2. 每个episode开始前重置Agent账户和市场状态
+3. 运行tick循环，按采样率采集数据
+4. 检查暂停/停止事件
+5. 每个tick后检查`trainer._should_end_episode_early()`
+6. episode结束后进行NEAT进化（训练模式）
+7. 重建Agent映射和执行顺序
+
+**演示模式流程：**
+1. 无限循环运行episode
+2. 每个episode开始前重置Agent账户和市场状态
+3. 运行tick循环，每tick都采集数据
+4. 检查暂停/停止事件
+5. 每个tick后检查`trainer._should_end_episode_early()`
+6. 速度控制：`time.sleep(0.1 / speed_factor)`
+7. 不进行进化，适合展示训练效果
 
 **提前结束逻辑：**
 - 训练/演示循环在每个tick后检查`trainer._should_end_episode_early()`
@@ -251,6 +282,13 @@ controller.stop()
   - `bids: list[tuple[float, float]]` - 买盘数据 [(price, qty), ...]，按价格从高到低排序
   - `asks: list[tuple[float, float]]` - 卖盘数据 [(price, qty), ...]，按价格从低到高排序
 
+**私有方法：**
+- `_setup_ui() -> None` - 创建UI组件
+- `_setup_depth_theme() -> None` - 设置深度图颜色主题
+- `_update_depth_chart(bids, asks) -> None` - 更新深度图
+- `_update_orderbook_table(bids, asks) -> None` - 更新合并的买卖盘价格列表
+- `_make_tag(suffix) -> str` - 生成唯一的tag名称
+
 **功能：**
 - 深度图：使用area_series显示买卖盘累计量，买盘绿色，卖盘红色
 - 合并盘口列表：买卖盘在同一个表格中显示，价格从高到低
@@ -276,6 +314,13 @@ controller.stop()
 - `CATFISH_PLOT_WIDTH: int = 450` - 每个鲶鱼图表宽度（3个并排）
 - `KDE_POINTS: int = 50` - KDE曲线采样点数
 
+**模块级常量：**
+- `POPULATION_COLORS: dict[AgentType, tuple[int, int, int]]` - 种群颜色配置
+- `CATFISH_COLORS: dict[str, tuple[int, int, int]]` - 鲶鱼颜色配置
+- `CATFISH_NAMES: dict[str, str]` - 鲶鱼中文名称映射
+- `POPULATION_NAMES: dict[AgentType, str]` - 种群中文名称映射
+- `VERTICAL_LAYOUT: list[AgentType]` - 纵向布局的种群顺序
+
 **方法：**
 - `update_price(price_history) -> None` - 更新价格曲线
   - `price_history: list[float]` - 价格历史列表
@@ -288,10 +333,14 @@ controller.stop()
   - `catfish_equity_history: list[list[float]]` - 三只鲶鱼的净值历史
 
 **私有方法：**
+- `_setup_ui() -> None` - 创建UI组件布局
 - `_create_equity_row(agent_type) -> None` - 创建单个种群的存活个体资产图表
+- `_setup_price_theme() -> None` - 设置价格曲线颜色主题
+- `_setup_equity_themes() -> None` - 设置种群曲线颜色主题
+- `_format_number(num) -> str` - 格式化数字（大数字用K/M/B/亿表示）
 - `_create_violin_plots() -> None` - 创建4个并排的小提琴图
 - `_setup_violin_themes() -> None` - 设置小提琴图颜色主题
-- `_gaussian_kde(data, x_grid, bandwidth) -> np.ndarray` - 高斯核密度估计（纯NumPy实现）
+- `_gaussian_kde(data, x_grid, bandwidth) -> np.ndarray` - 高斯核密度估计（纯NumPy实现，使用Silverman法则）
 - `_update_violin_plot(agent_type, equities) -> None` - 更新单个种群的小提琴图
 - `_create_catfish_plots() -> None` - 创建三只鲶鱼的图表区域（一行三个，默认隐藏）
 - `_setup_catfish_themes() -> None` - 设置鲶鱼曲线颜色主题
@@ -325,11 +374,11 @@ controller.stop()
 **颜色配置：**
 - 散户: 绿色 (100, 200, 100)
 - 高级散户: 蓝色 (100, 150, 255)
-- 庄家: 红色 (255, 100, 100)
+- 庄家: 粉红色 (255, 100, 150)
 - 做市商: 紫色 (200, 100, 255)
-- 趋势追踪鲶鱼: 橙色 (255, 165, 0)
-- 周期摆动鲶鱼: 天蓝色 (0, 191, 255)
-- 逆势操作鲶鱼: 粉色 (255, 105, 180)
+- 趋势追踪鲶鱼 (TrendFollowingCatfish): 橙色 (255, 165, 0)
+- 周期摆动鲶鱼 (CycleSwingCatfish): 天蓝色 (0, 191, 255)
+- 逆势操作鲶鱼 (MeanReversionCatfish): 粉色 (255, 105, 180)
 
 **Tag命名规则：**
 - 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`
@@ -353,6 +402,9 @@ controller.stop()
 - `update(trades) -> None` - 更新成交记录
   - `trades: list[TradeInfo]` - 成交记录列表
 
+**私有方法：**
+- `_setup_ui() -> None` - 创建UI组件
+
 **显示格式：**
 - 最新30笔成交，倒序显示（最新在上）
 - 买入绿色，卖出红色
@@ -366,7 +418,6 @@ controller.stop()
 - `on_start: Callable[[], None] | None` - 开始回调
 - `on_pause: Callable[[], None] | None` - 暂停/继续回调
 - `on_stop: Callable[[], None] | None` - 停止回调
-- `on_speed_change: Callable[[float], None] | None` - 速度变化回调
 
 注：组件会自动添加到当前DearPyGui上下文中
 
@@ -374,8 +425,14 @@ controller.stop()
 - `update_status(episode, tick, total_ticks, price) -> None` - 更新状态显示
 - `reset() -> None` - 重置面板状态
 
+**私有方法：**
+- `_setup_ui() -> None` - 创建UI组件
+- `_on_start_click(sender, app_data) -> None` - 开始按钮点击处理
+- `_on_pause_click(sender, app_data) -> None` - 暂停/继续按钮点击处理
+- `_on_stop_click(sender, app_data) -> None` - 停止按钮点击处理
+
 **属性：**
-- `is_paused: bool` - 当前暂停状态
+- `is_paused: bool` - 当前暂停状态（只读属性）
 
 ### TrainingUIApp
 
@@ -385,14 +442,36 @@ controller.stop()
 - `trainer: Trainer` - 已初始化的训练器
 - `episodes: int` - 训练的episode数量
 
+**属性：**
+- `trainer: Trainer` - 已初始化的训练器
+- `episodes: int` - 训练的episode数量
+- `episode_length: int` - 每个episode的tick数
+- `data_collector: UIDataCollector` - UI数据采集器
+- `controller: UIController` - UI控制器
+- `orderbook_panel: OrderBookPanel | None` - 订单簿面板组件
+- `chart_panel: ChartPanel | None` - 图表面板组件
+- `trades_panel: TradesPanel | None` - 成交记录面板组件
+- `control_panel: ControlPanel | None` - 控制面板组件
+
 **方法：**
 - `run() -> None` - 运行主循环（阻塞直到窗口关闭）
+
+**私有方法：**
+- `_setup_dpg() -> None` - 初始化DearPyGui上下文和视口
+- `_load_chinese_font() -> None` - 加载中文字体
+- `_setup_ui() -> None` - 创建UI布局
+- `_on_start() -> None` - 开始训练按钮回调
+- `_on_pause() -> None` - 暂停/继续按钮回调
+- `_on_stop() -> None` - 停止训练按钮回调
+- `_update_ui() -> None` - 更新UI（每帧调用）
 
 **功能：**
 - 实时显示订单簿、价格走势、成交记录、种群统计
 - 提供开始/暂停/停止按钮
 - 训练模式以最大速度运行，不支持速度控制
 - 在后台线程中进行NEAT进化
+- 视口标题：NEAT Trading Simulator - Training Mode
+- 视口大小：1920x1200
 
 ### DemoUIApp
 
@@ -400,16 +479,37 @@ controller.stop()
 
 **构造参数：**
 - `trainer: Trainer` - 已初始化的训练器
-- `checkpoint_path: str | None` - 检查点路径（可选）
+- `checkpoint_path: str | None` - 检查点路径（可选），用于加载训练好的模型
+
+**属性：**
+- `trainer: Trainer` - 已初始化的训练器
+- `episode_length: int` - 每个episode的tick数
+- `data_collector: UIDataCollector` - UI数据采集器
+- `controller: UIController` - UI控制器
+- `orderbook_panel: OrderBookPanel | None` - 订单簿面板组件
+- `chart_panel: ChartPanel | None` - 图表面板组件
+- `trades_panel: TradesPanel | None` - 成交记录面板组件
+- `control_panel: ControlPanel | None` - 控制面板组件
 
 **方法：**
 - `run() -> None` - 运行主循环（阻塞直到窗口关闭）
+
+**私有方法：**
+- `_setup_dpg() -> None` - 初始化DearPyGui上下文和视口
+- `_load_chinese_font() -> None` - 加载中文字体
+- `_setup_ui() -> None` - 创建UI布局
+- `_on_start() -> None` - 开始演示按钮回调
+- `_on_pause() -> None` - 暂停/继续按钮回调
+- `_on_stop() -> None` - 停止演示按钮回调
+- `_update_ui() -> None` - 更新UI（每帧调用）
 
 **功能：**
 - 实时显示订单簿、价格走势、成交记录、种群统计
 - 提供开始/暂停/停止按钮和速度滑块
 - 演示模式不进行进化，支持速度控制
 - 无限循环运行episode，适合展示
+- 视口标题：NEAT Trading Simulator - Demo Mode
+- 视口大小：1920x1200
 
 ## 使用示例（带UI组件）
 
@@ -504,3 +604,5 @@ app.run()  # 阻塞直到窗口关闭
 - 预分配NumPy数组避免重复内存分配
 - UI主循环与训练线程分离，避免阻塞
 - 数据队列满时丢弃旧数据，保证实时性
+- 高斯KDE使用纯NumPy实现，避免scipy依赖
+- 采样率控制（sample_rate）减少不必要的数据采集
