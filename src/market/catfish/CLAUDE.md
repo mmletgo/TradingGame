@@ -68,9 +68,11 @@
 - `config: CatfishConfig` - 鲶鱼配置
 - `phase_offset: int` - 相位偏移（默认0）
 
+**注意：** 此函数用于单模式创建，当前系统默认使用多模式（三种鲶鱼同时运行）。
+
 ### create_all_catfish(config) -> list[CatfishBase]
 
-创建所有三种鲶鱼实例，相位错开以避免同时触发。
+创建所有三种鲶鱼实例，相位错开以避免同时触发。**这是当前系统的默认行为**。
 
 **参数：**
 - `config: CatfishConfig` - 鲶鱼配置
@@ -81,6 +83,31 @@
 
 ## 使用示例
 
+**多模式（推荐，当前默认）：**
+
+```python
+from src.config.config import CatfishConfig
+from src.market.catfish import create_all_catfish
+
+# 创建三种鲶鱼（相位错开）
+config = CatfishConfig(
+    enabled=True,
+    multi_mode=True,  # 三种模式同时运行
+    lookback_period=50,
+    trend_threshold=0.02,
+)
+catfish_list = create_all_catfish(config)
+
+# 在每个 tick 调用
+for catfish in catfish_list:
+    should_act, direction = catfish.decide(orderbook, tick, price_history)
+    if should_act:
+        trades = catfish.execute(direction, matching_engine)
+        catfish.record_action(tick)
+```
+
+**单模式（已弃用）：**
+
 ```python
 from src.config.config import CatfishConfig, CatfishMode
 from src.market.catfish import create_catfish
@@ -88,17 +115,10 @@ from src.market.catfish import create_catfish
 # 创建趋势追踪型鲶鱼
 config = CatfishConfig(
     enabled=True,
+    multi_mode=False,
     mode=CatfishMode.TREND_FOLLOWING,
-    lookback_period=50,
-    trend_threshold=0.02,
 )
 catfish = create_catfish(catfish_id=-1, config=config)
-
-# 在每个 tick 调用
-should_act, direction = catfish.decide(orderbook, tick, price_history)
-if should_act:
-    trades = catfish.execute(direction, matching_engine)
-    catfish.record_action(tick)
 ```
 
 ## 配置参数

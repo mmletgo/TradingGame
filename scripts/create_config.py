@@ -14,7 +14,6 @@ from src.config.config import (
     AgentConfig,
     AgentType,
     CatfishConfig,
-    CatfishMode,
     Config,
     DemoConfig,
     MarketConfig,
@@ -27,7 +26,6 @@ def create_default_config(
     checkpoint_interval: int = 10,
     config_dir: str = "config",
     catfish_enabled: bool = False,
-    catfish_mode: str = "trend_following",
     catfish_fund_multiplier: float = 3.0,
 ) -> Config:
     """创建默认配置
@@ -36,8 +34,7 @@ def create_default_config(
         episode_length: 每个 episode 的 tick 数量
         checkpoint_interval: 检查点间隔（episode 数）
         config_dir: 配置文件目录（Population 会在此目录下查找对应的 NEAT 配置）
-        catfish_enabled: 是否启用鲶鱼
-        catfish_mode: 鲶鱼行为模式
+        catfish_enabled: 是否启用鲶鱼（启用后三种行为模式同时运行）
         catfish_fund_multiplier: 鲶鱼资金倍数
 
     Returns:
@@ -103,14 +100,9 @@ def create_default_config(
     # 鲶鱼配置（如果启用）
     catfish: CatfishConfig | None = None
     if catfish_enabled:
-        mode_map = {
-            "trend_following": CatfishMode.TREND_FOLLOWING,
-            "cycle_swing": CatfishMode.CYCLE_SWING,
-            "mean_reversion": CatfishMode.MEAN_REVERSION,
-        }
         catfish = CatfishConfig(
             enabled=True,
-            mode=mode_map.get(catfish_mode, CatfishMode.TREND_FOLLOWING),
+            multi_mode=True,  # 三种行为模式同时运行
             fund_multiplier=catfish_fund_multiplier,
             market_maker_base_fund=maker_initial_balance * maker_leverage,
         )

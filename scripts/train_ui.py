@@ -83,14 +83,7 @@ def main() -> None:
     parser.add_argument(
         "--catfish",
         action="store_true",
-        help="启用鲶鱼机制（默认禁用）",
-    )
-    parser.add_argument(
-        "--catfish-mode",
-        type=str,
-        default="trend_following",
-        choices=["trend_following", "cycle_swing", "mean_reversion"],
-        help="鲶鱼行为模式（默认: trend_following）",
+        help="启用鲶鱼机制（三种行为模式同时运行，默认禁用）",
     )
     parser.add_argument(
         "--catfish-fund-multiplier",
@@ -114,7 +107,7 @@ def main() -> None:
         print(f"Resume From: {args.resume}", flush=True)
     if args.catfish:
         print(
-            f"Catfish: enabled, mode={args.catfish_mode}, multiplier={args.catfish_fund_multiplier}x",
+            f"Catfish: enabled (三种模式同时运行), multiplier={args.catfish_fund_multiplier}x",
             flush=True,
         )
     else:
@@ -127,7 +120,6 @@ def main() -> None:
         checkpoint_interval=args.checkpoint_interval,
         config_dir=args.config_dir,
         catfish_enabled=args.catfish,
-        catfish_mode=args.catfish_mode,
         catfish_fund_multiplier=args.catfish_fund_multiplier,
     )
 
