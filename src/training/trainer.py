@@ -79,6 +79,8 @@ class Trainer:
     _tick_history_prices: list[float]
     _tick_history_volumes: list[float]
     _tick_history_amounts: list[float]
+    _episode_high_price: float  # 当前 episode 最高价
+    _episode_low_price: float  # 当前 episode 最低价
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -122,6 +124,10 @@ class Trainer:
         self._tick_history_prices: list[float] = []      # 每 tick 价格
         self._tick_history_volumes: list[float] = []    # 每 tick 成交量（带方向）
         self._tick_history_amounts: list[float] = []    # 每 tick 成交额（带方向）
+
+        # Episode 价格统计
+        self._episode_high_price: float = 0.0
+        self._episode_low_price: float = 0.0
 
     def _init_ema_price(self, initial_price: float) -> None:
         """初始化 EMA 平滑价格
@@ -1151,6 +1157,12 @@ class Trainer:
         if current_price is None:
             current_price = orderbook.last_price
         self._price_history.append(current_price)
+
+        # 更新 episode 价格统计
+        if current_price > self._episode_high_price:
+            self._episode_high_price = current_price
+        if current_price < self._episode_low_price:
+            self._episode_low_price = current_price
         # 限制历史长度（避免内存无限增长）
         if len(self._price_history) > 1000:
             self._price_history = self._price_history[-1000:]
@@ -1272,6 +1284,11 @@ class Trainer:
         self._pop_liquidated_counts.clear()
         self._eliminating_agents.clear()  # 清空重入保护集合
 
+        # 初始化 episode 价格统计
+        initial_price = self.config.market.initial_price
+        self._episode_high_price = initial_price
+        self._episode_low_price = initial_price
+
         # 2. 运行 episode_length 个 tick
         for _ in range(episode_length):
             if not self.is_running or self.is_paused:
@@ -1362,6 +1379,8 @@ class Trainer:
                 }
                 for agent_type, pop in self.populations.items()
             },
+            "high_price": self._episode_high_price,
+            "low_price": self._episode_low_price,
         }
 
     def save_checkpoint(self, path: str) -> None:

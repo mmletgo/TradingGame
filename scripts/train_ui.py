@@ -47,8 +47,8 @@ def main() -> None:
     parser.add_argument(
         "--episodes",
         type=int,
-        default=100,
-        help="训练的 episode 数量（默认: 100）",
+        default=4000,
+        help="训练的 episode 数量（默认: 4000）",
     )
     parser.add_argument(
         "--episode-length",

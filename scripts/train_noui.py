@@ -48,12 +48,15 @@ def progress_callback(state: dict[str, Any]) -> None:
     """
     episode = state.get("episode", 0)
     populations = state.get("populations", {})
+    high_price = state.get("high_price", 0.0)
+    low_price = state.get("low_price", 0.0)
 
     info_parts = [f"Episode {episode}"]
     for agent_type, pop_info in populations.items():
         gen = pop_info.get("generation", 0)
         count = pop_info.get("count", 0)
         info_parts.append(f"{agent_type}: gen={gen}, count={count}")
+    info_parts.append(f"high={high_price:.2f}, low={low_price:.2f}")
 
     print(" | ".join(info_parts))
 
@@ -67,8 +70,8 @@ def main() -> None:
     parser.add_argument(
         "--episodes",
         type=int,
-        default=100,
-        help="训练的 episode 数量（默认: 100）",
+        default=4000,
+        help="训练的 episode 数量（默认: 4000）",
     )
     parser.add_argument(
         "--episode-length",

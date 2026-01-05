@@ -45,7 +45,7 @@ def create_default_config(
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
-        ema_alpha=1.0,
+        ema_alpha=0.5,
     )
     maker_initial_balance = 20_000_000.0  # 做市商初始资金 20M
     maker_leverage = 10.0
@@ -69,14 +69,14 @@ def create_default_config(
         ),
         AgentType.WHALE: AgentConfig(
             count=100,  # 庄家（合并多空）
-            initial_balance=10000000.0,  # 1000万
+            initial_balance=30_000_000.0,  # 3000万
             leverage=10.0,
             maintenance_margin_rate=0.05,  # 10%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),
         AgentType.MARKET_MAKER: AgentConfig(
-            count=100,
+            count=200,
             initial_balance=maker_initial_balance,
             leverage=maker_leverage,
             maintenance_margin_rate=0.5 / maker_leverage,
