@@ -29,6 +29,7 @@ UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 - `price_history: deque[float]` - 价格历史缓冲区（存储 orderbook.last_price，与盘口一致）
 - `equity_history: dict[AgentType, deque[float]]` - 各种群所有个体平均资产历史缓冲区
 - `alive_equity_history: dict[AgentType, deque[float]]` - 各种群存活个体平均资产历史缓冲区
+- `catfish_equity_history: list[deque[float]]` - 三只鲶鱼的净值历史缓冲区
 
 **方法：**
 - `collect_tick_data(trainer) -> UIDataSnapshot` - 收集当前tick数据快照
@@ -54,6 +55,8 @@ UI数据快照，每个tick的完整数据。
 - `price_history: list[float]` - 价格历史
 - `equity_history: dict[AgentType, list[float]]` - 所有个体平均资产历史
 - `alive_equity_history: dict[AgentType, list[float]]` - 存活个体平均资产历史
+- `catfish_data: list[CatfishInfo]` - 三只鲶鱼的当前数据
+- `catfish_equity_history: list[list[float]]` - 三只鲶鱼的净值历史
 
 ### TradeInfo
 
@@ -64,6 +67,18 @@ UI数据快照，每个tick的完整数据。
 - `price: float` - 成交价格
 - `quantity: float` - 成交数量
 - `is_buyer_taker: bool` - True=买入（taker是买方），False=卖出（taker是卖方）
+
+### CatfishInfo
+
+鲶鱼信息（UI展示用）。
+
+**字段：**
+- `name: str` - 鲶鱼类型名称（如 "TrendFollowingCatfish"）
+- `equity: float` - 净值
+- `position_qty: int` - 持仓数量（正数做多，负数做空，0为空仓）
+- `position_value: float` - 持仓市值 = abs(position_qty) * current_price
+- `initial_balance: float` - 初始资金
+- `is_liquidated: bool` - 是否被强平
 
 ### PopulationStats
 
@@ -246,7 +261,7 @@ controller.stop()
 
 ### ChartPanel
 
-图表面板，显示价格曲线、种群存活个体平均资产曲线和资产分布小提琴图。
+图表面板，显示价格曲线、种群存活个体平均资产曲线、资产分布小提琴图和鲶鱼资金曲线。
 
 **构造参数：**
 - 无参数，组件会自动添加到当前DearPyGui上下文中
@@ -257,6 +272,8 @@ controller.stop()
 - `PRICE_PLOT_HEIGHT: int = 140` - 价格图表高度
 - `VIOLIN_PLOT_HEIGHT: int = 120` - 小提琴图高度
 - `VIOLIN_PLOT_WIDTH: int = 340` - 每个小提琴图宽度（4个并排）
+- `CATFISH_PLOT_HEIGHT: int = 140` - 鲶鱼图表高度
+- `CATFISH_PLOT_WIDTH: int = 450` - 每个鲶鱼图表宽度（3个并排）
 - `KDE_POINTS: int = 50` - KDE曲线采样点数
 
 **方法：**
@@ -266,6 +283,9 @@ controller.stop()
   - `equity_history: dict[AgentType, list[float]]` - 各种群所有个体平均资产历史（保留参数兼容性，但不再显示）
   - `alive_equity_history: dict[AgentType, list[float]]` - 各种群存活个体平均资产历史（用于显示）
   - `population_stats: dict[AgentType, PopulationStats]` - 各种群统计信息
+- `update_catfish(catfish_data, catfish_equity_history) -> None` - 更新鲶鱼图表
+  - `catfish_data: list[CatfishInfo]` - 鲶鱼信息列表
+  - `catfish_equity_history: list[list[float]]` - 三只鲶鱼的净值历史
 
 **私有方法：**
 - `_create_equity_row(agent_type) -> None` - 创建单个种群的存活个体资产图表
@@ -273,6 +293,8 @@ controller.stop()
 - `_setup_violin_themes() -> None` - 设置小提琴图颜色主题
 - `_gaussian_kde(data, x_grid, bandwidth) -> np.ndarray` - 高斯核密度估计（纯NumPy实现）
 - `_update_violin_plot(agent_type, equities) -> None` - 更新单个种群的小提琴图
+- `_create_catfish_plots() -> None` - 创建三只鲶鱼的图表区域（一行三个，默认隐藏）
+- `_setup_catfish_themes() -> None` - 设置鲶鱼曲线颜色主题
 
 **布局：**
 - 价格走势图：高度140px，宽度自适应
@@ -288,6 +310,11 @@ controller.stop()
   - 每个图表宽度340px
   - 显示KDE密度曲线形成的小提琴形状
   - 中位数线（白色）和四分位线（灰色）
+- 鲶鱼图表区域（3个并排，默认隐藏，高度140px）：
+  - 每个图表宽度450px
+  - 显示净值曲线
+  - 标题旁显示持仓数量（多/空/空仓）
+  - 被强平时显示红色"[已强平]"标记
 
 **小提琴图实现：**
 - 使用 Area Series 绘制 KDE 密度曲线
@@ -300,12 +327,16 @@ controller.stop()
 - 高级散户: 蓝色 (100, 150, 255)
 - 庄家: 红色 (255, 100, 100)
 - 做市商: 紫色 (200, 100, 255)
+- 趋势追踪鲶鱼: 橙色 (255, 165, 0)
+- 周期摆动鲶鱼: 天蓝色 (0, 191, 255)
+- 逆势操作鲶鱼: 粉色 (255, 105, 180)
 
 **Tag命名规则：**
 - 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`
 - 存活个体平均资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
 - 统计文本：`stat_{agent_type}`
 - 小提琴图：`violin_plot_{agent_type}`, `violin_area_{agent_type}`, `violin_median_{agent_type}`, `violin_q1_{agent_type}`, `violin_q3_{agent_type}`
+- 鲶鱼图表：`catfish_container`（容器组），`catfish_plot_{i}`, `catfish_series_{i}`, `catfish_x_axis_{i}`, `catfish_y_axis_{i}`, `catfish_title_{i}`, `catfish_position_{i}`（i=0,1,2）
 
 ### TradesPanel
 

@@ -27,6 +27,18 @@ class TradeInfo:
 
 
 @dataclass
+class CatfishInfo:
+    """鲶鱼信息（UI展示用）"""
+
+    name: str  # 鲶鱼类型名称
+    equity: float  # 净值
+    position_qty: int  # 持仓数量
+    position_value: float  # 持仓市值 = abs(position_qty) * current_price
+    initial_balance: float  # 初始资金
+    is_liquidated: bool  # 是否被强平
+
+
+@dataclass
 class PopulationStats:
     """种群统计信息"""
 
@@ -66,6 +78,10 @@ class UIDataSnapshot:
     equity_history: dict[AgentType, list[float]]  # 所有个体平均资产历史
     alive_equity_history: dict[AgentType, list[float]]  # 存活个体平均资产历史
 
+    # 鲶鱼数据
+    catfish_data: list[CatfishInfo]  # 三只鲶鱼的当前数据
+    catfish_equity_history: list[list[float]]  # 三只鲶鱼的净值历史
+
 
 class UIDataCollector:
     """UI数据采集器
@@ -83,6 +99,7 @@ class UIDataCollector:
     price_history: deque[float]
     equity_history: dict[AgentType, deque[float]]
     alive_equity_history: dict[AgentType, deque[float]]
+    catfish_equity_history: list[deque[float]]  # 三只鲶鱼的净值历史
 
     def __init__(self, history_length: int = 1000) -> None:
         """初始化数据采集器
@@ -98,6 +115,10 @@ class UIDataCollector:
         self.alive_equity_history = {
             agent_type: deque(maxlen=history_length) for agent_type in AgentType
         }
+        # 初始化三只鲶鱼的净值历史
+        self.catfish_equity_history = [
+            deque(maxlen=history_length) for _ in range(3)
+        ]
 
     def collect_tick_data(self, trainer: "Trainer") -> UIDataSnapshot:
         """收集当前tick的数据快照
@@ -162,6 +183,9 @@ class UIDataCollector:
             for trade in trainer.recent_trades
         ]
 
+        # 收集鲶鱼数据
+        catfish_data = self._collect_catfish_data(trainer, price_for_equity)
+
         return UIDataSnapshot(
             tick=trainer.tick,
             episode=trainer.episode,
@@ -174,6 +198,8 @@ class UIDataCollector:
             price_history=list(self.price_history),
             equity_history={k: list(v) for k, v in self.equity_history.items()},
             alive_equity_history={k: list(v) for k, v in self.alive_equity_history.items()},
+            catfish_data=catfish_data,
+            catfish_equity_history=[list(h) for h in self.catfish_equity_history],
         )
 
     def _compute_population_stats(
@@ -231,10 +257,68 @@ class UIDataCollector:
             alive_equities=alive_equities.tolist(),
         )
 
+    def _collect_catfish_data(
+        self, trainer: "Trainer", current_price: float
+    ) -> list[CatfishInfo]:
+        """收集鲶鱼数据
+
+        Args:
+            trainer: 训练器实例
+            current_price: 当前价格（用于计算净值）
+
+        Returns:
+            鲶鱼信息列表
+        """
+        catfish_data: list[CatfishInfo] = []
+
+        # 如果鲶鱼列表为空，返回空列表
+        if not hasattr(trainer, "catfish_list") or not trainer.catfish_list:
+            return catfish_data
+
+        # 收集每只鲶鱼的数据
+        for i, catfish in enumerate(trainer.catfish_list):
+            # 获取鲶鱼类型名称
+            name = type(catfish).__name__
+
+            # 计算净值
+            equity = catfish.account.get_equity(current_price)
+
+            # 获取持仓数量
+            position_qty = catfish.account.position.quantity
+
+            # 计算持仓市值
+            position_value = abs(position_qty) * current_price
+
+            # 获取初始资金
+            initial_balance = catfish.account.initial_balance
+
+            # 是否被强平
+            is_liquidated = catfish.is_liquidated
+
+            catfish_data.append(
+                CatfishInfo(
+                    name=name,
+                    equity=equity,
+                    position_qty=position_qty,
+                    position_value=position_value,
+                    initial_balance=initial_balance,
+                    is_liquidated=is_liquidated,
+                )
+            )
+
+            # 记录净值历史（最多记录3只鲶鱼）
+            if i < len(self.catfish_equity_history):
+                self.catfish_equity_history[i].append(equity)
+
+        return catfish_data
+
     def reset(self) -> None:
         """重置历史数据（新episode开始时调用）"""
         self.price_history.clear()
         for history in self.equity_history.values():
             history.clear()
         for history in self.alive_equity_history.values():
+            history.clear()
+        # 重置鲶鱼净值历史
+        for history in self.catfish_equity_history:
             history.clear()
