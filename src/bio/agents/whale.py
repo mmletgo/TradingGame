@@ -119,8 +119,8 @@ class WhaleAgent(Agent):
         if mid_price == 0:
             mid_price = 100.0
 
-        # 映射数量比例到 [0.1, 1.0]
-        quantity_ratio = 0.1 + (quantity_ratio_norm + 1) * 0.45  # -1→0.1, 0→0.55, 1→1.0
+        # 映射数量比例到 [0, 1.0]
+        quantity_ratio = (quantity_ratio_norm + 1) * 0.5  # -1→0, 0→0.5, 1→1.0
 
         # 获取 tick_size
         tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1

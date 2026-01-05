@@ -88,7 +88,7 @@ Agent 基类，提供通用属性和方法。
 - **RetailProAgent**: 实现散户/高级散户通用的 decide 方法（9个输出节点，7种动作）
 - **RetailAgent**: 继承 RetailProAgent 的 decide 方法
 - **WhaleAgent**: 实现庄家专用的 decide 方法（9个输出节点，7种动作，与散户相同的动作空间）
-- **MarketMakerAgent**: 实现做市商专用的 decide 方法（20个输出节点）
+- **MarketMakerAgent**: 实现做市商专用的 decide 方法（21个输出节点）
 
 **订单数量约束：** 所有订单数量（quantity）均为 int 类型，最小单位为 1。`_calculate_order_quantity` 方法会将计算结果取整并确保至少为 1。
 
@@ -243,13 +243,14 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 
 散户、高级散户、庄家使用相同的动作空间和神经网络输出结构。
 
-### 做市商神经网络输出（20 个值）
+### 做市商神经网络输出（21 个值）
 | 索引 | 说明 |
 |------|------|
 | 0-4 | 买单 1-5 价格偏移（-1 到 1，映射到 1-100 ticks）|
 | 5-9 | 买单 1-5 数量权重 |
 | 10-14 | 卖单 1-5 价格偏移（-1 到 1，映射到 1-100 ticks）|
 | 15-19 | 卖单 1-5 数量权重 |
+| 20 | 总下单比例基准（-1 到 1，映射到 0-1，控制使用多少可用资金下单）|
 
 **价格偏移映射**：神经网络输出 [-1, 1] 完全控制价格偏移，映射到 [1, 100] ticks。买单价格 = mid_price - offset * tick_size，卖单价格 = mid_price + offset * tick_size。
 

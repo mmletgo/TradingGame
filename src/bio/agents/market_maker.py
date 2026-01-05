@@ -254,11 +254,12 @@ class MarketMakerAgent(Agent):
         """决策下一步动作
 
         做市商默认每 tick 双边挂单，神经网络直接输出价格和数量参数。
-        神经网络输出结构（共 20 个值）：
+        神经网络输出结构（共 21 个值）：
         - 输出[0-4]: 买单1-5的价格偏移（-1到1，相对于mid_price）
         - 输出[5-9]: 买单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
         - 输出[10-14]: 卖单1-5的价格偏移（-1到1，相对于mid_price）
         - 输出[15-19]: 卖单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
+        - 输出[20]: 总下单比例基准（-1到1，映射到0-1，控制使用多少可用资金下单）
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -279,9 +280,9 @@ class MarketMakerAgent(Agent):
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
 
-        # 3. 验证输出维度（需要 20 个值）
-        if len(outputs) < 20:
-            raise ValueError(f"神经网络输出维度不足，期望 20，实际 {len(outputs)}")
+        # 3. 验证输出维度（需要 21 个值）
+        if len(outputs) < 21:
+            raise ValueError(f"神经网络输出维度不足，期望 21，实际 {len(outputs)}")
 
         # 4. 获取参考价格并计算仓位信息
         mid_price = market_state.mid_price
@@ -312,6 +313,14 @@ class MarketMakerAgent(Agent):
         bid_ratios, ask_ratios = self._apply_position_skew(
             bid_ratios, ask_ratios, skew_factor
         )
+
+        # 解析总下单比例基准
+        # 输出[20]: -1 到 1，映射到 0 到 1
+        total_ratio_base = (np.clip(outputs_arr[20], -1, 1) + 1) / 2  # [0, 1]
+
+        # 应用总下单比例基准到权重
+        bid_ratios = bid_ratios * total_ratio_base
+        ask_ratios = ask_ratios * total_ratio_base
 
         # 价格偏移完全由神经网络决定，映射到 [1, 100] ticks
         max_offset_ticks = 100.0
