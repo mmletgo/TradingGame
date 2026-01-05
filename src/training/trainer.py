@@ -284,6 +284,55 @@ class Trainer:
             self.matching_engine.cancel_order(agent.account.pending_order_id)
             agent.account.pending_order_id = None
 
+    def _execute_liquidation_market_order(self, agent: "Agent") -> tuple[int, bool]:
+        """执行强平市价单（不含 ADL）
+
+        只执行市价单平仓，不执行 ADL。用于三阶段强平流程中的阶段2。
+
+        Args:
+            agent: 被强平的 Agent
+
+        Returns:
+            (剩余未平仓数量, 是否为多头)
+        """
+        position_qty = agent.account.position.quantity
+        if position_qty == 0:
+            return 0, True
+
+        # 记录原始持仓方向
+        is_long = position_qty > 0
+        target_qty = abs(position_qty)
+
+        # 创建市价平仓单
+        side = OrderSide.SELL if is_long else OrderSide.BUY
+        order = Order(
+            order_id=agent._generate_order_id(),
+            agent_id=agent.agent_id,
+            side=side,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=target_qty,
+        )
+
+        # 直接撮合
+        trades = self.matching_engine.process_order(order)
+
+        # 更新账户（taker 和 maker）
+        for trade in trades:
+            is_buyer = trade.is_buyer_taker
+            agent.account.on_trade(trade, is_buyer)
+            self.recent_trades.append(trade)
+            # 更新 maker 的账户
+            maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+            maker_agent = self.agent_map.get(maker_id)
+            if maker_agent is not None:
+                maker_is_buyer = not trade.is_buyer_taker
+                maker_agent.account.on_trade(trade, maker_is_buyer)
+
+        # 返回剩余未平仓数量和方向
+        remaining_qty = abs(agent.account.position.quantity)
+        return remaining_qty, is_long
+
     def _execute_adl(
         self,
         liquidated_agent: "Agent",
@@ -776,25 +825,30 @@ class Trainer:
             # 立即撤销挂单，防止在后续平仓过程中作为 maker 被成交
             self._cancel_agent_orders(agent)
 
-        # === 强平处理：直接进入 ADL（跳过市价单平仓，避免价格冲击）===
+        # === 三阶段强平处理 ===
+        # 阶段2：统一执行市价单平仓，收集需要 ADL 的 Agent
+        agents_need_adl: list[tuple["Agent", int, bool]] = (
+            []
+        )  # (agent, remaining_qty, is_long)
         if len(agents_to_liquidate) > 0:
-            # 收集需要 ADL 的 Agent（所有有持仓的被强平 Agent）
-            agents_need_adl: list[tuple["Agent", int, bool]] = (
-                []
-            )  # (agent, position_qty, is_long)
             for agent in agents_to_liquidate:
-                position_qty = agent.account.position.quantity
-                if position_qty != 0:
-                    is_long = position_qty > 0
-                    agents_need_adl.append((agent, abs(position_qty), is_long))
+                remaining_qty, is_long = self._execute_liquidation_market_order(agent)
+                if remaining_qty > 0:
+                    agents_need_adl.append((agent, remaining_qty, is_long))
                 # 标记淘汰
                 agent.is_liquidated = True
                 self._pop_liquidated_counts[agent.agent_type] = (
                     self._pop_liquidated_counts.get(agent.agent_type, 0) + 1
                 )
+                # 穿仓兜底
+                if agent.account.balance < 0:
+                    agent.account.balance = 0.0
 
-            # 用当前价格计算 ADL 候选并执行
+            # 阶段3：用最新价格计算 ADL 候选并执行
             if agents_need_adl:
+                # 获取订单簿最新价格（强平市价单执行后的价格）
+                latest_price = orderbook.last_price
+
                 # 按方向计算 ADL 候选清单
                 self._adl_long_candidates = []
                 self._adl_short_candidates = []
@@ -804,9 +858,9 @@ class Trainer:
                     if agent.agent_id in agents_to_liquidate_ids:
                         continue
 
-                    # 用当前价格计算 ADL 候选信息
+                    # 用最新价格计算 ADL 候选信息
                     candidate = self.adl_manager.calculate_adl_score(
-                        agent, current_price
+                        agent, latest_price
                     )
                     if candidate is None:
                         continue
@@ -826,8 +880,8 @@ class Trainer:
                 self._adl_short_candidates.sort(key=lambda c: c.adl_score, reverse=True)
 
                 # 执行 ADL
-                for agent, position_qty, is_long in agents_need_adl:
-                    self._execute_adl(agent, position_qty, current_price, is_long)
+                for agent, remaining_qty, is_long in agents_need_adl:
+                    self._execute_adl(agent, remaining_qty, latest_price, is_long)
                     # 兜底处理：确保仓位清零
                     if agent.account.position.quantity != 0:
                         self.logger.warning(
@@ -836,8 +890,6 @@ class Trainer:
                         )
                         agent.account.position.quantity = 0
                         agent.account.position.avg_price = 0.0
-                    if agent.account.balance < 0:
-                        agent.account.balance = 0.0
 
         # === 鲶鱼行动（在 Agent 之前）===
         for catfish in self.catfish_list:
