@@ -23,11 +23,15 @@ ADL 在以下情况触发：
 ADL 候选者信息的数据类。
 
 **属性：**
-- `agent: Agent` - Agent 对象
+- `participant: Union[Agent, CatfishBase]` - 参与者对象（支持 Agent 或鲶鱼）
 - `position_qty: int` - 持仓数量（正=多头，负=空头）
 - `pnl_percent: float` - 盈亏百分比
 - `effective_leverage: float` - 有效杠杆
 - `adl_score: float` - ADL 排名分数（越高越优先被选中）
+
+**属性方法：**
+- `agent: Agent` - 兼容旧代码的属性访问器（仅当 participant 是 Agent 时可用）
+- `is_catfish: bool` - 检查候选者是否为鲶鱼
 
 ### ADLManager
 
@@ -76,7 +80,7 @@ ADL 排名算法的设计目标是优先选择高杠杆高盈利的交易者：
 
 ## 执行流程
 
-1. **Tick 开始时预计算**：Trainer 遍历所有 Agent，筛选盈利的候选者，计算 ADL 分数，按多头/空头分类并排序
+1. **Tick 开始时预计算**：Trainer 遍历所有 Agent 和鲶鱼，筛选盈利的候选者，计算 ADL 分数，按多头/空头分类并排序
 2. 强平触发后，撮合引擎尝试用市价单平仓
 3. 如果市价单未能完全成交，计算剩余需平仓数量
 4. 在 Trainer 的 `_execute_adl()` 中直接处理：
@@ -85,12 +89,13 @@ ADL 排名算法的设计目标是优先选择高杠杆高盈利的交易者：
    - 通过 `account.on_adl_trade()` 更新账户
 5. **ADL 成交价格为当前市场价格**（简单公平，双方都以市价成交）
 
-**注**：由于只有盈利的 Agent 才能作为 ADL 对手方，当所有对手方都亏损时（如特殊入场价导致），ADL 可能无法匹配。此时由系统兜底处理，强制清零被淘汰者的仓位。
+**注**：由于只有盈利的 Agent/鲶鱼才能作为 ADL 对手方，当所有对手方都亏损时（如特殊入场价导致），ADL 可能无法匹配。此时由系统兜底处理，强制清零被淘汰者的仓位。
 
 ## 与其他模块的关系
 
 ### 依赖模块
 - `src.bio.agents.base.Agent` - 访问 Agent 的账户和持仓信息
+- `src.market.catfish.catfish_base.CatfishBase` - 鲶鱼基类，可作为 ADL 候选者
 - `src.market.account.Account` - 获取余额、净值等账户信息
 - `src.market.account.Position` - 获取持仓数量和均价
 - `src.core.log_engine.logger` - 日志记录

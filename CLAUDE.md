@@ -89,10 +89,10 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
 2. **排名公式**：
    - 盈利时：`排名 = PnL% × 有效杠杆`
    - 亏损时：`排名 = PnL% / 有效杠杆`
-3. **执行流程**：按排名从高到低选择对手方，以破产价格强制成交
-4. **破产价格计算**：
-   - 多头：`avg_price - balance / |quantity|`
-   - 空头：`avg_price + balance / |quantity|`
+3. **执行流程**：按排名从高到低选择对手方，以当前市场价格强制成交
+4. **成交价格**：直接使用当前市场价格（不使用破产价格）
+   - 设计原则：强平 ≠ 破产，被强平时 Agent 可能还有正净值（仅保证金率过低）
+   - 优点：简单公平、避免异常、符合直觉
 
 相关模块：`src/market/adl/`
 
@@ -105,7 +105,7 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
 - `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）
 - `config/neat_retail_pro.cfg` - 高级散户（607 个输入节点，9 个输出节点）
 - `config/neat_whale.cfg` - 庄家（607 个输入节点，9 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（634 个输入节点，22 个输出节点）
+- `config/neat_market_maker.cfg` - 做市商（634 个输入节点，21 个输出节点）
 
 ## 目录级 CLAUDE.md 系统
 
