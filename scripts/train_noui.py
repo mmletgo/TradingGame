@@ -73,8 +73,8 @@ def main() -> None:
     parser.add_argument(
         "--episode-length",
         type=int,
-        default=1000,
-        help="每个 episode 的 tick 数量（默认: 1000）",
+        default=100,
+        help="每个 episode 的 tick 数量（默认: 100）",
     )
     parser.add_argument(
         "--checkpoint-interval",
@@ -128,7 +128,9 @@ def main() -> None:
     if args.resume:
         print(f"Resume From: {args.resume}")
     if args.catfish:
-        print(f"Catfish: enabled (三种模式同时运行), multiplier={args.catfish_fund_multiplier}x")
+        print(
+            f"Catfish: enabled (三种模式同时运行), multiplier={args.catfish_fund_multiplier}x"
+        )
     else:
         print("Catfish: disabled")
     print("=" * 60)
