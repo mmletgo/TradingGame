@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from src.config.config import CatfishConfig
+from src.market.catfish.catfish_account import CatfishAccount
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.matching.trade import Trade
 
@@ -29,10 +30,18 @@ class CatfishBase(ABC):
         config: 鲶鱼配置
         _next_order_id: 下一个订单ID（负数空间）
         _last_action_tick: 上次行动的tick
+        account: 鲶鱼账户
+        is_liquidated: 是否被强平
     """
 
     def __init__(
-        self, catfish_id: int, config: CatfishConfig, phase_offset: int = 0
+        self,
+        catfish_id: int,
+        config: CatfishConfig,
+        phase_offset: int = 0,
+        initial_balance: float = 0.0,
+        leverage: float = 10.0,
+        maintenance_margin_rate: float = 0.05,
     ) -> None:
         """
         初始化鲶鱼
@@ -41,6 +50,9 @@ class CatfishBase(ABC):
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
             phase_offset: 相位偏移（用于错开多个鲶鱼的触发时间）
+            initial_balance: 初始余额
+            leverage: 杠杆倍数
+            maintenance_margin_rate: 维持保证金率
         """
         if catfish_id >= 0:
             raise ValueError(f"鲶鱼ID必须为负数，当前值: {catfish_id}")
@@ -50,6 +62,17 @@ class CatfishBase(ABC):
         self.phase_offset: int = phase_offset
         self._next_order_id: int = catfish_id * 1_000_000  # 负数空间的订单ID
         self._last_action_tick: int = -1000  # 初始值设为很早，确保首次可以行动
+
+        # 新增：创建鲶鱼账户
+        self.account: CatfishAccount = CatfishAccount(
+            catfish_id=catfish_id,
+            initial_balance=initial_balance,
+            leverage=leverage,
+            maintenance_margin_rate=maintenance_margin_rate,
+        )
+
+        # 新增：是否被强平
+        self.is_liquidated: bool = False
 
     @abstractmethod
     def decide(
@@ -87,7 +110,7 @@ class CatfishBase(ABC):
             成交列表
         """
         orderbook = matching_engine.orderbook
-        quantity = self._calculate_quantity(orderbook)
+        quantity = self._calculate_quantity(orderbook, direction)
 
         if quantity <= 0:
             return []
@@ -103,35 +126,42 @@ class CatfishBase(ABC):
             quantity=quantity,
         )
 
-        # 注册鲶鱼的费率（使用庄家费率）
-        matching_engine.register_agent(self.catfish_id, 0.0, 0.0001)
+        # 注册鲶鱼费率（maker=0, taker=0）
+        matching_engine.register_agent(self.catfish_id, 0.0, 0.0)
 
         trades = matching_engine.match_market_order(order)
         return trades
 
-    def _calculate_quantity(self, orderbook: "OrderBook") -> int:
-        """
-        计算下单数量
-
-        根据订单簿深度和资金配置计算下单数量。
+    def _calculate_quantity(self, orderbook: "OrderBook", direction: int) -> int:
+        """计算下单数量（让盘口波动至少 3 tick）
 
         Args:
             orderbook: 订单簿
+            direction: 方向（1=买，-1=卖）
 
         Returns:
             下单数量
         """
-        mid_price = orderbook.get_mid_price()
-        if mid_price is None or mid_price <= 0:
+        target_ticks = 3
+
+        # 获取盘口深度
+        depth = orderbook.get_depth(levels=target_ticks)
+
+        if direction > 0:  # 买入，吃卖盘
+            levels = depth["asks"]
+        else:  # 卖出，吃买盘
+            levels = depth["bids"]
+
+        if len(levels) < target_ticks:
             return 0
 
-        # 计算鲶鱼资金
-        fund = self.config.fund_multiplier * self.config.market_maker_base_fund
+        # 累加前 target_ticks 档的数量
+        total_qty = 0
+        for i in range(min(target_ticks, len(levels))):
+            price, qty = levels[i]
+            total_qty += int(qty)  # qty 可能是 float
 
-        # 计算可买数量（简单计算，不考虑杠杆）
-        quantity = int(fund / mid_price)
-
-        return max(1, quantity)
+        return total_qty
 
     def _generate_order_id(self) -> int:
         """
@@ -168,3 +198,9 @@ class CatfishBase(ABC):
             tick: 当前tick
         """
         self._last_action_tick = tick
+
+    def reset(self) -> None:
+        """重置鲶鱼状态（Episode 开始时调用）"""
+        self.account.reset()
+        self.is_liquidated = False
+        self._last_action_tick = -1000

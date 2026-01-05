@@ -25,6 +25,9 @@ def create_catfish(
     catfish_id: int,
     config: CatfishConfig,
     phase_offset: int = 0,
+    initial_balance: float = 0.0,
+    leverage: float = 10.0,
+    maintenance_margin_rate: float = 0.05,
 ) -> CatfishBase:
     """
     根据配置创建鲶鱼实例
@@ -35,6 +38,9 @@ def create_catfish(
         catfish_id: 鲶鱼ID（应为负数）
         config: 鲶鱼配置
         phase_offset: 相位偏移（用于错开触发时间）
+        initial_balance: 初始余额
+        leverage: 杠杆倍数
+        maintenance_margin_rate: 维持保证金率
 
     Returns:
         对应类型的鲶鱼实例
@@ -43,16 +49,30 @@ def create_catfish(
         ValueError: 如果 mode 不是有效的 CatfishMode
     """
     if config.mode == CatfishMode.TREND_FOLLOWING:
-        return TrendFollowingCatfish(catfish_id, config, phase_offset)
+        return TrendFollowingCatfish(
+            catfish_id, config, phase_offset,
+            initial_balance, leverage, maintenance_margin_rate
+        )
     elif config.mode == CatfishMode.CYCLE_SWING:
-        return CycleSwingCatfish(catfish_id, config, phase_offset)
+        return CycleSwingCatfish(
+            catfish_id, config, phase_offset,
+            initial_balance, leverage, maintenance_margin_rate
+        )
     elif config.mode == CatfishMode.MEAN_REVERSION:
-        return MeanReversionCatfish(catfish_id, config, phase_offset)
+        return MeanReversionCatfish(
+            catfish_id, config, phase_offset,
+            initial_balance, leverage, maintenance_margin_rate
+        )
     else:
         raise ValueError(f"未知的鲶鱼模式: {config.mode}")
 
 
-def create_all_catfish(config: CatfishConfig) -> list[CatfishBase]:
+def create_all_catfish(
+    config: CatfishConfig,
+    initial_balance: float,
+    leverage: float = 10.0,
+    maintenance_margin_rate: float = 0.05,
+) -> list[CatfishBase]:
     """
     创建所有三种鲶鱼实例（相位错开）
 
@@ -60,6 +80,9 @@ def create_all_catfish(config: CatfishConfig) -> list[CatfishBase]:
 
     Args:
         config: 鲶鱼配置
+        initial_balance: 初始余额
+        leverage: 杠杆倍数
+        maintenance_margin_rate: 维持保证金率
 
     Returns:
         三种鲶鱼实例的列表
@@ -69,9 +92,18 @@ def create_all_catfish(config: CatfishConfig) -> list[CatfishBase]:
     phase_offsets = [0, cooldown // 3, cooldown * 2 // 3]
 
     catfish_list: list[CatfishBase] = [
-        TrendFollowingCatfish(-1, config, phase_offsets[0]),
-        CycleSwingCatfish(-2, config, phase_offsets[1]),
-        MeanReversionCatfish(-3, config, phase_offsets[2]),
+        TrendFollowingCatfish(
+            -1, config, phase_offsets[0],
+            initial_balance, leverage, maintenance_margin_rate
+        ),
+        CycleSwingCatfish(
+            -2, config, phase_offsets[1],
+            initial_balance, leverage, maintenance_margin_rate
+        ),
+        MeanReversionCatfish(
+            -3, config, phase_offsets[2],
+            initial_balance, leverage, maintenance_margin_rate
+        ),
     ]
 
     return catfish_list

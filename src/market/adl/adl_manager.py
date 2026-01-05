@@ -1,21 +1,38 @@
 """ADL (Auto-Deleveraging) 自动减仓管理器"""
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from src.bio.agents.base import Agent
+    from src.market.catfish.catfish_base import CatfishBase
 
 
 @dataclass
 class ADLCandidate:
     """ADL 候选者信息"""
 
-    agent: "Agent"
+    participant: Union["Agent", "CatfishBase"]  # 支持 Agent 或鲶鱼
     position_qty: int  # 持仓数量（正=多头，负=空头）
     pnl_percent: float  # 盈亏百分比
     effective_leverage: float  # 有效杠杆
     adl_score: float  # ADL 排名分数（越高越优先）
+
+    @property
+    def agent(self) -> "Agent":
+        """兼容旧代码（仅当 participant 是 Agent 时可用）"""
+        from src.bio.agents.base import Agent
+
+        if not isinstance(self.participant, Agent):
+            raise TypeError("This candidate is a Catfish, not an Agent")
+        return self.participant
+
+    @property
+    def is_catfish(self) -> bool:
+        """检查候选者是否为鲶鱼"""
+        from src.market.catfish.catfish_base import CatfishBase
+
+        return isinstance(self.participant, CatfishBase)
 
 
 class ADLManager:
@@ -122,7 +139,7 @@ class ADLManager:
                 adl_score = float("-inf")
 
         return ADLCandidate(
-            agent=agent,
+            participant=agent,
             position_qty=quantity,
             pnl_percent=pnl_percent,
             effective_leverage=effective_leverage,

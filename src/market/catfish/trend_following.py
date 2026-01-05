@@ -29,7 +29,13 @@ class TrendFollowingCatfish(CatfishBase):
     """
 
     def __init__(
-        self, catfish_id: int, config: CatfishConfig, phase_offset: int = 0
+        self,
+        catfish_id: int,
+        config: CatfishConfig,
+        phase_offset: int = 0,
+        initial_balance: float = 0.0,
+        leverage: float = 10.0,
+        maintenance_margin_rate: float = 0.05,
     ) -> None:
         """
         初始化趋势追踪型鲶鱼
@@ -38,8 +44,14 @@ class TrendFollowingCatfish(CatfishBase):
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
             phase_offset: 相位偏移（用于错开触发时间）
+            initial_balance: 初始余额
+            leverage: 杠杆倍数
+            maintenance_margin_rate: 维持保证金率
         """
-        super().__init__(catfish_id, config, phase_offset)
+        super().__init__(
+            catfish_id, config, phase_offset,
+            initial_balance, leverage, maintenance_margin_rate
+        )
 
     def decide(
         self,

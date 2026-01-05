@@ -30,7 +30,13 @@ class MeanReversionCatfish(CatfishBase):
     """
 
     def __init__(
-        self, catfish_id: int, config: CatfishConfig, phase_offset: int = 0
+        self,
+        catfish_id: int,
+        config: CatfishConfig,
+        phase_offset: int = 0,
+        initial_balance: float = 0.0,
+        leverage: float = 10.0,
+        maintenance_margin_rate: float = 0.05,
     ) -> None:
         """
         初始化逆势操作型鲶鱼
@@ -39,8 +45,14 @@ class MeanReversionCatfish(CatfishBase):
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
             phase_offset: 相位偏移（用于错开触发时间）
+            initial_balance: 初始余额
+            leverage: 杠杆倍数
+            maintenance_margin_rate: 维持保证金率
         """
-        super().__init__(catfish_id, config, phase_offset)
+        super().__init__(
+            catfish_id, config, phase_offset,
+            initial_balance, leverage, maintenance_margin_rate
+        )
         self._ema: float = 0.0
         self._ema_initialized: bool = False
 
@@ -116,10 +128,10 @@ class MeanReversionCatfish(CatfishBase):
 
     def reset(self) -> None:
         """
-        重置EMA状态
+        重置EMA和账户状态
 
         在新的episode开始时调用。
         """
+        super().reset()  # 调用父类 reset
         self._ema = 0.0
         self._ema_initialized = False
-        self._last_action_tick = -1000

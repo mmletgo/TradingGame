@@ -16,6 +16,7 @@ from src.bio.agents.base import AgentType
 
 if TYPE_CHECKING:
     from src.bio.agents.base import ActionType, Agent
+    from src.market.catfish.catfish_base import CatfishBase
     from src.market.market_state import (
         NormalizedMarketState as NormalizedMarketStateType,
     )
@@ -109,8 +110,9 @@ class Trainer:
         self._ema_alpha: float = 0.1
 
         # 鲶鱼相关
-        self.catfish_list = []
-        self._price_history = []
+        self.catfish_list: list["CatfishBase"] = []
+        self._price_history: list[float] = []
+        self._catfish_liquidated: bool = False  # 鲶鱼是否被强平（触发 episode 结束）
 
     def _init_ema_price(self, initial_price: float) -> None:
         """初始化 EMA 平滑价格
@@ -138,6 +140,42 @@ class Trainer:
             + (1 - self._ema_alpha) * self._smooth_mid_price
         )
         return self._smooth_mid_price
+
+    def _calculate_catfish_initial_balance(self) -> float:
+        """计算每条鲶鱼的初始资金
+
+        公式：鲶鱼总资金 = 做市商杠杆后资金 - 其他物种杠杆后资金
+        每条鲶鱼分配 1/3
+
+        Returns:
+            每条鲶鱼的初始资金
+
+        Raises:
+            ValueError: 如果其他物种资金 >= 做市商资金
+        """
+        agents_config = self.config.agents
+
+        # 做市商杠杆后资金
+        mm_config = agents_config[AgentType.MARKET_MAKER]
+        mm_fund = mm_config.count * mm_config.initial_balance * mm_config.leverage
+
+        # 其他物种杠杆后资金
+        other_fund = 0.0
+        for agent_type in [AgentType.RETAIL, AgentType.RETAIL_PRO, AgentType.WHALE]:
+            cfg = agents_config[agent_type]
+            other_fund += cfg.count * cfg.initial_balance * cfg.leverage
+
+        # 校验资金配置
+        if other_fund >= mm_fund:
+            raise ValueError(
+                f"鲶鱼资金配置错误：做市商杠杆后资金({mm_fund})必须大于"
+                f"其他物种杠杆后资金({other_fund})"
+            )
+
+        # 每条鲶鱼资金（3条鲶鱼）
+        catfish_count = 3
+        per_catfish = (mm_fund - other_fund) / catfish_count
+        return per_catfish
 
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取或创建线程池（惰性初始化）"""
@@ -171,26 +209,50 @@ class Trainer:
 
         # 初始化鲶鱼（如果配置中启用）
         if self.config.catfish and self.config.catfish.enabled:
+            # 计算鲶鱼初始资金
+            catfish_initial_balance = self._calculate_catfish_initial_balance()
+
+            # 鲶鱼使用庄家的杠杆和维持保证金率
+            whale_config = self.config.agents[AgentType.WHALE]
+            catfish_leverage = whale_config.leverage
+            catfish_mmr = whale_config.maintenance_margin_rate
+
             if self.config.catfish.multi_mode:
                 # 多模式：同时创建三种鲶鱼
-                self.catfish_list = create_all_catfish(self.config.catfish)
+                self.catfish_list = create_all_catfish(
+                    self.config.catfish,
+                    initial_balance=catfish_initial_balance,
+                    leverage=catfish_leverage,
+                    maintenance_margin_rate=catfish_mmr,
+                )
                 for catfish in self.catfish_list:
                     self.matching_engine.register_agent(
                         catfish.catfish_id,
                         0.0,  # maker fee
                         0.0,  # taker fee
                     )
-                self.logger.info(f"鲶鱼已启用: 多模式（三种鲶鱼同时运行，相位错开）")
+                self.logger.info(
+                    f"鲶鱼已启用: 多模式（三种鲶鱼同时运行，相位错开）, "
+                    f"每条初始资金={catfish_initial_balance/1e8:.2f}亿"
+                )
             else:
                 # 单模式：只创建一种鲶鱼
-                catfish = create_catfish(-1, self.config.catfish)
+                catfish = create_catfish(
+                    -1, self.config.catfish,
+                    initial_balance=catfish_initial_balance,
+                    leverage=catfish_leverage,
+                    maintenance_margin_rate=catfish_mmr,
+                )
                 self.catfish_list = [catfish]
                 self.matching_engine.register_agent(
                     catfish.catfish_id,
                     0.0,  # maker fee
                     0.0,  # taker fee
                 )
-                self.logger.info(f"鲶鱼已启用: 模式={self.config.catfish.mode.value}")
+                self.logger.info(
+                    f"鲶鱼已启用: 模式={self.config.catfish.mode.value}, "
+                    f"初始资金={catfish_initial_balance/1e8:.2f}亿"
+                )
 
         # 注册所有 Agent 的费率
         self._register_all_agents()
@@ -377,7 +439,7 @@ class Trainer:
             # 使用候选清单中的 position_qty（已被之前的 ADL 更新过）
             # 同时也要检查实际仓位，取两者最小值
             candidate_available_qty = abs(candidate.position_qty)
-            actual_position = abs(candidate.agent.account.position.quantity)
+            actual_position = abs(candidate.participant.account.position.quantity)
             available_qty = min(candidate_available_qty, actual_position)
 
             liquidated_actual_position = abs(liquidated_agent.account.position.quantity)
@@ -388,7 +450,9 @@ class Trainer:
 
             # 更新账户
             liquidated_agent.account.on_adl_trade(trade_qty, adl_price, is_taker=True)
-            candidate.agent.account.on_adl_trade(trade_qty, adl_price, is_taker=False)
+            candidate.participant.account.on_adl_trade(
+                trade_qty, adl_price, is_taker=False
+            )
 
             # 更新候选清单中的 position_qty，确保后续 ADL 不会重复使用
             if candidate.position_qty > 0:
@@ -397,7 +461,7 @@ class Trainer:
                 candidate.position_qty += trade_qty
 
             # self.logger.info(
-            #     f"ADL 成交: Agent {liquidated_agent.agent_id} 与 Agent {candidate.agent.agent_id} "
+            #     f"ADL 成交: Agent {liquidated_agent.agent_id} 与候选者 "
             #     f"成交 {trade_qty} @ {adl_price:.2f}, "
             #     f"候选剩余持仓 {candidate.position_qty}"
             # )
@@ -875,6 +939,45 @@ class Trainer:
                     else:
                         self._adl_short_candidates.append(candidate)
 
+                # 将鲶鱼加入 ADL 候选列表
+                for catfish in self.catfish_list:
+                    if catfish.is_liquidated:
+                        continue
+
+                    position_qty = catfish.account.position.quantity
+                    if position_qty == 0:
+                        continue
+
+                    # 计算 ADL 分数
+                    equity = catfish.account.get_equity(latest_price)
+                    pnl_percent = (
+                        (equity - catfish.account.initial_balance)
+                        / catfish.account.initial_balance
+                    )
+
+                    # 只有盈利的才能作为 ADL 候选
+                    if pnl_percent <= 0:
+                        continue
+
+                    position_value = abs(position_qty) * latest_price
+                    effective_leverage = (
+                        position_value / equity if equity > 0 else 0.0
+                    )
+                    adl_score = pnl_percent * effective_leverage
+
+                    candidate = ADLCandidate(
+                        participant=catfish,
+                        position_qty=position_qty,
+                        pnl_percent=pnl_percent,
+                        effective_leverage=effective_leverage,
+                        adl_score=adl_score,
+                    )
+
+                    if position_qty > 0:
+                        self._adl_long_candidates.append(candidate)
+                    else:
+                        self._adl_short_candidates.append(candidate)
+
                 # 按 ADL 分数从高到低排序
                 self._adl_long_candidates.sort(key=lambda c: c.adl_score, reverse=True)
                 self._adl_short_candidates.sort(key=lambda c: c.adl_score, reverse=True)
@@ -893,6 +996,10 @@ class Trainer:
 
         # === 鲶鱼行动（在 Agent 之前）===
         for catfish in self.catfish_list:
+            # 检查鲶鱼是否已被强平
+            if catfish.is_liquidated:
+                continue
+
             should_act, direction = catfish.decide(
                 orderbook,
                 self.tick,
@@ -901,33 +1008,23 @@ class Trainer:
             if should_act and direction != 0:
                 catfish_trades = catfish.execute(direction, self.matching_engine)
                 catfish.record_action(self.tick)
-                # 记录鲶鱼行动日志
-                # if catfish_trades:
-                #     total_qty = sum(t.quantity for t in catfish_trades)
-                #     avg_price = (
-                #         sum(t.price * t.quantity for t in catfish_trades) / total_qty
-                #         if total_qty > 0
-                #         else 0
-                #     )
-                #     direction_str = "买入" if direction > 0 else "卖出"
-                #     self.logger.info(
-                #         f"鲶鱼行动: {catfish.__class__.__name__} "
-                #         f"{direction_str} {total_qty} @ {avg_price:.2f} "
-                #         f"(tick={self.tick})"
-                #     )
-                # 鲶鱼无限资金模式：只更新 maker 账户
+
                 for trade in catfish_trades:
                     self.recent_trades.append(trade)
-                    # 确定 maker（与鲶鱼成交的对手方）
+
+                    # 更新鲶鱼账户（taker）
+                    is_buyer = trade.is_buyer_taker
+                    catfish.account.on_trade(trade, is_buyer)
+
+                    # 更新 maker 账户（与鲶鱼成交的对手方）
                     maker_id = (
                         trade.seller_id if trade.is_buyer_taker else trade.buyer_id
                     )
-                    # 只有正数 ID 的 maker 才需要更新账户
                     if maker_id > 0:
                         maker_agent = self.agent_map.get(maker_id)
                         if maker_agent is not None:
-                            is_buyer = not trade.is_buyer_taker
-                            maker_agent.account.on_trade(trade, is_buyer)
+                            maker_is_buyer = not trade.is_buyer_taker
+                            maker_agent.account.on_trade(trade, maker_is_buyer)
 
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
@@ -958,6 +1055,82 @@ class Trainer:
         if len(self._price_history) > 1000:
             self._price_history = self._price_history[-1000:]
 
+        # === 鲶鱼强平检查（放在所有 Agent 之后）===
+        self._check_catfish_liquidation(current_price)
+
+    def _check_catfish_liquidation(self, current_price: float) -> None:
+        """检查鲶鱼强平
+
+        鲶鱼强平后本轮 episode 立即结束，进入进化阶段。
+
+        Args:
+            current_price: 当前价格
+        """
+        for catfish in self.catfish_list:
+            if catfish.is_liquidated:
+                continue
+
+            if catfish.account.check_liquidation(current_price):
+                # 执行鲶鱼强平
+                self._execute_catfish_liquidation(catfish, current_price)
+                catfish.is_liquidated = True
+
+                # 穿仓兜底
+                if catfish.account.balance < 0:
+                    catfish.account.balance = 0.0
+
+                # 触发 episode 结束
+                self._catfish_liquidated = True
+                self.logger.warning(
+                    f"鲶鱼 {catfish.__class__.__name__} 被强平，"
+                    f"episode {self.episode} 提前结束 (tick={self.tick})"
+                )
+                break  # 一条鲶鱼强平就结束
+
+    def _execute_catfish_liquidation(
+        self, catfish: "CatfishBase", current_price: float
+    ) -> None:
+        """执行鲶鱼强平
+
+        Args:
+            catfish: 被强平的鲶鱼
+            current_price: 当前价格
+        """
+        position_qty = catfish.account.position.quantity
+        if position_qty == 0:
+            return
+
+        is_long = position_qty > 0
+        target_qty = abs(position_qty)
+
+        # 创建市价平仓单
+        side = OrderSide.SELL if is_long else OrderSide.BUY
+        order = Order(
+            order_id=catfish._generate_order_id(),
+            agent_id=catfish.catfish_id,
+            side=side,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=target_qty,
+        )
+
+        # 撮合
+        trades = self.matching_engine.match_market_order(order)
+
+        # 更新账户
+        for trade in trades:
+            is_buyer = trade.is_buyer_taker
+            catfish.account.on_trade(trade, is_buyer)
+            self.recent_trades.append(trade)
+
+            # 更新 maker 账户
+            maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+            if maker_id > 0:
+                maker_agent = self.agent_map.get(maker_id)
+                if maker_agent is not None:
+                    maker_is_buyer = not trade.is_buyer_taker
+                    maker_agent.account.on_trade(trade, maker_is_buyer)
+
     def run_episode(self) -> None:
         """运行一个 episode
 
@@ -975,6 +1148,11 @@ class Trainer:
         for population in self.populations.values():
             population.reset_agents()
 
+        # 重置鲶鱼
+        for catfish in self.catfish_list:
+            catfish.reset()
+        self._catfish_liquidated = False  # 重置鲶鱼强平标志
+
         # 重置市场状态
         self._reset_market()
 
@@ -988,6 +1166,13 @@ class Trainer:
             if not self.is_running or self.is_paused:
                 break
             self.run_tick()
+
+            # 检查鲶鱼是否被强平
+            if self._catfish_liquidated:
+                self.logger.info(
+                    f"Episode {self.episode} 因鲶鱼强平提前结束 (tick={self.tick})"
+                )
+                break
 
             # 检查是否满足提前结束条件
             early_end_result = self._should_end_episode_early()
