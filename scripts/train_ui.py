@@ -82,8 +82,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--catfish",
-        action="store_true",
-        help="启用鲶鱼机制（三种行为模式同时运行，默认禁用）",
+        action="store_const",
+        const=True,
+        default=None,
+        help="启用鲶鱼机制（三种行为模式同时运行）。不指定时使用 create_config.py 中的默认值。",
     )
     parser.add_argument(
         "--catfish-fund-multiplier",
@@ -115,13 +117,17 @@ def main() -> None:
     print("=" * 60, flush=True)
 
     # 创建配置
-    config = create_default_config(
-        episode_length=args.episode_length,
-        checkpoint_interval=args.checkpoint_interval,
-        config_dir=args.config_dir,
-        catfish_enabled=args.catfish,
-        catfish_fund_multiplier=args.catfish_fund_multiplier,
-    )
+    config_kwargs = {
+        "episode_length": args.episode_length,
+        "checkpoint_interval": args.checkpoint_interval,
+        "config_dir": args.config_dir,
+        "catfish_fund_multiplier": args.catfish_fund_multiplier,
+    }
+    # 只有在用户明确指定 --catfish 时才覆盖默认值
+    if args.catfish is not None:
+        config_kwargs["catfish_enabled"] = args.catfish
+
+    config = create_default_config(**config_kwargs)
 
     # 创建训练器
     trainer = Trainer(config)
