@@ -76,6 +76,9 @@ class Trainer:
     _num_workers: int
     catfish_list: list["CatfishBase"]
     _price_history: list[float]
+    _tick_history_prices: list[float]
+    _tick_history_volumes: list[float]
+    _tick_history_amounts: list[float]
 
     def __init__(self, config: Config) -> None:
         """创建训练器
@@ -115,6 +118,11 @@ class Trainer:
         self._price_history: list[float] = []
         self._catfish_liquidated: bool = False  # 鲶鱼是否被强平（触发 episode 结束）
 
+        # Tick 历史数据（用于 Agent 输入特征）
+        self._tick_history_prices: list[float] = []      # 每 tick 价格
+        self._tick_history_volumes: list[float] = []    # 每 tick 成交量（带方向）
+        self._tick_history_amounts: list[float] = []    # 每 tick 成交额（带方向）
+
     def _init_ema_price(self, initial_price: float) -> None:
         """初始化 EMA 平滑价格
 
@@ -141,6 +149,36 @@ class Trainer:
             + (1 - self._ema_alpha) * self._smooth_mid_price
         )
         return self._smooth_mid_price
+
+    def _aggregate_tick_trades(self, tick_trades: list[Trade]) -> tuple[float, float]:
+        """聚合本 tick 的成交量和成交额（符号+总量方式）
+
+        统计本 tick 所有成交的 taker 买入和 taker 卖出。
+        如果买入成交额 > 卖出成交额，结果为 +总量
+        如果卖出成交额 > 买入成交额，结果为 -总量
+        如果相等，结果为 0
+
+        Returns:
+            (带方向的成交量, 带方向的成交额)
+        """
+        if not tick_trades:
+            return 0.0, 0.0
+
+        buy_volume = sum(t.quantity for t in tick_trades if t.is_buyer_taker)
+        sell_volume = sum(t.quantity for t in tick_trades if not t.is_buyer_taker)
+        buy_amount = sum(t.price * t.quantity for t in tick_trades if t.is_buyer_taker)
+        sell_amount = sum(
+            t.price * t.quantity for t in tick_trades if not t.is_buyer_taker
+        )
+
+        total_volume = buy_volume + sell_volume
+        total_amount = buy_amount + sell_amount
+
+        if buy_amount > sell_amount:
+            return float(total_volume), total_amount
+        elif sell_amount > buy_amount:
+            return float(-total_volume), -total_amount
+        return 0.0, 0.0
 
     def _calculate_catfish_initial_balance(self) -> float:
         """计算每条鲶鱼的初始资金
@@ -699,6 +737,34 @@ class Trainer:
             # 成交数量带方向的对数归一化：sign(qty) * log10(|qty| + 1) / 10
             trade_quantities[:n] = np.sign(qtys) * np.log10(np.abs(qtys) + 1) / 10.0
 
+        # Tick 历史价格归一化（以第一个 tick 价格为基准）
+        tick_prices_normalized = np.zeros(100, dtype=np.float32)
+        tick_volumes_normalized = np.zeros(100, dtype=np.float32)
+        tick_amounts_normalized = np.zeros(100, dtype=np.float32)
+
+        if self._tick_history_prices:
+            hist_prices = np.array(
+                self._tick_history_prices[-100:], dtype=np.float32
+            )
+            volumes = np.array(self._tick_history_volumes[-100:], dtype=np.float32)
+            amounts = np.array(self._tick_history_amounts[-100:], dtype=np.float32)
+            n = len(hist_prices)
+
+            # 价格归一化：以第一个 tick 价格为基准
+            base_price = hist_prices[0]
+            if base_price > 0:
+                tick_prices_normalized[-n:] = (hist_prices - base_price) / base_price
+
+            # 成交量归一化：sign(vol) * log10(|vol| + 1) / 10
+            tick_volumes_normalized[-n:] = (
+                np.sign(volumes) * np.log10(np.abs(volumes) + 1) / 10.0
+            )
+
+            # 成交额归一化：sign(amt) * log10(|amt| + 1) / 12
+            tick_amounts_normalized[-n:] = (
+                np.sign(amounts) * np.log10(np.abs(amounts) + 1) / 12.0
+            )
+
         return NormalizedMarketState(
             mid_price=smooth_mid_price,  # 使用 EMA 平滑后的价格
             tick_size=tick_size,
@@ -706,6 +772,9 @@ class Trainer:
             ask_data=ask_data,
             trade_prices=trade_prices,
             trade_quantities=trade_quantities,
+            tick_history_prices=tick_prices_normalized,
+            tick_history_volumes=tick_volumes_normalized,
+            tick_history_amounts=tick_amounts_normalized,
         )
 
     def _evolve_populations_parallel(self, current_price: float) -> None:
@@ -846,6 +915,14 @@ class Trainer:
         self._price_history.clear()
         self._price_history.append(self.config.market.initial_price)
 
+        # 重置 tick 历史数据
+        self._tick_history_prices.clear()
+        self._tick_history_volumes.clear()
+        self._tick_history_amounts.clear()
+        self._tick_history_prices.append(self.config.market.initial_price)
+        self._tick_history_volumes.append(0.0)
+        self._tick_history_amounts.append(0.0)
+
         # 重置 EMA 平滑价格
         self._init_ema_price(self.config.market.initial_price)
 
@@ -888,6 +965,7 @@ class Trainer:
             return
 
         self.tick += 1
+        tick_trades: list[Trade] = []  # 收集本 tick 所有成交
         orderbook = self.matching_engine._orderbook
 
         # 使用 smooth_mid_price 作为强平检查的价格依据，与 Agent 报价逻辑一致
@@ -1028,6 +1106,7 @@ class Trainer:
 
                 for trade in catfish_trades:
                     self.recent_trades.append(trade)
+                    tick_trades.append(trade)  # 收集到本 tick 成交
 
                     # 更新鲶鱼账户（taker）
                     is_buyer = trade.is_buyer_taker
@@ -1060,6 +1139,7 @@ class Trainer:
 
             for trade in trades:
                 self.recent_trades.append(trade)
+                tick_trades.append(trade)  # 收集到本 tick 成交
                 maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
                 maker_agent = self.agent_map.get(maker_id)
                 if maker_agent is not None:
@@ -1074,6 +1154,17 @@ class Trainer:
         # 限制历史长度（避免内存无限增长）
         if len(self._price_history) > 1000:
             self._price_history = self._price_history[-1000:]
+
+        # 记录 tick 历史数据
+        self._tick_history_prices.append(current_price)
+        volume, amount = self._aggregate_tick_trades(tick_trades)
+        self._tick_history_volumes.append(volume)
+        self._tick_history_amounts.append(amount)
+        # 限制历史长度（最多 100 条）
+        if len(self._tick_history_prices) > 100:
+            self._tick_history_prices = self._tick_history_prices[-100:]
+            self._tick_history_volumes = self._tick_history_volumes[-100:]
+            self._tick_history_amounts = self._tick_history_amounts[-100:]
 
         # === 鲶鱼强平检查（放在所有 Agent 之后）===
         self._check_catfish_liquidation(current_price)

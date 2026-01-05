@@ -102,10 +102,10 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
 3. **Tick 执行**: 检查强平 → 鲶鱼行动 → 随机打乱所有 Agent 顺序 → 并行决策 → 串行执行
 
 ### NEAT 配置
-- `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）
-- `config/neat_retail_pro.cfg` - 高级散户（607 个输入节点，9 个输出节点）
-- `config/neat_whale.cfg` - 庄家（607 个输入节点，9 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（634 个输入节点，21 个输出节点）
+- `config/neat_retail.cfg` - 散户（127 个输入节点，9 个输出节点）
+- `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，9 个输出节点）
+- `config/neat_whale.cfg` - 庄家（907 个输入节点，9 个输出节点）
+- `config/neat_market_maker.cfg` - 做市商（934 个输入节点，21 个输出节点）
 
 ## 目录级 CLAUDE.md 系统
 

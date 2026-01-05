@@ -33,8 +33,10 @@ class RetailAgent(RetailProAgent):
     # 散户可见的订单簿档位数和成交笔数
     ORDERBOOK_DEPTH: int = 10
     TRADE_HISTORY_SIZE: int = 10
-    # 输入缓冲区大小: 10档买盘(20) + 10档卖盘(20) + 10笔成交价格(10) + 10笔成交数量(10) + 持仓(4) + 挂单(3) = 67
-    INPUT_SIZE: int = 67
+    TICK_HISTORY_SIZE: int = 20  # 新增：散户可见的 tick 历史数量
+    # 输入缓冲区大小: 10档买盘(20) + 10档卖盘(20) + 10笔成交价格(10) + 10笔成交数量(10)
+    #               + 持仓(4) + 挂单(3) + tick历史价格(20) + tick历史成交量(20) + tick历史成交额(20) = 127
+    INPUT_SIZE: int = 127
 
     agent_id: int
     brain: Brain
@@ -66,10 +68,11 @@ class RetailAgent(RetailProAgent):
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（67维 ndarray）
+            神经网络输入向量（127维 ndarray）
         """
         depth = self.ORDERBOOK_DEPTH
         trade_size = self.TRADE_HISTORY_SIZE
+        tick_size = self.TICK_HISTORY_SIZE
 
         # 买盘前10档: 每档2个值（价格归一化 + 数量），取前20个值
         self._input_buffer[:depth * 2] = market_state.bid_data[:depth * 2]
@@ -93,5 +96,17 @@ class RetailAgent(RetailProAgent):
         # 挂单信息（3个值）
         offset += 4  # 64
         self._input_buffer[offset:offset + 3] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
+
+        # tick 历史价格（最近20个）
+        offset += 3  # 67
+        self._input_buffer[offset:offset + tick_size] = market_state.tick_history_prices[-tick_size:]
+
+        # tick 历史成交量（最近20个）
+        offset += tick_size  # 87
+        self._input_buffer[offset:offset + tick_size] = market_state.tick_history_volumes[-tick_size:]
+
+        # tick 历史成交额（最近20个）
+        offset += tick_size  # 107
+        self._input_buffer[offset:offset + tick_size] = market_state.tick_history_amounts[-tick_size:]
 
         return self._input_buffer  # 不调用 .tolist()
