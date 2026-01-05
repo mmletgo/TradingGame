@@ -239,9 +239,12 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 
 **特点：**
 - 不使用神经网络，规则驱动
-- 无限资金模式，不参与强平/ADL
-- 纯市价单操作
-- 在所有Agent之前行动
+- 有限资金模式（初始资金 = 做市商杠杆后资金 - 其他物种杠杆后资金）
+- 参与强平和 ADL 机制
+- 鲶鱼被强平后 Episode 立即结束
+- 下单量按盘口计算（吃掉前3档），不按自身资金计算
+- 手续费为 0（maker 和 taker）
+- 在所有Agent之前行动，强平检查在所有Agent之后
 
 **行为模式：**
 - `trend_following`：趋势追踪，顺势推动价格
@@ -249,6 +252,6 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - `mean_reversion`：逆势操作，均值回归
 
 **配置：**
-通过 `CatfishConfig` 配置，包括资金倍数、触发阈值等参数。
+通过 `CatfishConfig` 配置，包括触发阈值等参数。
 
 详见：`src/market/catfish/CLAUDE.md`
