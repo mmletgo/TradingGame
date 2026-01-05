@@ -12,6 +12,7 @@
 - `trend_following.py` - 趋势追踪型鲶鱼
 - `cycle_swing.py` - 周期摆动型鲶鱼
 - `mean_reversion.py` - 逆势操作型鲶鱼
+- `random_trading.py` - 随机买卖型鲶鱼
 
 ## 核心类
 
@@ -131,6 +132,23 @@
 - 重置 EMA 为 0.0
 - 重置 EMA 初始化标志为 False
 
+### RandomTradingCatfish (random_trading.py)
+
+随机买卖型鲶鱼，以随机概率进行买卖操作。
+
+**策略逻辑：**
+1. 检查冷却时间 `action_cooldown`
+2. 以概率 `action_probability` 决定是否触发交易（默认 0.5）
+3. 若决定交易，随机选择方向：
+   - 50% 概率买入（direction = 1）
+   - 50% 概率卖出（direction = -1）
+
+**额外属性：**
+- `_action_probability: float` - 触发交易的概率（0-1 之间）
+
+**reset 方法：**
+- 调用基类的 reset 方法（重置账户、强平标志、_last_action_tick）
+
 ## 工厂函数
 
 ### create_catfish(catfish_id, config, phase_offset=0, initial_balance=0.0, leverage=10.0, maintenance_margin_rate=0.05) -> CatfishBase
@@ -145,11 +163,11 @@
 - `leverage: float` - 杠杆（默认10.0）
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
-**注意：** 此函数用于单模式创建，当前系统默认使用多模式（三种鲶鱼同时运行）。
+**注意：** 此函数用于单模式创建，当前系统默认使用多模式（四种鲶鱼同时运行）。
 
 ### create_all_catfish(config, initial_balance, leverage=10.0, maintenance_margin_rate=0.05) -> list[CatfishBase]
 
-创建所有三种鲶鱼实例，相位错开以避免同时触发。**这是当前系统的默认行为**。
+创建所有四种鲶鱼实例，相位错开以避免同时触发。**这是当前系统的默认行为**。
 
 **参数：**
 - `config: CatfishConfig` - 鲶鱼配置
@@ -158,12 +176,12 @@
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
 **返回：**
-- 三种鲶鱼实例的列表：[TrendFollowing, CycleSwing, MeanReversion]
-- ID 分配：-1 (TrendFollowing), -2 (CycleSwing), -3 (MeanReversion)
-- 相位偏移分别为：0, cooldown//3, cooldown*2//3（整数除法）
+- 四种鲶鱼实例的列表：[TrendFollowing, CycleSwing, MeanReversion, RandomTrading]
+- ID 分配：-1 (TrendFollowing), -2 (CycleSwing), -3 (MeanReversion), -4 (RandomTrading)
+- 相位偏移分别为：0, cooldown//4, cooldown*2//4, cooldown*3//4（整数除法）
 
 **相位偏移说明：**
-- 相位偏移用于错开三种鲶鱼的触发时间
+- 相位偏移用于错开四种鲶鱼的触发时间
 - 虽然 `can_act` 方法中没有直接使用 `phase_offset`，但不同的 `phase_offset` 值会影响鲶鱼的初始状态和触发时机
 
 ## 使用示例
@@ -174,10 +192,10 @@
 from src.config.config import CatfishConfig
 from src.market.catfish import create_all_catfish
 
-# 创建三种鲶鱼（相位错开）
+# 创建四种鲶鱼（相位错开）
 config = CatfishConfig(
     enabled=True,
-    multi_mode=True,  # 三种模式同时运行
+    multi_mode=True,  # 四种模式同时运行
     lookback_period=10,      # 默认值
     trend_threshold=0.002,   # 默认值
     half_cycle_length=10,    # 默认值

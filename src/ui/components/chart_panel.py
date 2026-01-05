@@ -39,9 +39,10 @@ POPULATION_COLORS: dict[AgentType, tuple[int, int, int]] = {
 
 # 鲶鱼颜色配置
 CATFISH_COLORS: dict[str, tuple[int, int, int]] = {
-    "TrendFollowingCatfish": (255, 165, 0),    # 橙色
-    "CycleSwingCatfish": (0, 191, 255),        # 天蓝色
-    "MeanReversionCatfish": (255, 105, 180),   # 粉色
+    "TrendFollowingCatfish": (255, 165, 0),      # 橙色
+    "CycleSwingCatfish": (0, 191, 255),          # 天蓝色
+    "MeanReversionCatfish": (255, 105, 180),     # 粉色
+    "RandomTradingCatfish": (148, 0, 211),       # 深紫色
 }
 
 # 鲶鱼中文名称
@@ -49,6 +50,7 @@ CATFISH_NAMES: dict[str, str] = {
     "TrendFollowingCatfish": "趋势追踪",
     "CycleSwingCatfish": "周期摆动",
     "MeanReversionCatfish": "逆势操作",
+    "RandomTradingCatfish": "随机买卖",
 }
 
 # 种群中文名称
@@ -81,7 +83,7 @@ class ChartPanel:
     VIOLIN_PLOT_HEIGHT: int = 120  # 小提琴图高度
     VIOLIN_PLOT_WIDTH: int = 340  # 每个小提琴图宽度（4个并排）
     CATFISH_PLOT_HEIGHT: int = 140  # 鲶鱼图表高度
-    CATFISH_PLOT_WIDTH: int = 450  # 每个鲶鱼图表宽度（3个并排）
+    CATFISH_PLOT_WIDTH: int = 340  # 每个鲶鱼图表宽度（4个并排）
     KDE_POINTS: int = 50  # KDE曲线采样点数
 
     # 是否显示鲶鱼图表
@@ -466,18 +468,19 @@ class ChartPanel:
         dpg.set_axis_limits(f"violin_y_axis_{tag_prefix}", -0.6, 0.6)
 
     def _create_catfish_plots(self) -> None:
-        """创建三只鲶鱼的图表区域（一行三个，默认隐藏）"""
+        """创建四只鲶鱼的图表区域（一行四个，默认隐藏）"""
         # 鲶鱼区域容器（默认隐藏）
         with dpg.group(tag="catfish_container", show=False):
             dpg.add_separator()
             dpg.add_text("鲶鱼资金曲线", color=(255, 255, 0))
 
-            # 三只鲶鱼图表水平排列
+            # 四只鲶鱼图表水平排列
             with dpg.group(horizontal=True):
                 catfish_types = [
                     "TrendFollowingCatfish",
                     "CycleSwingCatfish",
                     "MeanReversionCatfish",
+                    "RandomTradingCatfish",
                 ]
 
                 for i, catfish_type in enumerate(catfish_types):
@@ -532,6 +535,7 @@ class ChartPanel:
             "TrendFollowingCatfish",
             "CycleSwingCatfish",
             "MeanReversionCatfish",
+            "RandomTradingCatfish",
         ]
 
         for i, catfish_type in enumerate(catfish_types):
@@ -555,7 +559,7 @@ class ChartPanel:
 
         Args:
             catfish_data: 鲶鱼信息列表（CatfishInfo对象列表）
-            catfish_equity_history: 三只鲶鱼的净值历史
+            catfish_equity_history: 四只鲶鱼的净值历史
         """
         # 如果没有鲶鱼数据，隐藏鲶鱼区域
         if not catfish_data:
@@ -571,7 +575,7 @@ class ChartPanel:
 
         # 更新每只鲶鱼的图表
         for i, catfish_info in enumerate(catfish_data):
-            if i >= 3:  # 最多显示3只鲶鱼
+            if i >= 4:  # 最多显示4只鲶鱼
                 break
 
             # 获取鲶鱼类型和颜色

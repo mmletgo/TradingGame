@@ -9,6 +9,7 @@
 - TrendFollowingCatfish: 趋势追踪型鲶鱼
 - CycleSwingCatfish: 周期摆动型鲶鱼
 - MeanReversionCatfish: 逆势操作型鲶鱼
+- RandomTradingCatfish: 随机买卖型鲶鱼
 
 工厂函数：
 - create_catfish: 根据配置创建鲶鱼实例
@@ -19,6 +20,7 @@ from src.market.catfish.catfish_base import CatfishBase
 from src.market.catfish.trend_following import TrendFollowingCatfish
 from src.market.catfish.cycle_swing import CycleSwingCatfish
 from src.market.catfish.mean_reversion import MeanReversionCatfish
+from src.market.catfish.random_trading import RandomTradingCatfish
 
 
 def create_catfish(
@@ -63,6 +65,11 @@ def create_catfish(
             catfish_id, config, phase_offset,
             initial_balance, leverage, maintenance_margin_rate
         )
+    elif config.mode == CatfishMode.RANDOM:
+        return RandomTradingCatfish(
+            catfish_id, config, phase_offset,
+            initial_balance, leverage, maintenance_margin_rate
+        )
     else:
         raise ValueError(f"未知的鲶鱼模式: {config.mode}")
 
@@ -74,7 +81,7 @@ def create_all_catfish(
     maintenance_margin_rate: float = 0.05,
 ) -> list[CatfishBase]:
     """
-    创建所有三种鲶鱼实例（相位错开）
+    创建所有四种鲶鱼实例（相位错开）
 
     每种鲶鱼使用不同的相位偏移，确保触发时间错开。
 
@@ -85,11 +92,11 @@ def create_all_catfish(
         maintenance_margin_rate: 维持保证金率
 
     Returns:
-        三种鲶鱼实例的列表
+        四种鲶鱼实例的列表
     """
     cooldown = config.action_cooldown
-    # 三种鲶鱼的相位偏移：0, cooldown/3, cooldown*2/3
-    phase_offsets = [0, cooldown // 3, cooldown * 2 // 3]
+    # 四种鲶鱼的相位偏移：0, cooldown/4, cooldown*2/4, cooldown*3/4
+    phase_offsets = [0, cooldown // 4, cooldown * 2 // 4, cooldown * 3 // 4]
 
     catfish_list: list[CatfishBase] = [
         TrendFollowingCatfish(
@@ -104,6 +111,10 @@ def create_all_catfish(
             -3, config, phase_offsets[2],
             initial_balance, leverage, maintenance_margin_rate
         ),
+        RandomTradingCatfish(
+            -4, config, phase_offsets[3],
+            initial_balance, leverage, maintenance_margin_rate
+        ),
     ]
 
     return catfish_list
@@ -114,6 +125,7 @@ __all__ = [
     "TrendFollowingCatfish",
     "CycleSwingCatfish",
     "MeanReversionCatfish",
+    "RandomTradingCatfish",
     "create_catfish",
     "create_all_catfish",
 ]

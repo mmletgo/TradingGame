@@ -79,8 +79,8 @@ class UIDataSnapshot:
     alive_equity_history: dict[AgentType, list[float]]  # 存活个体平均资产历史
 
     # 鲶鱼数据
-    catfish_data: list[CatfishInfo]  # 三只鲶鱼的当前数据
-    catfish_equity_history: list[list[float]]  # 三只鲶鱼的净值历史
+    catfish_data: list[CatfishInfo]  # 四只鲶鱼的当前数据
+    catfish_equity_history: list[list[float]]  # 四只鲶鱼的净值历史
 
 
 class UIDataCollector:
@@ -99,7 +99,7 @@ class UIDataCollector:
     price_history: deque[float]
     equity_history: dict[AgentType, deque[float]]
     alive_equity_history: dict[AgentType, deque[float]]
-    catfish_equity_history: list[deque[float]]  # 三只鲶鱼的净值历史
+    catfish_equity_history: list[deque[float]]  # 四只鲶鱼的净值历史
 
     def __init__(self, history_length: int = 1000) -> None:
         """初始化数据采集器
@@ -115,9 +115,9 @@ class UIDataCollector:
         self.alive_equity_history = {
             agent_type: deque(maxlen=history_length) for agent_type in AgentType
         }
-        # 初始化三只鲶鱼的净值历史
+        # 初始化四只鲶鱼的净值历史
         self.catfish_equity_history = [
-            deque(maxlen=history_length) for _ in range(3)
+            deque(maxlen=history_length) for _ in range(4)
         ]
 
     def collect_tick_data(self, trainer: "Trainer") -> UIDataSnapshot:
@@ -306,7 +306,7 @@ class UIDataCollector:
                 )
             )
 
-            # 记录净值历史（最多记录3只鲶鱼）
+            # 记录净值历史（最多记录4只鲶鱼）
             if i < len(self.catfish_equity_history):
                 self.catfish_equity_history[i].append(equity)
 

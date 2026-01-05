@@ -45,33 +45,33 @@ def create_default_config(
         tick_size=0.1,
         lot_size=1.0,
         depth=100,
-        ema_alpha=0.5,
+        ema_alpha=0.9,
     )
-    maker_initial_balance = 20_000_000.0  # 做市商初始资金 20M
+    maker_initial_balance = 3_000_000.0  # 做市商初始资金 3M
     maker_leverage = 10.0
 
     agents = {
         AgentType.RETAIL: AgentConfig(
             count=10000,
-            initial_balance=200000.0,  # 20万
+            initial_balance=20000.0,  # 2万
             leverage=10.0,
-            maintenance_margin_rate=0.05,  # 10%
+            maintenance_margin_rate=0.05,  # 5%
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.RETAIL_PRO: AgentConfig(
             count=100,
-            initial_balance=200000.0,  # 20万
+            initial_balance=20000.0,  # 2万
             leverage=10.0,
-            maintenance_margin_rate=0.05,  # 10%
+            maintenance_margin_rate=0.05,  # 5%
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.WHALE: AgentConfig(
             count=100,  # 庄家（合并多空）
-            initial_balance=30_000_000.0,  # 3000万
+            initial_balance=3_500_000.0,  # 350万
             leverage=10.0,
-            maintenance_margin_rate=0.05,  # 10%
+            maintenance_margin_rate=0.05,  # 5%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),

@@ -26,6 +26,7 @@ class CatfishMode(Enum):
     TREND_FOLLOWING = "trend_following"  # 趋势追踪
     CYCLE_SWING = "cycle_swing"  # 周期摆动
     MEAN_REVERSION = "mean_reversion"  # 逆势操作
+    RANDOM = "random"  # 随机买卖
 
 
 @dataclass

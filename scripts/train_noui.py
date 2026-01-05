@@ -130,15 +130,8 @@ def main() -> None:
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
     if args.resume:
         print(f"Resume From: {args.resume}")
-    if args.catfish:
-        print(
-            f"Catfish: enabled (三种模式同时运行), multiplier={args.catfish_fund_multiplier}x"
-        )
-    else:
-        print("Catfish: disabled")
-    print("=" * 60)
 
-    # 创建配置
+    # 创建配置（必须在打印 catfish 状态之前，以获取最终配置）
     config_kwargs = {
         "episode_length": args.episode_length,
         "checkpoint_interval": args.checkpoint_interval,
@@ -150,6 +143,15 @@ def main() -> None:
         config_kwargs["catfish_enabled"] = args.catfish
 
     config = create_default_config(**config_kwargs)
+
+    # 打印 Catfish 状态（使用最终配置值）
+    if config.catfish is not None and config.catfish.enabled:
+        print(
+            f"Catfish: enabled (三种模式同时运行), multiplier={config.catfish.fund_multiplier}x"
+        )
+    else:
+        print("Catfish: disabled")
+    print("=" * 60)
 
     # 创建训练器
     trainer = Trainer(config)

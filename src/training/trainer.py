@@ -1153,9 +1153,8 @@ class Trainer:
                     maker_agent.account.on_trade(trade, is_buyer)
 
         # 记录价格历史（tick 结束时）
-        current_price = orderbook.get_mid_price()
-        if current_price is None:
-            current_price = orderbook.last_price
+        # 使用 last_price 而非 mid_price，确保价格符合 tick_size
+        current_price = orderbook.last_price
         self._price_history.append(current_price)
 
         # 更新 episode 价格统计
