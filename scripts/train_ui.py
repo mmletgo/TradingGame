@@ -81,9 +81,9 @@ def main() -> None:
         help="日志目录（默认: logs）",
     )
     parser.add_argument(
-        "--no-catfish",
+        "--catfish",
         action="store_true",
-        help="禁用鲶鱼机制（默认启用）",
+        help="启用鲶鱼机制（默认禁用）",
     )
     parser.add_argument(
         "--catfish-mode",
@@ -112,7 +112,7 @@ def main() -> None:
     print(f"Checkpoint Interval: {args.checkpoint_interval}", flush=True)
     if args.resume:
         print(f"Resume From: {args.resume}", flush=True)
-    if not args.no_catfish:
+    if args.catfish:
         print(
             f"Catfish: enabled, mode={args.catfish_mode}, multiplier={args.catfish_fund_multiplier}x",
             flush=True,
@@ -126,7 +126,7 @@ def main() -> None:
         episode_length=args.episode_length,
         checkpoint_interval=args.checkpoint_interval,
         config_dir=args.config_dir,
-        catfish_enabled=not args.no_catfish,
+        catfish_enabled=args.catfish,
         catfish_mode=args.catfish_mode,
         catfish_fund_multiplier=args.catfish_fund_multiplier,
     )
