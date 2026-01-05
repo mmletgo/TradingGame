@@ -23,10 +23,18 @@ class ArenaConfig:
         arena_id: 竞技场唯一标识
         config: 训练配置（所有竞技场共用同一配置）
         seed: 随机种子（不同种子产生不同市场特征）
+        migration_interval: 竞技场内部迁移间隔（episode 数）
+        checkpoint_interval: 检查点保存间隔（episode 数）
+        max_episodes: 最大 episode 数
+        checkpoint_dir: 检查点目录（各竞技场独立文件模式）
     """
     arena_id: int
     config: "Config"
     seed: int | None = None
+    migration_interval: int = 10
+    checkpoint_interval: int = 50
+    max_episodes: int = 4000
+    checkpoint_dir: str = "checkpoints/multi_arena"
 
 
 @dataclass
@@ -42,6 +50,8 @@ class MultiArenaConfig:
         migration_strategy: 迁移策略
         checkpoint_interval: 检查点保存间隔
         seed_offset: 随机种子偏移量
+        checkpoint_dir: 检查点目录（各竞技场独立文件模式）
+        max_episodes: 最大 episode 数
     """
     num_arenas: int = 10
     base_config: "Config | None" = None
@@ -51,3 +61,5 @@ class MultiArenaConfig:
     migration_strategy: MigrationStrategy = MigrationStrategy.RING
     checkpoint_interval: int = 50
     seed_offset: int = 0
+    checkpoint_dir: str = "checkpoints/multi_arena"
+    max_episodes: int = 4000

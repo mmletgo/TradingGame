@@ -4,23 +4,25 @@
 用于运行多个独立竞技场的并行训练，通过多进程架构绕过 GIL 限制。
 支持定期迁移 Agent 基因组，促进跨竞技场的策略交流。
 
-默认配置: 16 个竞技场并行
+新架构特点：
+- 每个竞技场独立进化，不等待其他竞技场
+- 主进程只负责监控和收集状态
+- 迁移通过共享检查点实现，各竞技场自主读写
+
+默认配置: 4 个竞技场并行
 
 使用方法:
     python scripts/train_multi_arena.py [选项]
 
 示例:
-    # 默认 16 个竞技场训练 100 个 episode
+    # 默认 4 个竞技场训练 100 个 episode
     python scripts/train_multi_arena.py --episodes 100
 
     # 自定义竞技场数量
     python scripts/train_multi_arena.py --num-arenas 10 --episodes 100
 
     # 自定义迁移参数
-    python scripts/train_multi_arena.py --migration-interval 20 --migration-count 10
-
-    # 从检查点恢复
-    python scripts/train_multi_arena.py --resume checkpoints/multi_arena_ep_50.pkl
+    python scripts/train_multi_arena.py --migration-interval 20 --checkpoint-interval 50
 """
 
 import argparse
@@ -49,15 +51,23 @@ def progress_callback(state: dict[str, Any]) -> None:
     Args:
         state: 训练状态字典
     """
-    episode = state.get("episode", 0)
-    total_episodes = state.get("total_episodes", 0)
-    num_arenas = state.get("total_arenas", 0)
+    running_arenas = state.get("running_arenas", 0)
+    total_arenas = state.get("total_arenas", 0)
     avg_volatility = state.get("avg_volatility", 0.0)
     avg_volume = state.get("avg_volume", 0.0)
     avg_tick_count = state.get("avg_tick_count", 0.0)
 
-    info_parts = [f"Episode {episode}/{total_episodes}"]
-    info_parts.append(f"Arenas: {num_arenas}")
+    # 获取各竞技场的 episode 进度
+    arena_episodes = state.get("arena_episodes", {})
+    if arena_episodes:
+        min_ep = min(arena_episodes.values())
+        max_ep = max(arena_episodes.values())
+        ep_range = f"{min_ep}-{max_ep}"
+    else:
+        ep_range = "0"
+
+    info_parts = [f"Episodes: {ep_range}"]
+    info_parts.append(f"Running: {running_arenas}/{total_arenas}")
     info_parts.append(f"Volatility: {avg_volatility:.4f}")
     info_parts.append(f"Volume: {avg_volume:.0f}")
     info_parts.append(f"Ticks: {avg_tick_count:.0f}")
@@ -68,7 +78,7 @@ def progress_callback(state: dict[str, Any]) -> None:
 def main() -> None:
     """主函数"""
     parser = argparse.ArgumentParser(
-        description="NEAT AI 交易模拟竞技场 - 多竞技场并行训练模式",
+        description="NEAT AI 交易模拟竞技场 - 多竞技场并行训练模式（异步监控）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -77,7 +87,7 @@ def main() -> None:
         "--episodes",
         type=int,
         default=4000,
-        help="训练的 episode 数量（默认: 4000）",
+        help="每个竞技场的最大 episode 数量（默认: 4000）",
     )
     parser.add_argument(
         "--episode-length",
@@ -88,14 +98,8 @@ def main() -> None:
     parser.add_argument(
         "--checkpoint-interval",
         type=int,
-        default=50,
-        help="检查点保存间隔（episode 数，默认: 50，0 表示不保存）",
-    )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="从指定检查点恢复训练",
+        default=10,
+        help="检查点保存间隔（episode 数，默认: 10，0 表示不保存）",
     )
     parser.add_argument(
         "--config-dir",
@@ -129,8 +133,8 @@ def main() -> None:
     parser.add_argument(
         "--num-arenas",
         type=int,
-        default=16,
-        help="竞技场数量（默认: 16）",
+        default=4,
+        help="竞技场数量（默认: 4）",
     )
     parser.add_argument(
         "--migration-interval",
@@ -157,6 +161,18 @@ def main() -> None:
         choices=["ring", "random", "best_to_worst"],
         help="迁移策略（默认: ring）",
     )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="checkpoints/multi_arena",
+        help="检查点目录（各竞技场独立文件模式，默认: checkpoints/multi_arena）",
+    )
+    parser.add_argument(
+        "--monitor-interval",
+        type=float,
+        default=1.0,
+        help="监控轮询间隔（秒，默认: 1.0）",
+    )
 
     args = parser.parse_args()
 
@@ -165,17 +181,17 @@ def main() -> None:
 
     # 打印配置
     print("=" * 70)
-    print("NEAT AI 交易模拟竞技场 - 多竞技场并行训练模式")
+    print("NEAT AI 交易模拟竞技场 - 多竞技场并行训练模式（异步监控）")
     print("=" * 70)
     print(f"竞技场数量: {args.num_arenas}")
-    print(f"Episodes: {args.episodes}")
+    print(f"每个竞技场最大 Episodes: {args.episodes}")
     print(f"Episode Length: {args.episode_length} ticks")
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
     print(f"迁移间隔: 每 {args.migration_interval} 个 episode")
     print(f"迁移数量: {args.migration_count} 个 Agent/种群")
     print(f"迁移策略: {args.migration_strategy}")
-    if args.resume:
-        print(f"Resume From: {args.resume}")
+    print(f"检查点目录: {args.checkpoint_dir}")
+    print(f"监控间隔: {args.monitor_interval}s")
 
     # 创建基础配置
     config_kwargs = {
@@ -213,6 +229,8 @@ def main() -> None:
         migration_best_ratio=args.migration_best_ratio,
         migration_strategy=migration_strategy,
         checkpoint_interval=args.checkpoint_interval,
+        max_episodes=args.episodes,
+        checkpoint_dir=args.checkpoint_dir,
     )
 
     # 创建竞技场管理器
@@ -232,48 +250,40 @@ def main() -> None:
     start_time_elapsed = time.time() - start_time
     print(f"所有竞技场启动完成（耗时: {start_time_elapsed:.2f}s）")
 
-    # 恢复检查点
-    if args.resume:
-        resume_path = Path(args.resume)
-        if resume_path.exists():
-            print(f"正在从检查点恢复: {args.resume}")
-            manager.load_checkpoint(args.resume)
-            print("检查点已恢复")
-        else:
-            print(f"错误: 检查点文件不存在: {args.resume}")
-            manager.stop()
-            sys.exit(1)
-
     # 开始训练
-    print("\n开始多竞技场训练...")
+    print("\n开始多竞技场训练（异步监控模式）...")
+    print("每个竞技场独立进化，通过共享检查点进行迁移")
     print("-" * 70)
 
     train_start = time.time()
     try:
-        manager.train(
-            episodes=args.episodes,
+        manager.monitor(
             progress_callback=progress_callback,
+            check_interval=args.monitor_interval,
         )
     except KeyboardInterrupt:
         print("\n\n训练被用户中断")
-        # 保存紧急检查点
-        emergency_path = "checkpoints/multi_arena_emergency.pkl"
-        manager.save_checkpoint(emergency_path)
-        print(f"紧急检查点已保存: {emergency_path}")
     finally:
         # 确保停止所有进程
         manager.stop()
 
     train_time = time.time() - train_start
 
+    # 获取最终统计
+    summary = manager.get_summary()
+    arena_episodes = summary.get("arena_episodes", {})
+    total_episodes_run = sum(arena_episodes.values()) if arena_episodes else 0
+
     # 打印统计
     print("-" * 70)
     print("多竞技场训练完成！")
     print(f"竞技场数量: {args.num_arenas}")
-    print(f"总 Episode: {args.episodes}")
+    print(f"各竞技场完成的 Episode: {arena_episodes}")
+    print(f"总 Episode 数: {total_episodes_run}")
     print(f"总耗时: {train_time:.2f}s")
-    print(f"平均每 Episode: {train_time / max(args.episodes, 1):.2f}s")
-    print(f"平均每竞技场每 Episode: {train_time / max(args.episodes * args.num_arenas, 1):.3f}s")
+    if total_episodes_run > 0:
+        print(f"平均每 Episode: {train_time / total_episodes_run:.3f}s")
+    print(f"检查点目录: {args.checkpoint_dir}")
     print("=" * 70)
 
 

@@ -59,6 +59,8 @@ class Arena:
     def setup(self) -> None:
         """初始化训练环境"""
         self.trainer.setup()
+        # 设置 is_running 标志，否则 run_episode 中的 tick 循环会立即退出
+        self.trainer.is_running = True
 
     def run_episode(self) -> "EpisodeMetrics":
         """运行单个 episode 并收集指标
@@ -130,6 +132,47 @@ class Arena:
                 candidates.append(packet)
 
         return candidates
+
+    def get_best_genomes(self, top_n: int = 10) -> dict[str, list[tuple[bytes, float]]]:
+        """获取各种群的最佳个体基因组
+
+        用于保存到共享检查点，供其他竞技场迁移使用。
+
+        Args:
+            top_n: 每个种群获取的最佳个体数量，默认 10
+
+        Returns:
+            各 Agent 类型的最佳基因组
+            格式: {agent_type.value: [(genome_data, fitness), ...]}
+        """
+        from src.training.arena.migration import MigrationSystem
+
+        best_genomes: dict[str, list[tuple[bytes, float]]] = {}
+
+        if not self.trainer.matching_engine:
+            return best_genomes
+
+        current_price = self.trainer.matching_engine._orderbook.last_price
+
+        for agent_type, population in self.trainer.populations.items():
+            # 评估适应度并排序
+            agent_fitnesses = population.evaluate(current_price)
+
+            if not agent_fitnesses:
+                continue
+
+            # 取 top_n 个最佳个体
+            top_agents = agent_fitnesses[:top_n]
+            genomes_list: list[tuple[bytes, float]] = []
+
+            for agent, fitness in top_agents:
+                genome = agent.brain.get_genome()
+                genome_data = MigrationSystem.serialize_genome(genome)
+                genomes_list.append((genome_data, fitness))
+
+            best_genomes[agent_type.value] = genomes_list
+
+        return best_genomes
 
     def inject_genomes(self, packets: list["MigrationPacket"]) -> None:
         """注入迁入的 genome

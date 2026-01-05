@@ -1,27 +1,39 @@
 """竞技场管理器模块
 
 负责创建、管理和协调多个竞技场的训练。
+支持两种模式：
+1. 同步模式（旧版兼容）：ArenaProcess + arena_worker
+2. 异步监控模式（推荐）：ArenaProcessInfo + arena_worker_autonomous
 """
 
-import pickle
+import queue
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing import Process, Queue
-from multiprocessing.managers import SyncManager
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.core.log_engine.logger import get_logger
 
 if TYPE_CHECKING:
+    from src.bio.agents.base import AgentType
+    from src.training.arena.arena import Arena
     from src.training.arena.config import ArenaConfig, MultiArenaConfig
     from src.training.arena.metrics import EpisodeMetrics, MetricsAggregator
     from src.training.arena.migration import MigrationPacket, MigrationSystem
+    from src.training.arena.shared_checkpoint import SharedCheckpointManager
+
+
+# =============================================================================
+# 旧版同步模式（已弃用，保留用于兼容）
+# =============================================================================
 
 
 @dataclass
 class ArenaProcess:
-    """竞技场进程信息
+    """竞技场进程信息（已弃用，保留用于兼容）
+
+    Deprecated: 请使用 ArenaProcessInfo 和 arena_worker_autonomous 替代。
 
     Attributes:
         arena_id: 竞技场 ID
@@ -40,7 +52,9 @@ def arena_worker(
     cmd_queue: Queue,
     result_queue: Queue,
 ) -> None:
-    """竞技场工作进程入口
+    """竞技场工作进程入口（已弃用，保留用于兼容）
+
+    Deprecated: 请使用 arena_worker_autonomous 替代。
 
     Args:
         arena_config: 竞技场配置
@@ -105,8 +119,172 @@ def arena_worker(
             result_queue.put(("error", str(e)))
 
 
+# =============================================================================
+# 新版异步监控模式
+# =============================================================================
+
+
+@dataclass
+class ArenaProcessInfo:
+    """竞技场进程信息（异步监控模式）
+
+    Attributes:
+        arena_id: 竞技场 ID
+        process: 进程对象
+        status_queue: 状态报告队列（子进程 -> 主进程）
+        control_queue: 控制命令队列（主进程 -> 子进程）
+        episode: 当前 episode 编号
+        is_finished: 是否已完成
+    """
+    arena_id: int
+    process: Process
+    status_queue: Queue  # 子进程 -> 主进程（状态报告）
+    control_queue: Queue  # 主进程 -> 子进程（控制命令）
+    episode: int = 0
+    is_finished: bool = False
+
+
+def _execute_migration_from_checkpoint(
+    arena: "Arena",
+    checkpoint_manager: "SharedCheckpointManager",
+    arena_id: int,
+) -> None:
+    """从共享检查点执行迁移
+
+    Args:
+        arena: 竞技场实例
+        checkpoint_manager: 共享检查点管理器
+        arena_id: 竞技场 ID
+    """
+    from src.bio.agents.base import AgentType
+    from src.training.arena.migration import MigrationPacket
+
+    # 从 checkpoint 获取其他竞技场的最佳个体
+    candidates = checkpoint_manager.get_migration_candidates(
+        requesting_arena_id=arena_id,
+        count_per_arena=5,
+    )
+
+    if not candidates:
+        return  # 没有可迁移的候选者
+
+    # 构建 MigrationPacket 列表并注入
+    packets: list[MigrationPacket] = []
+    for agent_type_str, genomes in candidates.items():
+        agent_type = AgentType(agent_type_str)
+        for genome_data, fitness in genomes:
+            packet = MigrationPacket(
+                source_arena=-1,
+                agent_type=agent_type,
+                genome_data=genome_data,
+                fitness=fitness,
+                generation=0,
+            )
+            packets.append(packet)
+
+    arena.inject_genomes(packets)
+
+
+def _save_arena_to_checkpoint(
+    arena: "Arena",
+    checkpoint_manager: "SharedCheckpointManager",
+    arena_id: int,
+    episode: int,
+) -> None:
+    """保存竞技场状态到共享检查点
+
+    Args:
+        arena: 竞技场实例
+        checkpoint_manager: 共享检查点管理器
+        arena_id: 竞技场 ID
+        episode: 当前 episode 编号
+    """
+    # 获取完整种群数据
+    populations = arena.get_checkpoint_data()["trainer"]["populations"]
+
+    # 获取最佳个体
+    best_genomes = arena.get_best_genomes(top_n=10)
+
+    # 更新到共享检查点
+    checkpoint_manager.update_arena(
+        arena_id=arena_id,
+        episode=episode,
+        populations=populations,
+        best_genomes=best_genomes,
+    )
+
+
+def arena_worker_autonomous(
+    arena_config: "ArenaConfig",
+    status_queue: Queue,  # 状态报告
+    control_queue: Queue,  # 控制命令
+) -> None:
+    """自治竞技场工作进程
+
+    竞技场按自己的节奏独立运行，主动触发迁移和保存。
+
+    Args:
+        arena_config: 竞技场配置
+        status_queue: 状态报告队列（子进程 -> 主进程）
+        control_queue: 控制命令队列（主进程 -> 子进程）
+    """
+    import queue as queue_module
+
+    from src.training.arena.arena import Arena
+    from src.training.arena.shared_checkpoint import SharedCheckpointManager
+
+    arena = Arena(arena_config)
+    arena.setup()
+
+    checkpoint_manager = SharedCheckpointManager(
+        checkpoint_path=arena_config.checkpoint_dir
+    )
+
+    arena_id = arena_config.arena_id
+    migration_interval = arena_config.migration_interval
+    checkpoint_interval = arena_config.checkpoint_interval
+    max_episodes = arena_config.max_episodes
+
+    # 通知主进程初始化完成
+    status_queue.put(("setup_done", arena_id, None))
+
+    episode = 0
+    while episode < max_episodes:
+        # 非阻塞检查停止命令
+        try:
+            cmd = control_queue.get_nowait()
+            if cmd == "stop":
+                break
+        except queue_module.Empty:
+            pass
+
+        # 运行一个 episode
+        metrics = arena.run_episode()
+        episode += 1
+
+        # 检查迁移间隔
+        if migration_interval > 0 and episode % migration_interval == 0:
+            _execute_migration_from_checkpoint(arena, checkpoint_manager, arena_id)
+
+        # 检查保存间隔
+        if checkpoint_interval > 0 and episode % checkpoint_interval == 0:
+            _save_arena_to_checkpoint(arena, checkpoint_manager, arena_id, episode)
+
+        # 发送状态更新
+        status_queue.put(("episode_done", arena_id, metrics))
+
+    # 发送完成通知
+    status_queue.put(("finished", arena_id, episode))
+    arena.stop()
+
+
+# =============================================================================
+# ArenaManager 类（监控者模式）
+# =============================================================================
+
+
 class ArenaManager:
-    """竞技场管理器
+    """竞技场管理器（监控者模式）
 
     负责创建、管理和协调多个竞技场的训练。
     使用多进程实现真正的并行化。
@@ -114,13 +292,13 @@ class ArenaManager:
     Attributes:
         config: 多竞技场配置
         arenas: 竞技场进程列表
-        migration_system: 迁移系统
+        checkpoint_manager: 共享检查点管理器
         metrics_aggregator: 指标聚合器
     """
 
     config: "MultiArenaConfig"
-    arenas: list[ArenaProcess]
-    migration_system: "MigrationSystem"
+    arenas: list[ArenaProcessInfo]
+    checkpoint_manager: "SharedCheckpointManager"
     metrics_aggregator: "MetricsAggregator"
     _is_running: bool
     _logger: Any
@@ -132,47 +310,54 @@ class ArenaManager:
             config: 多竞技场配置
         """
         from src.training.arena.metrics import MetricsAggregator
-        from src.training.arena.migration import MigrationSystem
+        from src.training.arena.shared_checkpoint import SharedCheckpointManager
 
         self.config = config
         self.arenas = []
-        self.migration_system = MigrationSystem(
-            num_arenas=config.num_arenas,
-            strategy=config.migration_strategy,
+        self.checkpoint_manager = SharedCheckpointManager(
+            checkpoint_path=config.checkpoint_dir
         )
         self.metrics_aggregator = MetricsAggregator()
         self._is_running = False
         self._logger = get_logger("arena_manager")
 
     def setup(self) -> None:
-        """初始化所有竞技场（每个竞技场一个进程）"""
+        """初始化所有竞技场进程"""
         from src.training.arena.config import ArenaConfig
 
         self._logger.info(f"正在创建 {self.config.num_arenas} 个竞技场...")
+
+        # 初始化共享检查点
+        self.checkpoint_manager.initialize(
+            config={"num_arenas": self.config.num_arenas},
+            num_arenas=self.config.num_arenas,
+        )
 
         for i in range(self.config.num_arenas):
             arena_config = ArenaConfig(
                 arena_id=i,
                 config=self.config.base_config,
                 seed=i + self.config.seed_offset,
+                migration_interval=self.config.migration_interval,
+                checkpoint_interval=self.config.checkpoint_interval,
+                max_episodes=self.config.max_episodes,
+                checkpoint_dir=self.config.checkpoint_dir,
             )
 
-            # 创建进程间通信队列
-            cmd_queue: Queue = Queue()
-            result_queue: Queue = Queue()
+            status_queue: Queue = Queue()
+            control_queue: Queue = Queue()
 
-            # 创建进程
             process = Process(
-                target=arena_worker,
-                args=(arena_config, cmd_queue, result_queue),
+                target=arena_worker_autonomous,
+                args=(arena_config, status_queue, control_queue),
                 name=f"Arena-{i}",
             )
 
-            self.arenas.append(ArenaProcess(
+            self.arenas.append(ArenaProcessInfo(
                 arena_id=i,
                 process=process,
-                cmd_queue=cmd_queue,
-                result_queue=result_queue,
+                status_queue=status_queue,
+                control_queue=control_queue,
             ))
 
         self._logger.info("竞技场进程已创建")
@@ -184,123 +369,58 @@ class ArenaManager:
         # 启动所有进程
         for arena in self.arenas:
             arena.process.start()
-            arena.cmd_queue.put(("setup", None))
 
         # 等待所有竞技场完成初始化
         for arena in self.arenas:
-            result = arena.result_queue.get()
-            if result[0] == "error":
-                raise RuntimeError(f"Arena {arena.arena_id} setup failed: {result[1]}")
+            status, arena_id, _ = arena.status_queue.get()
+            if status != "setup_done":
+                raise RuntimeError(f"Arena {arena_id} 初始化失败")
 
         self._is_running = True
         self._logger.info("所有竞技场已启动")
 
-    def train(
+    def monitor(
         self,
-        episodes: int,
         progress_callback: Callable[[dict], None] | None = None,
+        check_interval: float = 1.0,
     ) -> None:
-        """训练主循环
+        """监控所有竞技场的运行状态（非阻塞）
 
         Args:
-            episodes: 训练的 episode 数量
             progress_callback: 进度回调函数
+            check_interval: 检查间隔（秒）
         """
-        self._logger.info(f"开始训练 {episodes} 个 episodes...")
-
-        for ep in range(episodes):
-            if not self._is_running:
+        while self._is_running:
+            # 检查是否所有竞技场都已完成
+            if all(arena.is_finished for arena in self.arenas):
                 break
 
-            # 1. 所有竞技场运行一个 episode
+            # 收集状态更新
             for arena in self.arenas:
-                arena.cmd_queue.put(("run_episode", None))
-
-            # 2. 收集结果
-            results: list["EpisodeMetrics"] = []
-            for arena in self.arenas:
-                result = arena.result_queue.get()
-                if result[0] == "error":
-                    self._logger.error(f"Arena {arena.arena_id} error: {result[1]}")
+                if arena.is_finished:
                     continue
-                results.append(result[1])
 
-            # 3. 聚合指标
-            self.metrics_aggregator.update_batch(results)
+                while True:
+                    try:
+                        status, arena_id, data = arena.status_queue.get_nowait()
 
-            # 4. 迁移（每 N 个 episode）
-            if (ep + 1) % self.config.migration_interval == 0:
-                self._execute_migration()
+                        if status == "episode_done":
+                            arena.episode += 1
+                            self.metrics_aggregator.update(data)
+                        elif status == "finished":
+                            arena.is_finished = True
+                            self._logger.info(f"Arena {arena_id} 已完成 {data} 个 episode")
+                    except queue.Empty:
+                        break
 
-            # 5. 检查点
-            if (
-                self.config.checkpoint_interval > 0
-                and (ep + 1) % self.config.checkpoint_interval == 0
-            ):
-                self.save_checkpoint(f"checkpoints/multi_arena_ep_{ep + 1}.pkl")
-
-            # 6. 进度回调
+            # 进度回调
             if progress_callback:
                 summary = self.metrics_aggregator.get_global_summary()
-                summary["episode"] = ep + 1
-                summary["total_episodes"] = episodes
+                summary["running_arenas"] = sum(1 for a in self.arenas if not a.is_finished)
+                summary["arena_episodes"] = {a.arena_id: a.episode for a in self.arenas}
                 progress_callback(summary)
 
-            # 日志
-            if (ep + 1) % 10 == 0:
-                summary = self.metrics_aggregator.get_global_summary()
-                self._logger.info(
-                    f"Episode {ep + 1}/{episodes} 完成, "
-                    f"平均波动率: {summary.get('avg_volatility', 0):.4f}"
-                )
-
-        self._logger.info("训练完成")
-
-    def _execute_migration(self) -> None:
-        """执行一次迁移"""
-        self._logger.info("开始迁移...")
-
-        # 计算迁移数量
-        migration_count = self.config.migration_count
-        best_count = int(migration_count * self.config.migration_best_ratio)
-        worst_count = migration_count - best_count
-
-        # 1. 从所有竞技场收集候选者
-        for arena in self.arenas:
-            arena.cmd_queue.put(("get_migration_candidates", {
-                "best_count": best_count,
-                "worst_count": worst_count,
-            }))
-
-        # 收集候选者
-        all_candidates: list["MigrationPacket"] = []
-        for arena in self.arenas:
-            result = arena.result_queue.get()
-            if result[0] == "error":
-                self._logger.error(f"获取候选者失败: {result[1]}")
-                continue
-            all_candidates.extend(result[1])
-
-        self._logger.info(f"收集到 {len(all_candidates)} 个迁移候选者")
-
-        # 2. 规划迁移方向
-        migrations = self.migration_system.plan_migrations(all_candidates)
-
-        # 3. 分发迁移
-        for arena in self.arenas:
-            packets = migrations.get(arena.arena_id, [])
-            if packets:
-                arena.cmd_queue.put(("inject_genomes", packets))
-            else:
-                arena.cmd_queue.put(("inject_genomes", []))
-
-        # 等待完成
-        for arena in self.arenas:
-            result = arena.result_queue.get()
-            if result[0] == "error":
-                self._logger.error(f"注入失败: {result[1]}")
-
-        self._logger.info("迁移完成")
+            time.sleep(check_interval)
 
     def stop(self) -> None:
         """停止所有竞技场"""
@@ -308,7 +428,7 @@ class ArenaManager:
         self._logger.info("正在停止竞技场...")
 
         for arena in self.arenas:
-            arena.cmd_queue.put(("stop", None))
+            arena.control_queue.put("stop")
             arena.process.join(timeout=10)
             if arena.process.is_alive():
                 self._logger.warning(f"Arena {arena.arena_id} 未响应，强制终止")
@@ -316,62 +436,18 @@ class ArenaManager:
 
         self._logger.info("所有竞技场已停止")
 
-    def save_checkpoint(self, path: str) -> None:
-        """保存所有竞技场的检查点
+    def train(
+        self,
+        episodes: int,
+        progress_callback: Callable[[dict], None] | None = None,
+    ) -> None:
+        """训练（兼容旧接口，内部调用 monitor）
 
         Args:
-            path: 检查点文件路径
+            episodes: 训练的 episode 数量（忽略，使用 config.max_episodes）
+            progress_callback: 进度回调函数
         """
-        self._logger.info(f"保存检查点到 {path}...")
-
-        # 收集所有竞技场的检查点
-        for arena in self.arenas:
-            arena.cmd_queue.put(("get_checkpoint", None))
-
-        checkpoints = {}
-        for arena in self.arenas:
-            result = arena.result_queue.get()
-            if result[0] == "error":
-                self._logger.error(f"获取检查点失败: {result[1]}")
-                continue
-            checkpoints[arena.arena_id] = result[1]
-
-        # 保存
-        checkpoint_path = Path(path)
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(checkpoint_path, "wb") as f:
-            pickle.dump({
-                "config": self.config,
-                "arenas": checkpoints,
-                "metrics": self.metrics_aggregator.get_history(),
-            }, f)
-
-        self._logger.info("检查点已保存")
-
-    def load_checkpoint(self, path: str) -> None:
-        """加载检查点
-
-        Args:
-            path: 检查点文件路径
-        """
-        self._logger.info(f"加载检查点 {path}...")
-
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-
-        # 加载到各竞技场
-        for arena_id, checkpoint in data["arenas"].items():
-            arena = self.arenas[arena_id]
-            arena.cmd_queue.put(("load_checkpoint", checkpoint))
-
-        # 等待完成
-        for arena in self.arenas:
-            result = arena.result_queue.get()
-            if result[0] == "error":
-                self._logger.error(f"加载失败: {result[1]}")
-
-        self._logger.info("检查点已加载")
+        self.monitor(progress_callback=progress_callback)
 
     def get_summary(self) -> dict:
         """获取当前训练状态汇总
@@ -379,4 +455,8 @@ class ArenaManager:
         Returns:
             状态汇总
         """
-        return self.metrics_aggregator.get_global_summary()
+        summary = self.metrics_aggregator.get_global_summary()
+        summary["arena_episodes"] = {
+            arena.arena_id: arena.episode for arena in self.arenas
+        }
+        return summary
