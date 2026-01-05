@@ -133,8 +133,8 @@ def main() -> None:
     parser.add_argument(
         "--num-arenas",
         type=int,
-        default=4,
-        help="竞技场数量（默认: 4）",
+        default=16,
+        help="竞技场数量（默认: 16）",
     )
     parser.add_argument(
         "--migration-interval",

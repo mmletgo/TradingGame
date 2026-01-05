@@ -39,16 +39,16 @@ POPULATION_COLORS: dict[AgentType, tuple[int, int, int]] = {
 
 # 鲶鱼颜色配置
 CATFISH_COLORS: dict[str, tuple[int, int, int]] = {
-    "TrendFollowingCatfish": (255, 165, 0),      # 橙色
-    "CycleSwingCatfish": (0, 191, 255),          # 天蓝色
+    "TrendCreatorCatfish": (255, 165, 0),        # 橙色
+    "TrendFollowingCatfish": (255, 165, 0),      # 橙色（向后兼容别名）
     "MeanReversionCatfish": (255, 105, 180),     # 粉色
     "RandomTradingCatfish": (148, 0, 211),       # 深紫色
 }
 
 # 鲶鱼中文名称
 CATFISH_NAMES: dict[str, str] = {
-    "TrendFollowingCatfish": "趋势追踪",
-    "CycleSwingCatfish": "周期摆动",
+    "TrendCreatorCatfish": "趋势创造",
+    "TrendFollowingCatfish": "趋势创造",         # 向后兼容别名
     "MeanReversionCatfish": "逆势操作",
     "RandomTradingCatfish": "随机买卖",
 }
@@ -474,11 +474,10 @@ class ChartPanel:
             dpg.add_separator()
             dpg.add_text("鲶鱼资金曲线", color=(255, 255, 0))
 
-            # 四只鲶鱼图表水平排列
+            # 三只鲶鱼图表水平排列
             with dpg.group(horizontal=True):
                 catfish_types = [
-                    "TrendFollowingCatfish",
-                    "CycleSwingCatfish",
+                    "TrendCreatorCatfish",
                     "MeanReversionCatfish",
                     "RandomTradingCatfish",
                 ]
@@ -532,8 +531,7 @@ class ChartPanel:
     def _setup_catfish_themes(self) -> None:
         """设置鲶鱼曲线颜色主题"""
         catfish_types = [
-            "TrendFollowingCatfish",
-            "CycleSwingCatfish",
+            "TrendCreatorCatfish",
             "MeanReversionCatfish",
             "RandomTradingCatfish",
         ]

@@ -140,8 +140,15 @@
 
 3. **Tick 执行** (`run_tick`)
 
-   **时序设计**：Agent 的下单操作影响的是下一个 tick，确保强平检查和数据采集使用同一价格
+   **时序设计**：
+   - **Tick 1**：只展示做市商初始挂单后的市场状态，其他 agent 不行动
+   - **Tick 2+**：Agent 的下单操作影响的是下一个 tick，确保强平检查和数据采集使用同一价格
 
+   **Tick 1（做市商初始化展示 tick）**：
+   - 只记录价格历史和 tick 数据，不执行任何 agent 行动
+   - 用于 UI 模式展示做市商初始挂单后形成的市场状态
+
+   **Tick 2+（正常行动 tick）**：
    - **Tick 开始（强平处理分三阶段）**：
      - 保存 tick 开始时的价格到 `tick_start_price`（供数据采集使用）
      - **阶段1（统一撤单）**：遍历所有 Agent 检查强平条件，收集需要淘汰的 Agent，**统一撤销这些 Agent 的所有挂单**
@@ -309,9 +316,9 @@ python scripts/train_multi_arena.py --resume checkpoints/multi_arena_ep_50.pkl
 - 使用 `_price_history`（最多1000个历史价格）进行决策
 
 **行为模式：**
-- `trend_following`：趋势追踪，顺势推动价格
-- `cycle_swing`：周期摆动，交替买卖形成波动
+- `trend_creator`：趋势创造者，Episode 开始时随机选择方向，整个 Episode 保持该方向持续操作
 - `mean_reversion`：逆势操作，均值回归
+- `random`：随机买卖
 
 **配置：**
 通过 `CatfishConfig` 配置，包括触发阈值、模式选择、多模式开关等参数。

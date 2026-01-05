@@ -263,14 +263,10 @@ ADL（Auto-Deleveraging）自动减仓模块，在强平订单无法完全成交
   - 抽象方法：`decide(orderbook, tick, price_history) -> tuple[bool, int]` - 决策是否行动和方向
   - 核心方法：`execute()`, `can_act()`, `record_action()`, `reset()`
 
-- `TrendFollowingCatfish` - 趋势追踪型鲶鱼
-  - 根据历史价格变化率顺势下单
-  - 配置：`lookback_period`, `trend_threshold`, `action_cooldown`
-
-- `CycleSwingCatfish` - 周期摆动型鲶鱼
-  - 按固定周期交替买卖
-  - 配置：`half_cycle_length`, `action_interval`
-  - 内部状态：`_current_direction` - 当前方向
+- `TrendCreatorCatfish` - 趋势创造者鲶鱼
+  - Episode 开始时随机选择方向，整个 Episode 保持该方向持续操作
+  - 配置：`action_cooldown`
+  - 内部状态：`_current_direction` - 当前方向（1=买，-1=卖）
 
 - `MeanReversionCatfish` - 逆势操作型鲶鱼
   - 当价格偏离 EMA 均线时反向操作

@@ -77,7 +77,7 @@ UI数据快照，每个tick的完整数据。
 鲶鱼信息（UI展示用）。
 
 **字段：**
-- `name: str` - 鲶鱼类型名称（如 "TrendFollowingCatfish", "CycleSwingCatfish", "MeanReversionCatfish"）
+- `name: str` - 鲶鱼类型名称（如 "TrendCreatorCatfish", "MeanReversionCatfish", "RandomTradingCatfish"）
 - `equity: float` - 净值
 - `position_qty: int` - 持仓数量（正数做多，负数做空，0为空仓）
 - `position_value: float` - 持仓市值 = abs(position_qty) * current_price
@@ -376,9 +376,9 @@ controller.stop()
 - 高级散户: 蓝色 (100, 150, 255)
 - 庄家: 粉红色 (255, 100, 150)
 - 做市商: 紫色 (200, 100, 255)
-- 趋势追踪鲶鱼 (TrendFollowingCatfish): 橙色 (255, 165, 0)
-- 周期摆动鲶鱼 (CycleSwingCatfish): 天蓝色 (0, 191, 255)
+- 趋势创造者鲶鱼 (TrendCreatorCatfish): 橙色 (255, 165, 0)
 - 逆势操作鲶鱼 (MeanReversionCatfish): 粉色 (255, 105, 180)
+- 随机买卖鲶鱼 (RandomTradingCatfish): 深紫色 (148, 0, 211)
 
 **Tag命名规则：**
 - 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`

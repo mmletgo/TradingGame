@@ -47,9 +47,9 @@ class CatfishAccount:
         return equity / position_value
 
     def check_liquidation(self, current_price: float) -> bool:
-        """检查是否需要强平"""
-        margin_ratio = self.get_margin_ratio(current_price)
-        return margin_ratio < self.maintenance_margin_rate
+        """检查是否需要强平（仅资金归零时强平）"""
+        equity = self.get_equity(current_price)
+        return equity <= 0
 
     def on_trade(self, trade: Trade, is_buyer: bool) -> None:
         """处理成交（复用 Account 的逻辑，但手续费为0）

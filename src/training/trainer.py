@@ -962,11 +962,14 @@ class Trainer:
         """执行一个 tick（直接调用模式）
 
         时序设计：
-        1. Tick 开始：用 smooth_mid_price 检查所有 agent 的强平条件（爆仓即淘汰）
-        2. Tick 过程：Agent 按顺序决策和下单
-        3. Tick 结束：下单效果（价格变动）在下个 tick 被感知
+        1. Tick 1：只展示做市商初始挂单后的市场状态，其他 agent 不行动
+        2. Tick 2+：
+           - Tick 开始：用 smooth_mid_price 检查所有 agent 的强平条件（爆仓即淘汰）
+           - Tick 过程：Agent 按顺序决策和下单
+           - Tick 结束：下单效果（价格变动）在下个 tick 被感知
 
         这样设计确保：
+        - UI 模式下第一个可见 tick 是做市商初始挂单后的状态
         - 强平检查和 Agent 报价使用同一价格基准（smooth_mid_price）
         - 所有 agent 在同一价格基础上被检查，公平
         """
@@ -987,6 +990,21 @@ class Trainer:
         )
         self.tick_start_price = current_price  # 保存 tick 开始时的价格
 
+        # === Tick 1：只记录做市商初始挂单后的状态，不执行 agent 行动 ===
+        if self.tick == 1:
+            # 只记录价格历史和 tick 数据
+            self._price_history.append(current_price)
+            self._tick_history_prices.append(current_price)
+            self._tick_history_volumes.append(0.0)
+            self._tick_history_amounts.append(0.0)
+            # 更新 episode 价格统计
+            if current_price > self._episode_high_price:
+                self._episode_high_price = current_price
+            if current_price < self._episode_low_price:
+                self._episode_low_price = current_price
+            return
+
+        # === Tick 2+：正常执行所有 agent 行动 ===
         # === Tick 开始：检查所有 agent 的强平条件（爆仓即淘汰）===
         # 阶段1：向量化收集需要淘汰的 agent，统一撤销挂单
         agents_to_liquidate = self._check_liquidations_vectorized(current_price)

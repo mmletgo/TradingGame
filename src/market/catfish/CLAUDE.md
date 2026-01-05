@@ -9,8 +9,7 @@
 - `__init__.py` - 模块导出和工厂函数
 - `catfish_base.py` - 鲶鱼抽象基类
 - `catfish_account.py` - 鲶鱼账户类
-- `trend_following.py` - 趋势追踪型鲶鱼
-- `cycle_swing.py` - 周期摆动型鲶鱼
+- `trend_following.py` - 趋势创造者鲶鱼
 - `mean_reversion.py` - 逆势操作型鲶鱼
 - `random_trading.py` - 随机买卖型鲶鱼
 
@@ -31,7 +30,7 @@
 **核心方法：**
 - `get_equity(current_price) -> float` - 计算净值 = 余额 + 浮动盈亏
 - `get_margin_ratio(current_price) -> float` - 计算保证金率 = 净值 / 持仓市值（无持仓时返回 inf）
-- `check_liquidation(current_price) -> bool` - 检查是否需要强平（保证金率 < 维持保证金率）
+- `check_liquidation(current_price) -> bool` - 检查是否需要强平（净值 <= 0 时强平）
 - `on_trade(trade, is_buyer) -> None` - 处理成交（鲶鱼手续费为0）
   - 根据买卖方向更新持仓
   - 将已实现盈亏加到余额
@@ -71,42 +70,24 @@
 - `_generate_order_id() -> int` - 生成订单ID（负数空间，每次递减1）
 - `can_act(tick) -> bool` - 检查冷却时间
   - 返回 `tick - _last_action_tick >= action_cooldown`
-  - 注意：虽然参数有 phase_offset，但实际并未在冷却时间计算中使用
 - `record_action(tick)` - 记录行动时间
 - `reset()` - 重置鲶鱼状态（账户、强平标志、_last_action_tick）
 
-### TrendFollowingCatfish (trend_following.py)
+### TrendCreatorCatfish (trend_following.py)
 
-趋势追踪型鲶鱼，根据历史价格变化率顺势下单。
-
-**策略逻辑：**
-1. 检查冷却时间 `action_cooldown`
-2. 检查历史数据是否足够（至少 `lookback_period` 个数据点）
-3. 回看 `lookback_period` 个 tick 的价格（获取 `price_history[-lookback_period]` 和当前价格）
-4. 计算价格变化率：`(current_price - start_price) / start_price`
-5. 若变化率绝对值超过 `trend_threshold`，顺势下单
-   - 价格上涨则买入（direction = 1）
-   - 价格下跌则卖出（direction = -1）
-
-### CycleSwingCatfish (cycle_swing.py)
-
-周期摆动型鲶鱼，按固定周期交替买卖。
+趋势创造者鲶鱼，每个 Episode 开始时随机选择方向，整个 Episode 保持该方向持续操作。
 
 **策略逻辑：**
-1. 计算完整周期：`full_cycle = 2 * half_cycle_length`
-2. 计算当前周期位置：`position_in_cycle = tick % full_cycle`
-3. 根据周期位置确定方向：
-   - 前半周期（position_in_cycle < half_cycle_length）：买入（direction = 1）
-   - 后半周期（position_in_cycle >= half_cycle_length）：卖出（direction = -1）
-4. 检查是否到达行动间隔：`tick % action_interval == 0`
-5. 无视市场状态，按固定周期交替买卖
+1. Episode 开始时随机选择方向（买或卖）
+2. 整个 Episode 保持该方向持续操作
+3. 按冷却时间 `action_cooldown` 间隔操作
 
 **额外属性：**
 - `_current_direction: int` - 当前方向（1=买，-1=卖）
 
-**注意：**
-- 此策略不使用 `can_act()` 方法，不检查 `action_cooldown`
-- 仅通过 `tick % action_interval` 控制行动时机
+**reset 方法：**
+- 调用基类的 reset 方法
+- 重新随机选择方向
 
 ### MeanReversionCatfish (mean_reversion.py)
 
@@ -163,11 +144,11 @@
 - `leverage: float` - 杠杆（默认10.0）
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
-**注意：** 此函数用于单模式创建，当前系统默认使用多模式（四种鲶鱼同时运行）。
+**注意：** 此函数用于单模式创建，当前系统默认使用多模式（三种鲶鱼同时运行）。
 
 ### create_all_catfish(config, initial_balance, leverage=10.0, maintenance_margin_rate=0.05) -> list[CatfishBase]
 
-创建所有四种鲶鱼实例，相位错开以避免同时触发。**这是当前系统的默认行为**。
+创建所有三种鲶鱼实例，相位错开以避免同时触发。**这是当前系统的默认行为**。
 
 **参数：**
 - `config: CatfishConfig` - 鲶鱼配置
@@ -176,13 +157,9 @@
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
 **返回：**
-- 四种鲶鱼实例的列表：[TrendFollowing, CycleSwing, MeanReversion, RandomTrading]
-- ID 分配：-1 (TrendFollowing), -2 (CycleSwing), -3 (MeanReversion), -4 (RandomTrading)
-- 相位偏移分别为：0, cooldown//4, cooldown*2//4, cooldown*3//4（整数除法）
-
-**相位偏移说明：**
-- 相位偏移用于错开四种鲶鱼的触发时间
-- 虽然 `can_act` 方法中没有直接使用 `phase_offset`，但不同的 `phase_offset` 值会影响鲶鱼的初始状态和触发时机
+- 三种鲶鱼实例的列表：[TrendCreator, MeanReversion, RandomTrading]
+- ID 分配：-1 (TrendCreator), -2 (MeanReversion), -3 (RandomTrading)
+- 相位偏移分别为：0, cooldown//3, cooldown*2//3（整数除法）
 
 ## 使用示例
 
@@ -192,14 +169,10 @@
 from src.config.config import CatfishConfig
 from src.market.catfish import create_all_catfish
 
-# 创建四种鲶鱼（相位错开）
+# 创建三种鲶鱼（相位错开）
 config = CatfishConfig(
     enabled=True,
-    multi_mode=True,  # 四种模式同时运行
-    lookback_period=10,      # 默认值
-    trend_threshold=0.002,   # 默认值
-    half_cycle_length=10,    # 默认值
-    action_interval=5,       # 默认值
+    multi_mode=True,  # 三种模式同时运行
     ma_period=20,            # 默认值
     deviation_threshold=0.003, # 默认值
     action_cooldown=10,      # 默认值
@@ -214,17 +187,17 @@ for catfish in catfish_list:
         catfish.record_action(tick)
 ```
 
-**单模式（已弃用，不推荐使用）：**
+**单模式：**
 
 ```python
 from src.config.config import CatfishConfig, CatfishMode
 from src.market.catfish import create_catfish
 
-# 创建趋势追踪型鲶鱼
+# 创建趋势创造者鲶鱼
 config = CatfishConfig(
     enabled=True,
     multi_mode=False,
-    mode=CatfishMode.TREND_FOLLOWING,
+    mode=CatfishMode.TREND_CREATOR,
 )
 catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000_000.0)
 ```
@@ -237,25 +210,17 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 |------|------|--------|------|
 | enabled | bool | False | 是否启用鲶鱼 |
 | multi_mode | bool | True | 是否同时启用三种模式 |
-| mode | CatfishMode | TREND_FOLLOWING | 单模式时的鲶鱼行为模式 |
+| mode | CatfishMode | TREND_CREATOR | 单模式时的鲶鱼行为模式 |
 | fund_multiplier | float | 3.0 | 资金乘数（相对于做市商基础资金） |
 | market_maker_base_fund | float | 20,000,000 | 做市商基础资金 |
-| lookback_period | int | 10 | 趋势追踪回看周期（tick数） |
-| trend_threshold | float | 0.002 | 趋势阈值（价格变化率） |
-| half_cycle_length | int | 10 | 周期摆动半周期长度（tick数） |
-| action_interval | int | 5 | 周期摆动行动间隔（tick数） |
 | ma_period | int | 20 | 均线周期（EMA计算周期） |
 | deviation_threshold | float | 0.003 | 偏离阈值（价格与EMA的偏离率） |
 | action_cooldown | int | 10 | 行动冷却时间（tick数） |
 
 **参数说明：**
-- `lookback_period`: 趋势追踪鲶鱼回看的历史价格数量
-- `trend_threshold`: 价格变化率超过此值时触发交易（0.002 = 0.2%）
-- `half_cycle_length`: 周期摆动的半周期长度，完整周期 = 2 × half_cycle_length
-- `action_interval`: 周期摆动鲶鱼的行动间隔（每N个tick行动一次）
 - `ma_period`: EMA均线周期，用于逆势操作鲶鱼
 - `deviation_threshold`: 价格偏离EMA的阈值（0.003 = 0.3%）
-- `action_cooldown`: 趋势追踪和逆势操作鲶鱼的冷却时间（周期摆动鲶鱼不使用此参数）
+- `action_cooldown`: 所有鲶鱼的冷却时间
 
 ## 鲶鱼资金模式
 
@@ -285,7 +250,7 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 - taker 费率：0
 
 **强平机制：**
-- 鲶鱼保证金率低于维持保证金率时触发强平
+- 鲶鱼净值 <= 0 时触发强平（即资金归零才爆仓，不按保证金率判断）
 - 强平检查在所有 Agent 执行完毕之后进行
 - **任意一条鲶鱼被强平 → 本轮 Episode 立即结束，进入进化阶段**
 

@@ -37,7 +37,7 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 python scripts/train_noui.py --episodes 100 --catfish
 
 # 指定鲶鱼模式
-python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
+python scripts/train_noui.py --episodes 100 --catfish --catfish-mode trend_creator
 ```
 
 ### 代码修改后必须执行（清理缓存 + 重新编译）

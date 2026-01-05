@@ -212,7 +212,7 @@ pytest tests/ --cov=src --cov-report=html
 | `--episode-length` | 1000 | 每个 episode 的 tick 数量 |
 | `--checkpoint-interval` | 10 | 检查点保存间隔（0=不保存） |
 | `--catfish` | False | 是否启用鲶鱼机制 |
-| `--catfish-mode` | cycle_swing | 鲶鱼行为模式 |
+| `--catfish-mode` | trend_creator | 鲶鱼行为模式 |
 
 ### Agent 配置
 

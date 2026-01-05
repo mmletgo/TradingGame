@@ -25,9 +25,10 @@
 定义鲶鱼的行为模式。
 
 **枚举值：**
-- `TREND_FOLLOWING` - 趋势追踪：根据历史价格变化率顺势下单
-- `CYCLE_SWING` - 周期摆动：按固定周期交替买卖
+- `TREND_CREATOR` - 趋势创造者：Episode 开始时随机选择方向，整个 Episode 保持该方向持续操作
+- `TREND_FOLLOWING` - 趋势追踪（向后兼容别名，等同于 TREND_CREATOR）
 - `MEAN_REVERSION` - 逆势操作：当价格偏离均线时反向操作
+- `RANDOM` - 随机买卖：以随机概率进行买卖操作
 
 ## 核心配置类
 
@@ -122,32 +123,28 @@ Agent 配置，定义特定类型 Agent 的交易参数。
 |------|------|--------|------|
 | enabled | bool | False | 是否启用鲶鱼 |
 | multi_mode | bool | True | 是否同时启用三种模式 |
-| mode | CatfishMode | TREND_FOLLOWING | 单模式时的鲶鱼行为模式 |
+| mode | CatfishMode | TREND_CREATOR | 单模式时的鲶鱼行为模式 |
 | fund_multiplier | float | 3.0 | 资金乘数（相对于做市商基础资金） |
 | market_maker_base_fund | float | 20,000,000 | 做市商基础资金 |
-| lookback_period | int | 10 | 趋势追踪回看周期（tick数） |
-| trend_threshold | float | 0.002 | 趋势阈值（价格变化率） |
-| half_cycle_length | int | 10 | 周期摆动半周期长度（tick数） |
-| action_interval | int | 5 | 周期摆动行动间隔（tick数） |
 | ma_period | int | 20 | 逆势操作均线周期 |
 | deviation_threshold | float | 0.003 | 逆势操作偏离阈值 |
 | action_cooldown | int | 10 | 行动冷却时间（tick数） |
 
 **鲶鱼行为模式说明：**
 
-1. **趋势追踪 (TREND_FOLLOWING)**
-   - 回看 `lookback_period` 个 tick 的价格
-   - 计算价格变化率，若超过 `trend_threshold` 则顺势下单
+1. **趋势创造者 (TREND_CREATOR)**
+   - Episode 开始时随机选择方向（买或卖）
+   - 整个 Episode 保持该方向持续操作
    - 有冷却时间 `action_cooldown`
 
-2. **周期摆动 (CYCLE_SWING)**
-   - 每 `half_cycle_length` 个 tick 切换方向
-   - 每 `action_interval` 个 tick 行动一次
-   - 无视市场状态，按固定周期交替买卖
-
-3. **逆势操作 (MEAN_REVERSION)**
+2. **逆势操作 (MEAN_REVERSION)**
    - 维护 EMA 均值（周期 `ma_period`）
    - 当当前价格偏离 EMA 超过 `deviation_threshold`，反向操作
+   - 有冷却时间 `action_cooldown`
+
+3. **随机买卖 (RANDOM)**
+   - 以 50% 概率决定是否触发交易
+   - 若触发，随机选择买或卖
    - 有冷却时间 `action_cooldown`
 
 **鲶鱼资金计算（当前默认）：**
@@ -318,8 +315,8 @@ config = Config(
 # 命令行启用鲶鱼（三种模式同时运行）
 python scripts/train_noui.py --episodes 100 --catfish
 
-# 指定单模式（已弃用）
-python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
+# 指定单模式
+python scripts/train_noui.py --episodes 100 --catfish --catfish-mode trend_creator
 ```
 
 ## 配置参数调优建议
@@ -371,11 +368,9 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
   - 5.0+：强烈扰动
 
 - 模式特定参数：
-  - `lookback_period`：10-100，越大越关注长期趋势
-  - `trend_threshold`：0.001-0.01，越小越敏感
-  - `half_cycle_length`：10-200，摆动周期
-  - `ma_period`：20-200，均线周期
-  - `deviation_threshold`：0.001-0.01，偏离阈值
+  - `ma_period`：20-200，均线周期（逆势操作鲶鱼使用）
+  - `deviation_threshold`：0.001-0.01，偏离阈值（逆势操作鲶鱼使用）
+  - `action_cooldown`：10-50，行动冷却时间
 
 ## 依赖关系
 

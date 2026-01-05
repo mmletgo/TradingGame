@@ -23,8 +23,8 @@ class AgentType(Enum):
 class CatfishMode(Enum):
     """鲶鱼行为模式"""
 
-    TREND_FOLLOWING = "trend_following"  # 趋势追踪
-    CYCLE_SWING = "cycle_swing"  # 周期摆动
+    TREND_CREATOR = "trend_creator"  # 趋势创造者
+    TREND_FOLLOWING = "trend_following"  # 趋势追踪（向后兼容别名）
     MEAN_REVERSION = "mean_reversion"  # 逆势操作
     RANDOM = "random"  # 随机买卖
 
@@ -139,14 +139,6 @@ class CatfishConfig:
         fund_multiplier: 资金乘数（相对于做市商基础资金）
         market_maker_base_fund: 做市商基础资金
 
-        # 趋势追踪参数（TREND_FOLLOWING 模式）
-        lookback_period: 回看周期（tick数）
-        trend_threshold: 趋势阈值（价格变化率）
-
-        # 周期摆动参数（CYCLE_SWING 模式）
-        half_cycle_length: 半周期长度（tick数）
-        action_interval: 行动间隔（tick数）
-
         # 逆势操作参数（MEAN_REVERSION 模式）
         ma_period: 均线周期
         deviation_threshold: 偏离阈值
@@ -157,21 +149,13 @@ class CatfishConfig:
 
     enabled: bool = False
     multi_mode: bool = True  # 默认同时启用三种模式
-    mode: CatfishMode = CatfishMode.TREND_FOLLOWING  # 单模式时使用
+    mode: CatfishMode = CatfishMode.TREND_CREATOR  # 单模式时使用
 
     # 资金参数
     fund_multiplier: float = 3.0
     market_maker_base_fund: float = 20_000_000.0
 
-    # 趋势追踪参数
-    lookback_period: int = 10
-    trend_threshold: float = 0.002
-
-    # 周期摆动参数
-    half_cycle_length: int = 10
-    action_interval: int = 5
-
-    # 逆势操作参数
+    # 逆势操作参数（MEAN_REVERSION 模式）
     ma_period: int = 20
     deviation_threshold: float = 0.003
 

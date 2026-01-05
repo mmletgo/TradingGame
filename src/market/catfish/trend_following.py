@@ -1,9 +1,11 @@
 """
-趋势追踪型鲶鱼模块
+趋势创造者鲶鱼模块
 
-实现趋势追踪策略的鲶鱼，根据历史价格变化率顺势下单。
+实现趋势创造策略的鲶鱼，每个 Episode 开始时随机选择方向，
+整个 Episode 保持该方向持续操作，主动创造趋势。
 """
 
+import random
 from typing import TYPE_CHECKING
 
 from src.config.config import CatfishConfig
@@ -13,19 +15,19 @@ if TYPE_CHECKING:
     from src.market.orderbook.orderbook import OrderBook
 
 
-class TrendFollowingCatfish(CatfishBase):
+class TrendCreatorCatfish(CatfishBase):
     """
-    趋势追踪型鲶鱼
+    趋势创造者鲶鱼
 
     策略逻辑：
-    - 回看 lookback_period 个 tick 的价格
-    - 计算价格变化率
-    - 若变化率超过 trend_threshold，顺势下单
-    - 有冷却时间 action_cooldown
+    - Episode 开始时随机选择方向（买或卖）
+    - 整个 Episode 保持该方向持续操作
+    - 按冷却时间 action_cooldown 间隔操作
 
     Attributes:
         catfish_id: 鲶鱼ID
         config: 鲶鱼配置
+        _current_direction: 当前方向（1=买，-1=卖）
     """
 
     def __init__(
@@ -38,7 +40,7 @@ class TrendFollowingCatfish(CatfishBase):
         maintenance_margin_rate: float = 0.05,
     ) -> None:
         """
-        初始化趋势追踪型鲶鱼
+        初始化趋势创造者鲶鱼
 
         Args:
             catfish_id: 鲶鱼ID（应为负数）
@@ -52,6 +54,8 @@ class TrendFollowingCatfish(CatfishBase):
             catfish_id, config, phase_offset,
             initial_balance, leverage, maintenance_margin_rate
         )
+        # 初始化时随机选择方向
+        self._current_direction: int = random.choice([1, -1])
 
     def decide(
         self,
@@ -62,12 +66,12 @@ class TrendFollowingCatfish(CatfishBase):
         """
         决策是否行动以及行动方向
 
-        根据历史价格计算变化率，若超过阈值则顺势下单。
+        始终按当前方向操作，仅检查冷却时间。
 
         Args:
             orderbook: 订单簿
             tick: 当前tick
-            price_history: 历史价格列表
+            price_history: 历史价格列表（未使用）
 
         Returns:
             (should_act, direction): 是否行动和方向（1=买，-1=卖）
@@ -76,28 +80,19 @@ class TrendFollowingCatfish(CatfishBase):
         if not self.can_act(tick):
             return False, 0
 
-        # 检查历史数据是否足够
-        lookback = self.config.lookback_period
-        if len(price_history) < lookback:
-            return False, 0
+        # 返回当前方向
+        return True, self._current_direction
 
-        # 获取回看周期的起始价格和当前价格
-        start_price = price_history[-lookback]
-        current_price = price_history[-1]
+    def reset(self) -> None:
+        """
+        重置鲶鱼状态
 
-        # 避免除以零
-        if start_price <= 0:
-            return False, 0
+        每个 Episode 开始时调用，重置账户并重新随机选择方向。
+        """
+        super().reset()
+        # 重新随机选择方向
+        self._current_direction = random.choice([1, -1])
 
-        # 计算价格变化率
-        change_rate = (current_price - start_price) / start_price
 
-        # 检查是否超过阈值
-        threshold = self.config.trend_threshold
-        if abs(change_rate) < threshold:
-            return False, 0
-
-        # 顺势下单：价格上涨则买入，价格下跌则卖出
-        direction = 1 if change_rate > 0 else -1
-
-        return True, direction
+# 保持向后兼容的别名
+TrendFollowingCatfish = TrendCreatorCatfish
