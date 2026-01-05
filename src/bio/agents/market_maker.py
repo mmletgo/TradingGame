@@ -67,12 +67,12 @@ class MarketMakerAgent(Agent):
     def get_action_space(self) -> list[ActionType]:
         """获取做市商可用动作
 
-        做市商可以执行双边挂单、清仓两种动作。
+        做市商默认每 tick 双边挂单，无需动作选择。
 
         Returns:
-            可用动作类型列表 [QUOTE, CLEAR_POSITION]
+            空列表（做市商不使用动作选择）
         """
-        return [ActionType.QUOTE, ActionType.CLEAR_POSITION]
+        return []
 
     def observe(
         self, market_state: NormalizedMarketState, orderbook: OrderBook
@@ -253,14 +253,12 @@ class MarketMakerAgent(Agent):
     ) -> tuple[ActionType, dict[str, Any]]:
         """决策下一步动作
 
-        做市商通过神经网络决定是双边挂单还是清仓。
-        神经网络输出结构（共 22 个值）：
-        - 输出[0]: QUOTE 动作得分
-        - 输出[1]: CLEAR_POSITION 动作得分
-        - 输出[2-6]: 买单1-5的价格偏移（-1到1，相对于mid_price）
-        - 输出[7-11]: 买单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
-        - 输出[12-16]: 卖单1-5的价格偏移（-1到1，相对于mid_price）
-        - 输出[17-21]: 卖单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
+        做市商默认每 tick 双边挂单，神经网络直接输出价格和数量参数。
+        神经网络输出结构（共 20 个值）：
+        - 输出[0-4]: 买单1-5的价格偏移（-1到1，相对于mid_price）
+        - 输出[5-9]: 买单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
+        - 输出[10-14]: 卖单1-5的价格偏移（-1到1，相对于mid_price）
+        - 输出[15-19]: 卖单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -270,11 +268,10 @@ class MarketMakerAgent(Agent):
             (动作类型, 动作参数字典)
             - QUOTE: {"bid_orders": [{"price": float, "quantity": float}, ...],
                       "ask_orders": [{"price": float, "quantity": float}, ...]}
-            - CLEAR_POSITION: {}
         """
-        # 如果已被强平，返回清仓（实际不执行）
+        # 如果已被强平，返回空订单列表
         if self.is_liquidated:
-            return ActionType.CLEAR_POSITION, {}
+            return ActionType.QUOTE, {"bid_orders": [], "ask_orders": []}
 
         # 1. 观察市场，获取神经网络输入（复用基类方法）
         inputs = self.observe(market_state, orderbook)
@@ -282,15 +279,11 @@ class MarketMakerAgent(Agent):
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
 
-        # 3. 验证输出维度（需要 22 个值）
-        if len(outputs) < 22:
-            raise ValueError(f"神经网络输出维度不足，期望 22，实际 {len(outputs)}")
+        # 3. 验证输出维度（需要 20 个值）
+        if len(outputs) < 20:
+            raise ValueError(f"神经网络输出维度不足，期望 20，实际 {len(outputs)}")
 
-        # 4. 解析动作类型（选择 QUOTE 或 CLEAR_POSITION）
-        quote_score = outputs[0]
-        clear_score = outputs[1]
-
-        # 5. 获取参考价格并计算仓位信息
+        # 4. 获取参考价格并计算仓位信息
         mid_price = market_state.mid_price
         if mid_price == 0:
             mid_price = 100.0
@@ -301,16 +294,10 @@ class MarketMakerAgent(Agent):
         skew_factor = self._calculate_skew_factor(mid_price)
         position_qty = self.account.position.quantity
 
-        # 做市商禁止选择 CLEAR_POSITION，必须始终提供双边流动性
-        # 风险管理通过 skew_factor 调整买卖权重来实现
-        # 注释掉原有的清仓逻辑：
-        # if clear_score > quote_score and position_qty != 0:
-        #     return ActionType.CLEAR_POSITION, {}
-
         # 向量化收集数量比例
         outputs_arr = np.array(outputs)
-        bid_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[7:12], -1, 1) + 1) / 2)
-        ask_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[17:22], -1, 1) + 1) / 2)
+        bid_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[5:10], -1, 1) + 1) / 2)
+        ask_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[15:20], -1, 1) + 1) / 2)
 
         # 计算总和并归一化（确保 10 个订单的总比例 = 1.0）
         total_raw_ratio = bid_raw_ratios.sum() + ask_raw_ratios.sum()
@@ -330,7 +317,7 @@ class MarketMakerAgent(Agent):
         max_offset_ticks = 100.0
         min_offset_ticks = 1.0
 
-        bid_price_offsets = np.clip(outputs_arr[2:7], -1, 1)
+        bid_price_offsets = np.clip(outputs_arr[0:5], -1, 1)
         # [-1, 1] -> [1, 100]
         bid_price_ticks = min_offset_ticks + (bid_price_offsets + 1) / 2 * (
             max_offset_ticks - min_offset_ticks
@@ -351,7 +338,7 @@ class MarketMakerAgent(Agent):
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
         # 卖单价格偏移完全由神经网络决定
-        ask_price_offsets = np.clip(outputs_arr[12:17], -1, 1)
+        ask_price_offsets = np.clip(outputs_arr[10:15], -1, 1)
         # [-1, 1] -> [1, 100]
         ask_price_ticks = min_offset_ticks + (ask_price_offsets + 1) / 2 * (
             max_offset_ticks - min_offset_ticks
@@ -518,10 +505,10 @@ class MarketMakerAgent(Agent):
     ) -> list[Trade]:
         """执行动作
 
-        做市商特定实现：QUOTE 先撤所有旧单再双边挂单，CLEAR_POSITION 先撤单再平仓。
+        做市商默认每 tick 双边挂单，先撤所有旧单再挂新单。
 
         Args:
-            action: 动作类型
+            action: 动作类型（固定为 QUOTE）
             params: 动作参数字典
             matching_engine: 撮合引擎
 
@@ -531,11 +518,4 @@ class MarketMakerAgent(Agent):
         if self.is_liquidated:
             return []
 
-        trades: list[Trade] = []
-
-        if action == ActionType.QUOTE:
-            trades = self._handle_quote(params, matching_engine)
-        elif action == ActionType.CLEAR_POSITION:
-            trades = self._handle_clear_position(matching_engine)
-
-        return trades
+        return self._handle_quote(params, matching_engine)

@@ -82,13 +82,13 @@ Agent 基类，提供通用属性和方法。
 撤销做市商所有买卖挂单，清空 `bid_order_ids` 和 `ask_order_ids` 列表。
 
 #### `_place_quote_orders(orders, side, order_ids, matching_engine) -> list[Trade]` (做市商私有)
-挂限价单并记录订单ID到指定列表，返回成交列表。被 `execute_action` 的 QUOTE 动作调用。
+挂限价单并记录订单ID到指定列表，返回成交列表。被 `_handle_quote` 方法调用。
 
 **注意**: Agent 基类不包含 `decide` 方法。`decide` 方法由各子类根据自己的动作空间实现：
 - **RetailProAgent**: 实现散户/高级散户通用的 decide 方法（9个输出节点，7种动作）
 - **RetailAgent**: 继承 RetailProAgent 的 decide 方法
 - **WhaleAgent**: 实现庄家专用的 decide 方法（9个输出节点，7种动作，与散户相同的动作空间）
-- **MarketMakerAgent**: 实现做市商专用的 decide 方法（22个输出节点）
+- **MarketMakerAgent**: 实现做市商专用的 decide 方法（20个输出节点）
 
 **订单数量约束：** 所有订单数量（quantity）均为 int 类型，最小单位为 1。`_calculate_order_quantity` 方法会将计算结果取整并确保至少为 1。
 
@@ -115,7 +115,7 @@ Agent 基类，提供通用属性和方法。
 - **RetailAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单
 - **RetailProAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单
 - **WhaleAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单（与散户相同行为）
-- **MarketMakerAgent**: QUOTE 先撤所有旧单再双边挂单，重写 `_handle_clear_position` 以处理多个挂单
+- **MarketMakerAgent**: 默认每 tick 双边挂单，先撤所有旧单再挂新单
 
 #### `_process_trades(trades: list[Trade]) -> None`
 处理成交列表，更新账户。遍历成交列表，调用 `account.on_trade` 更新账户。
@@ -127,8 +127,7 @@ Agent 基类，提供通用属性和方法。
 
 - `_cancel_all_orders(matching_engine)` - 撤销所有挂单
 - `_place_quote_orders(orders, side, order_ids, matching_engine)` - 挂多个限价单
-- `_handle_quote(params, matching_engine)` - 处理 QUOTE 动作
-- `_handle_clear_position(matching_engine)` - 重写基类方法，先撤销所有挂单（买卖双边）再平仓
+- `_handle_quote(params, matching_engine)` - 处理双边挂单（先撤所有旧单，再挂新单）
 
 ## 做市商仓位倾斜挂单机制
 
@@ -164,10 +163,9 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 
 **保护机制**：单边最小权重为 10%，确保任何情况下都保持双边挂单。
 
-**禁止清仓**：做市商禁止选择 CLEAR_POSITION 动作，必须始终提供双边流动性。风险管理完全通过 skew_factor 调整买卖权重来实现。这是因为：
+**做市商默认挂单**：做市商每 tick 必然双边挂单，无需动作选择。风险管理完全通过 skew_factor 调整买卖权重来实现。这是因为：
 - 做市商的核心职责是提供流动性
-- 如果允许清仓，神经网络可能进化出倾向于清仓的策略，导致流动性枯竭
-- 通过仓位倾斜机制，做市商可以在不清仓的情况下逐步减少不利方向的仓位
+- 通过仓位倾斜机制，做市商可以在保持双边挂单的情况下逐步减少不利方向的仓位
 
 **订单数量计算**：做市商调用 `_calculate_order_quantity` 时使用 `ref_price=mid_price` 作为参考价格，确保计算时使用一致的市场价格而非订单价格，避免因买卖价差导致的计算误差。
 
@@ -245,17 +243,17 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 
 散户、高级散户、庄家使用相同的动作空间和神经网络输出结构。
 
-### 做市商神经网络输出（22 个值）
+### 做市商神经网络输出（20 个值）
 | 索引 | 说明 |
 |------|------|
-| 0 | QUOTE 动作得分 |
-| 1 | CLEAR_POSITION 动作得分 |
-| 2-6 | 买单 1-5 价格偏移（-1 到 1，映射到 1-100 ticks）|
-| 7-11 | 买单 1-5 数量权重 |
-| 12-16 | 卖单 1-5 价格偏移（-1 到 1，映射到 1-100 ticks）|
-| 17-21 | 卖单 1-5 数量权重 |
+| 0-4 | 买单 1-5 价格偏移（-1 到 1，映射到 1-100 ticks）|
+| 5-9 | 买单 1-5 数量权重 |
+| 10-14 | 卖单 1-5 价格偏移（-1 到 1，映射到 1-100 ticks）|
+| 15-19 | 卖单 1-5 数量权重 |
 
 **价格偏移映射**：神经网络输出 [-1, 1] 完全控制价格偏移，映射到 [1, 100] ticks。买单价格 = mid_price - offset * tick_size，卖单价格 = mid_price + offset * tick_size。
+
+**做市商默认行为**：做市商每 tick 必然双边挂单，无需动作选择。神经网络直接输出价格和数量参数。
 
 做市商的 `decide` 方法对输出解析进行了向量化优化，使用 NumPy 批量处理数量比例和价格偏移的计算，减少 Python 循环开销。
 
