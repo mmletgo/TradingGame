@@ -4,6 +4,7 @@
 """
 
 import pickle
+import random
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -1044,6 +1045,9 @@ class Trainer:
 
         # 预计算归一化市场数据
         market_state = self._compute_normalized_market_state()
+
+        # === 随机打乱执行顺序（每个 tick 都不同，模拟真实环境）===
+        random.shuffle(self.agent_execution_order)
 
         # === 并行决策阶段 ===
         decisions = self._batch_decide_parallel(

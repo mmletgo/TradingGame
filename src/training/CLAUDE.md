@@ -56,7 +56,7 @@
 - `_calculate_catfish_initial_balance()` - 计算鲶鱼初始资金（做市商杠杆后资金 - 其他物种杠杆后资金）/ 3
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
-- `_build_execution_order()` - 构建 Agent 执行顺序列表（做市商->庄家->高级散户->散户）
+- `_build_execution_order()` - 构建 Agent 执行顺序列表（初始化时收集所有 Agent，实际执行时每 tick 随机打乱）
 - `_cancel_agent_orders()` - 撤销指定 Agent 的所有挂单（做市商撤多单，普通 Agent 撤单个挂单）
 - `_execute_liquidation_market_order()` - 执行强平市价单，提交市价单平仓，若市价单无法完全成交则返回剩余数量（调用前必须先撤销挂单）
 - `_execute_adl()` - 执行 ADL 自动减仓，在循环中处理 ADL 成交（使用预计算的候选清单、更新账户、更新 position_qty）
@@ -134,7 +134,8 @@
    - **Tick 过程**：
      - 鲶鱼行动（如果启用）
      - 向量化计算归一化市场状态
-     - Agent 按顺序决策和下单（做市商→庄家→高级散户→散户）
+     - **随机打乱 Agent 执行顺序**（每 tick 完全随机，模拟真实环境）
+     - Agent 并行决策 → 串行执行下单
      - 记录成交到 `recent_trades`，更新 maker 账户
    - **Tick 结束**：
      - 下单产生的价格变动效果在下个 tick 被感知

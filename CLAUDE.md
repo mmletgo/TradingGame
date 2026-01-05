@@ -99,7 +99,7 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode cycle_swing
 ### 训练流程
 1. **初始化**: 创建四种群、撮合引擎、做市商建立初始流动性
 2. **Episode 循环**: 重置账户/市场 → 运行 N 个 tick → NEAT 进化
-3. **Tick 执行**: 检查强平 → 做市商 → 庄家 → 高级散户 → 散户
+3. **Tick 执行**: 检查强平 → 鲶鱼行动 → 随机打乱所有 Agent 顺序 → 并行决策 → 串行执行
 
 ### NEAT 配置
 - `config/neat_retail.cfg` - 散户（67 个输入节点，9 个输出节点）
