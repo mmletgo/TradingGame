@@ -239,12 +239,13 @@
 ## 启动脚本
 
 训练脚本位于 `scripts/` 目录：
-- `train_noui.py` - 无 UI 高性能训练模式
+- `train_noui.py` - 单竞技场无 UI 高性能训练模式
+- `train_multi_arena.py` - 多竞技场并行训练模式（默认 16 个竞技场）
 
-### train_noui.py 使用方法
+### train_noui.py 使用方法（单竞技场）
 
 ```bash
-# 基本训练（100 个 episode，单竞技场）
+# 基本训练（100 个 episode）
 python scripts/train_noui.py --episodes 100
 
 # 自定义参数
@@ -252,13 +253,6 @@ python scripts/train_noui.py --episodes 500 --episode-length 1000 --checkpoint-i
 
 # 从检查点恢复训练
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
-
-# 多竞技场并行训练
-python scripts/train_noui.py --multi-arena --num-arenas 10 --episodes 100
-
-# 多竞技场训练（自定义迁移参数）
-python scripts/train_noui.py --multi-arena --num-arenas 10 --migration-interval 10 \
-    --migration-count 5 --migration-strategy ring --episodes 100
 ```
 
 命令行参数：
@@ -271,12 +265,33 @@ python scripts/train_noui.py --multi-arena --num-arenas 10 --migration-interval 
 - `--catfish`: 启用鲶鱼机制
 - `--catfish-fund-multiplier`: 鲶鱼资金倍数（默认: 3.0）
 
+### train_multi_arena.py 使用方法（多竞技场）
+
+```bash
+# 默认 16 个竞技场训练
+python scripts/train_multi_arena.py --episodes 100
+
+# 自定义竞技场数量
+python scripts/train_multi_arena.py --num-arenas 10 --episodes 100
+
+# 自定义迁移参数
+python scripts/train_multi_arena.py --migration-interval 20 --migration-count 10
+
+# 从检查点恢复
+python scripts/train_multi_arena.py --resume checkpoints/multi_arena_ep_50.pkl
+```
+
 多竞技场参数：
-- `--multi-arena`: 启用多竞技场并行训练模式
-- `--num-arenas`: 竞技场数量（默认: 10）
+- `--num-arenas`: 竞技场数量（默认: 16）
 - `--migration-interval`: 迁移间隔（episode 数，默认: 10）
 - `--migration-count`: 每次迁移的 Agent 数量（每种群，默认: 5）
+- `--migration-best-ratio`: 迁移最好个体的比例（默认: 0.5）
 - `--migration-strategy`: 迁移策略（ring/random/best_to_worst，默认: ring）
+
+**检查点说明**：
+- 单竞技场检查点: `checkpoints/ep_*.pkl`
+- 多竞技场检查点: `checkpoints/multi_arena_ep_*.pkl`
+- 两种模式的检查点互不冲突
 
 ## 鲶鱼机制
 
