@@ -5,12 +5,15 @@
 目录结构：
     checkpoints/multi_arena/
         arena_0/
-            checkpoint.pkl
+            checkpoint.pkl      # 完整数据（populations + episode 等，用于恢复）
+            best_genomes.pkl    # 仅 best_genomes（迁移用，很小）
         arena_1/
             checkpoint.pkl
+            best_genomes.pkl
         ...
 
 写入时只写自己的文件（原子写入），读取其他竞技场时直接读取。
+迁移时优先读取轻量级的 best_genomes.pkl，避免加载完整 populations 造成内存暴涨。
 """
 
 import os
@@ -101,6 +104,17 @@ class SharedCheckpointManager:
         """获取竞技场的 checkpoint 文件路径"""
         return os.path.join(self._get_arena_dir(arena_id), "checkpoint.pkl")
 
+    def _get_arena_best_genomes_path(self, arena_id: int) -> str:
+        """获取竞技场的 best_genomes 文件路径（轻量级，仅用于迁移）
+
+        Args:
+            arena_id: 竞技场 ID
+
+        Returns:
+            best_genomes.pkl 文件的完整路径
+        """
+        return os.path.join(self._get_arena_dir(arena_id), "best_genomes.pkl")
+
     def initialize(self, config: dict[str, Any], num_arenas: int) -> None:
         """初始化检查点目录结构
 
@@ -139,22 +153,38 @@ class SharedCheckpointManager:
     ) -> None:
         """更新单个竞技场的 checkpoint（原子写入，无锁）
 
+        同时保存两个文件：
+        - checkpoint.pkl: 完整数据（用于恢复）
+        - best_genomes.pkl: 仅 best_genomes（用于迁移，体积小）
+
         Args:
             arena_id: 竞技场 ID
             episode: 当前 episode 编号
             populations: 完整种群数据
             best_genomes: 各 Agent 类型的最佳基因组
         """
+        current_time = time.time()
+
+        # 1. 保存完整检查点（用于恢复）
         arena_data = ArenaCheckpointData(
             arena_id=arena_id,
             episode=episode,
             best_genomes=best_genomes,
             populations=populations,
-            updated_at=time.time(),
+            updated_at=current_time,
         )
-
         checkpoint_path = self._get_arena_checkpoint_path(arena_id)
         self._atomic_write(checkpoint_path, arena_data)
+
+        # 2. 保存轻量级 best_genomes（用于迁移）
+        best_genomes_data = {
+            "arena_id": arena_id,
+            "episode": episode,
+            "best_genomes": best_genomes,
+            "updated_at": current_time,
+        }
+        best_genomes_path = self._get_arena_best_genomes_path(arena_id)
+        self._atomic_write_dict(best_genomes_path, best_genomes_data)
 
         self._logger.debug(
             f"竞技场 {arena_id} 保存检查点: episode={episode}"
@@ -167,7 +197,8 @@ class SharedCheckpointManager:
     ) -> dict[str, list[tuple[bytes, float]]]:
         """获取其他竞技场的最佳个体
 
-        遍历其他竞技场的 checkpoint 文件，收集最佳基因组。
+        优先读取轻量级的 best_genomes.pkl 文件，避免加载完整 populations。
+        如果 best_genomes.pkl 不存在（兼容旧格式），才回退到读取完整 checkpoint。
 
         Args:
             requesting_arena_id: 请求迁移的竞技场 ID（排除自身）
@@ -195,15 +226,25 @@ class SharedCheckpointManager:
             if arena_id == requesting_arena_id:
                 continue
 
-            # 读取该竞技场的 checkpoint
-            checkpoint_path = self._get_arena_checkpoint_path(arena_id)
-            arena_data = self._read_arena_checkpoint(checkpoint_path)
+            # 优先读取轻量级的 best_genomes.pkl
+            best_genomes_path = self._get_arena_best_genomes_path(arena_id)
+            best_genomes = self._read_arena_best_genomes(best_genomes_path)
 
-            if arena_data is None or not arena_data.best_genomes:
+            if best_genomes is None:
+                # 回退：兼容旧格式，读取完整 checkpoint
+                self._logger.debug(
+                    f"竞技场 {arena_id} 无 best_genomes.pkl，回退到完整 checkpoint"
+                )
+                checkpoint_path = self._get_arena_checkpoint_path(arena_id)
+                arena_data = self._read_arena_checkpoint(checkpoint_path)
+                if arena_data is not None:
+                    best_genomes = arena_data.best_genomes
+
+            if not best_genomes:
                 continue
 
             # 收集最佳基因组
-            for agent_type, genomes in arena_data.best_genomes.items():
+            for agent_type, genomes in best_genomes.items():
                 if agent_type not in candidates:
                     candidates[agent_type] = []
                 selected = genomes[:count_per_arena]
@@ -293,6 +334,32 @@ class SharedCheckpointManager:
             self._logger.warning(f"读取检查点文件失败 {checkpoint_path}: {e}")
             return None
 
+    def _read_arena_best_genomes(
+        self, path: str
+    ) -> dict[str, list[tuple[bytes, float]]] | None:
+        """读取竞技场的轻量级 best_genomes 文件
+
+        Args:
+            path: best_genomes.pkl 文件路径
+
+        Returns:
+            best_genomes 字典，如果文件不存在或损坏则返回 None
+        """
+        if not os.path.exists(path):
+            return None
+
+        try:
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+            # 验证数据结构
+            if isinstance(data, dict) and "best_genomes" in data:
+                return data["best_genomes"]
+            self._logger.warning(f"best_genomes 文件格式无效 {path}")
+            return None
+        except (pickle.PickleError, EOFError, OSError) as e:
+            self._logger.warning(f"读取 best_genomes 文件失败 {path}: {e}")
+            return None
+
     def _atomic_write(self, path: str, data: ArenaCheckpointData) -> None:
         """原子写入检查点文件
 
@@ -314,6 +381,35 @@ class SharedCheckpointManager:
             os.replace(temp_path, path)
         except OSError as e:
             self._logger.error(f"写入检查点文件失败 {path}: {e}")
+            # 清理临时文件
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise
+
+    def _atomic_write_dict(self, path: str, data: dict[str, Any]) -> None:
+        """原子写入字典数据到文件
+
+        先写入临时文件，再用 os.replace() 原子重命名。
+
+        Args:
+            path: 目标文件路径
+            data: 要写入的字典数据
+        """
+        # 确保目录存在
+        dir_path = os.path.dirname(path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+
+        temp_path = f"{path}.tmp"
+        try:
+            with open(temp_path, "wb") as f:
+                pickle.dump(data, f)
+            os.replace(temp_path, path)
+        except OSError as e:
+            self._logger.error(f"写入文件失败 {path}: {e}")
             # 清理临时文件
             if os.path.exists(temp_path):
                 try:

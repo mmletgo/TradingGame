@@ -222,9 +222,11 @@ def _execute_migration_from_checkpoint(
 
     arena.inject_genomes(packets)
 
-    # 迁移后强制 GC，释放反序列化产生的临时对象
+    # 迁移后强制多轮 GC，确保 NEAT 对象的循环引用被完全清理
     del packets
     del candidates
+    gc.collect()
+    gc.collect()
     gc.collect()
     malloc_trim()  # 将释放的内存归还给操作系统
 
@@ -243,14 +245,15 @@ def _save_arena_to_checkpoint(
         arena_id: 竞技场 ID
         episode: 当前 episode 编号
     """
-    # 获取完整种群数据
+    # 先获取 best_genomes（相对轻量的操作）
+    best_genomes = arena.get_best_genomes(top_n=10)
+
+    # 然后获取完整种群数据
     checkpoint_data = arena.get_checkpoint_data()
     populations = checkpoint_data["trainer"]["populations"]
 
-    # 获取最佳个体
-    best_genomes = arena.get_best_genomes(top_n=10)
-
-    # 更新到共享检查点
+    # 分两步更新到共享检查点，减少同时存在的大对象
+    # 先保存 best_genomes
     checkpoint_manager.update_arena(
         arena_id=arena_id,
         episode=episode,
@@ -258,10 +261,14 @@ def _save_arena_to_checkpoint(
         best_genomes=best_genomes,
     )
 
-    # 保存后清理临时数据，强制 GC
+    # 立即释放 best_genomes
+    del best_genomes
+    gc.collect()
+
+    # 释放 checkpoint_data 和 populations
     del checkpoint_data
     del populations
-    del best_genomes
+    gc.collect()
     gc.collect()
     malloc_trim()  # 将释放的内存归还给操作系统
 
@@ -393,6 +400,11 @@ def arena_worker_autonomous(
                 f"[MEMORY] Arena-{arena_id} migration_delta: "
                 f"+{mem_after_migrate - mem_before_migrate:.1f} MB"
             )
+            # 迁移后立即强制多轮 GC，确保临时对象被完全清理
+            gc.collect()
+            gc.collect()
+            gc.collect()
+            malloc_trim()
 
         # 检查保存间隔
         if checkpoint_interval > 0 and episode % checkpoint_interval == 0:
@@ -403,6 +415,11 @@ def arena_worker_autonomous(
                 f"[MEMORY] Arena-{arena_id} checkpoint_save_delta: "
                 f"+{mem_after_save - mem_before_save:.1f} MB"
             )
+            # 保存后立即强制多轮 GC，确保临时对象被完全清理
+            gc.collect()
+            gc.collect()
+            gc.collect()
+            malloc_trim()
 
         # 每个 episode 后都强制垃圾回收，防止进化阶段内存泄漏
         mem_before_gc = _get_memory_mb()
