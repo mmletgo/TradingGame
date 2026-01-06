@@ -247,6 +247,18 @@ class Arena:
         neat_pop.population[new_id] = genome
         del neat_pop.population[worst_id]
 
+        # 【关键】重新划分物种
+        # 直接修改 neat_pop.population 后，neat_pop.species 中的物种成员信息已过时：
+        # - 物种的 members 仍然引用已删除的旧 genome
+        # - 新注入的 genome 没有被分配到任何物种
+        # 必须调用 speciate() 重新划分物种，否则 stagnation.update() 会因
+        # 物种成员的 fitness 为 None 而报错
+        neat_pop.species.speciate(
+            neat_pop.config,
+            neat_pop.population,
+            neat_pop.generation,
+        )
+
         # 清理旧 Agent 对象，防止内存泄漏
         population._cleanup_old_agents()
 
