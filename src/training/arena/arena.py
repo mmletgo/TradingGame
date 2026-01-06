@@ -144,9 +144,11 @@ class Arena:
         return candidates
 
     def get_best_genomes(self, top_n: int = 10) -> dict[str, list[tuple[bytes, float]]]:
-        """获取各种群的最佳个体基因组
+        """获取各种群的最佳个体基因组（使用缓存的 fitness）
 
         用于保存到共享检查点，供其他竞技场迁移使用。
+        直接从 neat_pop.population 获取 genome，使用进化后缓存的 fitness，
+        避免重复调用 population.evaluate()。
 
         Args:
             top_n: 每个种群获取的最佳个体数量，默认 10
@@ -159,25 +161,29 @@ class Arena:
 
         best_genomes: dict[str, list[tuple[bytes, float]]] = {}
 
-        if not self.trainer.matching_engine:
-            return best_genomes
-
-        current_price = self.trainer.matching_engine._orderbook.last_price
-
         for agent_type, population in self.trainer.populations.items():
-            # 评估适应度并排序
-            agent_fitnesses = population.evaluate(current_price)
+            neat_pop = population.neat_pop
 
-            if not agent_fitnesses:
+            # 1. 直接从 neat_pop.population.values() 获取所有 genome
+            all_genomes = list(neat_pop.population.values())
+
+            if not all_genomes:
                 continue
 
-            # 取 top_n 个最佳个体
-            top_agents = agent_fitnesses[:top_n]
-            genomes_list: list[tuple[bytes, float]] = []
+            # 2. 按 genome.fitness 降序排序
+            all_genomes.sort(
+                key=lambda g: g.fitness if g.fitness is not None else float('-inf'),
+                reverse=True,
+            )
 
-            for agent, fitness in top_agents:
-                genome = agent.brain.get_genome()
+            # 3. 取 top_n 个
+            top_genomes = all_genomes[:top_n]
+
+            # 4. 序列化返回
+            genomes_list: list[tuple[bytes, float]] = []
+            for genome in top_genomes:
                 genome_data = MigrationSystem.serialize_genome(genome)
+                fitness = genome.fitness if genome.fitness is not None else 0.0
                 genomes_list.append((genome_data, fitness))
 
             best_genomes[agent_type.value] = genomes_list
@@ -185,86 +191,52 @@ class Arena:
         return best_genomes
 
     def inject_genomes(self, packets: list["MigrationPacket"]) -> None:
-        """注入迁入的 genome
+        """注入迁入的 genome（批量优化版本）
 
         将迁入的 genome 注入到对应种群中，替换最差个体。
+        优化：按 agent_type 分组批量处理，只增量更新被替换的 Agent。
 
         Args:
             packets: 迁移数据包列表
         """
+        import neat
         from src.training.arena.migration import MigrationSystem
 
-        injected_count = 0
+        if not packets:
+            return
+
+        # 1. 按 agent_type 对 packets 分组
+        packets_by_type: dict["AgentType", list["MigrationPacket"]] = {}
         for packet in packets:
-            population = self.trainer.populations.get(packet.agent_type)
+            if packet.agent_type not in packets_by_type:
+                packets_by_type[packet.agent_type] = []
+            packets_by_type[packet.agent_type].append(packet)
+
+        # 2. 收集所有替换信息
+        all_replaced_info: dict["AgentType", list[tuple[int, "Agent", "Agent"]]] = {}
+
+        for agent_type, type_packets in packets_by_type.items():
+            population = self.trainer.populations.get(agent_type)
             if population is None:
                 continue
 
-            # 反序列化 genome
-            genome = MigrationSystem.deserialize_genome(packet.genome_data)
+            # 反序列化所有 genome 并设置 fitness
+            new_genomes: list[neat.DefaultGenome] = []
+            for packet in type_packets:
+                genome = MigrationSystem.deserialize_genome(packet.genome_data)
+                # 设置 fitness（从迁移包中带来的适应度）
+                # 如果没有 fitness，设置为 0.0 避免 None 导致进化时出错
+                genome.fitness = packet.fitness if packet.fitness is not None else 0.0
+                new_genomes.append(genome)
 
-            # 设置 fitness（从迁移包中带来的适应度）
-            # 如果没有 fitness，设置为 0.0 避免 None 导致进化时出错
-            genome.fitness = packet.fitness if packet.fitness is not None else 0.0
+            # 3. 调用 population.replace_worst_agents(genomes) 获取替换信息
+            replaced_info = population.replace_worst_agents(new_genomes)
+            if replaced_info:
+                all_replaced_info[agent_type] = replaced_info
 
-            # 注入到种群中
-            self._inject_genome_to_population(population, genome)
-            injected_count += 1
-
-        # 如果有注入，需要重新构建 trainer 的执行顺序和映射表
-        # 因为 _inject_genome_to_population 会创建新的 agent 对象，
-        # 而 trainer.agent_execution_order 还持有旧 agent 的引用
-        if injected_count > 0:
-            self.trainer._register_all_agents()
-            self.trainer._build_agent_map()
-            self.trainer._build_execution_order()
-            self.trainer._update_pop_total_counts()
-
-    def _inject_genome_to_population(
-        self,
-        population: "Population",
-        genome: "neat.DefaultGenome",
-    ) -> None:
-        """将 genome 注入到种群中（替换最差个体）
-
-        Args:
-            population: 目标种群
-            genome: 要注入的 genome
-        """
-        neat_pop = population.neat_pop
-
-        # 找到最差个体的 genome_id
-        worst_id = min(
-            neat_pop.population.keys(),
-            key=lambda gid: neat_pop.population[gid].fitness or 0.0,
-        )
-
-        # 生成新 ID
-        new_id = max(neat_pop.population.keys()) + 1
-        genome.key = new_id
-
-        # 替换
-        neat_pop.population[new_id] = genome
-        del neat_pop.population[worst_id]
-
-        # 【关键】重新划分物种
-        # 直接修改 neat_pop.population 后，neat_pop.species 中的物种成员信息已过时：
-        # - 物种的 members 仍然引用已删除的旧 genome
-        # - 新注入的 genome 没有被分配到任何物种
-        # 必须调用 speciate() 重新划分物种，否则 stagnation.update() 会因
-        # 物种成员的 fitness 为 None 而报错
-        neat_pop.species.speciate(
-            neat_pop.config,
-            neat_pop.population,
-            neat_pop.generation,
-        )
-
-        # 清理旧 Agent 对象，防止内存泄漏
-        population._cleanup_old_agents()
-
-        # 重建 agents
-        genomes = list(neat_pop.population.items())
-        population.agents = population.create_agents(genomes)
+        # 4. 调用 trainer._update_agents_after_migration() 增量更新状态
+        if all_replaced_info:
+            self.trainer._update_agents_after_migration(all_replaced_info)
 
     def get_checkpoint_data(self) -> dict:
         """获取检查点数据

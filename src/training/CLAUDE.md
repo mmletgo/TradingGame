@@ -34,6 +34,7 @@
 - `_create_single_agent()` - 创建单个 Agent（线程安全）
 - `evaluate()` - 评估种群适应度并排序
 - `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError 并在进化失败时自动重置种群
+- `replace_worst_agents(new_genomes)` - 增量替换最差的 Agent（不重建整个种群），用于迁移优化
 - `_cleanup_old_agents()` - 清理旧 Agent 对象，打破循环引用，帮助垃圾回收
 - `_cleanup_neat_history()` - 清理 NEAT 种群中的历史数据，防止内存泄漏
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
@@ -84,6 +85,7 @@
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
 - `save_checkpoint_data()` - 返回检查点数据（不写入文件，用于多竞技场模式）
 - `load_checkpoint_data()` - 从检查点数据恢复（不读取文件）
+- `_update_agents_after_migration(replaced_info)` - 迁移后增量更新内部状态（agent_map、agent_execution_order）
 - `get_price_stats()` - 获取价格统计（高/低/最终价格）
 - `get_population_stats()` - 获取种群统计（适应度、淘汰数等）
 
@@ -363,9 +365,9 @@ python scripts/train_multi_arena.py --resume checkpoints/multi_arena_ep_50.pkl
 
 每个 episode 结束后都强制执行两次 `gc.collect()`，确保进化阶段产生的对象被及时回收。
 
-**6. 迁移注入时清理旧 Agent (`Arena._inject_genome_to_population()`)**
+**6. 迁移注入时增量替换 Agent (`Population.replace_worst_agents()`)**
 
-注入迁移基因组前先调用 `_cleanup_old_agents()` 清理旧 Agent 对象。
+增量替换最差的 Agent，只清理和创建需要替换的 Agent 对象，避免重建整个种群。
 
 ### 内存泄漏排查
 

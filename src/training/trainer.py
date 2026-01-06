@@ -455,6 +455,44 @@ class Trainer:
         for agent_type, population in self.populations.items():
             self._pop_total_counts[agent_type] = len(population.agents)
 
+    def _update_agents_after_migration(
+        self,
+        replaced_info: dict[AgentType, list[tuple[int, "Agent", "Agent"]]],
+    ) -> None:
+        """迁移后增量更新内部状态
+
+        仅更新被替换的 Agent 相关状态，避免重建整个 agent_map 和 agent_execution_order。
+
+        Args:
+            replaced_info: {agent_type: [(idx, old_agent, new_agent), ...]}
+        """
+        if not self.matching_engine:
+            return
+
+        # 1. 遍历所有被替换的 agent
+        for agent_type, replacements in replaced_info.items():
+            for idx, old_agent, new_agent in replacements:
+                # 2. 更新 agent_map：移除旧 agent 的映射，添加新 agent 的映射
+                if old_agent.agent_id in self.agent_map:
+                    del self.agent_map[old_agent.agent_id]
+                self.agent_map[new_agent.agent_id] = new_agent
+
+                # 3. 更新 agent_execution_order：找到旧 agent 的位置，替换为新 agent
+                try:
+                    exec_idx = self.agent_execution_order.index(old_agent)
+                    self.agent_execution_order[exec_idx] = new_agent
+                except ValueError:
+                    # 旧 agent 不在执行顺序中（可能已被移除），添加新 agent
+                    self.agent_execution_order.append(new_agent)
+
+                # 4. 注册新 agent 的费率到撮合引擎
+                agent_config = self.populations[agent_type].agent_config
+                self.matching_engine.register_agent(
+                    new_agent.agent_id,
+                    agent_config.maker_fee_rate,
+                    agent_config.taker_fee_rate,
+                )
+
     def _mark_agent_liquidated(self, agent_id: int) -> None:
         """标记 Agent 已被强平
 
