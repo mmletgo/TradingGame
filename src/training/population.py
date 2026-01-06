@@ -637,3 +637,130 @@ class Population:
         """
         for agent in self.agents:
             agent.reset(self.agent_config)
+
+    def replace_worst_agents(
+        self,
+        new_genomes: list[neat.DefaultGenome],
+    ) -> list[tuple[int, Agent, Agent]]:
+        """增量替换最差的 Agent（不重建整个种群）
+
+        优化点：只创建/替换需要的 Agent，避免重建整个种群。
+
+        Args:
+            new_genomes: 要注入的新 genome 列表（已设置 fitness 和 key）
+
+        Returns:
+            被替换的 (索引, 旧Agent, 新Agent) 列表
+        """
+        if not new_genomes:
+            return []
+
+        n_to_replace = len(new_genomes)
+        neat_pop = self.neat_pop
+
+        # 1. 按 genome.fitness 找到当前种群中最差的 N 个 agent
+        # 构建 (agent_idx, genome_id, fitness) 列表
+        agent_genome_fitness: list[tuple[int, int, float]] = []
+        for idx, agent in enumerate(self.agents):
+            genome = agent.brain.get_genome()
+            fitness = genome.fitness if genome.fitness is not None else float('-inf')
+            agent_genome_fitness.append((idx, genome.key, fitness))
+
+        # 按 fitness 升序排序（最差的在前面）
+        agent_genome_fitness.sort(key=lambda x: x[2])
+
+        # 取最差的 N 个
+        worst_entries = agent_genome_fitness[:n_to_replace]
+
+        # 2. 收集这些 agent 的索引和对应的 genome_id
+        worst_indices: list[int] = [entry[0] for entry in worst_entries]
+        worst_genome_ids: list[int] = [entry[1] for entry in worst_entries]
+
+        # 3. 从 neat_pop.population 中删除这些旧 genome，添加新 genome
+        # 先删除旧的
+        for old_genome_id in worst_genome_ids:
+            if old_genome_id in neat_pop.population:
+                del neat_pop.population[old_genome_id]
+
+        # 为新 genome 分配唯一 key 并添加到种群
+        max_key = max(neat_pop.population.keys()) if neat_pop.population else 0
+        for i, genome in enumerate(new_genomes):
+            new_key = max_key + 1 + i
+            genome.key = new_key
+            neat_pop.population[new_key] = genome
+
+        # 4. 只为新 genome 创建新的 Agent 对象
+        # 确定 Agent 类
+        if self.agent_type == AgentType.RETAIL:
+            agent_class: type[Agent] = RetailAgent
+        elif self.agent_type == AgentType.RETAIL_PRO:
+            agent_class = RetailProAgent
+        elif self.agent_type == AgentType.WHALE:
+            agent_class = WhaleAgent
+        elif self.agent_type == AgentType.MARKET_MAKER:
+            agent_class = MarketMakerAgent
+        else:
+            raise ValueError(f"未知的 Agent 类型: {self.agent_type}")
+
+        agent_id_offset = self._AGENT_ID_OFFSET.get(self.agent_type, 0)
+
+        # 构建替换信息列表
+        replaced_info: list[tuple[int, Agent, Agent]] = []
+
+        for i, genome in enumerate(new_genomes):
+            idx = worst_indices[i]
+            old_agent = self.agents[idx]
+
+            # 5. 创建新的 Agent 对象
+            _, new_agent = self._create_single_agent(
+                idx,
+                genome.key,
+                genome,
+                agent_class,
+                agent_id_offset,
+            )
+
+            # 6. 清理被替换的旧 Agent 对象（参考 _cleanup_old_agents 的实现）
+            if hasattr(old_agent, 'brain') and old_agent.brain is not None:
+                brain = old_agent.brain
+                # 清理 Network 内部状态
+                if hasattr(brain, 'network') and brain.network is not None:
+                    network = brain.network
+                    if hasattr(network, 'node_evals'):
+                        network.node_evals = None  # type: ignore[assignment]
+                    if hasattr(network, 'values'):
+                        network.values = None  # type: ignore[assignment]
+                    if hasattr(network, 'input_nodes'):
+                        network.input_nodes = None  # type: ignore[assignment]
+                    if hasattr(network, 'output_nodes'):
+                        network.output_nodes = None  # type: ignore[assignment]
+                # 清理 Brain 引用
+                brain.genome = None  # type: ignore[assignment]
+                brain.network = None  # type: ignore[assignment]
+                brain.config = None  # type: ignore[assignment]
+                old_agent.brain = None  # type: ignore[assignment]
+            if hasattr(old_agent, 'account') and old_agent.account is not None:
+                if hasattr(old_agent.account, 'position'):
+                    old_agent.account.position = None  # type: ignore[assignment]
+                old_agent.account = None  # type: ignore[assignment]
+            if hasattr(old_agent, '_input_buffer'):
+                old_agent._input_buffer = None  # type: ignore[assignment]
+
+            # 更新 self.agents[idx] 为新创建的 Agent
+            self.agents[idx] = new_agent
+
+            replaced_info.append((idx, old_agent, new_agent))
+
+        # 7. 调用 speciate() 重新划分物种
+        neat_pop.species.speciate(
+            neat_pop.config,
+            neat_pop.population,
+            neat_pop.generation,
+        )
+
+        self.logger.info(
+            f"{self.agent_type.value} 种群增量替换了 {n_to_replace} 个最差 Agent"
+        )
+
+        # 8. 返回被替换的信息列表
+        return replaced_info
