@@ -223,8 +223,8 @@ checkpoints/multi_arena/
 **分离存储优化：**
 - `checkpoint.pkl`（~100-200MB）：包含完整 `neat_pop` 对象，仅用于恢复训练
 - `best_genomes.pkl`（~1-2MB）：仅包含迁移需要的基因组数据
-- 迁移时优先读取轻量级文件，大幅减少内存占用
-- 向后兼容：如果只有旧格式的 `checkpoint.pkl`，自动回退读取
+- 迁移时只读取轻量级文件，大幅减少内存占用
+- 注意：旧格式的 checkpoint 需要先使用 `scripts/migrate_checkpoints.py` 迁移
 
 ## 架构设计
 
@@ -410,7 +410,6 @@ manager.stop()
 - 主进程只检测检查点文件是否存在，不读取数据
 - 子进程使用 `should_resume` 标志决定是否从文件恢复
 - 避免在主进程中占用大量内存，避免跨进程序列化大对象
-- `initial_checkpoint` 参数已弃用，保留用于向后兼容
 
 **2. 直接从检查点创建种群 (`Trainer.setup(checkpoint)`)**
 

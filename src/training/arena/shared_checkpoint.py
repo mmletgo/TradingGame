@@ -197,8 +197,7 @@ class SharedCheckpointManager:
     ) -> dict[str, list[tuple[bytes, float]]]:
         """获取其他竞技场的最佳个体
 
-        优先读取轻量级的 best_genomes.pkl 文件，避免加载完整 populations。
-        如果 best_genomes.pkl 不存在（兼容旧格式），才回退到读取完整 checkpoint。
+        读取轻量级的 best_genomes.pkl 文件，避免加载完整 populations。
 
         Args:
             requesting_arena_id: 请求迁移的竞技场 ID（排除自身）
@@ -226,19 +225,9 @@ class SharedCheckpointManager:
             if arena_id == requesting_arena_id:
                 continue
 
-            # 优先读取轻量级的 best_genomes.pkl
+            # 读取轻量级的 best_genomes.pkl
             best_genomes_path = self._get_arena_best_genomes_path(arena_id)
             best_genomes = self._read_arena_best_genomes(best_genomes_path)
-
-            if best_genomes is None:
-                # 回退：兼容旧格式，读取完整 checkpoint
-                self._logger.debug(
-                    f"竞技场 {arena_id} 无 best_genomes.pkl，回退到完整 checkpoint"
-                )
-                checkpoint_path = self._get_arena_checkpoint_path(arena_id)
-                arena_data = self._read_arena_checkpoint(checkpoint_path)
-                if arena_data is not None:
-                    best_genomes = arena_data.best_genomes
 
             if not best_genomes:
                 continue

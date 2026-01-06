@@ -332,10 +332,6 @@ def arena_worker_autonomous(
                 logger.warning(f"Arena-{arena_id} 检查点读取失败: {e}，将从头开始训练")
                 checkpoint_data = None
 
-    # 兼容旧接口：如果传入了 initial_checkpoint（已弃用）
-    if checkpoint_data is None and arena_config.initial_checkpoint is not None:
-        checkpoint_data = arena_config.initial_checkpoint
-
     # 初始化竞技场（如果有检查点，直接从检查点创建 Agent）
     arena.setup(checkpoint=checkpoint_data)
 
@@ -548,9 +544,6 @@ class ArenaManager:
                 checkpoint_interval=self.config.checkpoint_interval,
                 max_episodes=self.config.max_episodes,
                 checkpoint_dir=self.config.checkpoint_dir,
-                # 不传递检查点数据，让子进程自己从文件读取
-                initial_checkpoint=None,
-                # 新增：告诉子进程是否应该尝试从文件恢复
                 should_resume=self.auto_resume and has_checkpoint,
             )
 
