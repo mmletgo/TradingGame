@@ -28,6 +28,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# 将项目根目录添加到 Python 路径（用于加载 pickle 中的自定义类）
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 
 @dataclass
 class ArenaCheckpointData:
