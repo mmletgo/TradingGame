@@ -194,6 +194,7 @@ class Arena:
         """
         from src.training.arena.migration import MigrationSystem
 
+        injected_count = 0
         for packet in packets:
             population = self.trainer.populations.get(packet.agent_type)
             if population is None:
@@ -202,8 +203,22 @@ class Arena:
             # 反序列化 genome
             genome = MigrationSystem.deserialize_genome(packet.genome_data)
 
+            # 设置 fitness（从迁移包中带来的适应度）
+            # 如果没有 fitness，设置为 0.0 避免 None 导致进化时出错
+            genome.fitness = packet.fitness if packet.fitness is not None else 0.0
+
             # 注入到种群中
             self._inject_genome_to_population(population, genome)
+            injected_count += 1
+
+        # 如果有注入，需要重新构建 trainer 的执行顺序和映射表
+        # 因为 _inject_genome_to_population 会创建新的 agent 对象，
+        # 而 trainer.agent_execution_order 还持有旧 agent 的引用
+        if injected_count > 0:
+            self.trainer._register_all_agents()
+            self.trainer._build_agent_map()
+            self.trainer._build_execution_order()
+            self.trainer._update_pop_total_counts()
 
     def _inject_genome_to_population(
         self,
