@@ -121,12 +121,10 @@ class ArenaMetrics:
             "arena_id": self.arena_id,
             "episode_count": len(recent),
             "avg_volatility": float(np.mean([m.volatility for m in recent])),
-            "avg_volume": float(np.mean([m.total_volume for m in recent])),
             "price_range": (
                 min(m.low_price for m in recent),
                 max(m.high_price for m in recent),
             ),
-            "avg_tick_count": float(np.mean([m.tick_count for m in recent])),
         }
 
 
@@ -187,8 +185,6 @@ class MetricsAggregator:
                 summaries[arena_id] = {
                     "episodes": len(metrics_deque),
                     "avg_volatility": float(np.mean([m.volatility for m in recent])),
-                    "avg_volume": float(np.mean([m.total_volume for m in recent])),
-                    "avg_tick_count": float(np.mean([m.tick_count for m in recent])),
                 }
         return summaries
 
@@ -212,8 +208,6 @@ class MetricsAggregator:
             "total_arenas": len(self.arena_metrics),
             "total_episodes": sum(len(m) for m in self.arena_metrics.values()),
             "avg_volatility": float(np.mean([m.volatility for m in all_recent])),
-            "avg_volume": float(np.mean([m.total_volume for m in all_recent])),
-            "avg_tick_count": float(np.mean([m.tick_count for m in all_recent])),
         }
 
     def get_history(self) -> dict[int, list[EpisodeMetrics]]:

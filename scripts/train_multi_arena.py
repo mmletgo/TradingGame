@@ -55,11 +55,11 @@ def progress_callback(state: dict[str, Any]) -> None:
     Args:
         state: 训练状态字典
     """
+    from datetime import datetime
+
     running_arenas = state.get("running_arenas", 0)
     total_arenas = state.get("total_arenas", 0)
     avg_volatility = state.get("avg_volatility", 0.0)
-    avg_volume = state.get("avg_volume", 0.0)
-    avg_tick_count = state.get("avg_tick_count", 0.0)
 
     # 获取各竞技场的 episode 进度
     arena_episodes = state.get("arena_episodes", {})
@@ -70,11 +70,12 @@ def progress_callback(state: dict[str, Any]) -> None:
     else:
         ep_range = "0"
 
-    info_parts = [f"Episodes: {ep_range}"]
+    # 获取当前时间（时分秒）
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    info_parts = [f"[{current_time}]", f"Episodes: {ep_range}"]
     info_parts.append(f"Running: {running_arenas}/{total_arenas}")
     info_parts.append(f"Volatility: {avg_volatility:.4f}")
-    info_parts.append(f"Volume: {avg_volume:.0f}")
-    info_parts.append(f"Ticks: {avg_tick_count:.0f}")
 
     print(" | ".join(info_parts))
 
