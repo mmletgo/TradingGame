@@ -3,6 +3,7 @@
 管理训练流程，协调种群和撮合引擎。
 """
 
+import gc
 import pickle
 import random
 from collections import deque
@@ -14,6 +15,19 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from src.bio.agents.base import AgentType
+
+
+def _get_memory_mb() -> float:
+    """获取当前进程的内存使用量（MB）"""
+    try:
+        with open('/proc/self/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    parts = line.split()
+                    return float(parts[1]) / 1024.0
+    except Exception:
+        pass
+    return 0.0
 
 if TYPE_CHECKING:
     from src.bio.agents.base import ActionType, Agent
@@ -30,7 +44,7 @@ from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
-from src.training.population import Population
+from src.training.population import Population, malloc_trim
 
 
 class Trainer:
@@ -189,6 +203,71 @@ class Trainer:
             return float(-total_volume), -total_amount
         return 0.0, 0.0
 
+    def _setup_populations_from_checkpoint(
+        self, populations_data: dict[AgentType, dict]
+    ) -> None:
+        """从检查点数据直接创建种群
+
+        直接从检查点的 NEAT 种群数据创建 Agent，避免先创建全新 Agent 再清理的开销。
+
+        Args:
+            populations_data: 检查点中的种群数据
+                格式: {agent_type: {"generation": int, "neat_pop": neat.Population}}
+        """
+        for agent_type in AgentType:
+            if agent_type not in populations_data:
+                # 如果检查点中没有此种群，创建全新种群
+                self.populations[agent_type] = Population(agent_type, self.config)
+                continue
+
+            pop_data = populations_data[agent_type]
+
+            # 创建 Population 对象但不初始化 NEAT 种群（使用检查点数据）
+            pop = Population.__new__(Population)
+            pop.agent_type = agent_type
+            pop.agent_config = self.config.agents[agent_type]
+            pop.generation = pop_data["generation"]
+            pop.logger = get_logger("population")
+            pop._executor = None
+            pop._num_workers = 8
+
+            # 加载 NEAT 配置
+            from pathlib import Path
+            import neat
+
+            config_dir = Path(self.config.training.neat_config_path)
+            if agent_type == AgentType.MARKET_MAKER:
+                neat_config_path = config_dir / "neat_market_maker.cfg"
+            elif agent_type == AgentType.WHALE:
+                neat_config_path = config_dir / "neat_whale.cfg"
+            elif agent_type == AgentType.RETAIL_PRO:
+                neat_config_path = config_dir / "neat_retail_pro.cfg"
+            else:
+                neat_config_path = config_dir / "neat_retail.cfg"
+
+            pop.neat_config = neat.Config(
+                neat.DefaultGenome,
+                neat.DefaultReproduction,
+                neat.DefaultSpeciesSet,
+                neat.DefaultStagnation,
+                str(neat_config_path),
+            )
+            pop.neat_config.pop_size = pop.agent_config.count
+
+            # 直接使用检查点中的 NEAT 种群
+            pop.neat_pop = pop_data["neat_pop"]
+
+            # 从 NEAT 种群创建 Agent
+            genomes = list(pop.neat_pop.population.items())
+            pop.agents = pop.create_agents(genomes)
+
+            self.populations[agent_type] = pop
+
+            self.logger.info(
+                f"从检查点恢复 {agent_type.value} 种群，"
+                f"代数: {pop.generation}，Agent 数量: {len(pop.agents)}"
+            )
+
     def _calculate_catfish_initial_balance(self) -> float:
         """计算每条鲶鱼的初始资金
 
@@ -239,15 +318,26 @@ class Trainer:
             self._executor.shutdown(wait=True)
             self._executor = None
 
-    def setup(self) -> None:
+    def setup(self, checkpoint: dict | None = None) -> None:
         """初始化训练环境
 
         创建四种群、撮合引擎，初始化市场。
         训练模式使用直接调用。
+
+        Args:
+            checkpoint: 可选的检查点数据，如果提供则直接从检查点恢复种群
+                       而不是创建全新种群（避免不必要的内存分配）
         """
-        # 串行创建四种群（每个种群内部的Agent创建是并行的）
-        for agent_type in AgentType:
-            self.populations[agent_type] = Population(agent_type, self.config)
+        # 串行创建四种群
+        if checkpoint is not None and "populations" in checkpoint:
+            # 直接从检查点恢复，不创建全新 Agent
+            self._setup_populations_from_checkpoint(checkpoint["populations"])
+            self.tick = checkpoint.get("tick", 0)
+            self.episode = checkpoint.get("episode", 0)
+        else:
+            # 创建全新种群（每个种群内部的Agent创建是并行的）
+            for agent_type in AgentType:
+                self.populations[agent_type] = Population(agent_type, self.config)
 
         # 创建撮合引擎
         self.matching_engine = MatchingEngine(self.config.market)
@@ -787,21 +877,52 @@ class Trainer:
         )
 
     def _evolve_populations_parallel(self, current_price: float) -> None:
-        """并行进化所有种群"""
-        executor = self._get_executor()
-        populations = list(self.populations.values())
+        """并行进化所有种群
 
-        futures = {
-            executor.submit(pop.evolve, current_price): pop for pop in populations
-        }
+        关键优化：
+        1. 串行进化每个种群，避免并行导致的内存峰值
+        2. 每个种群进化后立即 GC，释放旧对象
+        3. 清理 futures 引用，避免持有已完成任务的引用
+        """
+        # [MEMORY] 记录进化开始前的内存
+        mem_before_evolve = _get_memory_mb()
 
-        for future in as_completed(futures):
-            pop = futures[future]
+        # 改为串行进化，每个种群进化后立即 GC，避免内存峰值
+        # 并行进化会导致所有旧 genome 同时存在于内存中
+        for pop in self.populations.values():
             try:
-                future.result()
+                pop.evolve(current_price)
             except Exception as e:
                 self.logger.error(f"种群 {pop.agent_type.value} 进化失败: {e}")
                 raise
+
+            # 每个种群进化后立即 GC
+            gc.collect()
+
+        # [MEMORY] 记录进化后、最终 GC 前的内存
+        mem_after_evolve = _get_memory_mb()
+
+        # 最终全面 GC，确保所有临时对象被回收
+        # 包括 Python 2 代和 3 代垃圾
+        gc.collect(0)  # 年轻代
+        gc.collect(1)  # 中年代
+        gc.collect(2)  # 老年代
+
+        # 【关键】调用 malloc_trim 将释放的内存归还给操作系统
+        # Python 的内存分配器通常不会主动归还内存，导致 VmRSS 持续增长
+        malloc_trim()
+
+        # [MEMORY] 记录 GC 后的内存
+        mem_after_gc = _get_memory_mb()
+
+        # 输出内存变化统计
+        arena_tag = f"Arena-{self.arena_id}" if self.arena_id is not None else "Trainer"
+        self.logger.info(
+            f"[MEMORY_EVOLVE_PARALLEL] {arena_tag} ep_{self.episode}: "
+            f"evolve={mem_after_evolve - mem_before_evolve:+.1f}MB, "
+            f"gc_released={mem_after_evolve - mem_after_gc:.1f}MB, "
+            f"net={mem_after_gc - mem_before_evolve:+.1f}MB"
+        )
 
     def _batch_decide_parallel(
         self,
@@ -1539,6 +1660,12 @@ class Trainer:
         for agent_type, pop_data in checkpoint["populations"].items():
             if agent_type in self.populations:
                 pop = self.populations[agent_type]
+                # 【关键修复】先清理旧 Agent，防止内存泄漏
+                # setup() 时已创建了 Agent，加载检查点时需要先清理
+                pop._cleanup_old_agents()
+                gc.collect()
+                gc.collect()
+
                 pop.generation = pop_data["generation"]
                 pop.neat_pop = pop_data["neat_pop"]
                 genomes = list(pop.neat_pop.population.items())

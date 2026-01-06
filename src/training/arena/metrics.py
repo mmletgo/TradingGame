@@ -136,14 +136,21 @@ class MetricsAggregator:
     聚合所有竞技场的训练指标。
 
     Attributes:
-        arena_metrics: 各竞技场的指标历史
+        arena_metrics: 各竞技场的指标历史（每个竞技场最多保留 1000 条）
+        _max_history: 每个竞技场最大历史记录数
     """
 
-    arena_metrics: dict[int, list[EpisodeMetrics]]
+    arena_metrics: dict[int, deque[EpisodeMetrics]]
+    _max_history: int
 
-    def __init__(self) -> None:
-        """初始化聚合器"""
+    def __init__(self, max_history: int = 1000) -> None:
+        """初始化聚合器
+
+        Args:
+            max_history: 每个竞技场最大历史记录数，默认 1000
+        """
         self.arena_metrics = {}
+        self._max_history = max_history
 
     def update(self, metrics: EpisodeMetrics) -> None:
         """更新指标
@@ -152,7 +159,7 @@ class MetricsAggregator:
             metrics: Episode 指标
         """
         if metrics.arena_id not in self.arena_metrics:
-            self.arena_metrics[metrics.arena_id] = []
+            self.arena_metrics[metrics.arena_id] = deque(maxlen=self._max_history)
         self.arena_metrics[metrics.arena_id].append(metrics)
 
     def update_batch(self, metrics_list: list[EpisodeMetrics]) -> None:
@@ -174,11 +181,11 @@ class MetricsAggregator:
             汇总字典
         """
         summaries = {}
-        for arena_id, metrics_list in self.arena_metrics.items():
-            recent = metrics_list[-window:]
+        for arena_id, metrics_deque in self.arena_metrics.items():
+            recent = list(metrics_deque)[-window:]
             if recent:
                 summaries[arena_id] = {
-                    "episodes": len(metrics_list),
+                    "episodes": len(metrics_deque),
                     "avg_volatility": float(np.mean([m.volatility for m in recent])),
                     "avg_volume": float(np.mean([m.total_volume for m in recent])),
                     "avg_tick_count": float(np.mean([m.tick_count for m in recent])),
@@ -195,8 +202,8 @@ class MetricsAggregator:
             全局汇总字典
         """
         all_recent: list[EpisodeMetrics] = []
-        for metrics_list in self.arena_metrics.values():
-            all_recent.extend(metrics_list[-window:])
+        for metrics_deque in self.arena_metrics.values():
+            all_recent.extend(list(metrics_deque)[-window:])
 
         if not all_recent:
             return {}
@@ -213,6 +220,6 @@ class MetricsAggregator:
         """获取完整历史（用于检查点）
 
         Returns:
-            完整的指标历史
+            完整的指标历史（转换为 list 格式）
         """
-        return dict(self.arena_metrics)
+        return {arena_id: list(metrics) for arena_id, metrics in self.arena_metrics.items()}

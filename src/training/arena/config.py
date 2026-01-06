@@ -27,6 +27,8 @@ class ArenaConfig:
         checkpoint_interval: 检查点保存间隔（episode 数）
         max_episodes: 最大 episode 数
         checkpoint_dir: 检查点目录（各竞技场独立文件模式）
+        initial_checkpoint: 初始检查点数据（已弃用，保留用于兼容）
+        should_resume: 是否应该从文件恢复检查点（子进程自己读取文件）
     """
     arena_id: int
     config: "Config"
@@ -35,6 +37,8 @@ class ArenaConfig:
     checkpoint_interval: int = 50
     max_episodes: int = 4000
     checkpoint_dir: str = "checkpoints/multi_arena"
+    initial_checkpoint: dict[str, object] | None = None
+    should_resume: bool = False
 
 
 @dataclass

@@ -34,6 +34,8 @@
 - `_create_single_agent()` - 创建单个 Agent（线程安全）
 - `evaluate()` - 评估种群适应度并排序
 - `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError 并在进化失败时自动重置种群
+- `_cleanup_old_agents()` - 清理旧 Agent 对象，打破循环引用，帮助垃圾回收
+- `_cleanup_neat_history()` - 清理 NEAT 种群中的历史数据，防止内存泄漏
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
 - `reset_agents()` - 重置所有 Agent 账户
 - `_get_executor()` - 获取实例级别线程池
@@ -324,3 +326,50 @@ python scripts/train_multi_arena.py --resume checkpoints/multi_arena_ep_50.pkl
 通过 `CatfishConfig` 配置，包括触发阈值、模式选择、多模式开关等参数。
 
 详见：`src/market/catfish/CLAUDE.md`
+
+## 内存管理
+
+### 多竞技场模式内存优化
+
+多竞技场模式下，每个竞技场运行在独立进程中。为防止内存泄漏，实现了以下机制：
+
+**1. NEAT 种群历史清理 (`Population._cleanup_neat_history()`)**
+
+每次进化后彻底清理 NEAT 库内部积累的历史数据：
+- `genome_to_species` 字典：只保留当前代基因组的映射
+- `species.members`：清理已不存在的基因组引用
+- `stagnation.species_fitness`：清空物种适应度历史
+- `reproduction.ancestors`：清空祖先引用
+- `reporters` 统计数据：只保留最近 5 代
+
+**2. Agent 对象清理 (`Population._cleanup_old_agents()`)**
+
+在创建新 Agent 之前，显式打破循环引用：
+- 清理 `Brain.network` 内部状态（node_evals, values 等）
+- 置空 `Brain.genome`, `Brain.network`, `Brain.config`
+- 置空 `Agent.brain`, `Agent.account`
+- 多次调用 `gc.collect()` 处理循环引用
+
+**3. 进化后垃圾回收 (`Trainer._evolve_populations_parallel()`)**
+
+并行进化完成后，多次调用 `gc.collect()` 确保释放旧对象。
+
+**4. 迁移和检查点操作后 GC**
+
+- `_execute_migration_from_checkpoint()`: 迁移后立即清理临时对象并 GC
+- `_save_arena_to_checkpoint()`: 保存检查点后立即清理并 GC
+
+**5. 每 episode 垃圾回收 (`arena_worker_autonomous()`)**
+
+每个 episode 结束后都强制执行两次 `gc.collect()`，确保进化阶段产生的对象被及时回收。
+
+**6. 迁移注入时清理旧 Agent (`Arena._inject_genome_to_population()`)**
+
+注入迁移基因组前先调用 `_cleanup_old_agents()` 清理旧 Agent 对象。
+
+### 内存泄漏排查
+
+如果仍然出现内存增长，可能的原因：
+1. NEAT 配置文件中启用了过多的 reporter
+2. 子进程间通信队列积压
+3. 检查是否有其他未被清理的循环引用

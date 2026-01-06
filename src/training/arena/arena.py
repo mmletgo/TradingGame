@@ -56,9 +56,19 @@ class Arena:
         # 创建指标收集器
         self.metrics = ArenaMetrics(arena_config.arena_id)
 
-    def setup(self) -> None:
-        """初始化训练环境"""
-        self.trainer.setup()
+    def setup(self, checkpoint: dict | None = None) -> None:
+        """初始化训练环境
+
+        Args:
+            checkpoint: 可选的检查点数据，如果提供则直接从检查点恢复种群
+        """
+        # 传递检查点数据到 Trainer.setup()
+        # 如果有检查点，Trainer 会直接从检查点创建种群，避免先创建再清理
+        trainer_checkpoint = None
+        if checkpoint is not None and "trainer" in checkpoint:
+            trainer_checkpoint = checkpoint["trainer"]
+
+        self.trainer.setup(checkpoint=trainer_checkpoint)
         # 设置 is_running 标志，否则 run_episode 中的 tick 循环会立即退出
         self.trainer.is_running = True
 
@@ -221,6 +231,9 @@ class Arena:
         # 替换
         neat_pop.population[new_id] = genome
         del neat_pop.population[worst_id]
+
+        # 清理旧 Agent 对象，防止内存泄漏
+        population._cleanup_old_agents()
 
         # 重建 agents
         genomes = list(neat_pop.population.items())

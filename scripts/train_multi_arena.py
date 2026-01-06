@@ -8,15 +8,19 @@
 - 每个竞技场独立进化，不等待其他竞技场
 - 主进程只负责监控和收集状态
 - 迁移通过共享检查点实现，各竞技场自主读写
+- 默认自动从最新检查点恢复训练
 
-默认配置: 4 个竞技场并行
+默认配置: 12 个竞技场并行，自动恢复启用
 
 使用方法:
     python scripts/train_multi_arena.py [选项]
 
 示例:
-    # 默认 4 个竞技场训练 100 个 episode
+    # 默认配置训练（自动恢复）
     python scripts/train_multi_arena.py --episodes 100
+
+    # 禁用自动恢复，从头开始训练
+    python scripts/train_multi_arena.py --no-resume --episodes 100
 
     # 自定义竞技场数量
     python scripts/train_multi_arena.py --num-arenas 10 --episodes 100
@@ -133,8 +137,8 @@ def main() -> None:
     parser.add_argument(
         "--num-arenas",
         type=int,
-        default=16,
-        help="竞技场数量（默认: 16）",
+        default=12,
+        help="竞技场数量（默认: 12）",
     )
     parser.add_argument(
         "--migration-interval",
@@ -173,6 +177,11 @@ def main() -> None:
         default=1.0,
         help="监控轮询间隔（秒，默认: 1.0）",
     )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="禁用自动从检查点恢复（默认: 自动恢复）",
+    )
 
     args = parser.parse_args()
 
@@ -192,6 +201,7 @@ def main() -> None:
     print(f"迁移策略: {args.migration_strategy}")
     print(f"检查点目录: {args.checkpoint_dir}")
     print(f"监控间隔: {args.monitor_interval}s")
+    print(f"自动恢复: {'禁用' if args.no_resume else '启用'}")
 
     # 创建基础配置
     config_kwargs = {
@@ -234,7 +244,7 @@ def main() -> None:
     )
 
     # 创建竞技场管理器
-    manager = ArenaManager(multi_config)
+    manager = ArenaManager(multi_config, auto_resume=not args.no_resume)
 
     # 初始化
     print("创建竞技场进程...")

@@ -6,6 +6,8 @@
 2. 异步监控模式（推荐）：ArenaProcessInfo + arena_worker_autonomous
 """
 
+import gc
+import os
 import queue
 import time
 from collections.abc import Callable
@@ -14,6 +16,40 @@ from multiprocessing import Process, Queue
 from typing import TYPE_CHECKING, Any
 
 from src.core.log_engine.logger import get_logger
+from src.training.population import malloc_trim
+
+
+def _get_memory_mb() -> float:
+    """获取当前进程的内存使用量（MB）
+
+    使用 /proc/self/status 读取 VmRSS（常驻内存）
+    """
+    try:
+        with open('/proc/self/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    # 格式: VmRSS:    12345 kB
+                    parts = line.split()
+                    return float(parts[1]) / 1024.0  # kB -> MB
+    except Exception:
+        pass
+    return 0.0
+
+
+def _log_memory(logger: Any, tag: str, arena_id: int) -> float:
+    """记录内存使用并返回当前内存值
+
+    Args:
+        logger: 日志器
+        tag: 标签（如 "episode_start", "evolve_before" 等）
+        arena_id: 竞技场 ID
+
+    Returns:
+        当前内存使用量（MB）
+    """
+    mem = _get_memory_mb()
+    logger.info(f"[MEMORY] Arena-{arena_id} {tag}: {mem:.1f} MB")
+    return mem
 
 if TYPE_CHECKING:
     from src.bio.agents.base import AgentType
@@ -156,6 +192,8 @@ def _execute_migration_from_checkpoint(
         checkpoint_manager: 共享检查点管理器
         arena_id: 竞技场 ID
     """
+    import gc
+
     from src.bio.agents.base import AgentType
     from src.training.arena.migration import MigrationPacket
 
@@ -184,6 +222,12 @@ def _execute_migration_from_checkpoint(
 
     arena.inject_genomes(packets)
 
+    # 迁移后强制 GC，释放反序列化产生的临时对象
+    del packets
+    del candidates
+    gc.collect()
+    malloc_trim()  # 将释放的内存归还给操作系统
+
 
 def _save_arena_to_checkpoint(
     arena: "Arena",
@@ -200,7 +244,8 @@ def _save_arena_to_checkpoint(
         episode: 当前 episode 编号
     """
     # 获取完整种群数据
-    populations = arena.get_checkpoint_data()["trainer"]["populations"]
+    checkpoint_data = arena.get_checkpoint_data()
+    populations = checkpoint_data["trainer"]["populations"]
 
     # 获取最佳个体
     best_genomes = arena.get_best_genomes(top_n=10)
@@ -212,6 +257,13 @@ def _save_arena_to_checkpoint(
         populations=populations,
         best_genomes=best_genomes,
     )
+
+    # 保存后清理临时数据，强制 GC
+    del checkpoint_data
+    del populations
+    del best_genomes
+    gc.collect()
+    malloc_trim()  # 将释放的内存归还给操作系统
 
 
 def arena_worker_autonomous(
@@ -228,27 +280,86 @@ def arena_worker_autonomous(
         status_queue: 状态报告队列（子进程 -> 主进程）
         control_queue: 控制命令队列（主进程 -> 子进程）
     """
+    import gc
+    import os
+    import pickle
     import queue as queue_module
 
     from src.training.arena.arena import Arena
     from src.training.arena.shared_checkpoint import SharedCheckpointManager
 
+    arena_id = arena_config.arena_id
+    logger = get_logger(f"arena_worker_{arena_id}")
+
+    # 记录初始内存
+    mem_initial = _log_memory(logger, "worker_start", arena_id)
+
     arena = Arena(arena_config)
-    arena.setup()
+
+    # 如果需要恢复，先读取检查点再 setup（避免先创建 Agent 再清理的开销）
+    checkpoint_data: dict | None = None
+    loaded_episode = 0
+
+    if arena_config.should_resume:
+        checkpoint_path = os.path.join(
+            arena_config.checkpoint_dir,
+            f"arena_{arena_id}",
+            "checkpoint.pkl"
+        )
+        if os.path.exists(checkpoint_path):
+            logger.info(f"Arena-{arena_id} 正在从文件读取检查点...")
+            try:
+                with open(checkpoint_path, "rb") as f:
+                    arena_data = pickle.load(f)
+                loaded_episode = arena_data.episode
+                # 构建检查点数据格式
+                checkpoint_data = {
+                    "trainer": {
+                        "populations": arena_data.populations,
+                        "tick": 0,
+                        "episode": arena_data.episode,
+                    },
+                }
+                logger.info(f"Arena-{arena_id} 检查点读取完成，episode={loaded_episode}")
+            except (pickle.PickleError, EOFError, OSError, AttributeError) as e:
+                logger.warning(f"Arena-{arena_id} 检查点读取失败: {e}，将从头开始训练")
+                checkpoint_data = None
+
+    # 兼容旧接口：如果传入了 initial_checkpoint（已弃用）
+    if checkpoint_data is None and arena_config.initial_checkpoint is not None:
+        checkpoint_data = arena_config.initial_checkpoint
+
+    # 初始化竞技场（如果有检查点，直接从检查点创建 Agent）
+    arena.setup(checkpoint=checkpoint_data)
+
+    # 清理临时对象
+    if 'arena_data' in locals():
+        del arena_data
+    gc.collect()
+    gc.collect()
+    malloc_trim()
 
     checkpoint_manager = SharedCheckpointManager(
         checkpoint_path=arena_config.checkpoint_dir
     )
 
-    arena_id = arena_config.arena_id
     migration_interval = arena_config.migration_interval
     checkpoint_interval = arena_config.checkpoint_interval
     max_episodes = arena_config.max_episodes
+
+    # 记录 setup 后内存
+    mem_after_setup = _log_memory(logger, "after_setup", arena_id)
+    logger.info(
+        f"[MEMORY] Arena-{arena_id} setup_delta: "
+        f"+{mem_after_setup - mem_initial:.1f} MB"
+    )
 
     # 通知主进程初始化完成
     status_queue.put(("setup_done", arena_id, None))
 
     episode = 0
+    mem_prev_episode = mem_after_setup
+
     while episode < max_episodes:
         # 非阻塞检查停止命令
         try:
@@ -258,22 +369,78 @@ def arena_worker_autonomous(
         except queue_module.Empty:
             pass
 
-        # 运行一个 episode
+        # 记录 episode 开始前内存
+        mem_ep_start = _log_memory(logger, f"ep_{episode+1}_start", arena_id)
+
+        # 运行一个 episode（包含进化）
         metrics = arena.run_episode()
         episode += 1
 
+        # 记录 episode 结束（进化后）内存
+        mem_ep_end = _log_memory(logger, f"ep_{episode}_end", arena_id)
+        logger.info(
+            f"[MEMORY] Arena-{arena_id} ep_{episode}_delta: "
+            f"+{mem_ep_end - mem_ep_start:.1f} MB, "
+            f"cumulative: +{mem_ep_end - mem_after_setup:.1f} MB"
+        )
+
         # 检查迁移间隔
         if migration_interval > 0 and episode % migration_interval == 0:
+            mem_before_migrate = _get_memory_mb()
             _execute_migration_from_checkpoint(arena, checkpoint_manager, arena_id)
+            mem_after_migrate = _get_memory_mb()
+            logger.info(
+                f"[MEMORY] Arena-{arena_id} migration_delta: "
+                f"+{mem_after_migrate - mem_before_migrate:.1f} MB"
+            )
 
         # 检查保存间隔
         if checkpoint_interval > 0 and episode % checkpoint_interval == 0:
+            mem_before_save = _get_memory_mb()
             _save_arena_to_checkpoint(arena, checkpoint_manager, arena_id, episode)
+            mem_after_save = _get_memory_mb()
+            logger.info(
+                f"[MEMORY] Arena-{arena_id} checkpoint_save_delta: "
+                f"+{mem_after_save - mem_before_save:.1f} MB"
+            )
+
+        # 每个 episode 后都强制垃圾回收，防止进化阶段内存泄漏
+        mem_before_gc = _get_memory_mb()
+        gc.collect()
+        gc.collect()
+        malloc_trim()  # 将释放的内存归还给操作系统
+        mem_after_gc = _get_memory_mb()
+
+        # 检查 GC 是否有效
+        gc_released = mem_before_gc - mem_after_gc
+        if gc_released > 1.0:  # 超过 1MB 才记录
+            logger.info(
+                f"[MEMORY] Arena-{arena_id} ep_{episode}_gc_released: "
+                f"-{gc_released:.1f} MB"
+            )
+
+        # 每 10 个 episode 输出内存增长统计
+        if episode % 10 == 0:
+            mem_current = _get_memory_mb()
+            growth_per_ep = (mem_current - mem_after_setup) / episode
+            logger.warning(
+                f"[MEMORY_SUMMARY] Arena-{arena_id} ep_{episode}: "
+                f"current={mem_current:.1f} MB, "
+                f"since_setup=+{mem_current - mem_after_setup:.1f} MB, "
+                f"avg_growth={growth_per_ep:.2f} MB/ep"
+            )
+
+        mem_prev_episode = mem_after_gc
 
         # 发送状态更新
         status_queue.put(("episode_done", arena_id, metrics))
 
     # 发送完成通知
+    mem_final = _log_memory(logger, "worker_end", arena_id)
+    logger.info(
+        f"[MEMORY] Arena-{arena_id} total_growth: "
+        f"+{mem_final - mem_initial:.1f} MB over {episode} episodes"
+    )
     status_queue.put(("finished", arena_id, episode))
     arena.stop()
 
@@ -294,20 +461,23 @@ class ArenaManager:
         arenas: 竞技场进程列表
         checkpoint_manager: 共享检查点管理器
         metrics_aggregator: 指标聚合器
+        auto_resume: 是否自动从最新检查点恢复
     """
 
     config: "MultiArenaConfig"
     arenas: list[ArenaProcessInfo]
     checkpoint_manager: "SharedCheckpointManager"
     metrics_aggregator: "MetricsAggregator"
+    auto_resume: bool
     _is_running: bool
     _logger: Any
 
-    def __init__(self, config: "MultiArenaConfig") -> None:
+    def __init__(self, config: "MultiArenaConfig", auto_resume: bool = True) -> None:
         """初始化竞技场管理器
 
         Args:
             config: 多竞技场配置
+            auto_resume: 是否自动从最新检查点恢复（默认: True）
         """
         from src.training.arena.metrics import MetricsAggregator
         from src.training.arena.shared_checkpoint import SharedCheckpointManager
@@ -318,6 +488,7 @@ class ArenaManager:
             checkpoint_path=config.checkpoint_dir
         )
         self.metrics_aggregator = MetricsAggregator()
+        self.auto_resume = auto_resume
         self._is_running = False
         self._logger = get_logger("arena_manager")
 
@@ -333,6 +504,24 @@ class ArenaManager:
             num_arenas=self.config.num_arenas,
         )
 
+        # 检测是否有现有检查点（不加载数据，只检测存在性）
+        # 子进程会自己从文件读取检查点，避免在主进程中占用大量内存
+        has_checkpoint = False
+        if self.auto_resume:
+            import os
+            for arena_id in range(self.config.num_arenas):
+                checkpoint_path = self.checkpoint_manager._get_arena_checkpoint_path(
+                    arena_id
+                )
+                if os.path.exists(checkpoint_path):
+                    has_checkpoint = True
+                    break
+
+            if has_checkpoint:
+                self._logger.info("检测到现有检查点，子进程将自动恢复")
+            else:
+                self._logger.info("未检测到现有检查点，从头开始训练")
+
         for i in range(self.config.num_arenas):
             arena_config = ArenaConfig(
                 arena_id=i,
@@ -342,6 +531,10 @@ class ArenaManager:
                 checkpoint_interval=self.config.checkpoint_interval,
                 max_episodes=self.config.max_episodes,
                 checkpoint_dir=self.config.checkpoint_dir,
+                # 不传递检查点数据，让子进程自己从文件读取
+                initial_checkpoint=None,
+                # 新增：告诉子进程是否应该尝试从文件恢复
+                should_resume=self.auto_resume and has_checkpoint,
             )
 
             status_queue: Queue = Queue()
