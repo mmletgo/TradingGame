@@ -16,6 +16,7 @@ from multiprocessing import Process, Queue
 from typing import TYPE_CHECKING, Any
 
 from src.core.log_engine.logger import get_logger
+from src.training.generation_saver import GenerationSaver
 from src.training.population import malloc_trim
 
 
@@ -346,6 +347,16 @@ def arena_worker_autonomous(
         checkpoint_path=arena_config.checkpoint_dir
     )
 
+    # 只有 arena_0 负责保存 generations（避免重复）
+    generation_saver: GenerationSaver | None = None
+    if arena_id == 0:
+        # 在检查点目录下创建 generations 子目录
+        generations_dir = os.path.join(
+            arena_config.checkpoint_dir,
+            "generations"
+        )
+        generation_saver = GenerationSaver(output_dir=generations_dir)
+
     migration_interval = arena_config.migration_interval
     checkpoint_interval = arena_config.checkpoint_interval
     max_episodes = arena_config.max_episodes
@@ -411,6 +422,17 @@ def arena_worker_autonomous(
                 f"[MEMORY] Arena-{arena_id} checkpoint_save_delta: "
                 f"+{mem_after_save - mem_before_save:.1f} MB"
             )
+
+            # 保存每代 best_genome（只有 arena_0）
+            if generation_saver is not None:
+                generation = list(arena.trainer.populations.values())[0].generation
+                current_price = arena.trainer.matching_engine._orderbook.last_price
+                generation_saver.save_generation(
+                    generation=generation,
+                    populations=arena.trainer.populations,
+                    current_price=current_price,
+                )
+
             # 保存后立即强制多轮 GC，确保临时对象被完全清理
             gc.collect()
             gc.collect()

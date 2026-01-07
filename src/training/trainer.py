@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         NormalizedMarketState as NormalizedMarketStateType,
     )
     from src.market.orderbook.orderbook import OrderBook
+    from src.training.generation_saver import GenerationSaver
 from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
@@ -97,6 +98,7 @@ class Trainer:
     _episode_high_price: float  # 当前 episode 最高价
     _episode_low_price: float  # 当前 episode 最低价
     arena_id: int | None  # 竞技场 ID（多竞技场场景）
+    _generation_saver: "GenerationSaver | None"
 
     def __init__(self, config: Config, arena_id: int | None = None) -> None:
         """创建训练器
@@ -146,6 +148,19 @@ class Trainer:
         # Episode 价格统计
         self._episode_high_price: float = 0.0
         self._episode_low_price: float = 0.0
+
+        # 每代保存器
+        self._generation_saver: "GenerationSaver | None" = None
+
+    def set_generation_saver(self, saver: "GenerationSaver") -> None:
+        """设置每代保存器
+
+        设置后，每次进化完成会自动保存该代的最佳基因组。
+
+        Args:
+            saver: GenerationSaver 实例
+        """
+        self._generation_saver = saver
 
     def _init_ema_price(self, initial_price: float) -> None:
         """初始化 EMA 平滑价格
@@ -1569,6 +1584,15 @@ class Trainer:
                 # 正常进化：重新计算适应度 + 选择 + 繁殖
                 current_price = self.matching_engine._orderbook.last_price
                 self._evolve_populations_parallel(current_price)
+
+                # 保存每代的 best_genome（如果设置了保存器）
+                if self._generation_saver is not None:
+                    generation = next(iter(self.populations.values())).generation
+                    self._generation_saver.save_generation(
+                        generation=generation,
+                        populations=self.populations,
+                        current_price=current_price,
+                    )
 
                 # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
                 self._register_all_agents()

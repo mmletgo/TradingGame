@@ -2,12 +2,13 @@
 
 ## 模块概述
 
-分析模块负责对演示模式结束后的数据进行分析和可视化，生成分析图表和终端摘要。
+分析模块负责对演示模式和进化效果的数据进行分析和可视化。
 
 ## 文件结构
 
 - `__init__.py` - 模块导出
 - `demo_analyzer.py` - 演示模式分析器
+- `evolution_tester.py` - 进化效果测试器
 
 ## 核心类
 
@@ -176,3 +177,177 @@ Agent 类型中文名称映射：
 - `RETAIL_PRO` → "高级散户"
 - `WHALE` → "庄家"
 - `MARKET_MAKER` → "做市商"
+
+---
+
+### EvolutionTester
+
+进化效果测试器，通过对比测试评估进化是否有效。使用多进程并行运行所有测试。
+
+**属性：**
+- `config: Config` - 全局配置
+- `generations_dir: str` - 代数据保存目录
+- `results_dir: str` - 测试结果保存目录
+
+**构造参数：**
+- `config: Config` - 全局配置对象
+- `generations_dir: str` - 代数据保存目录（默认 "checkpoints/generations"）
+- `results_dir: str` - 测试结果保存目录（默认 "checkpoints/test_results"）
+
+**核心方法：**
+
+#### `create_agents_from_genome(agent_type, genome_data, count) -> list[Agent]`
+从单个 genome 复制创建完整种群（每个 Agent 有独立账户）。
+
+参数：
+- `agent_type: AgentType` - Agent 类型
+- `genome_data: bytes` - 序列化的 genome 数据
+- `count: int` - 要创建的 Agent 数量
+
+返回：Agent 列表
+
+#### `run_baseline_test(generation, num_runs, episode_length, force) -> dict`
+基准测试：使用第 N 代 4 个物种的 best_genome 竞技。
+
+参数：
+- `generation: int` - 代数
+- `num_runs: int` - 运行次数（默认 3）
+- `episode_length: int` - episode 长度（默认 1000）
+- `force: bool` - 是否强制重新运行（默认 False）
+
+返回格式：
+```python
+{
+    "test_type": "baseline",
+    "generation": int,
+    "num_runs": int,
+    "species_summary": {
+        AgentType: {
+            "avg_return_rate": float,
+            "std_return_rate": float,
+            "avg_survival_rate": float,
+            "std_survival_rate": float,
+            "runs": int
+        },
+        ...
+    }
+}
+```
+
+#### `run_comparison_test(target_generation, base_generation, target_species, ...) -> dict`
+比较测试：第 N 代某物种 + 第 N-1 代其他物种。
+
+参数：
+- `target_generation: int` - 目标代数（新进化的代）
+- `base_generation: int` - 基准代数（旧的代）
+- `target_species: AgentType` - 目标物种（使用新代）
+- `num_runs: int` - 运行次数（默认 3）
+- `episode_length: int` - episode 长度（默认 1000）
+- `force: bool` - 是否强制重新运行（默认 False）
+
+返回格式同基准测试，额外包含 `base_generation` 和 `target_species` 字段。
+
+#### `evaluate_evolution_effectiveness(generation, num_runs, episode_length, force) -> dict`
+评估进化有效性（并行运行所有测试）。
+
+参数：
+- `generation: int` - 要评估的代数（N）
+- `num_runs: int` - 每个测试的运行次数（默认 3）
+- `episode_length: int` - 每次运行的 episode 长度（默认 1000）
+- `force: bool` - 是否强制重新运行（默认 False）
+
+返回格式：
+```python
+{
+    "generation": int,
+    "base_generation": int,
+    "baseline": {...},  # 基准测试结果
+    "comparisons": {AgentType: {...}, ...},  # 各物种比较测试结果
+    "effectiveness": {
+        AgentType: {
+            "baseline_return_rate": float,
+            "comparison_return_rate": float,
+            "absolute_improvement": float,
+            "relative_improvement_pct": float,
+            "is_effective": bool
+        },
+        ...
+    },
+    "summary": {
+        "effective_species": [str, ...],
+        "ineffective_species": [str, ...]
+    }
+}
+```
+
+**并行测试架构：**
+
+使用 `concurrent.futures.ProcessPoolExecutor` 实现真正并行：
+- 评估一代需要：1 个基准测试 + 4 个比较测试 = 5 个场景
+- 每个场景运行 num_runs 次 = 共 5 * num_runs 个任务
+- 进程池大小 = CPU 核心数
+
+Worker 函数 `_run_single_test_worker(params)` 在独立进程中执行：
+1. 创建 Trainer（禁用鲶鱼）
+2. 从 genome_data 创建各物种的 Agent 种群
+3. 运行单次 episode
+4. 收集并返回结果
+
+**评估指标：**
+
+```python
+return_rate = (final_equity - initial_balance) / initial_balance
+```
+
+收集数据：
+- `avg_return_rate`: 平均收益率
+- `survival_rate`: 存活率
+- `position_distribution`: 持仓分布（long/short/flat）
+
+**结果缓存：**
+
+- 基准测试：`{results_dir}/baseline/gen_{N}.pkl`
+- 比较测试：`{results_dir}/comparison/gen_{N}_vs_gen_{M}_{species}.pkl`
+
+如果结果已存在且 force=False，直接加载返回。
+
+**使用示例：**
+
+```python
+from src.config.config import Config
+from src.analysis.evolution_tester import EvolutionTester
+
+# 加载配置
+config = Config(...)
+
+# 创建测试器
+tester = EvolutionTester(
+    config,
+    generations_dir="checkpoints/generations",
+    results_dir="checkpoints/test_results"
+)
+
+# 评估第 10 代的进化有效性
+report = tester.evaluate_evolution_effectiveness(
+    generation=10,
+    num_runs=3,
+    episode_length=1000
+)
+
+# 查看结果
+print(f"有效物种: {report['summary']['effective_species']}")
+print(f"无效物种: {report['summary']['ineffective_species']}")
+
+for agent_type, eff in report['effectiveness'].items():
+    print(f"{agent_type.value}: 改善 {eff['relative_improvement_pct']:.1f}%")
+```
+
+**关键依赖：**
+
+- `src.training.trainer.Trainer` - 训练器
+- `src.training.population.Population` - 种群管理
+- `src.training.arena.migration.MigrationSystem` - genome 序列化/反序列化
+- `src.bio.brain.brain.Brain` - 神经网络
+- `src.bio.agents.*` - 各类型 Agent
+- `src.market.matching.matching_engine.MatchingEngine` - 撮合引擎
+- `src.market.adl.adl_manager.ADLManager` - ADL 管理器
