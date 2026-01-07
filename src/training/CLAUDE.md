@@ -72,6 +72,7 @@
 - `_create_single_agent()` - 创建单个 Agent（线程安全）
 - `evaluate()` - 评估种群适应度并排序
 - `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError/CompleteExtinctionException 并在进化失败时自动重置种群，记录完整异常堆栈
+- `evolve_with_cached_fitness()` - 使用缓存的适应度进行进化（不重新计算适应度），用于 tick 数不足时打破死循环
 - `replace_worst_agents(new_genomes)` - 增量替换最差的 Agent（不重建整个种群），用于迁移优化。**关键**：注入迁入的 genome 后会自动更新 `genome_config.node_indexer`，确保后续变异操作不会生成与迁入 genome 冲突的节点 ID
 - `get_elite_species_avg_fitness()` - 获取最精英 species 的平均适应度（遍历所有 NEAT species，返回平均适应度最高的那个）
 - `_cleanup_old_agents()` - 清理旧 Agent 对象，打破循环引用，帮助垃圾回收
@@ -178,7 +179,9 @@
      - 鲶鱼被强平（立即结束 episode）
      - 任意种群存活少于初始值的 1/4（确保有足够的幸存者用于 NEAT 进化）
      - 订单簿只有单边挂单（确保市场流动性正常）
-   - **进化条件**：tick 数 >= 10 才执行进化，否则跳过进化直接进入下一个 episode（避免因样本不足导致进化效果差）
+   - **进化条件**：
+     - tick 数 >= 10：正常进化（重新计算适应度 + 选择 + 繁殖）
+     - tick 数 < 10：使用缓存适应度进化（跳过适应度计算，使用之前 episode 的适应度进行选择和繁殖，打破死循环）
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
 3. **Tick 执行** (`run_tick`)

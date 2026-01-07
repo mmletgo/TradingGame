@@ -961,6 +961,37 @@ class Trainer:
             f"net={mem_after_gc - mem_before_evolve:+.1f}MB"
         )
 
+    def _evolve_populations_with_cached_fitness(self) -> None:
+        """使用缓存适应度进化所有种群
+
+        当 tick 数不足时调用，跳过适应度计算，使用之前 episode 缓存的适应度进行进化。
+        这样可以打破"tick 不足 → 不进化 → 行为不变 → tick 不足"的死循环。
+        """
+        for agent_type, population in self.populations.items():
+            try:
+                success = population.evolve_with_cached_fitness()
+                if success:
+                    self.logger.debug(
+                        f"{agent_type.value} 种群使用缓存适应度进化成功"
+                    )
+                else:
+                    self.logger.warning(
+                        f"{agent_type.value} 种群没有缓存适应度，跳过本次进化"
+                    )
+            except Exception as e:
+                self.logger.error(
+                    f"种群 {agent_type.value} 缓存进化失败: {e}"
+                )
+
+            # 每个种群进化后立即 GC
+            gc.collect()
+
+        # 最终全面 GC
+        gc.collect(0)
+        gc.collect(1)
+        gc.collect(2)
+        malloc_trim()
+
     def _batch_decide_parallel(
         self,
         agents: list["Agent"],
@@ -1529,10 +1560,13 @@ class Trainer:
                     # self._log_market_maker_status()
                 break
 
-        # 3. 进化（仅在 tick 数 >= 10 时进化，否则跳过进化直接进入下一个 episode）
+        # 3. 进化
+        # - tick 数 >= 10 时：正常进化（重新计算适应度）
+        # - tick 数 < 10 时：使用缓存适应度进化（打破死循环）
         min_ticks_for_evolution = 10
         if self.is_running and not self.is_paused:
             if self.tick >= min_ticks_for_evolution:
+                # 正常进化：重新计算适应度 + 选择 + 繁殖
                 current_price = self.matching_engine._orderbook.last_price
                 self._evolve_populations_parallel(current_price)
 
@@ -1544,10 +1578,18 @@ class Trainer:
 
                 self.logger.info(f"Episode {self.episode} 完成，tick={self.tick}")
             else:
+                # tick 不足：使用缓存适应度进化，打破死循环
                 self.logger.warning(
                     f"Episode {self.episode} tick 数不足（{self.tick} < {min_ticks_for_evolution}），"
-                    f"跳过进化直接进入下一个 episode"
+                    f"使用缓存适应度进化"
                 )
+                self._evolve_populations_with_cached_fitness()
+
+                # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
+                self._register_all_agents()
+                self._build_agent_map()
+                self._build_execution_order()
+                self._update_pop_total_counts()
 
     def train(
         self,

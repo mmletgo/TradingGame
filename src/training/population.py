@@ -438,6 +438,108 @@ class Population:
             f"Agent 数量: {len(self.agents)}"
         )
 
+    def evolve_with_cached_fitness(self) -> bool:
+        """使用缓存的适应度进行进化（不重新计算适应度）
+
+        用于 tick 数不足时，基于历史适应度继续进化，打破死循环。
+
+        与 evolve() 的区别：
+        1. 不调用 evaluate() 重新计算适应度
+        2. 使用基因组中已缓存的 fitness 值
+        3. 如果所有 fitness 都是 None，返回 False 跳过进化
+
+        Returns:
+            bool: 是否成功进化。如果所有基因组的 fitness 都是 None，返回 False。
+        """
+        # 1. 检查是否有可用的缓存适应度
+        genomes_with_fitness = [
+            g for g in self.neat_pop.population.values()
+            if g.fitness is not None
+        ]
+
+        if not genomes_with_fitness:
+            self.logger.warning(
+                f"{self.agent_type.value} 没有缓存的适应度，无法进行缓存进化"
+            )
+            return False
+
+        # 2. 对于 fitness 为 None 的基因组，设置最低适应度（确保被淘汰）
+        min_fitness = min(g.fitness for g in genomes_with_fitness)
+        for genome in self.neat_pop.population.values():
+            if genome.fitness is None:
+                genome.fitness = min_fitness - 1.0  # type: ignore[assignment]
+
+        # 3. 保存旧基因组引用用于清理
+        old_genomes = list(self.neat_pop.population.values())
+        self._cleanup_old_agents()
+        gc.collect()
+        gc.collect()
+
+        # 4. 调用 NEAT 进化（使用缓存的 fitness，不重新评估）
+        def eval_genomes(
+            _genomes: list[tuple[int, neat.DefaultGenome]], _config: neat.Config
+        ) -> None:
+            # 适应度已经在缓存中，这里不需要再计算
+            pass
+
+        try:
+            self.neat_pop.run(eval_genomes, n=1)
+        except (RuntimeError, CompleteExtinctionException) as e:
+            error_msg = str(e) if str(e) else type(e).__name__
+            self.logger.warning(
+                f"{self.agent_type.value} 缓存进化失败: {error_msg}，正在重置种群..."
+            )
+            self._cleanup_genome_internals(old_genomes)
+            del old_genomes
+            gc.collect()
+            gc.collect()
+            malloc_trim()
+            self._reset_neat_population()
+            return False
+        except Exception as e:
+            error_msg = str(e) if str(e) else type(e).__name__
+            self.logger.error(
+                f"{self.agent_type.value} 缓存进化遇到未预期异常: {error_msg}"
+            )
+            self.logger.error(f"完整异常堆栈:\n{traceback.format_exc()}")
+            self._cleanup_genome_internals(old_genomes)
+            del old_genomes
+            gc.collect()
+            gc.collect()
+            malloc_trim()
+            self._reset_neat_population()
+            return False
+
+        # 5. 清理旧基因组的内部数据
+        new_genome_ids = set(self.neat_pop.population.keys())
+        old_genomes_to_clean = [
+            g for g in old_genomes if g.key not in new_genome_ids
+        ]
+        self._cleanup_genome_internals(old_genomes_to_clean)
+        del old_genomes
+        del old_genomes_to_clean
+        gc.collect()
+        gc.collect()
+        malloc_trim()
+
+        # 6. 增加代数计数
+        self.generation += 1
+
+        # 7. 清理 NEAT 历史数据
+        self._cleanup_neat_history()
+        gc.collect()
+        malloc_trim()
+
+        # 8. 从新基因组重建 Agent 列表
+        new_genomes = list(self.neat_pop.population.items())
+        self.agents = self.create_agents(new_genomes)
+
+        self.logger.info(
+            f"{self.agent_type.value} 种群使用缓存适应度完成第 {self.generation} 代进化，"
+            f"Agent 数量: {len(self.agents)}"
+        )
+        return True
+
     def _cleanup_genome_internals(self, genomes: list[neat.DefaultGenome]) -> None:
         """清理基因组内部数据结构
 
