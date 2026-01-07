@@ -1530,18 +1530,25 @@ class Trainer:
                     self._log_market_maker_status()
                 break
 
-        # 3. 进化（仅在正常完成 episode 时）
+        # 3. 进化（仅在 tick 数 >= 10 时进化，否则跳过进化直接进入下一个 episode）
+        min_ticks_for_evolution = 10
         if self.is_running and not self.is_paused:
-            current_price = self.matching_engine._orderbook.last_price
-            self._evolve_populations_parallel(current_price)
+            if self.tick >= min_ticks_for_evolution:
+                current_price = self.matching_engine._orderbook.last_price
+                self._evolve_populations_parallel(current_price)
 
-            # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
-            self._register_all_agents()
-            self._build_agent_map()
-            self._build_execution_order()
-            self._update_pop_total_counts()
+                # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
+                self._register_all_agents()
+                self._build_agent_map()
+                self._build_execution_order()
+                self._update_pop_total_counts()
 
-            self.logger.info(f"Episode {self.episode} 完成，tick={self.tick}")
+                self.logger.info(f"Episode {self.episode} 完成，tick={self.tick}")
+            else:
+                self.logger.warning(
+                    f"Episode {self.episode} tick 数不足（{self.tick} < {min_ticks_for_evolution}），"
+                    f"跳过进化直接进入下一个 episode"
+                )
 
     def train(
         self,
