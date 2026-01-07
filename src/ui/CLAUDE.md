@@ -116,6 +116,9 @@ UI控制器，管理训练线程与UI线程的交互。
 - `_is_demo_mode: bool` - 是否为演示模式
 - `_training_thread: Thread | None` - 训练/演示线程
 - `_tick_counter: int` - tick计数器（用于采样率控制）
+- `_demo_catfish_enabled: bool` - 演示模式下是否启用鲶鱼（默认False）
+- `_demo_end_callback: Callable[[dict], None] | None` - 演示结束时的回调函数
+- `_original_catfish_list: list | None` - 保存原始鲶鱼列表用于恢复
 
 **方法：**
 - `start_training(episodes: int) -> None` - 启动训练模式（后台线程，会进化）
@@ -129,11 +132,14 @@ UI控制器，管理训练线程与UI线程的交互。
 - `is_paused() -> bool` - 检查是否暂停
 - `get_speed() -> float` - 获取当前速度倍率
 - `is_demo_mode() -> bool` - 检查是否为演示模式
+- `set_demo_catfish_enabled(enabled: bool) -> None` - 设置演示模式下是否启用鲶鱼
+- `set_demo_end_callback(callback: Callable[[dict], None] | None) -> None` - 设置演示结束回调
 
 **私有方法：**
 - `_training_loop(episodes: int) -> None` - 训练主循环（后台线程）
-- `_demo_loop() -> None` - 演示循环（后台线程，无限循环）
+- `_demo_loop() -> None` - 演示循环（后台线程，无限循环，使用演示模式专用结束条件）
 - `_collect_and_send_data() -> None` - 采集数据并发送到队列
+- `_check_demo_end_condition() -> tuple[str, AgentType | None] | None` - 检查演示模式结束条件（仅物种淘汰）
 
 **控制信号：**
 - `_pause_event: threading.Event` - 暂停事件
@@ -155,18 +161,28 @@ UI控制器，管理训练线程与UI线程的交互。
 7. 重建Agent映射和执行顺序
 
 **演示模式流程：**
-1. 无限循环运行episode
-2. 每个episode开始前重置Agent账户和市场状态
-3. 运行tick循环，每tick都采集数据
-4. 检查暂停/停止事件
-5. 每个tick后检查`trainer._should_end_episode_early()`
-6. 速度控制：`time.sleep(0.1 / speed_factor)`
-7. 不进行进化，适合展示训练效果
+1. 保存原始鲶鱼列表，根据`_demo_catfish_enabled`决定是否清空鲶鱼
+2. 无限循环运行episode
+3. 每个episode开始前重置Agent账户、市场状态和鲶鱼强平标志
+4. 运行tick循环，每tick都采集数据
+5. 检查暂停/停止事件
+6. 每个tick后清除鲶鱼强平标志（演示模式下鲶鱼爆仓不结束episode）
+7. 使用`_check_demo_end_condition()`检查结束条件（仅物种淘汰，不检查订单簿单边和鲶鱼）
+8. 速度控制：`time.sleep(0.1 / speed_factor)`
+9. 满足结束条件时调用`_demo_end_callback`并退出演示循环
+10. 使用try-finally确保恢复原始鲶鱼列表
+11. 不进行进化，适合展示训练效果
 
-**提前结束逻辑：**
-- 训练/演示循环在每个tick后检查`trainer._should_end_episode_early()`
+**训练模式提前结束逻辑：**
+- 训练循环在每个tick后检查`trainer._should_end_episode_early()`
 - 若任意种群存活少于初始值的 1/4，立即结束当前episode的tick循环
-- 进入进化阶段（训练模式）或开始新episode（演示模式）
+- 进入进化阶段
+
+**演示模式提前结束逻辑：**
+- 演示循环使用专用的`_check_demo_end_condition()`方法
+- 仅检查物种淘汰条件（某种群存活数少于初始值的1/4）
+- 不检查订单簿单边清空和鲶鱼爆仓条件
+- 满足结束条件时调用回调函数并退出整个演示循环（不是开始新episode）
 
 ## 依赖接口
 

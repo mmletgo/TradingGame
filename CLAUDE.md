@@ -40,6 +40,33 @@ python scripts/train_noui.py --episodes 100 --catfish
 python scripts/train_noui.py --episodes 100 --catfish --catfish-mode trend_creator
 ```
 
+### 演示模式
+```bash
+# 从单训练场 checkpoint 加载演示
+python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl
+
+# 从多训练场 checkpoint 加载（自动选择 episode 最高的 arena）
+python scripts/demo_ui.py --checkpoint checkpoints/multi_arena
+
+# 指定加载某个 arena
+python scripts/demo_ui.py --checkpoint checkpoints/multi_arena --arena-id 5
+
+# 列出所有 arena 信息
+python scripts/demo_ui.py --checkpoint checkpoints/multi_arena --list-arenas
+
+# 启用鲶鱼（默认禁用，即使启用鲶鱼爆仓也不结束 episode）
+python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --catfish
+
+# 禁用分析
+python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --no-analyze
+```
+
+**演示模式特点：**
+- 兼容单训练场和多训练场 checkpoint
+- 鲶鱼默认禁用，启用时鲶鱼爆仓不结束 episode
+- 结束条件：任意物种淘汰到只剩 1/4
+- 结束后自动生成分析图和终端摘要
+
 ### 代码修改后必须执行（清理缓存 + 重新编译）
 
 修改代码后必须执行以下命令，否则可能因缓存问题导致运行时卡住或行为异常：
@@ -69,6 +96,9 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode trend_creat
 **src/training/** - 训练引擎
 - `Population` - 种群管理，从 NEAT 基因组创建 Agent
 - `Trainer` - 训练协调器，管理 tick/episode 生命周期
+
+**src/analysis/** - 分析模块
+- `DemoAnalyzer` - 演示模式分析器，生成分析图和终端摘要
 
 **src/config/** - 配置管理
 

@@ -7,7 +7,9 @@
 import queue
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
+
+from src.config.config import AgentType
 
 if TYPE_CHECKING:
     from src.training.trainer import Trainer
@@ -64,6 +66,11 @@ class UIController:
         self._tick_counter: int = 0
         self._speed_factor: float = 1.0
         self._is_demo_mode: bool = False
+
+        # 演示模式特殊配置
+        self._demo_catfish_enabled: bool = False
+        self._demo_end_callback: Callable[[dict], None] | None = None
+        self._original_catfish_list: list | None = None  # 保存原始鲶鱼列表用于恢复
 
     def start_training(self, episodes: int) -> None:
         """启动训练模式（后台线程）
@@ -173,51 +180,128 @@ class UIController:
             print(f"Training loop error: {e}")
             traceback.print_exc()
 
+    def set_demo_catfish_enabled(self, enabled: bool) -> None:
+        """设置演示模式下是否启用鲶鱼
+
+        Args:
+            enabled: True启用鲶鱼，False禁用鲶鱼
+        """
+        self._demo_catfish_enabled = enabled
+
+    def set_demo_end_callback(
+        self, callback: Callable[[dict], None] | None
+    ) -> None:
+        """设置演示结束回调
+
+        Args:
+            callback: 演示结束时调用的回调函数，参数为包含结束原因的字典
+        """
+        self._demo_end_callback = callback
+
+    def _check_demo_end_condition(self) -> tuple[str, AgentType | None] | None:
+        """仅检查物种淘汰条件（演示模式专用，不检查订单簿单边和鲶鱼）
+
+        Returns:
+            如果满足结束条件返回 (原因, Agent类型)，否则返回 None
+        """
+        for agent_type, total in self.trainer._pop_total_counts.items():
+            if total > 0:
+                liquidated = self.trainer._pop_liquidated_counts.get(agent_type, 0)
+                alive = total - liquidated
+                if alive < total / 4:
+                    return ("population_depleted", agent_type)
+        return None
+
     def _demo_loop(self) -> None:
         """演示循环（不进化）
 
         无限循环运行episode，但不进行进化。
         适合用于展示已训练的模型效果。
         每tick都采集数据，并受速度控制。
+
+        演示模式特殊逻辑：
+        - 根据_demo_catfish_enabled控制是否启用鲶鱼
+        - 使用_check_demo_end_condition检查结束条件（仅物种淘汰）
+        - 结束时调用_demo_end_callback回调
         """
-        while not self._stop_event.is_set():
-            # 运行一个episode
-            self.trainer.episode += 1
+        # 保存原始鲶鱼列表
+        self._original_catfish_list = (
+            self.trainer.catfish_list.copy()
+            if hasattr(self.trainer, "catfish_list")
+            else []
+        )
 
-            # 重置所有种群的Agent账户
-            for population in self.trainer.populations.values():
-                population.reset_agents()
+        # 如果禁用鲶鱼，清空列表
+        if not self._demo_catfish_enabled and hasattr(self.trainer, "catfish_list"):
+            self.trainer.catfish_list = []
 
-            # 重置市场状态
-            self.trainer._reset_market()
-            self.trainer.tick = 0
-            self.trainer._pop_liquidated_counts.clear()  # 重置淘汰计数
-            self.data_collector.reset()
+        try:
+            while not self._stop_event.is_set():
+                # 运行一个episode
+                self.trainer.episode += 1
 
-            # 运行ticks（受速度控制）
-            episode_length = self.trainer.config.training.episode_length
-            for _ in range(episode_length):
-                if self._stop_event.is_set():
-                    break
+                # 重置所有种群的Agent账户
+                for population in self.trainer.populations.values():
+                    population.reset_agents()
 
-                # 检查暂停
-                while self._pause_event.is_set() and not self._stop_event.is_set():
-                    time.sleep(0.1)
+                # 重置市场状态
+                self.trainer._reset_market()
+                self.trainer.tick = 0
+                self.trainer._pop_liquidated_counts.clear()  # 重置淘汰计数
+                # 重置鲶鱼强平标志
+                if hasattr(self.trainer, "_catfish_liquidated"):
+                    self.trainer._catfish_liquidated = False
+                self.data_collector.reset()
 
-                # 速度控制（演示模式）
-                if self._speed_factor < 100:
-                    time.sleep(0.1 / self._speed_factor)
+                # 运行ticks（受速度控制）
+                episode_length = self.trainer.config.training.episode_length
+                end_reason: str | None = None
+                end_agent_type: AgentType | None = None
 
-                # 执行tick
-                self.trainer.run_tick()
+                for _ in range(episode_length):
+                    if self._stop_event.is_set():
+                        break
 
-                # 每tick都采集数据（演示模式）
-                self._collect_and_send_data()
+                    # 检查暂停
+                    while self._pause_event.is_set() and not self._stop_event.is_set():
+                        time.sleep(0.1)
 
-                # 检查是否满足提前结束条件
-                early_end_type = self.trainer._should_end_episode_early()
-                if early_end_type is not None:
-                    break
+                    # 速度控制（演示模式）
+                    if self._speed_factor < 100:
+                        time.sleep(0.1 / self._speed_factor)
+
+                    # 执行tick
+                    self.trainer.run_tick()
+
+                    # 清除鲶鱼强平标志（演示模式下鲶鱼爆仓不结束 episode）
+                    if hasattr(self.trainer, "_catfish_liquidated"):
+                        self.trainer._catfish_liquidated = False
+
+                    # 每tick都采集数据（演示模式）
+                    self._collect_and_send_data()
+
+                    # 使用演示模式专用的结束条件检查
+                    result = self._check_demo_end_condition()
+                    if result is not None:
+                        end_reason, end_agent_type = result
+                        break
+
+                # 如果满足结束条件，调用回调并退出
+                if end_reason is not None and self._demo_end_callback:
+                    self._demo_end_callback(
+                        {
+                            "end_reason": end_reason,
+                            "end_agent_type": end_agent_type,
+                        }
+                    )
+                    break  # 退出演示循环
+        finally:
+            # 恢复原始鲶鱼列表
+            if (
+                self._original_catfish_list is not None
+                and hasattr(self.trainer, "catfish_list")
+            ):
+                self.trainer.catfish_list = self._original_catfish_list
 
     def _collect_and_send_data(self) -> None:
         """采集数据并发送到队列

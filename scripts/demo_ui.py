@@ -32,7 +32,9 @@ sys.path.insert(0, str(project_root))
 
 from src.core.log_engine.logger import setup_logging
 from src.training.trainer import Trainer
+from src.training.checkpoint_loader import CheckpointLoader, CheckpointType
 from src.ui.demo_app import DemoUIApp
+from src.analysis.demo_analyzer import DemoAnalyzer
 
 from create_config import create_default_config
 
@@ -67,11 +69,80 @@ def main() -> None:
         default="logs",
         help="日志目录（默认: logs）",
     )
+    parser.add_argument(
+        "--arena-id",
+        type=int,
+        default=None,
+        help="多训练场模式下指定加载哪个 arena（默认选最高 episode）",
+    )
+    parser.add_argument(
+        "--list-arenas",
+        action="store_true",
+        help="列出多训练场的所有 arena 信息（不启动演示）",
+    )
+    parser.add_argument(
+        "--catfish",
+        action="store_true",
+        help="启用鲶鱼（默认禁用）",
+    )
+    parser.add_argument(
+        "--no-analyze",
+        action="store_true",
+        help="禁用演示结束后的分析",
+    )
+    parser.add_argument(
+        "--analysis-output",
+        type=str,
+        default="analysis_output",
+        help="分析结果输出目录（默认: analysis_output）",
+    )
 
     args = parser.parse_args()
 
     # 设置日志
     setup_logging(args.log_dir)
+
+    # 如果指定了 --list-arenas，列出所有 arena 并退出
+    if args.list_arenas:
+        if not args.checkpoint:
+            print("错误: --list-arenas 需要指定 --checkpoint 路径")
+            sys.exit(1)
+
+        checkpoint_type = CheckpointLoader.detect_type(args.checkpoint)
+        if checkpoint_type != CheckpointType.MULTI_ARENA:
+            print(f"错误: {args.checkpoint} 不是多训练场 checkpoint")
+            sys.exit(1)
+
+        arenas = CheckpointLoader.list_arenas(args.checkpoint)
+        print(f"\n多训练场 Checkpoint: {args.checkpoint}")
+        print(f"共 {len(arenas)} 个 Arena:\n")
+        print(f"{'Arena ID':>10}  {'Episode':>10}  {'更新时间'}")
+        print("-" * 50)
+        for arena in arenas:
+            from datetime import datetime
+
+            updated_at = datetime.fromtimestamp(arena["updated_at"]).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            print(f"{arena['arena_id']:>10}  {arena['episode']:>10}  {updated_at}")
+        sys.exit(0)
+
+    # 加载 checkpoint（如果指定）
+    checkpoint_data = None
+    if args.checkpoint:
+        checkpoint_path = Path(args.checkpoint)
+        if not checkpoint_path.exists():
+            print(f"错误: 检查点文件/目录不存在: {args.checkpoint}")
+            sys.exit(1)
+
+        # 使用 CheckpointLoader 加载
+        checkpoint_type = CheckpointLoader.detect_type(args.checkpoint)
+        print(f"Checkpoint 类型: {checkpoint_type.value}")
+
+        checkpoint_data = CheckpointLoader.load(args.checkpoint, arena_id=args.arena_id)
+        print(f"Episode: {checkpoint_data['episode']}")
+        if checkpoint_data["source_arena_id"] is not None:
+            print(f"Arena ID: {checkpoint_data['source_arena_id']}")
 
     print("=" * 60)
     print("NEAT AI 交易模拟竞技场 - 演示模式")
@@ -79,16 +150,15 @@ def main() -> None:
     print(f"Episode Length: {args.episode_length} ticks")
     if args.checkpoint:
         print(f"Checkpoint: {args.checkpoint}")
+        if args.arena_id is not None:
+            print(f"Arena ID: {args.arena_id}")
     else:
         print("Checkpoint: 未指定（使用随机初始化的Agent）")
+    print(f"鲶鱼: {'启用' if args.catfish else '禁用'}")
+    print(f"分析: {'禁用' if args.no_analyze else '启用'}")
+    if not args.no_analyze:
+        print(f"分析输出目录: {args.analysis_output}")
     print("=" * 60)
-
-    # 验证检查点文件存在
-    if args.checkpoint:
-        checkpoint_path = Path(args.checkpoint)
-        if not checkpoint_path.exists():
-            print(f"错误: 检查点文件不存在: {args.checkpoint}")
-            sys.exit(1)
 
     # 创建配置（使用与训练相同的默认配置，但不保存检查点）
     config = create_default_config(
@@ -102,7 +172,17 @@ def main() -> None:
 
     # 初始化
     print("初始化演示环境...")
-    trainer.setup()
+    if checkpoint_data:
+        # 从 checkpoint 数据直接设置 populations
+        trainer.setup(
+            checkpoint={
+                "populations": checkpoint_data["populations"],
+                "tick": checkpoint_data["tick"],
+                "episode": checkpoint_data["episode"],
+            }
+        )
+    else:
+        trainer.setup()
     print("训练器初始化完成")
 
     # 预热：重置一次市场和Agent，确保所有懒加载完成
@@ -122,8 +202,18 @@ def main() -> None:
     trainer._reset_market()
     print("预热完成，所有初始化已就绪")
 
-    # 创建并运行演示UI
-    app = DemoUIApp(trainer, checkpoint_path=args.checkpoint)
+    # 创建分析器（除非禁用）
+    analyzer = None
+    if not args.no_analyze:
+        analyzer = DemoAnalyzer(output_dir=args.analysis_output)
+
+    # 创建并运行演示UI（不再传递 checkpoint_path，因为已经加载了）
+    app = DemoUIApp(
+        trainer,
+        checkpoint_path=None,  # 已经加载了，不需要再加载
+        catfish_enabled=args.catfish,
+        analyzer=analyzer,
+    )
     print("启动演示UI...")
     print("按 [开始] 按钮开始演示")
     print("使用速度滑块调整演示速度")

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.training.trainer import Trainer
+    from src.analysis.demo_analyzer import DemoAnalyzer
 
 from src.ui.data_collector import UIDataCollector, UIDataSnapshot
 from src.ui.ui_controller import UIController
@@ -32,6 +33,8 @@ class DemoUIApp:
     episode_length: int
     data_collector: UIDataCollector
     controller: UIController
+    _catfish_enabled: bool
+    _analyzer: "DemoAnalyzer | None"
 
     # UI组件
     orderbook_panel: "OrderBookPanel | None"
@@ -40,16 +43,24 @@ class DemoUIApp:
     control_panel: "ControlPanel | None"
 
     def __init__(
-        self, trainer: "Trainer", checkpoint_path: str | None = None
+        self,
+        trainer: "Trainer",
+        checkpoint_path: str | None = None,
+        catfish_enabled: bool = False,
+        analyzer: "DemoAnalyzer | None" = None,
     ) -> None:
         """初始化演示模式UI应用
 
         Args:
             trainer: 已初始化的训练器
             checkpoint_path: 检查点路径（可选），用于加载训练好的模型
+            catfish_enabled: 是否启用鲶鱼机制
+            analyzer: 演示分析器（可选），用于生成演示结束后的分析报告
         """
         self.trainer = trainer
         self.episode_length = trainer.config.training.episode_length
+        self._catfish_enabled = catfish_enabled
+        self._analyzer = analyzer
 
         # 加载检查点
         if checkpoint_path:
@@ -62,6 +73,10 @@ class DemoUIApp:
             data_collector=self.data_collector,
             sample_rate=1,  # 每tick采集
         )
+
+        # 设置演示模式选项
+        self.controller.set_demo_catfish_enabled(catfish_enabled)
+        self.controller.set_demo_end_callback(self._on_demo_end)
 
         # UI组件
         self.orderbook_panel = None
@@ -179,6 +194,21 @@ class DemoUIApp:
 
         停止演示并清理资源。
         """
+        self.controller.stop()
+
+    def _on_demo_end(self, data: dict) -> None:
+        """演示结束回调
+
+        Args:
+            data: 包含 end_reason 和 end_agent_type 的字典
+        """
+        if self._analyzer:
+            self._analyzer.analyze(
+                self.trainer,
+                data["end_reason"],
+                data.get("end_agent_type"),
+            )
+        # 停止演示（会触发 UI 退出）
         self.controller.stop()
 
     def _update_ui(self) -> None:

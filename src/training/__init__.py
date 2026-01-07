@@ -3,7 +3,8 @@
 包含种群管理和训练器。
 """
 
+from src.training.checkpoint_loader import CheckpointLoader, CheckpointType
 from src.training.population import Population
 from src.training.trainer import Trainer
 
-__all__ = ["Population", "Trainer"]
+__all__ = ["CheckpointLoader", "CheckpointType", "Population", "Trainer"]

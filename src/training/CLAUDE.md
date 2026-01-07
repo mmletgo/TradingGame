@@ -9,6 +9,7 @@
 - `__init__.py` - 模块导出
 - `population.py` - 种群管理类
 - `trainer.py` - 训练器类
+- `checkpoint_loader.py` - 统一的 checkpoint 加载器
 - `arena/` - 多竞技场并行训练子模块（详见 `arena/CLAUDE.md`）
   - `config.py` - 配置类（ArenaConfig, MultiArenaConfig）
   - `arena.py` - 单个竞技场封装
@@ -17,6 +18,43 @@
   - `metrics.py` - 指标收集
 
 ## 核心类
+
+### CheckpointLoader (checkpoint_loader.py)
+
+统一的 checkpoint 加载器，自动识别并加载两种格式的 checkpoint。
+
+**支持的格式：**
+- 单训练场：`checkpoints/ep_*.pkl` 格式
+- 多训练场：`checkpoints/multi_arena/arena_*/checkpoint.pkl` 格式
+
+**主要方法：**
+- `detect_type(path)` - 检测 checkpoint 类型
+  - `.pkl` 文件 → `CheckpointType.SINGLE_ARENA`
+  - 包含 `arena_*` 子目录的目录 → `CheckpointType.MULTI_ARENA`
+- `load(path, arena_id=None)` - 加载 checkpoint，返回统一格式
+  - 多训练场模式下，`arena_id=None` 时自动选择 episode 最高的 arena
+- `list_arenas(path)` - 列出多训练场的所有 arena 信息
+
+**统一返回格式：**
+```python
+{
+    "type": CheckpointType,           # SINGLE_ARENA 或 MULTI_ARENA
+    "tick": int,                       # 当前 tick（多训练场为 0）
+    "episode": int,                    # 当前 episode
+    "populations": {                   # 种群数据
+        AgentType: {
+            "generation": int,
+            "neat_pop": neat.Population
+        },
+        ...
+    },
+    "source_arena_id": int | None,    # 多训练场时为 arena_id
+}
+```
+
+**注意事项：**
+- 多训练场格式中 populations 的 key 原为字符串（`agent_type.value`），加载时自动转换为 `AgentType`
+- 多训练场 checkpoint 不保存 tick，统一返回 0
 
 ### Population (population.py)
 
