@@ -57,8 +57,6 @@ def progress_callback(state: dict[str, Any]) -> None:
     """
     from datetime import datetime
 
-    running_arenas = state.get("running_arenas", 0)
-    total_arenas = state.get("total_arenas", 0)
     avg_volatility = state.get("avg_volatility", 0.0)
 
     # 获取各竞技场的 episode 进度
@@ -74,7 +72,6 @@ def progress_callback(state: dict[str, Any]) -> None:
     current_time = datetime.now().strftime("%H:%M:%S")
 
     info_parts = [f"[{current_time}]", f"Episodes: {ep_range}"]
-    info_parts.append(f"Running: {running_arenas}/{total_arenas}")
     info_parts.append(f"Volatility: {avg_volatility:.4f}")
 
     # 获取各物种最精英 species 的平均适应度

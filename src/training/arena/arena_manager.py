@@ -589,10 +589,15 @@ class ArenaManager:
     ) -> None:
         """监控所有竞技场的运行状态（非阻塞）
 
+        当所有竞技场中最大的 episode 轮次增加时，才调用 progress_callback。
+
         Args:
             progress_callback: 进度回调函数
             check_interval: 检查间隔（秒）
         """
+        # 跟踪当前最大 episode
+        last_max_episode = 0
+
         while self._is_running:
             # 检查是否所有竞技场都已完成
             if all(arena.is_finished for arena in self.arenas):
@@ -616,8 +621,15 @@ class ArenaManager:
                     except queue.Empty:
                         break
 
-            # 进度回调
-            if progress_callback:
+            # 计算当前所有竞技场的最大 episode
+            current_max_episode = max(
+                (arena.episode for arena in self.arenas),
+                default=0
+            )
+
+            # 只在最大 episode 增加时才调用进度回调
+            if progress_callback and current_max_episode > last_max_episode:
+                last_max_episode = current_max_episode
                 summary = self.metrics_aggregator.get_global_summary()
                 summary["running_arenas"] = sum(1 for a in self.arenas if not a.is_finished)
                 summary["arena_episodes"] = {a.arena_id: a.episode for a in self.arenas}
