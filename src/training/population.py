@@ -6,8 +6,11 @@
 import ctypes
 import gc
 import logging
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from itertools import count
 import neat
+from neat.population import CompleteExtinctionException
 import numpy as np
 
 from src.bio.agents.base import Agent
@@ -334,12 +337,29 @@ class Population:
 
         try:
             self.neat_pop.run(eval_genomes, n=1)
-        except RuntimeError as e:
+        except (RuntimeError, CompleteExtinctionException) as e:
             # NEAT 进化失败（通常是因为种群灭绝或无法繁殖足够后代）
             # 重置种群并重新开始
+            error_msg = str(e) if str(e) else type(e).__name__
             self.logger.warning(
-                f"{self.agent_type.value} 种群进化失败: {e}，正在重置种群..."
+                f"{self.agent_type.value} 种群进化失败: {error_msg}，正在重置种群..."
             )
+            self.logger.debug(f"完整异常堆栈:\n{traceback.format_exc()}")
+            # 清理旧基因组数据
+            self._cleanup_genome_internals(old_genomes)
+            del old_genomes
+            gc.collect()
+            gc.collect()
+            malloc_trim()
+            self._reset_neat_population()
+            return
+        except Exception as e:
+            # 捕获其他未预期的异常，记录完整堆栈
+            error_msg = str(e) if str(e) else type(e).__name__
+            self.logger.error(
+                f"{self.agent_type.value} 种群进化遇到未预期异常: {error_msg}"
+            )
+            self.logger.error(f"完整异常堆栈:\n{traceback.format_exc()}")
             # 清理旧基因组数据
             self._cleanup_genome_internals(old_genomes)
             del old_genomes
@@ -688,6 +708,30 @@ class Population:
             new_key = max_key + 1 + i
             genome.key = new_key
             neat_pop.population[new_key] = genome
+
+        # 3.5. 【关键修复】更新 node_indexer，确保新生成的节点 ID 不会与迁入的 genome 冲突
+        # 迁入的 genome 可能来自其他竞技场，包含比当前竞技场 node_indexer 更大的节点 ID
+        # 如果不更新，后续的 mutate_add_node 可能会生成重复的节点 ID
+        genome_config = neat_pop.config.genome_config
+        max_node_id_in_new_genomes = 0
+        for genome in new_genomes:
+            if genome.nodes:
+                local_max = max(genome.nodes.keys())
+                if local_max > max_node_id_in_new_genomes:
+                    max_node_id_in_new_genomes = local_max
+        # 如果新 genome 的最大节点 ID 超过了当前 node_indexer 的下一个值，需要更新
+        if max_node_id_in_new_genomes > 0:
+            if genome_config.node_indexer is None:
+                # node_indexer 还未初始化，直接设置为 max_node_id + 1
+                genome_config.node_indexer = count(max_node_id_in_new_genomes + 1)
+            else:
+                # 需要检查当前 node_indexer 的下一个值
+                # 由于 count 对象无法直接获取当前值，我们通过 peek 方式获取
+                # 但这会消耗一个值，所以需要用新的 count 替换
+                current_next = next(genome_config.node_indexer)
+                # 取两者的最大值 + 1 作为新的起点
+                new_start = max(current_next, max_node_id_in_new_genomes + 1)
+                genome_config.node_indexer = count(new_start)
 
         # 4. 只为新 genome 创建新的 Agent 对象
         # 确定 Agent 类

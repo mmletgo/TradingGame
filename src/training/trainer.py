@@ -967,8 +967,19 @@ class Trainer:
         agents: list["Agent"],
         market_state: "NormalizedMarketStateType",
         orderbook: "OrderBook",
+        timeout: float = 60.0,  # 单个 tick 决策超时时间（秒）
     ) -> list[tuple["Agent", "ActionType", dict[str, Any]]]:
-        """并行执行所有 Agent 的决策"""
+        """并行执行所有 Agent 的决策
+
+        Args:
+            agents: Agent 列表
+            market_state: 归一化市场状态
+            orderbook: 订单簿
+            timeout: 超时时间（秒），防止死锁
+
+        Returns:
+            决策结果列表
+        """
         executor = self._get_executor()
 
         future_to_idx: dict[
@@ -982,13 +993,29 @@ class Trainer:
         results: list[tuple["Agent", "ActionType", dict[str, Any]] | None] = [
             None
         ] * len(agents)
-        for future in as_completed(future_to_idx):
-            idx, agent = future_to_idx[future]
-            try:
-                action, params = future.result()
-                results[idx] = (agent, action, params)
-            except Exception as e:
-                self.logger.warning(f"Agent {agent.agent_id} 决策异常: {e}")
+
+        # 使用超时机制防止死锁
+        try:
+            for future in as_completed(future_to_idx, timeout=timeout):
+                idx, agent = future_to_idx[future]
+                try:
+                    action, params = future.result(timeout=5.0)  # 单个结果也有超时
+                    results[idx] = (agent, action, params)
+                except TimeoutError:
+                    self.logger.warning(f"Agent {agent.agent_id} 决策获取结果超时")
+                except Exception as e:
+                    self.logger.warning(f"Agent {agent.agent_id} 决策异常: {e}")
+        except TimeoutError:
+            # 整体超时，记录警告并取消未完成的任务
+            arena_tag = f"Arena-{self.arena_id}" if self.arena_id is not None else ""
+            self.logger.error(
+                f"{arena_tag} tick {self.tick} 决策并行执行超时 ({timeout}s)，"
+                f"可能存在死锁"
+            )
+            # 取消未完成的 future
+            for future in future_to_idx:
+                if not future.done():
+                    future.cancel()
 
         return [r for r in results if r is not None]
 

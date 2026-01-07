@@ -33,8 +33,8 @@
 - `create_agents()` - 从基因组列表创建 Agent（小批量串行，大批量并行）
 - `_create_single_agent()` - 创建单个 Agent（线程安全）
 - `evaluate()` - 评估种群适应度并排序
-- `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError 并在进化失败时自动重置种群
-- `replace_worst_agents(new_genomes)` - 增量替换最差的 Agent（不重建整个种群），用于迁移优化
+- `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError/CompleteExtinctionException 并在进化失败时自动重置种群，记录完整异常堆栈
+- `replace_worst_agents(new_genomes)` - 增量替换最差的 Agent（不重建整个种群），用于迁移优化。**关键**：注入迁入的 genome 后会自动更新 `genome_config.node_indexer`，确保后续变异操作不会生成与迁入 genome 冲突的节点 ID
 - `_cleanup_old_agents()` - 清理旧 Agent 对象，打破循环引用，帮助垃圾回收
 - `_cleanup_neat_history()` - 清理 NEAT 种群中的历史数据，防止内存泄漏
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
