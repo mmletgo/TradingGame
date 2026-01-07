@@ -369,6 +369,18 @@ python scripts/train_multi_arena.py --resume checkpoints/multi_arena_ep_50.pkl
 
 增量替换最差的 Agent，只清理和创建需要替换的 Agent 对象，避免重建整个种群。
 
+### 死锁防护
+
+**1. 多线程导入锁问题修复**
+
+`FastFeedForwardNetwork.create()` 原先在方法内部导入 `fast_graphs` 模块，在多线程环境下（`create_agents()` 使用线程池并行创建 Agent）可能导致 Python 导入锁死锁。已将导入移到模块级别（`neat/_cython/fast_network.pyx`）。
+
+**2. 线程池超时机制**
+
+- `create_agents()`: 添加 120 秒整体超时，防止并行创建 Agent 时死锁
+- `_batch_decide_parallel()`: 添加 60 秒超时，防止并行决策时死锁
+- 超时后会取消未完成的任务并记录错误日志
+
 ### 内存泄漏排查
 
 如果仍然出现内存增长，可能的原因：

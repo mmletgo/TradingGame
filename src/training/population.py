@@ -235,14 +235,29 @@ class Population:
             )
             futures[future] = idx
 
-        # 收集结果，按索引排序
+        # 收集结果，按索引排序（添加超时防止死锁）
         results: list[tuple[int, Agent]] = []
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                results.append(result)
-            except Exception as e:
-                raise RuntimeError(f"创建 Agent 失败: {e}") from e
+        timeout_seconds = 120.0  # 2分钟超时
+        try:
+            for future in as_completed(futures, timeout=timeout_seconds):
+                try:
+                    result = future.result(timeout=10.0)  # 单个结果也有超时
+                    results.append(result)
+                except TimeoutError:
+                    self.logger.error(f"创建 Agent 获取结果超时")
+                except Exception as e:
+                    raise RuntimeError(f"创建 Agent 失败: {e}") from e
+        except TimeoutError:
+            # 整体超时
+            self.logger.error(
+                f"创建 {self.agent_type.value} Agent 整体超时 ({timeout_seconds}s)，"
+                f"已完成 {len(results)}/{len(genomes)}，可能存在死锁"
+            )
+            # 取消未完成的任务
+            for future in futures:
+                if not future.done():
+                    future.cancel()
+            raise RuntimeError(f"创建 Agent 超时，可能存在死锁")
 
         results.sort(key=lambda x: x[0])
         return [agent for _, agent in results]
