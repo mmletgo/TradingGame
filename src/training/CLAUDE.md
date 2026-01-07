@@ -73,6 +73,7 @@
 - `evaluate()` - 评估种群适应度并排序
 - `evolve()` - 执行一代 NEAT 进化，捕获 RuntimeError/CompleteExtinctionException 并在进化失败时自动重置种群，记录完整异常堆栈
 - `replace_worst_agents(new_genomes)` - 增量替换最差的 Agent（不重建整个种群），用于迁移优化。**关键**：注入迁入的 genome 后会自动更新 `genome_config.node_indexer`，确保后续变异操作不会生成与迁入 genome 冲突的节点 ID
+- `get_elite_species_avg_fitness()` - 获取最精英 species 的平均适应度（遍历所有 NEAT species，返回平均适应度最高的那个）
 - `_cleanup_old_agents()` - 清理旧 Agent 对象，打破循环引用，帮助垃圾回收
 - `_cleanup_neat_history()` - 清理 NEAT 种群中的历史数据，防止内存泄漏
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
@@ -125,7 +126,7 @@
 - `load_checkpoint_data()` - 从检查点数据恢复（不读取文件）
 - `_update_agents_after_migration(replaced_info)` - 迁移后增量更新内部状态（agent_map、agent_execution_order）
 - `get_price_stats()` - 获取价格统计（高/低/最终价格）
-- `get_population_stats()` - 获取种群统计（适应度、淘汰数等）
+- `get_population_stats()` - 获取种群统计（适应度、淘汰数、最精英 species 平均适应度等）
 
 **多竞技场支持：**
 - `arena_id: int | None` - 竞技场 ID（多竞技场模式时设置）

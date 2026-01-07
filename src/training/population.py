@@ -823,3 +823,33 @@ class Population:
 
         # 8. 返回被替换的信息列表
         return replaced_info
+
+    def get_elite_species_avg_fitness(self) -> float | None:
+        """获取最精英 species 的平均适应度
+
+        遍历 NEAT 种群中的所有 species，计算每个 species 的平均适应度，
+        返回平均适应度最高的那个 species 的值。
+
+        Returns:
+            最精英 species 的平均适应度，如果没有有效数据则返回 None
+        """
+        neat_pop = self.neat_pop
+        if not hasattr(neat_pop, 'species') or neat_pop.species is None:
+            return None
+
+        species_set = neat_pop.species
+        if not hasattr(species_set, 'species') or not species_set.species:
+            return None
+
+        best_avg: float | None = None
+        for species in species_set.species.values():
+            # 获取该 species 所有成员的适应度
+            member_fitnesses = species.get_fitnesses()
+            # 过滤掉 None 值
+            valid_fitnesses = [f for f in member_fitnesses if f is not None]
+            if valid_fitnesses:
+                avg = sum(valid_fitnesses) / len(valid_fitnesses)
+                if best_avg is None or avg > best_avg:
+                    best_avg = avg
+
+        return best_avg

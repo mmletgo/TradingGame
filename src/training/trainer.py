@@ -20,14 +20,15 @@ from src.bio.agents.base import AgentType
 def _get_memory_mb() -> float:
     """获取当前进程的内存使用量（MB）"""
     try:
-        with open('/proc/self/status', 'r') as f:
+        with open("/proc/self/status", "r") as f:
             for line in f:
-                if line.startswith('VmRSS:'):
+                if line.startswith("VmRSS:"):
                     parts = line.split()
                     return float(parts[1]) / 1024.0
     except Exception:
         pass
     return 0.0
+
 
 if TYPE_CHECKING:
     from src.bio.agents.base import ActionType, Agent
@@ -138,9 +139,9 @@ class Trainer:
         self._catfish_liquidated: bool = False  # 鲶鱼是否被强平（触发 episode 结束）
 
         # Tick 历史数据（用于 Agent 输入特征）
-        self._tick_history_prices: list[float] = []      # 每 tick 价格
-        self._tick_history_volumes: list[float] = []    # 每 tick 成交量（带方向）
-        self._tick_history_amounts: list[float] = []    # 每 tick 成交额（带方向）
+        self._tick_history_prices: list[float] = []  # 每 tick 价格
+        self._tick_history_volumes: list[float] = []  # 每 tick 成交量（带方向）
+        self._tick_history_amounts: list[float] = []  # 每 tick 成交额（带方向）
 
         # Episode 价格统计
         self._episode_high_price: float = 0.0
@@ -880,9 +881,7 @@ class Trainer:
         tick_amounts_normalized = np.zeros(100, dtype=np.float32)
 
         if self._tick_history_prices:
-            hist_prices = np.array(
-                self._tick_history_prices[-100:], dtype=np.float32
-            )
+            hist_prices = np.array(self._tick_history_prices[-100:], dtype=np.float32)
             volumes = np.array(self._tick_history_volumes[-100:], dtype=np.float32)
             amounts = np.array(self._tick_history_amounts[-100:], dtype=np.float32)
             n = len(hist_prices)
@@ -1527,7 +1526,7 @@ class Trainer:
                         f"Episode {self.episode} 提前结束：订单簿{side} (tick={self.tick})"
                     )
                     # 调试日志：输出做市商状态
-                    self._log_market_maker_status()
+                    # self._log_market_maker_status()
                 break
 
         # 3. 进化（仅在 tick 数 >= 10 时进化，否则跳过进化直接进入下一个 episode）
@@ -1622,11 +1621,12 @@ class Trainer:
         """获取当前种群统计
 
         Returns:
-            种群统计字典，包含淘汰数和平均适应度
+            种群统计字典，包含淘汰数、平均适应度和最精英 species 的平均适应度
         """
         stats: dict = {
             "liquidations": dict(self._pop_liquidated_counts),
             "avg_fitness": {},
+            "elite_species_fitness": {},
         }
 
         if not self.matching_engine:
@@ -1637,9 +1637,14 @@ class Trainer:
         for agent_type, pop in self.populations.items():
             agent_fitnesses = pop.evaluate(current_price)
             if agent_fitnesses:
-                stats["avg_fitness"][agent_type] = (
-                    sum(f for _, f in agent_fitnesses) / len(agent_fitnesses)
-                )
+                stats["avg_fitness"][agent_type] = sum(
+                    f for _, f in agent_fitnesses
+                ) / len(agent_fitnesses)
+
+            # 获取最精英 species 的平均适应度
+            elite_fitness = pop.get_elite_species_avg_fitness()
+            if elite_fitness is not None:
+                stats["elite_species_fitness"][agent_type] = elite_fitness
 
         return stats
 

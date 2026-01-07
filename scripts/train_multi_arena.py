@@ -77,6 +77,25 @@ def progress_callback(state: dict[str, Any]) -> None:
     info_parts.append(f"Running: {running_arenas}/{total_arenas}")
     info_parts.append(f"Volatility: {avg_volatility:.4f}")
 
+    # 获取各物种最精英 species 的平均适应度
+    elite_fitness = state.get("elite_species_fitness", {})
+    if elite_fitness:
+        # 使用缩写：R=retail, P=retail_pro, W=whale, M=market_maker
+        abbr_map = {
+            "retail": "R",
+            "retail_pro": "P",
+            "whale": "W",
+            "market_maker": "M",
+        }
+        fitness_parts = []
+        for type_key, fitness in elite_fitness.items():
+            # 规范化 key（处理大小写）
+            normalized_key = type_key.lower() if isinstance(type_key, str) else str(type_key).lower()
+            abbr = abbr_map.get(normalized_key, normalized_key[:1].upper())
+            fitness_parts.append(f"{abbr}={fitness:.2f}")
+        if fitness_parts:
+            info_parts.append(f"Elite: {' '.join(fitness_parts)}")
+
     print(" | ".join(info_parts))
 
 

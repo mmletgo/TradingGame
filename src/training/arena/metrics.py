@@ -25,6 +25,7 @@ class EpisodeMetrics:
         total_volume: 总成交量
         liquidation_count: 各类型强平数量
         avg_fitness: 各类型平均适应度
+        elite_species_fitness: 各类型最精英 species 的平均适应度
     """
     arena_id: int
     episode: int
@@ -36,6 +37,7 @@ class EpisodeMetrics:
     total_volume: float = 0.0
     liquidation_count: dict["AgentType", int] = field(default_factory=dict)
     avg_fitness: dict["AgentType", float] = field(default_factory=dict)
+    elite_species_fitness: dict["AgentType", float] = field(default_factory=dict)
 
 
 class ArenaMetrics:
@@ -92,6 +94,7 @@ class ArenaMetrics:
             total_volume=price_stats.get("total_volume", 0.0),
             liquidation_count=population_stats.get("liquidations", {}),
             avg_fitness=population_stats.get("avg_fitness", {}),
+            elite_species_fitness=population_stats.get("elite_species_fitness", {}),
         )
         self.episode_history.append(metrics)
         return metrics
@@ -195,7 +198,7 @@ class MetricsAggregator:
             window: 统计窗口大小
 
         Returns:
-            全局汇总字典
+            全局汇总字典，包含 elite_species_fitness（各竞技场最新 episode 的平均值）
         """
         all_recent: list[EpisodeMetrics] = []
         for metrics_deque in self.arena_metrics.values():
@@ -204,10 +207,29 @@ class MetricsAggregator:
         if not all_recent:
             return {}
 
+        # 聚合各竞技场最新 episode 的 elite_species_fitness
+        # 收集每个竞技场最新的 elite_species_fitness，然后对所有竞技场取平均
+        elite_fitness_by_type: dict[str, list[float]] = {}
+        for arena_id, metrics_deque in self.arena_metrics.items():
+            if metrics_deque:
+                latest = metrics_deque[-1]
+                for agent_type, fitness in latest.elite_species_fitness.items():
+                    type_key = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
+                    if type_key not in elite_fitness_by_type:
+                        elite_fitness_by_type[type_key] = []
+                    elite_fitness_by_type[type_key].append(fitness)
+
+        # 计算每个 AgentType 的平均 elite_species_fitness
+        avg_elite_fitness: dict[str, float] = {}
+        for type_key, fitness_list in elite_fitness_by_type.items():
+            if fitness_list:
+                avg_elite_fitness[type_key] = float(np.mean(fitness_list))
+
         return {
             "total_arenas": len(self.arena_metrics),
             "total_episodes": sum(len(m) for m in self.arena_metrics.values()),
             "avg_volatility": float(np.mean([m.volatility for m in all_recent])),
+            "elite_species_fitness": avg_elite_fitness,
         }
 
     def get_history(self) -> dict[int, list[EpisodeMetrics]]:
