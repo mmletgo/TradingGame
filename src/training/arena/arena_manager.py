@@ -423,21 +423,21 @@ def arena_worker_autonomous(
                 f"+{mem_after_save - mem_before_save:.1f} MB"
             )
 
-            # 保存每代 best_genome（只有 arena_0）
-            if generation_saver is not None:
-                generation = list(arena.trainer.populations.values())[0].generation
-                current_price = arena.trainer.matching_engine._orderbook.last_price
-                generation_saver.save_generation(
-                    generation=generation,
-                    populations=arena.trainer.populations,
-                    current_price=current_price,
-                )
-
             # 保存后立即强制多轮 GC，确保临时对象被完全清理
             gc.collect()
             gc.collect()
             gc.collect()
             malloc_trim()
+
+        # 保存每代 best_genome（只有 arena_0，每个 episode 都保存）
+        if generation_saver is not None:
+            generation = list(arena.trainer.populations.values())[0].generation
+            current_price = arena.trainer.matching_engine._orderbook.last_price
+            generation_saver.save_generation(
+                generation=generation,
+                populations=arena.trainer.populations,
+                current_price=current_price,
+            )
 
         # 每个 episode 后都强制垃圾回收，防止进化阶段内存泄漏
         mem_before_gc = _get_memory_mb()
