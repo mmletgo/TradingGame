@@ -4,146 +4,214 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于 NEAT (NeuroEvolution of Augmenting Topologies) 算法的 AI 交易模拟竞技场。四类型的 AI Agent（散户、高级散户、庄家、做市商）通过神经网络进化算法学习交易策略，在模拟订单簿市场中竞争。
+基于 NEAT (NeuroEvolution of Augmenting Topologies) 算法的 AI 交易模拟竞技场。四种类型的 AI Agent（散户、高级散户、庄家、做市商）通过神经网络进化算法学习交易策略，在模拟订单簿市场中竞争。
 
 ## 常用命令
 
 ### 构建 Cython 模块
 ```bash
-python setup.py build_ext --inplace
+./rebuild.sh  # 推荐：清理缓存 + 重新编译
+python setup.py build_ext --inplace  # 仅编译
 ```
 
 ### 运行测试
 ```bash
-# 运行所有测试
-pytest tests/
-
-# 运行单个测试文件
-pytest tests/training/test_population.py
-
-# 运行特定测试
-pytest tests/training/test_population.py::TestPopulation::test_create_agents
+pytest tests/                                    # 运行所有测试
+pytest tests/training/test_population.py         # 运行单个文件
+pytest tests/training/test_population.py::TestPopulation::test_create_agents  # 运行特定测试
 ```
 
-### 训练
+### 单竞技场训练
 ```bash
-# 无 UI 高性能训练
-python scripts/train_noui.py --episodes 100
+python scripts/train_noui.py --episodes 100                    # 无UI高性能训练
+python scripts/train_noui.py --resume checkpoints/ep_50.pkl    # 从检查点恢复
+python scripts/train_noui.py --episodes 100 --catfish          # 启用鲶鱼机制
+python scripts/train_ui.py                                      # 带UI训练
+```
 
-# 从检查点恢复
-python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
-
-# 启用鲶鱼机制训练
-python scripts/train_noui.py --episodes 100 --catfish
-
-# 指定鲶鱼模式
-python scripts/train_noui.py --episodes 100 --catfish --catfish-mode trend_creator
+### 多竞技场并行训练
+```bash
+python scripts/train_multi_arena.py --num-arenas 16 --episodes 100
 ```
 
 ### 演示模式
 ```bash
-# 从单训练场 checkpoint 加载演示
-python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl
-
-# 从多训练场 checkpoint 加载（自动选择 episode 最高的 arena）
-python scripts/demo_ui.py --checkpoint checkpoints/multi_arena
-
-# 指定加载某个 arena
-python scripts/demo_ui.py --checkpoint checkpoints/multi_arena --arena-id 5
-
-# 列出所有 arena 信息
-python scripts/demo_ui.py --checkpoint checkpoints/multi_arena --list-arenas
-
-# 启用鲶鱼（默认禁用，即使启用鲶鱼爆仓也不结束 episode）
-python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --catfish
-
-# 禁用分析
-python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --no-analyze
+python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl           # 单竞技场检查点
+python scripts/demo_ui.py --checkpoint checkpoints/multi_arena          # 多竞技场（自动选最优）
+python scripts/demo_ui.py --checkpoint checkpoints/multi_arena --list-arenas  # 列出所有arena
+python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --catfish       # 启用鲶鱼
 ```
 
 **演示模式特点：**
-- 兼容单训练场和多训练场 checkpoint
+- 兼容单/多竞技场检查点
 - 鲶鱼默认禁用，启用时鲶鱼爆仓不结束 episode
 - 结束条件：任意物种淘汰到只剩 1/4
 - 结束后自动生成分析图和终端摘要
 
-### 代码修改后必须执行（清理缓存 + 重新编译）
+---
 
-修改代码后必须执行以下命令，否则可能因缓存问题导致运行时卡住或行为异常：
+## 核心业务逻辑
 
-**一键执行（推荐）：**
-```bash
-./rebuild.sh
+### 训练生命周期
+
+```
+初始化阶段
+├─ 创建4个NEAT种群
+├─ 从基因组创建Agent对象
+├─ 创建撮合引擎
+└─ 做市商建立初始流动性（Tick 1）
+
+Episode循环（每episode N个tick）
+├─ 重置所有Agent账户
+├─ 重置市场状态和订单簿
+└─ Tick循环
+    ├─ Tick 1: 仅做市商行动
+    └─ Tick 2+:
+        ├─ 强平检查（三阶段）
+        ├─ 鲶鱼行动（如启用）
+        ├─ 计算归一化市场状态（所有Agent共用）
+        ├─ 随机打乱Agent顺序
+        ├─ 并行决策（神经网络推理）
+        └─ 串行执行（订单提交）
+
+NEAT进化阶段
+├─ 计算适应度（基于PnL）
+├─ 执行NEAT进化算法
+├─ 清理历史数据防止内存泄漏
+└─ 从新基因组创建Agent
 ```
 
-## 核心架构
+### 强平机制（三阶段）
 
-### 模块职责
+触发条件：`保证金率 < 维持保证金率`
 
-**src/core/** - 核心引擎
-- `log_engine/` - 统一日志管理（命令行只显示启动信息和错误，其余输出到日志文件）
-
-**src/market/** - 交易市场引擎
-- `orderbook/` - 订单簿（Cython 实现，买卖各100档）
-- `matching/` - 撮合引擎（价格优先、时间优先）
-- `account/` - 账户管理（持仓、余额、保证金、强平）
-- `catfish/` - 鲶鱼机制（规则驱动的市场波动制造者）
-
-**src/bio/** - 生物系统
-- `brain/` - NEAT 神经网络封装
-- `agents/` - 四种 Agent 类型，继承自 `Agent` 基类
-
-**src/training/** - 训练引擎
-- `Population` - 种群管理，从 NEAT 基因组创建 Agent
-- `Trainer` - 训练协调器，管理 tick/episode 生命周期
-
-**src/analysis/** - 分析模块
-- `DemoAnalyzer` - 演示模式分析器，生成分析图和终端摘要
-
-**src/config/** - 配置管理
-
-### Agent 行为规则
-
-| 类型 | 动作 | 约束 |
+| 阶段 | 操作 | 目的 |
 |------|------|------|
-| 散户 | 挂单/撤单/吃单/不动 | 同时只挂一单，100倍杠杆 |
-| 高级散户 | 挂单/撤单/吃单/不动 | 同时只挂一单，100倍杠杆（可观察完整100档订单簿） |
-| 庄家 | 挂单/撤单/吃单/不动 | 同时只挂一单，10倍杠杆 |
-| 做市商 | 双边挂单/清仓 | 每 tick 必然双边挂单（每边1-5单），先撤旧单再挂新单，10倍杠杆 |
+| 阶段1 | 统一撤销被淘汰Agent的所有挂单 | 防止撤单时作为maker产生反向仓位 |
+| 阶段2 | 统一提交市价单平仓 | 尝试在订单簿中平仓 |
+| 阶段3 | ADL自动减仓 | 处理无法完全成交的情况 |
 
-### ADL (自动减仓) 机制
+**ADL排名公式：**
+- 盈利方：`排名 = PnL% × 有效杠杆`
+- 亏损方：`排名 = PnL% / 有效杠杆`
+- 成交价格：使用当前市场价格（非破产价格）
 
-当强平订单无法在订单簿中完全成交时，系统自动触发 ADL 机制：
+### 四种Agent类型
 
-1. **触发条件**：强平市价单无法完全成交（流动性不足）
-2. **排名公式**：
-   - 盈利时：`排名 = PnL% × 有效杠杆`
-   - 亏损时：`排名 = PnL% / 有效杠杆`
-3. **执行流程**：按排名从高到低选择对手方，以当前市场价格强制成交
-4. **成交价格**：直接使用当前市场价格（不使用破产价格）
-   - 设计原则：强平 ≠ 破产，被强平时 Agent 可能还有正净值（仅保证金率过低）
-   - 优点：简单公平、避免异常、符合直觉
+| 类型 | 数量 | 初始资金 | 杠杆 | 订单簿深度 | 动作 |
+|------|------|----------|------|-----------|------|
+| 散户 | 10,000 | 10万 | 100x | 10档 | 挂单/撤单/吃单/不动 |
+| 高级散户 | 100 | 10万 | 100x | 100档 | 挂单/撤单/吃单/不动 |
+| 庄家 | 100 | 1000万 | 10x | 100档 | 挂单/撤单/吃单/不动/清仓 |
+| 做市商 | 100 | 1000万 | 10x | 100档 | 双边挂单（每边1-5单） |
 
-相关模块：`src/market/adl/`
+**约束规则：**
+- 散户/高级散户/庄家：同时只能挂一单
+- 做市商：每tick必须双边挂单，先撤旧单再挂新单
+- 所有操作在最新价 ±100 个最小变动单位内
 
-### 训练流程
-1. **初始化**: 创建四种群、撮合引擎、做市商建立初始流动性
-2. **Episode 循环**: 重置账户/市场 → 运行 N 个 tick → NEAT 进化
-3. **Tick 执行**: 检查强平 → 鲶鱼行动 → 随机打乱所有 Agent 顺序 → 并行决策 → 串行执行
+### 鲶鱼机制
 
-### NEAT 配置
-- `config/neat_retail.cfg` - 散户（127 个输入节点，9 个输出节点）
-- `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，9 个输出节点）
-- `config/neat_whale.cfg` - 庄家（907 个输入节点，9 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（934 个输入节点，21 个输出节点）
+规则驱动的市场扰动器（不参与NEAT进化）：
+
+| 模式 | 行为 |
+|------|------|
+| 趋势创造者 | Episode开始随机选方向，持续该方向操作 |
+| 均值回归 | 价格偏离EMA时反向操作 |
+| 随机交易 | 随机买卖制造噪音 |
+
+**特殊规则：**
+- 初始资金 = (做市商杠杆后资金 - 其他物种杠杆后资金) / 3
+- 手续费为0
+- 鲶鱼被强平 → Episode立即结束（训练模式）
+
+### 手续费模型
+
+| 角色 | Maker费 | Taker费 |
+|------|---------|---------|
+| 散户/高级散户 | 万2 | 万5 |
+| 庄家/做市商 | -万1（返佣） | 万1 |
+| 鲶鱼 | 0 | 0 |
+
+---
+
+## 模块架构
+
+### 目录结构
+
+```
+src/
+├── core/           # 核心引擎
+│   └── log_engine/ # 统一日志管理
+├── market/         # 交易市场引擎
+│   ├── orderbook/  # 订单簿（Cython，买卖各100档）
+│   ├── matching/   # 撮合引擎（价格优先、时间优先）
+│   ├── account/    # 账户管理（持仓、余额、保证金、强平）
+│   ├── adl/        # ADL自动减仓
+│   └── catfish/    # 鲶鱼模块
+├── bio/            # 生物系统
+│   ├── brain/      # NEAT神经网络封装
+│   └── agents/     # 四种Agent类型
+├── training/       # 训练引擎
+│   ├── population.py   # 种群管理
+│   ├── trainer.py      # 训练协调器
+│   └── arena/          # 多竞技场模块
+├── ui/             # DearPyGui可视化
+├── analysis/       # 演示分析器
+└── config/         # 配置管理
+```
+
+### NEAT配置文件
+
+| 配置 | Agent类型 | 输入节点 | 输出节点 |
+|------|----------|----------|----------|
+| neat_retail.cfg | 散户 | 127 | 9 |
+| neat_retail_pro.cfg | 高级散户 | 907 | 9 |
+| neat_whale.cfg | 庄家 | 907 | 9 |
+| neat_market_maker.cfg | 做市商 | 934 | 21 |
+
+---
 
 ## 目录级 CLAUDE.md 系统
 
-各子目录包含独立的 CLAUDE.md 文件，详细描述该目录下的代码逻辑和接口。阅读代码时优先查阅对应目录的 CLAUDE.md。
+各子目录包含独立的 CLAUDE.md 文件，详细描述该目录下的代码逻辑和接口。阅读代码时优先查阅对应目录的 CLAUDE.md：
+
+| 模块 | 文件 | 内容 |
+|------|------|------|
+| 市场引擎 | src/market/CLAUDE.md | 订单簿、撮合、账户、ADL |
+| Agent | src/bio/agents/CLAUDE.md | 四种Agent行为与输入输出 |
+| 神经网络 | src/bio/brain/CLAUDE.md | NEAT封装与前向传播 |
+| 训练引擎 | src/training/CLAUDE.md | Episode循环、强平处理 |
+| 多竞技场 | src/training/arena/CLAUDE.md | 并行训练、物种迁移 |
+| 鲶鱼 | src/market/catfish/CLAUDE.md | 三种模式详解 |
+| ADL | src/market/adl/CLAUDE.md | 自动减仓机制 |
+
+---
 
 ## 技术约束
 
 - 优先使用 NumPy 向量化操作
-- 无法向量化的场景使用 Cython 加速（如订单簿）
+- 无法向量化的场景使用 Cython 加速（如订单簿、持仓计算、神经网络前向传播）
 - 严格的 Python 类型定义
 - 所有参数可通过配置文件配置
+- 代码修改后必须执行 `./rebuild.sh` 清理缓存并重新编译
+
+---
+
+## 性能优化要点
+
+### Cython加速模块
+- `OrderBook` - 订单簿操作
+- `Position` - 持仓计算
+- `FastFeedForwardNetwork` - 神经网络推理（10-100倍提升）
+
+### 并行化策略
+- 多竞技场：独立进程并行（绕过GIL）
+- Agent创建：8个worker线程池
+- Agent决策：16个worker线程池
+
+### 内存管理
+- 预分配输入缓冲区
+- NEAT历史数据定期清理
+- Episode后强制垃圾回收
+- 多竞技场分离存储（轻重分离）
