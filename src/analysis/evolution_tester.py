@@ -58,6 +58,7 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
     """
     # 延迟导入，避免循环依赖
     from src.training.trainer import Trainer
+    from src.market.catfish import create_all_catfish, create_catfish
 
     config: Config = params["config"]
     populations_data: dict[AgentType, bytes] = params["populations_data"]
@@ -65,11 +66,7 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
     test_type: str = params["test_type"]
     run_idx: int = params["run_idx"]
 
-    # 创建 Trainer（不使用鲶鱼）
-    # 临时修改配置禁用鲶鱼
-    original_catfish = config.catfish
-    config.catfish = None
-
+    # 创建 Trainer（保留鲶鱼配置）
     trainer = Trainer(config)
 
     # 加载 NEAT 配置
@@ -143,6 +140,33 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
     trainer._build_execution_order()
     trainer._update_pop_total_counts()
 
+    # 初始化鲶鱼（如果配置中启用）
+    if config.catfish and config.catfish.enabled:
+        catfish_initial_balance = trainer._calculate_catfish_initial_balance()
+        whale_config = config.agents[AgentType.WHALE]
+        catfish_leverage = whale_config.leverage
+        catfish_mmr = whale_config.maintenance_margin_rate
+
+        if config.catfish.multi_mode:
+            trainer.catfish_list = create_all_catfish(
+                config.catfish,
+                initial_balance=catfish_initial_balance,
+                leverage=catfish_leverage,
+                maintenance_margin_rate=catfish_mmr,
+            )
+            for catfish in trainer.catfish_list:
+                trainer.matching_engine.register_agent(catfish.catfish_id, 0.0, 0.0)
+        else:
+            catfish = create_catfish(
+                -1,
+                config.catfish,
+                initial_balance=catfish_initial_balance,
+                leverage=catfish_leverage,
+                maintenance_margin_rate=catfish_mmr,
+            )
+            trainer.catfish_list = [catfish]
+            trainer.matching_engine.register_agent(catfish.catfish_id, 0.0, 0.0)
+
     # 初始化市场
     trainer._ema_alpha = config.market.ema_alpha
     trainer._init_ema_price(config.market.initial_price)
@@ -156,9 +180,19 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
     for population in trainer.populations.values():
         population.reset_agents()
 
+    # 重置鲶鱼
+    for catfish in trainer.catfish_list:
+        catfish.reset()
+
     trainer._reset_market()
     trainer.tick = 0
     trainer._pop_liquidated_counts.clear()
+    trainer._catfish_liquidated = False
+
+    # 初始化 episode 价格统计
+    initial_price = config.market.initial_price
+    trainer._episode_high_price = initial_price
+    trainer._episode_low_price = initial_price
 
     # 记录初始余额
     initial_balances: dict[AgentType, float] = {}
@@ -177,10 +211,11 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
         if early_end_result is not None:
             break
 
-    trainer.is_running = False
+        # 检查鲶鱼强平（鲶鱼强平则 episode 提前结束）
+        if trainer._catfish_liquidated:
+            break
 
-    # 恢复配置
-    config.catfish = original_catfish
+    trainer.is_running = False
 
     # 收集结果
     current_price = trainer.matching_engine._orderbook.last_price

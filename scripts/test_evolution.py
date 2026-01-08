@@ -89,7 +89,8 @@ def check_test_status(
 
     for agent_type in AgentType:
         comparison_path = (
-            results_path / "comparison"
+            results_path
+            / "comparison"
             / f"gen_{generation}_vs_gen_{base_generation}_{agent_type.value}.pkl"
         )
         done = comparison_path.exists()
@@ -180,7 +181,9 @@ def list_generations_with_status(
                 status_str = "○ 未测试"
                 pending_count += 1
 
-            print(f"{gen_num:>6} | {save_time:^20} | {species_count:>6} | {status_str:<20}")
+            print(
+                f"{gen_num:>6} | {save_time:^20} | {species_count:>6} | {status_str:<20}"
+            )
 
     print("=" * 80)
     print(f"共 {len(generations)} 代: {completed_count} 已完成, {pending_count} 待测试")
@@ -435,8 +438,22 @@ def main() -> None:
         default="logs",
         help="日志目录（默认: logs）",
     )
+    parser.add_argument(
+        "--catfish",
+        action="store_true",
+        default=True,
+        help="启用鲶鱼机制（默认: 启用）",
+    )
+    parser.add_argument(
+        "--no-catfish",
+        action="store_true",
+        help="禁用鲶鱼机制",
+    )
 
     args = parser.parse_args()
+
+    # 处理 catfish 参数
+    catfish_enabled = args.catfish and not args.no_catfish
 
     # 处理 --list 参数
     if args.list_generations:
@@ -455,13 +472,18 @@ def main() -> None:
         print("请先运行训练以生成代数据")
         sys.exit(1)
 
-    # 创建测试专用配置（禁用鲶鱼，不保存 checkpoint）
+    # 创建测试专用配置
     config = create_default_config(
         episode_length=args.episode_length,
         checkpoint_interval=0,
         config_dir=args.config_dir,
-        catfish_enabled=False,
+        catfish_enabled=catfish_enabled,
     )
+
+    if catfish_enabled:
+        print("鲶鱼机制: 已启用")
+    else:
+        print("鲶鱼机制: 已禁用")
 
     # 创建测试器
     tester = EvolutionTester(

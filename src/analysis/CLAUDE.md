@@ -288,10 +288,17 @@ Agent 类型中文名称映射：
 - 进程池大小 = CPU 核心数
 
 Worker 函数 `_run_single_test_worker(params)` 在独立进程中执行：
-1. 创建 Trainer（禁用鲶鱼）
+1. 创建 Trainer
 2. 从 genome_data 创建各物种的 Agent 种群
-3. 运行单次 episode
-4. 收集并返回结果
+3. 初始化鲶鱼（如果 config.catfish.enabled=True）
+4. 运行单次 episode（鲶鱼强平时提前结束）
+5. 收集并返回结果
+
+**鲶鱼机制：**
+- 测试默认启用鲶鱼，可通过 `--no-catfish` 参数禁用
+- 鲶鱼的作用是打破"不交易"僵局，增加市场波动
+- 鲶鱼被强平时 episode 提前结束
+- 没有鲶鱼时，进化后的 Agent 可能学会"不交易"策略，导致收益率为 0
 
 **评估指标：**
 
