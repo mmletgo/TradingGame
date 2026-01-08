@@ -201,18 +201,17 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
             initial_balances[agent_type] = population.agents[0].account.initial_balance
 
     # 运行 episode
+    # 测试模式下，鲶鱼爆仓不结束 episode，只有以下情况才结束：
+    # 1. tick 达到 episode_length
+    # 2. 任一物种被淘汰到只剩 1/4
     for _ in range(episode_length):
         if not trainer.is_running:
             break
         trainer.run_tick()
 
-        # 检查提前结束条件
+        # 检查提前结束条件（物种淘汰到 1/4 或订单簿单边）
         early_end_result = trainer._should_end_episode_early()
         if early_end_result is not None:
-            break
-
-        # 检查鲶鱼强平（鲶鱼强平则 episode 提前结束）
-        if trainer._catfish_liquidated:
             break
 
     trainer.is_running = False

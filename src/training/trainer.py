@@ -1453,13 +1453,13 @@ class Trainer:
                 if catfish.account.balance < 0:
                     catfish.account.balance = 0.0
 
-                # 触发 episode 结束
+                # 标记鲶鱼强平（调用方决定是否结束 episode）
                 self._catfish_liquidated = True
-                self.logger.warning(
-                    f"鲶鱼 {catfish.__class__.__name__} 被强平，"
-                    f"episode {self.episode} 提前结束 (tick={self.tick})"
+                self.logger.info(
+                    f"鲶鱼 {catfish.__class__.__name__} 被强平 "
+                    f"(episode={self.episode}, tick={self.tick})"
                 )
-                break  # 一条鲶鱼强平就结束
+                break  # 一条鲶鱼强平就停止检查
 
     def _execute_catfish_liquidation(
         self, catfish: "CatfishBase", current_price: float
