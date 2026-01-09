@@ -31,18 +31,11 @@ def _py_clip(value: float, min_val: float, max_val: float) -> float:
 # 尝试导入 Cython 加速函数，如果失败则使用纯 Python 实现
 try:
     from src.bio.agents._cython.fast_decide import (
-        fast_argmax as _cython_argmax,
+        fast_argmax,
         fast_round_price,
         fast_clip,
     )
     _HAS_CYTHON_DECIDE = True
-
-    # 包装 Cython argmax 以自动处理 list 到 numpy 数组的转换
-    def fast_argmax(arr: np.ndarray | list[float], start: int, end: int) -> int:
-        """Cython 加速的 argmax，自动处理 list 输入"""
-        if isinstance(arr, list):
-            arr = np.array(arr, dtype=np.float64)
-        return _cython_argmax(arr, start, end)
 except ImportError:
     fast_argmax = _py_argmax
     fast_round_price = _py_round_price
