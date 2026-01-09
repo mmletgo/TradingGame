@@ -50,6 +50,24 @@ from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.training.fast_math import log_normalize_signed, log_normalize_unsigned
 from src.training.population import Population, malloc_trim
 
+# 缓存类型常量 - 直接在 Python 中定义，避免 Cython 导出问题
+CACHE_TYPE_RETAIL = 0
+CACHE_TYPE_FULL = 1
+CACHE_TYPE_MARKET_MAKER = 2
+
+# 尝试导入 OpenMP 批量决策缓存模块
+try:
+    from src.training._cython.batch_decide_openmp import (
+        batch_decide_retail,
+        batch_decide_full,
+        batch_decide_market_maker,
+        BatchNetworkCache,
+    )
+    HAS_OPENMP_DECIDE = True
+except ImportError:
+    HAS_OPENMP_DECIDE = False
+    BatchNetworkCache = None  # type: ignore
+
 
 class Trainer:
     """训练器
@@ -164,6 +182,12 @@ class Trainer:
             'tick_volumes': np.zeros(100, dtype=np.float32),
             'tick_amounts': np.zeros(100, dtype=np.float32),
         }
+
+        # 网络数据缓存（OpenMP 优化）
+        self._network_caches: dict[AgentType, "BatchNetworkCache"] | None = None
+        self._cache_initialized: bool = False
+        # 是否使用 OpenMP 决策（可通过配置关闭）
+        self.use_openmp_decide: bool = True
 
     def set_generation_saver(self, saver: "GenerationSaver") -> None:
         """设置每代保存器
@@ -347,6 +371,67 @@ class Trainer:
             self._executor.shutdown(wait=True)
             self._executor = None
 
+    def _init_network_caches(self) -> None:
+        """初始化网络数据缓存
+
+        为每种 Agent 类型创建 BatchNetworkCache，预分配内存和提取网络数据。
+        只在 HAS_OPENMP_DECIDE 为 True 且 use_openmp_decide 为 True 时创建。
+        """
+        if not HAS_OPENMP_DECIDE or not self.use_openmp_decide:
+            self._network_caches = None
+            self._cache_initialized = False
+            return
+
+        if BatchNetworkCache is None:
+            self._network_caches = None
+            self._cache_initialized = False
+            return
+
+        self._network_caches = {}
+
+        # 为每种 Agent 类型创建缓存
+        for agent_type, population in self.populations.items():
+            if not population.agents:
+                continue
+
+            # 确定缓存类型
+            if agent_type == AgentType.RETAIL:
+                cache_type = CACHE_TYPE_RETAIL
+            elif agent_type == AgentType.MARKET_MAKER:
+                cache_type = CACHE_TYPE_MARKET_MAKER
+            else:  # RETAIL_PRO, WHALE
+                cache_type = CACHE_TYPE_FULL
+
+            # 创建缓存
+            num_networks = len(population.agents)
+            cache = BatchNetworkCache(num_networks, cache_type)
+
+            # 提取网络数据
+            networks = [agent.brain.network for agent in population.agents]
+            cache.update_networks(networks)
+
+            self._network_caches[agent_type] = cache
+            self.logger.debug(f"已为 {agent_type.value} 创建网络缓存，数量={num_networks}")
+
+        self._cache_initialized = True
+        self.logger.info(f"网络数据缓存初始化完成，共 {len(self._network_caches)} 种类型")
+
+    def _update_network_caches(self) -> None:
+        """更新网络数据缓存
+
+        在 NEAT 进化后调用，重新提取所有网络数据到缓存。
+        """
+        if self._network_caches is None:
+            return
+
+        for agent_type, population in self.populations.items():
+            cache = self._network_caches.get(agent_type)
+            if cache is None or not population.agents:
+                continue
+
+            networks = [agent.brain.network for agent in population.agents]
+            cache.update_networks(networks)
+
     def setup(self, checkpoint: dict | None = None) -> None:
         """初始化训练环境
 
@@ -438,6 +523,9 @@ class Trainer:
 
         # 初始化市场（做市商先行动）
         self._init_market()
+
+        # 初始化网络数据缓存（OpenMP 优化）
+        self._init_network_caches()
 
         self.logger.info("训练环境初始化完成")
 
@@ -978,6 +1066,9 @@ class Trainer:
         # [MEMORY] 记录进化后、最终 GC 前的内存
         mem_after_evolve = _get_memory_mb()
 
+        # 所有种群进化完成后，更新网络数据缓存
+        self._update_network_caches()
+
         # 最终全面 GC，确保所有临时对象被回收
         # 包括 Python 2 代和 3 代垃圾
         gc.collect(0)  # 年轻代
@@ -1024,6 +1115,9 @@ class Trainer:
 
             # 每个种群进化后立即 GC
             gc.collect()
+
+        # 所有种群进化完成后，更新网络数据缓存
+        self._update_network_caches()
 
         # 最终全面 GC
         gc.collect(0)
@@ -1095,6 +1189,11 @@ class Trainer:
         if n == 0:
             return []
 
+        # ======= 缓存路径：优先使用缓存版本 =======
+        if self._cache_initialized and self._network_caches:
+            return self._batch_decide_with_cache(active_agents, market_state)
+
+        # ======= 原有逻辑：非缓存路径 =======
         # 尝试导入 batch_activate_parallel
         try:
             from neat._cython.fast_network import batch_activate_parallel
@@ -1357,6 +1456,139 @@ class Trainer:
         """
         # 尝试使用 OpenMP 并行版本
         return self._batch_decide_openmp(agents, market_state, orderbook)
+
+    def _batch_decide_with_cache(
+        self,
+        active_agents: list["Agent"],
+        market_state: "NormalizedMarketStateType",
+    ) -> list[tuple["Agent", "ActionType", dict[str, Any]]]:
+        """使用缓存执行批量决策
+
+        按 Agent 类型分组，使用对应的 BatchNetworkCache 执行决策。
+
+        Args:
+            active_agents: 活跃的 Agent 列表（已过滤淘汰的）
+            market_state: 归一化市场状态
+
+        Returns:
+            决策结果列表：[(agent, action, params), ...]
+        """
+        from src.bio.agents.base import ActionType
+
+        # 按 Agent 类型分组（保持原始索引）
+        type_groups: dict[AgentType, list[tuple[int, "Agent"]]] = {}
+        for idx, agent in enumerate(active_agents):
+            agent_type = agent.agent_type
+            if agent_type not in type_groups:
+                type_groups[agent_type] = []
+            type_groups[agent_type].append((idx, agent))
+
+        all_results: list[tuple[int, "Agent", "ActionType", dict[str, Any]]] = []
+        mid_price = market_state.mid_price
+
+        for agent_type, group in type_groups.items():
+            cache = self._network_caches.get(agent_type)  # type: ignore
+            if cache is None or not cache.is_valid():
+                # 回退到非缓存版本（单独处理这组）
+                self.logger.warning(
+                    f"缓存无效或不存在 {agent_type.value}，跳过"
+                )
+                continue
+
+            # 收集该类型的所有 Agent
+            group_agents = [agent for _, agent in group]
+
+            # 使用缓存执行决策
+            try:
+                raw_results = cache.decide(group_agents, market_state)
+            except Exception as e:
+                self.logger.warning(f"缓存决策失败 {agent_type.value}: {e}")
+                continue
+
+            # 转换结果
+            is_whale = (agent_type == AgentType.WHALE)
+            is_market_maker = (agent_type == AgentType.MARKET_MAKER)
+            tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+
+            for i, (idx, agent) in enumerate(group):
+                try:
+                    if is_market_maker:
+                        # 做市商返回原始输出
+                        nn_output = raw_results[i]
+                        action, params = self._parse_market_maker_output(
+                            agent, nn_output, mid_price, tick_size
+                        )
+                    else:
+                        # 散户/高级散户/庄家：解析 Cython 返回的结果
+                        action_type_int, side_int, price, quantity = raw_results[i]
+                        action, params = self._convert_retail_result(
+                            agent, action_type_int, side_int, price, quantity,
+                            mid_price, is_whale=is_whale
+                        )
+                    all_results.append((idx, agent, action, params))
+                except Exception:
+                    pass
+
+        # 按原始顺序排序
+        all_results.sort(key=lambda x: x[0])
+        return [(agent, action, params) for _, agent, action, params in all_results]
+
+    def _convert_retail_result(
+        self,
+        agent: "Agent",
+        action_type_int: int,
+        side_int: int,
+        price: float,
+        quantity: int,
+        mid_price: float,
+        is_whale: bool = False,
+    ) -> tuple["ActionType", dict[str, Any]]:
+        """将 Cython 返回的散户/庄家结果转换为 ActionType 和 params
+
+        Args:
+            agent: Agent 对象
+            action_type_int: 动作类型整数（0=挂单, 1=撤单, 2=吃单, 3=不动, 4=清仓）
+            side_int: 方向整数（0=买, 1=卖）
+            price: 价格
+            quantity: 数量
+            mid_price: 中间价
+            is_whale: 是否为庄家
+
+        Returns:
+            (动作类型, 参数字典)
+        """
+        from src.bio.agents.base import ActionType
+
+        params: dict[str, Any] = {}
+
+        # 动作类型映射
+        # 0=挂单, 1=撤单, 2=吃单, 3=不动, 4=清仓
+        if action_type_int == 0:
+            # 挂单
+            if side_int == 0:
+                action = ActionType.PLACE_BID
+            else:
+                action = ActionType.PLACE_ASK
+            params["price"] = price
+            params["quantity"] = quantity
+        elif action_type_int == 1:
+            # 撤单
+            action = ActionType.CANCEL
+        elif action_type_int == 2:
+            # 吃单
+            if side_int == 0:
+                action = ActionType.MARKET_BUY
+            else:
+                action = ActionType.MARKET_SELL
+            params["quantity"] = quantity
+        elif action_type_int == 4 and is_whale:
+            # 清仓（仅庄家）
+            action = ActionType.CLOSE_POSITION
+        else:
+            # 不动
+            action = ActionType.HOLD
+
+        return action, params
 
     def _check_liquidations_vectorized(self, current_price: float) -> list["Agent"]:
         """向量化检查所有 Agent 的强平条件"""
@@ -2133,6 +2365,9 @@ class Trainer:
         self._build_execution_order()
         self._update_pop_total_counts()
 
+        # 更新网络数据缓存
+        self._update_network_caches()
+
         self.logger.info(f"检查点已加载: {path}")
 
     def load_checkpoint_data(self, checkpoint: dict) -> None:
@@ -2165,6 +2400,9 @@ class Trainer:
         self._build_execution_order()
         self._update_pop_total_counts()
 
+        # 更新网络数据缓存
+        self._update_network_caches()
+
     def pause(self) -> None:
         """暂停训练"""
         self.is_paused = True
@@ -2180,3 +2418,7 @@ class Trainer:
         self.is_running = False
         self.logger.info("训练已停止")
         self._shutdown_executor()
+
+        # 清理网络数据缓存
+        self._network_caches = None
+        self._cache_initialized = False

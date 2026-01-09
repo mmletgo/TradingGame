@@ -161,3 +161,45 @@ cdef void batch_parse_market_maker_nogil(
     int num_agents,
     int num_threads
 ) noexcept nogil
+
+
+# ============================================================================
+# 缓存类型常量
+# ============================================================================
+
+cdef int CACHE_TYPE_RETAIL
+cdef int CACHE_TYPE_FULL
+cdef int CACHE_TYPE_MARKET_MAKER
+
+
+# ============================================================================
+# 网络数据缓存类
+# ============================================================================
+
+cdef class BatchNetworkCache:
+    """网络数据缓存类，避免每次调用都重新提取网络数据"""
+
+    # C 结构体指针
+    cdef BatchNetworkData* network_data
+    cdef ThreadLocalBuffer* thread_buffers
+    cdef BatchAgentState* agent_state
+    cdef MarketStateData* market_data
+    cdef DecisionResult* results
+
+    # 缓存参数
+    cdef int num_networks
+    cdef int num_threads
+    cdef int input_dim
+    cdef int output_dim
+    cdef int max_nodes
+    cdef int max_connections
+
+    # 预分配的 NumPy 数组
+    cdef object inputs_array   # np.ndarray
+    cdef object outputs_array  # np.ndarray
+
+    # 网络 ID 列表（用于检测是否需要更新）
+    cdef list network_ids
+
+    # 类型标识 (0=retail, 1=full, 2=market_maker)
+    cdef int cache_type

@@ -1364,3 +1364,270 @@ def get_max_threads() -> int:
 def set_num_threads(int num_threads):
     """设置 OpenMP 线程数"""
     openmp.omp_set_num_threads(num_threads)
+
+
+# ============================================================================
+# 缓存类型常量（模块级）
+# ============================================================================
+
+CACHE_TYPE_RETAIL = 0
+CACHE_TYPE_FULL = 1
+CACHE_TYPE_MARKET_MAKER = 2
+
+
+# ============================================================================
+# 网络数据缓存类
+# ============================================================================
+
+cdef class BatchNetworkCache:
+    """网络数据缓存类，避免每次调用都重新提取网络数据
+
+    使用方法：
+    1. 创建缓存: cache = BatchNetworkCache(num_networks, cache_type, num_threads)
+    2. 更新网络数据: cache.update_networks(networks)
+    3. 执行决策: results = cache.decide(agents, market_state)
+
+    性能优化原理：
+    - 网络结构在进化前不变，只需提取一次
+    - Agent 状态和市场状态每 tick 都变，每次都需更新
+    - 预分配所有内存，避免 malloc/free 开销
+    """
+
+    def __cinit__(self, int num_networks, int cache_type, int num_threads=0):
+        """初始化缓存
+
+        Args:
+            num_networks: 网络数量
+            cache_type: 类型 (0=retail 127维, 1=full 907维, 2=market_maker 934维)
+            num_threads: OpenMP 线程数，0 表示自动检测
+        """
+        # 自动检测线程数
+        if num_threads <= 0:
+            num_threads = openmp.omp_get_max_threads()
+
+        self.num_networks = num_networks
+        self.num_threads = num_threads
+        self.cache_type = cache_type
+        self.network_ids = []
+
+        # 根据类型设置输入输出维度
+        if cache_type == 0:  # retail
+            self.input_dim = INPUT_DIM_RETAIL
+            self.output_dim = OUTPUT_DIM_RETAIL
+        elif cache_type == 1:  # full
+            self.input_dim = INPUT_DIM_FULL
+            self.output_dim = OUTPUT_DIM_RETAIL
+        else:  # market_maker
+            self.input_dim = INPUT_DIM_MARKET_MAKER
+            self.output_dim = OUTPUT_DIM_MARKET_MAKER
+
+        # 初始估算网络大小（update_networks 时会调整）
+        self.max_nodes = 100
+        self.max_connections = 1000
+
+        # 初始化所有指针为 NULL（网络数据在 update_networks 时分配）
+        self.network_data = NULL
+        self.thread_buffers = NULL
+
+        # 分配 Agent 状态和市场数据结构（每次 decide 都需要更新，但结构不变）
+        self.agent_state = alloc_batch_agent_state(num_networks)
+        self.market_data = alloc_market_state_data()
+        self.results = <DecisionResult*>calloc(num_networks, sizeof(DecisionResult))
+
+        # 预分配 NumPy 数组（用于存储输入和输出）
+        self.inputs_array = np.zeros((num_networks, self.input_dim), dtype=np.float64)
+        self.outputs_array = np.zeros((num_networks, self.output_dim), dtype=np.float64)
+
+    def __dealloc__(self):
+        """释放所有分配的内存"""
+        if self.network_data != NULL:
+            free_batch_network_data(self.network_data)
+        if self.agent_state != NULL:
+            free_batch_agent_state(self.agent_state)
+        if self.market_data != NULL:
+            free_market_state_data(self.market_data)
+        if self.results != NULL:
+            free(self.results)
+        if self.thread_buffers != NULL:
+            free_thread_buffers(self.thread_buffers, self.num_threads)
+
+    def update_networks(self, list networks):
+        """更新缓存的网络数据
+
+        在网络结构变化时（NEAT 进化后）调用此方法。
+        如果网络没有变化（通过 id() 检测），则跳过更新。
+
+        Args:
+            networks: FastFeedForwardNetwork 列表
+        """
+        cdef int num_networks = len(networks)
+        if num_networks == 0:
+            return
+
+        # 检查是否需要更新（通过对象 id 检测）
+        new_ids = [id(net) for net in networks]
+        if new_ids == self.network_ids:
+            return  # 网络没有变化，跳过更新
+
+        self.network_ids = new_ids
+        self.num_networks = num_networks
+
+        # 计算所有网络的最大节点数和连接数
+        cdef int max_nodes = 0
+        cdef int max_connections = 0
+        cdef int num_conns
+
+        for net in networks:
+            if net.num_nodes > max_nodes:
+                max_nodes = net.num_nodes
+            num_conns = len(net.conn_sources)
+            if num_conns > max_connections:
+                max_connections = num_conns
+
+        self.max_nodes = max_nodes
+        self.max_connections = max_connections
+
+        # 释放旧的网络数据和线程缓冲区
+        if self.network_data != NULL:
+            free_batch_network_data(self.network_data)
+        if self.thread_buffers != NULL:
+            free_thread_buffers(self.thread_buffers, self.num_threads)
+
+        # 分配新的网络数据结构
+        self.network_data = alloc_batch_network_data(
+            num_networks, max_nodes, max_connections,
+            self.input_dim, self.output_dim
+        )
+
+        # 分配线程本地缓冲区
+        self.thread_buffers = alloc_thread_buffers(
+            self.num_threads, max_nodes + self.input_dim,
+            self.input_dim, self.output_dim
+        )
+
+        # 提取网络数据到缓存（这是主要的耗时操作，只在进化后执行一次）
+        _extract_networks_to_batch(networks, self.network_data)
+
+        # 如果 Agent 数量变化，重新分配相关结构
+        if self.agent_state == NULL or self.agent_state.num_agents != num_networks:
+            if self.agent_state != NULL:
+                free_batch_agent_state(self.agent_state)
+            self.agent_state = alloc_batch_agent_state(num_networks)
+
+        # 重新分配结果数组
+        if self.results != NULL:
+            free(self.results)
+        self.results = <DecisionResult*>calloc(num_networks, sizeof(DecisionResult))
+
+        # 重新分配 NumPy 数组（如果大小变化）
+        if self.inputs_array.shape[0] != num_networks:
+            self.inputs_array = np.zeros((num_networks, self.input_dim), dtype=np.float64)
+            self.outputs_array = np.zeros((num_networks, self.output_dim), dtype=np.float64)
+
+    def decide(self, list agents, market_state) -> list:
+        """执行批量决策（使用缓存的网络数据）
+
+        Args:
+            agents: Agent 列表（顺序必须与 update_networks 时的 networks 一致）
+            market_state: NormalizedMarketState
+
+        Returns:
+            - retail/full: [(action_type, side, price, quantity), ...]
+            - market_maker: [(nn_output_array, mid_price, tick_size), ...]
+        """
+        cdef int num_agents = len(agents)
+        if num_agents == 0 or self.network_data == NULL:
+            return []
+
+        # 提取 Agent 状态（每次都需要更新，因为持仓、余额等会变化）
+        _extract_agents_to_batch(agents, self.agent_state, market_state.mid_price)
+
+        # 提取市场数据（每次都需要更新，因为订单簿、成交等会变化）
+        _extract_market_state(market_state, self.market_data)
+
+        cdef double[:, :] inputs_view = self.inputs_array
+        cdef double[:, :] outputs_view = self.outputs_array
+        cdef double mid_price = market_state.mid_price
+        cdef double tick_size = market_state.tick_size
+
+        # 执行批量计算（nogil 并行）
+        with nogil:
+            # 1. 批量观察（构建神经网络输入）
+            if self.cache_type == 0:  # retail
+                batch_observe_retail_nogil(
+                    self.agent_state, self.market_data,
+                    inputs_view, self.num_threads
+                )
+            elif self.cache_type == 1:  # full
+                batch_observe_full_nogil(
+                    self.agent_state, self.market_data,
+                    inputs_view, self.num_threads
+                )
+            else:  # market_maker
+                batch_observe_market_maker_nogil(
+                    self.agent_state, self.market_data,
+                    inputs_view, self.num_threads
+                )
+
+            # 2. 批量前向传播
+            batch_forward_nogil(
+                self.network_data, inputs_view, outputs_view,
+                self.thread_buffers, self.num_threads
+            )
+
+            # 3. 批量解析（非 market_maker）
+            if self.cache_type != 2:  # retail or full
+                batch_parse_retail_nogil(
+                    outputs_view, self.results, mid_price,
+                    tick_size, num_agents, self.num_threads
+                )
+            else:  # market_maker
+                batch_parse_market_maker_nogil(
+                    outputs_view, self.results, mid_price,
+                    tick_size, num_agents, self.num_threads
+                )
+
+        # 转换结果为 Python 列表
+        cdef list result_list = []
+        cdef int i
+
+        if self.cache_type == 2:  # market_maker 返回原始输出
+            for i in range(num_agents):
+                result_list.append((
+                    np.asarray(self.outputs_array[i]).copy(),
+                    mid_price,
+                    tick_size,
+                ))
+        else:  # retail/full 返回解析后的决策
+            for i in range(num_agents):
+                result_list.append((
+                    self.results[i].action_type,
+                    self.results[i].side,
+                    self.results[i].price,
+                    self.results[i].quantity,
+                ))
+
+        return result_list
+
+    def is_valid(self) -> bool:
+        """检查缓存是否有效（已初始化网络数据）"""
+        return self.network_data != NULL and len(self.network_ids) > 0
+
+    def clear(self):
+        """清除缓存的网络数据，强制下次 update_networks 时重新提取"""
+        self.network_ids = []
+
+    @property
+    def size(self) -> int:
+        """返回缓存的网络数量"""
+        return self.num_networks
+
+    @property
+    def type_name(self) -> str:
+        """返回缓存类型名称"""
+        if self.cache_type == 0:
+            return "retail"
+        elif self.cache_type == 1:
+            return "full"
+        else:
+            return "market_maker"
