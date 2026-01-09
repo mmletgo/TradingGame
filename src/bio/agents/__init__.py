@@ -5,11 +5,15 @@
 """
 
 from src.bio.agents.base import Agent
+from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.agents.whale import WhaleAgent
+from src.bio.agents.market_maker import MarketMakerAgent
 
 __all__ = [
     "Agent",
+    "RetailAgent",
     "RetailProAgent",
     "WhaleAgent",
+    "MarketMakerAgent",
 ]

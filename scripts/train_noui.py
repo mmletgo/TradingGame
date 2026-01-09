@@ -69,7 +69,12 @@ def main() -> None:
         "--episodes",
         type=int,
         default=4000,
-        help="训练的 episode 数量（默认: 4000）",
+        help="训练的 episode 数量（默认: 4000）。与 --infinite 互斥",
+    )
+    parser.add_argument(
+        "--infinite",
+        action="store_true",
+        help="无限训练模式，直到手动中断（Ctrl+C）。与 --episodes 互斥",
     )
     parser.add_argument(
         "--episode-length",
@@ -120,10 +125,17 @@ def main() -> None:
     # 设置日志
     setup_logging(args.log_dir)
 
+    # 确定训练模式
+    infinite_mode = args.infinite
+    episodes_to_train: int | None = None if infinite_mode else args.episodes
+
     print("=" * 60)
     print("NEAT AI 交易模拟竞技场 - 无 UI 训练模式")
     print("=" * 60)
-    print(f"Episodes: {args.episodes}")
+    if infinite_mode:
+        print("Episodes: 无限模式（Ctrl+C 停止）")
+    else:
+        print(f"Episodes: {args.episodes}")
     print(f"Episode Length: {args.episode_length} ticks")
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
     if args.resume:
@@ -189,7 +201,7 @@ def main() -> None:
 
     train_start = time.time()
     try:
-        trainer.train(episodes=args.episodes, state_callback=progress_callback)
+        trainer.train(episodes=episodes_to_train, state_callback=progress_callback)
     except KeyboardInterrupt:
         print("\n\n训练被用户中断")
         # 保存紧急检查点
@@ -198,12 +210,13 @@ def main() -> None:
         print(f"紧急检查点已保存: {emergency_path}")
 
     train_time = time.time() - train_start
+    trained_episodes = episodes_to_train if episodes_to_train else trainer.episode
 
     print("-" * 60)
     print("训练完成！")
     print(f"总 Episode: {trainer.episode}")
     print(f"总耗时: {train_time:.2f}s")
-    print(f"平均每 Episode: {train_time / max(args.episodes, 1):.2f}s")
+    print(f"平均每 Episode: {train_time / max(trained_episodes, 1):.2f}s")
     print("=" * 60)
 
 

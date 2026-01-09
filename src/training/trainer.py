@@ -1683,20 +1683,22 @@ class Trainer:
 
     def train(
         self,
-        episodes: int,
+        episodes: int | None = None,
         state_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """主训练循环
 
         Args:
-            episodes: 训练的 episode 数量
+            episodes: 训练的 episode 数量，None 表示无限训练模式
             state_callback: 可选的状态回调函数（用于 UI 更新）
         """
         self.is_running = True
         checkpoint_interval = self.config.training.checkpoint_interval
 
-        for ep in range(episodes):
-            if not self.is_running:
+        ep = 0
+        while self.is_running:
+            # 检查是否达到目标 episode 数
+            if episodes is not None and ep >= episodes:
                 break
 
             self.run_episode()
@@ -1708,6 +1710,8 @@ class Trainer:
             # 定期保存检查点
             if checkpoint_interval > 0 and (ep + 1) % checkpoint_interval == 0:
                 self.save_checkpoint(f"checkpoints/ep_{ep + 1}.pkl")
+
+            ep += 1
 
         self.is_running = False
 
