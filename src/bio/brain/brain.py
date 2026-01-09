@@ -67,3 +67,17 @@ class Brain:
             NEAT 基因组
         """
         return self.genome
+
+    def update_from_genome(
+        self, genome: neat.DefaultGenome, config: neat.Config
+    ) -> None:
+        """原地更新 genome 和 network，避免重建对象
+
+        Args:
+            genome: 新的 NEAT 基因组
+            config: NEAT 配置
+        """
+        self.genome = genome
+        self.config = config
+        # 重建网络（必须的，因为拓扑可能变化）
+        self.network = FastFeedForwardNetwork.create(genome, config)

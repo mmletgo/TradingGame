@@ -343,16 +343,14 @@ class Population:
         使用 NEAT 算法进行一代进化：
         1. 使用向量化 evaluate 计算所有 Agent 适应度
         2. 通过 agent -> genome 映射为基因组设置适应度
-        3. 清理旧 Agent 对象（在 neat_pop.run 之前，断开对旧 genome 的引用）
-        4. 调用 NEAT 种群的 run 方法进行一代进化
-        5. 清理 NEAT 历史数据
-        6. 从新基因组重建 Agent 列表
+        3. 调用 NEAT 种群的 run 方法进行一代进化
+        4. 清理 NEAT 历史数据
+        5. 复用 Agent 对象，只更新 Brain（对象池化优化）
 
         当 NEAT 进化失败（如种群灭绝）时，自动重置种群并重新开始。
 
-        关键优化：在 neat_pop.run() 之前先清理旧 Agent，这样旧的 genome 对象
-        就没有外部引用了，当 neat_pop.run() 替换 population 时，旧的 genome
-        可以被 GC 立即回收，避免内存泄漏。
+        对象池化优化：不再销毁旧 Agent 对象，而是复用它们，只更新 Brain。
+        这样可以避免大量对象的创建和销毁开销，显著提升性能。
 
         Args:
             current_price: 当前市场价格，用于计算适应度
@@ -368,19 +366,9 @@ class Population:
             genome = agent.brain.get_genome()
             genome.fitness = fitness  # type: ignore[assignment]
 
-        # 3. 【关键】在 neat_pop.run() 之前：
-        # - 保存旧基因组引用（用于后续清理其内部数据）
-        # - 清理旧 Agent 对象（断开 Agent -> Brain -> genome 引用链）
+        # 3. 保存旧基因组引用（用于后续清理其内部数据）
         mem_before_cleanup = _get_memory_mb()
-
-        # 保存旧基因组引用，用于进化后清理其内部数据
         old_genomes = list(self.neat_pop.population.values())
-
-        self._cleanup_old_agents()
-        # 强制 GC，回收旧 Agent 和 Brain 对象
-        gc.collect()
-        gc.collect()
-        mem_after_cleanup = _get_memory_mb()
 
         # 4. 调用 NEAT 进化（eval_genomes 留空，适应度已设置）
         def eval_genomes(
@@ -455,20 +443,20 @@ class Population:
         malloc_trim()
         mem_after_neat_cleanup = _get_memory_mb()
 
-        # 7. 从新基因组重建 Agent 列表
-        mem_before_create = _get_memory_mb()
+        # 8. 【对象池化优化】复用 Agent 对象，只更新 Brain
+        mem_before_update = _get_memory_mb()
         new_genomes = list(self.neat_pop.population.items())
-        self.agents = self.create_agents(new_genomes)
-        mem_after_create = _get_memory_mb()
+        for idx, (genome_id, genome) in enumerate(new_genomes):
+            self.agents[idx].update_brain(genome, self.neat_config)
+        mem_after_update = _get_memory_mb()
 
         # [MEMORY] 输出详细的内存变化日志
         mem_end = _get_memory_mb()
         self.logger.info(
             f"[MEMORY_EVOLVE] {self.agent_type.value} gen_{self.generation}: "
-            f"agent_cleanup={mem_after_cleanup - mem_before_cleanup:+.1f}MB, "
-            f"neat_run=+{mem_after_neat - mem_after_cleanup:.1f}MB, "
+            f"neat_run=+{mem_after_neat - mem_before_cleanup:.1f}MB, "
             f"neat_cleanup={mem_after_neat_cleanup - mem_before_neat_cleanup:+.1f}MB, "
-            f"agent_create=+{mem_after_create - mem_before_create:.1f}MB, "
+            f"brain_update=+{mem_after_update - mem_before_update:.1f}MB, "
             f"total={mem_end - mem_start:+.1f}MB"
         )
 
@@ -486,6 +474,8 @@ class Population:
         1. 不调用 evaluate() 重新计算适应度
         2. 使用基因组中已缓存的 fitness 值
         3. 如果所有 fitness 都是 None，返回 False 跳过进化
+
+        对象池化优化：不再销毁旧 Agent 对象，而是复用它们，只更新 Brain。
 
         Returns:
             bool: 是否成功进化。如果所有基因组的 fitness 都是 None，返回 False。
@@ -510,9 +500,6 @@ class Population:
 
         # 3. 保存旧基因组引用用于清理
         old_genomes = list(self.neat_pop.population.values())
-        self._cleanup_old_agents()
-        gc.collect()
-        gc.collect()
 
         # 4. 调用 NEAT 进化（使用缓存的 fitness，不重新评估）
         def eval_genomes(
@@ -569,9 +556,10 @@ class Population:
         gc.collect()
         malloc_trim()
 
-        # 8. 从新基因组重建 Agent 列表
+        # 8. 【对象池化优化】复用 Agent 对象，只更新 Brain
         new_genomes = list(self.neat_pop.population.items())
-        self.agents = self.create_agents(new_genomes)
+        for idx, (genome_id, genome) in enumerate(new_genomes):
+            self.agents[idx].update_brain(genome, self.neat_config)
 
         self.logger.info(
             f"{self.agent_type.value} 种群使用缓存适应度完成第 {self.generation} 代进化，"
