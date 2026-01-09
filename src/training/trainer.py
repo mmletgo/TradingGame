@@ -1031,6 +1031,309 @@ class Trainer:
         gc.collect(2)
         malloc_trim()
 
+    def _batch_decide_serial(
+        self,
+        agents: list["Agent"],
+        market_state: "NormalizedMarketStateType",
+        orderbook: "OrderBook",
+    ) -> list[tuple["Agent", "ActionType", dict[str, Any]]]:
+        """高效串行决策 - 单线程处理所有 Agent
+
+        经测试，由于 Python GIL 限制，多线程并行决策反而比单线程慢。
+        单线程串行处理避免了线程调度开销和 GIL 竞争。
+
+        Args:
+            agents: Agent 列表
+            market_state: 归一化市场状态
+            orderbook: 订单簿
+
+        Returns:
+            决策结果列表：[(agent, action, params), ...]
+        """
+        results: list[tuple["Agent", "ActionType", dict[str, Any]]] = []
+
+        for agent in agents:
+            # 跳过已淘汰的 Agent
+            if agent.is_liquidated:
+                continue
+            try:
+                action, params = agent.decide(market_state, orderbook)
+                results.append((agent, action, params))
+            except Exception:
+                # 忽略错误，继续处理其他 Agent
+                pass
+
+        return results
+
+    def _batch_decide_openmp(
+        self,
+        agents: list["Agent"],
+        market_state: "NormalizedMarketStateType",
+        orderbook: "OrderBook",
+    ) -> list[tuple["Agent", "ActionType", dict[str, Any]]]:
+        """OpenMP 多核并行决策
+
+        使用 OpenMP prange 实现真正的多核 CPU 并行神经网络计算。
+        流程：
+        1. 按 Agent 类型分组（不同类型有不同输入输出维度）
+        2. 串行：收集所有 Agent 的输入向量（observe）
+        3. 并行：按类型批量执行神经网络前向传播（OpenMP prange）
+        4. 串行：解析输出并返回决策结果
+
+        Args:
+            agents: Agent 列表
+            market_state: 归一化市场状态
+            orderbook: 订单簿
+
+        Returns:
+            决策结果列表：[(agent, action, params), ...]
+        """
+        # 过滤掉已淘汰的 Agent
+        active_agents = [a for a in agents if not a.is_liquidated]
+        n = len(active_agents)
+
+        if n == 0:
+            return []
+
+        # 尝试导入 batch_activate_parallel
+        try:
+            from neat._cython.fast_network import batch_activate_parallel
+        except ImportError:
+            # 回退到串行版本
+            return self._batch_decide_serial(agents, market_state, orderbook)
+
+        # 按 Agent 类型分组（不同类型有不同的输入输出维度）
+        type_groups: dict[AgentType, list[tuple[int, "Agent"]]] = {}
+        for idx, agent in enumerate(active_agents):
+            agent_type = agent.agent_type
+            if agent_type not in type_groups:
+                type_groups[agent_type] = []
+            type_groups[agent_type].append((idx, agent))
+
+        # 为每个类型准备批量数据并处理
+        all_results: list[tuple[int, "Agent", "ActionType", dict[str, Any]]] = []
+
+        for agent_type, group in type_groups.items():
+            if not group:
+                continue
+
+            # 收集输入和网络
+            inputs_list: list[np.ndarray] = []
+            networks_list: list = []
+            valid_items: list[tuple[int, "Agent"]] = []
+
+            for idx, agent in group:
+                try:
+                    input_vec = agent.observe(market_state, orderbook)
+                    network = agent.brain.network
+                    inputs_list.append(input_vec)
+                    networks_list.append(network)
+                    valid_items.append((idx, agent))
+                except Exception:
+                    pass
+
+            if not valid_items:
+                continue
+
+            # 获取该类型的输入输出维度
+            num_valid = len(valid_items)
+            num_inputs = networks_list[0].num_inputs
+            num_outputs = networks_list[0].num_outputs
+
+            # 准备批量数组
+            inputs_batch = np.zeros((num_valid, num_inputs), dtype=np.float64)
+            outputs_batch = np.zeros((num_valid, num_outputs), dtype=np.float64)
+
+            for i, inp in enumerate(inputs_list):
+                inputs_batch[i, :len(inp)] = inp
+
+            # OpenMP 并行执行神经网络前向传播
+            batch_activate_parallel(networks_list, inputs_batch, outputs_batch)
+
+            # 解析输出（不同类型使用不同的解析逻辑）
+            for i, (idx, agent) in enumerate(valid_items):
+                try:
+                    output = outputs_batch[i]
+                    action, params = self._parse_agent_output(
+                        agent, output, market_state, orderbook
+                    )
+                    all_results.append((idx, agent, action, params))
+                except Exception:
+                    pass
+
+        # 按原始顺序排序结果
+        all_results.sort(key=lambda x: x[0])
+
+        return [(agent, action, params) for _, agent, action, params in all_results]
+
+    def _parse_agent_output(
+        self,
+        agent: "Agent",
+        output: np.ndarray,
+        market_state: "NormalizedMarketStateType",
+        orderbook: "OrderBook",
+    ) -> tuple["ActionType", dict[str, Any]]:
+        """解析 Agent 的神经网络输出为动作
+
+        根据 Agent 类型使用不同的解析逻辑。
+
+        Args:
+            agent: Agent 对象
+            output: 神经网络输出数组
+            market_state: 归一化市场状态
+            orderbook: 订单簿
+
+        Returns:
+            (动作类型, 参数字典)
+        """
+        from src.bio.agents.base import fast_argmax, fast_round_price, fast_clip
+
+        mid_price = market_state.mid_price
+        if mid_price == 0:
+            mid_price = 100.0
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+
+        agent_type = agent.agent_type
+
+        if agent_type == AgentType.MARKET_MAKER:
+            # 做市商：21 个输出，直接返回 QUOTE 动作
+            return self._parse_market_maker_output(
+                agent, output, mid_price, tick_size
+            )
+        else:
+            # 散户/高级散户/庄家：9 个输出
+            return self._parse_retail_output(
+                agent, output, mid_price, tick_size, agent_type
+            )
+
+    def _parse_retail_output(
+        self,
+        agent: "Agent",
+        output: np.ndarray,
+        mid_price: float,
+        tick_size: float,
+        agent_type: AgentType,
+    ) -> tuple["ActionType", dict[str, Any]]:
+        """解析散户/高级散户/庄家的神经网络输出"""
+        from src.bio.agents.base import ActionType, fast_argmax, fast_round_price, fast_clip
+
+        # 解析动作类型
+        num_actions = 7 if agent_type == AgentType.WHALE else 6
+        action_idx = fast_argmax(output, 0, num_actions)
+        action = ActionType(action_idx)
+
+        # 解析参数
+        price_offset_norm = fast_clip(output[7], -1.0, 1.0)
+        quantity_ratio_norm = fast_clip(output[8], -1.0, 1.0)
+        quantity_ratio = (quantity_ratio_norm + 1) * 0.5
+
+        params: dict[str, Any] = {}
+
+        if action == ActionType.PLACE_BID:
+            price_offset_ticks = price_offset_norm * 100
+            raw_price = mid_price + price_offset_ticks * tick_size
+            params["price"] = fast_round_price(raw_price, tick_size)
+            params["quantity"] = agent._calculate_order_quantity(
+                mid_price, quantity_ratio, is_buy=True
+            )
+        elif action == ActionType.PLACE_ASK:
+            price_offset_ticks = price_offset_norm * 100
+            raw_price = mid_price + price_offset_ticks * tick_size
+            params["price"] = fast_round_price(raw_price, tick_size)
+            params["quantity"] = agent._calculate_order_quantity(
+                mid_price, quantity_ratio, is_buy=False
+            )
+        elif action == ActionType.MARKET_BUY:
+            params["quantity"] = agent._calculate_order_quantity(
+                mid_price, quantity_ratio, is_buy=True
+            )
+        elif action == ActionType.MARKET_SELL:
+            position_qty = agent.account.position.quantity
+            if position_qty > 0:
+                params["quantity"] = max(1, int(position_qty * quantity_ratio))
+            else:
+                params["quantity"] = agent._calculate_order_quantity(
+                    mid_price, quantity_ratio, is_buy=False
+                )
+
+        return action, params
+
+    def _parse_market_maker_output(
+        self,
+        agent: "Agent",
+        output: np.ndarray,
+        mid_price: float,
+        tick_size: float,
+    ) -> tuple["ActionType", dict[str, Any]]:
+        """解析做市商的神经网络输出"""
+        from src.bio.agents.base import ActionType, fast_round_price, fast_clip
+
+        # 做市商输出：21 个值
+        # [0-4] 买单价格偏移, [5-9] 买单数量权重
+        # [10-14] 卖单价格偏移, [15-19] 卖单数量权重
+        # [20] 总下单比例基准
+
+        bid_price_offsets = output[0:5]
+        bid_qty_weights = output[5:10]
+        ask_price_offsets = output[10:15]
+        ask_qty_weights = output[15:20]
+        total_ratio_raw = output[20] if len(output) > 20 else 0.0
+
+        # 映射总下单比例
+        total_ratio = (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5
+
+        # 计算倾斜因子
+        skew_factor = agent._calculate_skew_factor(mid_price)
+
+        # 应用倾斜到权重
+        bid_weights_sum = sum(max(0, (w + 1) * 0.5) for w in bid_qty_weights)
+        ask_weights_sum = sum(max(0, (w + 1) * 0.5) for w in ask_qty_weights)
+        total_weights = bid_weights_sum + ask_weights_sum
+
+        if total_weights > 0:
+            bid_multiplier = 1.0 + skew_factor
+            ask_multiplier = 1.0 - skew_factor
+            bid_weights_sum *= bid_multiplier
+            ask_weights_sum *= ask_multiplier
+            total_weights = bid_weights_sum + ask_weights_sum
+
+        # 构建订单列表
+        bid_orders: list[tuple[float, int]] = []
+        ask_orders: list[tuple[float, int]] = []
+
+        for i in range(5):
+            # 买单
+            offset = fast_clip(bid_price_offsets[i], -1.0, 1.0)
+            ticks = 1 + (offset + 1) * 49.5  # 1-100 ticks
+            price = mid_price - ticks * tick_size
+            price = fast_round_price(price, tick_size)
+
+            weight = max(0, (bid_qty_weights[i] + 1) * 0.5)
+            if total_weights > 0 and weight > 0:
+                ratio = (weight / total_weights) * total_ratio
+                qty = agent._calculate_order_quantity(
+                    price, ratio, is_buy=True, ref_price=mid_price
+                )
+                if qty > 0:
+                    bid_orders.append((price, qty))
+
+            # 卖单
+            offset = fast_clip(ask_price_offsets[i], -1.0, 1.0)
+            ticks = 1 + (offset + 1) * 49.5
+            price = mid_price + ticks * tick_size
+            price = fast_round_price(price, tick_size)
+
+            weight = max(0, (ask_qty_weights[i] + 1) * 0.5)
+            if total_weights > 0 and weight > 0:
+                ratio = (weight / total_weights) * total_ratio
+                qty = agent._calculate_order_quantity(
+                    price, ratio, is_buy=False, ref_price=mid_price
+                )
+                if qty > 0:
+                    ask_orders.append((price, qty))
+
+        return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
+
     def _batch_decide_parallel(
         self,
         agents: list["Agent"],
@@ -1038,84 +1341,22 @@ class Trainer:
         orderbook: "OrderBook",
         timeout: float = 60.0,
     ) -> list[tuple["Agent", "ActionType", dict[str, Any]]]:
-        """优化版并行决策 - 批量处理减少任务数量
+        """并行决策
 
-        将 Agent 按 CPU 核心数分批，每批提交一个任务，减少调度开销。
-        原实现：10,300 个任务 -> 优化后：约 16 个任务（取决于 _num_workers）
+        使用 OpenMP 多核并行执行神经网络前向传播。
+        如果 OpenMP 版本不可用，回退到串行版本。
 
         Args:
             agents: Agent 列表
             market_state: 归一化市场状态
             orderbook: 订单簿
-            timeout: 超时时间（秒），防止死锁
+            timeout: 超时时间（秒），未使用
 
         Returns:
             决策结果列表：[(agent, action, params), ...]
         """
-        executor = self._get_executor()
-
-        # 过滤已淘汰的 Agent
-        active_agents: list["Agent"] = [a for a in agents if not a.is_liquidated]
-        if not active_agents:
-            return []
-
-        # 计算批次大小：将 Agent 均匀分配到各个 worker
-        n_workers: int = self._num_workers
-        chunk_size: int = max(1, (len(active_agents) + n_workers - 1) // n_workers)
-
-        def decide_batch(
-            batch: list["Agent"],
-        ) -> list[tuple["Agent", "ActionType", dict[str, Any]]]:
-            """批量决策函数 - 在单个线程内串行执行一批 Agent 的决策"""
-            results: list[tuple["Agent", "ActionType", dict[str, Any]]] = []
-            for agent in batch:
-                try:
-                    action, params = agent.decide(market_state, orderbook)
-                    results.append((agent, action, params))
-                except Exception:
-                    # 记录错误但继续处理其他 Agent
-                    pass
-            return results
-
-        # 将 active_agents 分批
-        batches: list[list["Agent"]] = []
-        for i in range(0, len(active_agents), chunk_size):
-            batches.append(active_agents[i : i + chunk_size])
-
-        # 提交批量任务
-        future_to_batch_idx: dict[
-            Future[list[tuple["Agent", "ActionType", dict[str, Any]]]], int
-        ] = {}
-        for batch_idx, batch in enumerate(batches):
-            future = executor.submit(decide_batch, batch)
-            future_to_batch_idx[future] = batch_idx
-
-        # 收集结果
-        all_results: list[tuple["Agent", "ActionType", dict[str, Any]]] = []
-
-        try:
-            for future in as_completed(future_to_batch_idx, timeout=timeout):
-                batch_idx = future_to_batch_idx[future]
-                try:
-                    batch_results = future.result(timeout=5.0)
-                    all_results.extend(batch_results)
-                except TimeoutError:
-                    self.logger.warning(f"批次 {batch_idx} 决策获取结果超时")
-                except Exception as e:
-                    self.logger.warning(f"批次 {batch_idx} 决策异常: {e}")
-        except TimeoutError:
-            # 整体超时，记录警告并取消未完成的任务
-            arena_tag = f"Arena-{self.arena_id}" if self.arena_id is not None else ""
-            self.logger.error(
-                f"{arena_tag} tick {self.tick} 决策并行执行超时 ({timeout}s)，"
-                f"可能存在死锁"
-            )
-            # 取消未完成的 future
-            for future in future_to_batch_idx:
-                if not future.done():
-                    future.cancel()
-
-        return all_results
+        # 尝试使用 OpenMP 并行版本
+        return self._batch_decide_openmp(agents, market_state, orderbook)
 
     def _check_liquidations_vectorized(self, current_price: float) -> list["Agent"]:
         """向量化检查所有 Agent 的强平条件"""
