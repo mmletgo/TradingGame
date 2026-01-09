@@ -22,6 +22,10 @@ Agent (base.py) - 基类，不包含 decide 方法
 - `retail.py` - 散户 Agent（继承 RetailProAgent，仅重写 observe 方法限制可见市场数据）
 - `whale.py` - 庄家 Agent（继承基类，可做多也可做空）
 - `market_maker.py` - 做市商 Agent（重写部分方法）
+- `_cython/` - Cython 加速模块
+  - `__init__.py` - Cython 模块导出
+  - `fast_decide.pyx` - 决策辅助函数的 Cython 实现（fast_argmax, fast_round_price, fast_clip）
+  - `fast_observe.pyx` - observe 方法的 Cython 实现（fast_observe_retail, fast_observe_full, fast_observe_market_maker）
 
 ## 核心类
 
@@ -383,3 +387,55 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 - 如果空仓或持有空仓（quantity <= 0）：开空仓，使用 `_calculate_order_quantity` 计算数量
 
 这与 MARKET_BUY 不同，MARKET_BUY 总是使用 `_calculate_order_quantity` 计算数量（无论是平空仓还是开多仓）。
+
+## Cython 加速模块
+
+### fast_observe.pyx
+
+提供 `observe()` 方法的 Cython 加速实现，用于构建神经网络输入向量。每次调用仅需 1-2 微秒。
+
+**核心函数：**
+
+#### `fast_observe_retail(output_buffer, bid_data, ask_data, trade_prices, trade_quantities, tick_history_prices, tick_history_volumes, tick_history_amounts, position_inputs..., pending_inputs...)`
+构建散户的神经网络输入向量（127 维）。使用 `nogil` 释放 GIL，支持多线程并行。
+
+#### `fast_observe_full(output_buffer, ...)`
+构建高级散户/庄家的神经网络输入向量（907 维）。
+
+#### `fast_observe_market_maker(output_buffer, ..., pending_order_inputs)`
+构建做市商的神经网络输入向量（934 维）。做市商的挂单信息通过 30 维数组传入。
+
+#### `get_position_inputs(equity, leverage, position_quantity, position_avg_price, balance, initial_balance, mid_price) -> tuple`
+计算持仓信息输入（4 个值）。返回 `(position_value_normalized, position_avg_price_normalized, balance_normalized, equity_normalized)`。
+
+#### `get_pending_order_inputs(order_price, order_quantity, order_side, mid_price) -> tuple`
+计算挂单信息输入（3 个值）。返回 `(pending_price_normalized, pending_qty_normalized, pending_side)`。
+
+**使用方式：**
+Agent 类在 `observe()` 方法中自动检测 Cython 模块是否可用，如果可用则使用加速版本，否则回退到纯 Python 实现。
+
+```python
+# 自动检测并使用 Cython 加速
+if _HAS_CYTHON_OBSERVE:
+    # 使用 Cython 实现
+    fast_observe_full(self._input_buffer, ...)
+else:
+    # 回退到纯 Python 实现
+    self._input_buffer[:200] = market_state.bid_data
+    ...
+```
+
+### fast_decide.pyx
+
+提供决策辅助函数的 Cython 加速实现。
+
+**核心函数：**
+
+#### `fast_argmax(arr, start, end) -> int`
+在指定范围内查找最大值索引。使用 `nogil` 释放 GIL。
+
+#### `fast_round_price(price, tick_size) -> float`
+将价格取整到 tick_size 的整数倍，确保最小值为 tick_size。
+
+#### `fast_clip(value, min_val, max_val) -> float`
+将值裁剪到指定范围。

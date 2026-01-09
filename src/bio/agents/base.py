@@ -42,6 +42,17 @@ except ImportError:
     fast_clip = _py_clip
     _HAS_CYTHON_DECIDE = False
 
+# 尝试导入 Cython 加速的 observe 函数
+try:
+    from src.bio.agents._cython.fast_observe import (
+        fast_observe_full,
+        get_position_inputs as cython_get_position_inputs,
+        get_pending_order_inputs as cython_get_pending_order_inputs,
+    )
+    _HAS_CYTHON_OBSERVE = True
+except ImportError:
+    _HAS_CYTHON_OBSERVE = False
+
 if TYPE_CHECKING:
     from src.market.matching.matching_engine import MatchingEngine
 import neat
@@ -141,20 +152,71 @@ class Agent:
         Returns:
             神经网络输入向量（907维 ndarray）
         """
-        # 直接复制到预分配数组，避免 np.concatenate 创建新数组
-        self._input_buffer[:200] = market_state.bid_data
-        self._input_buffer[200:400] = market_state.ask_data
-        self._input_buffer[400:500] = market_state.trade_prices
-        self._input_buffer[500:600] = market_state.trade_quantities
-        self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
-        self._input_buffer[604:607] = self._get_pending_order_inputs(
-            market_state.mid_price, orderbook
-        )
-        # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
-        self._input_buffer[607:707] = market_state.tick_history_prices
-        self._input_buffer[707:807] = market_state.tick_history_volumes
-        self._input_buffer[807:907] = market_state.tick_history_amounts
-        return self._input_buffer  # 不调用 .tolist()
+        if _HAS_CYTHON_OBSERVE:
+            # 使用 Cython 加速版本
+            # 先计算持仓和挂单信息
+            mid_price = market_state.mid_price
+            equity = self.account.get_equity(mid_price)
+            position_inputs = cython_get_position_inputs(
+                equity,
+                self.account.leverage,
+                self.account.position.quantity,
+                self.account.position.avg_price,
+                self.account.balance,
+                self.account.initial_balance,
+                mid_price,
+            )
+
+            # 获取挂单信息
+            pending_id = self.account.pending_order_id
+            if pending_id is not None:
+                order = orderbook.order_map.get(pending_id)
+                if order is not None:
+                    pending_inputs = cython_get_pending_order_inputs(
+                        order.price,
+                        order.quantity,
+                        1 if order.side == OrderSide.BUY else 2,
+                        mid_price,
+                    )
+                else:
+                    pending_inputs = (0.0, 0.0, 0.0)
+            else:
+                pending_inputs = (0.0, 0.0, 0.0)
+
+            # 调用 Cython 函数填充缓冲区
+            fast_observe_full(
+                self._input_buffer,
+                market_state.bid_data,
+                market_state.ask_data,
+                market_state.trade_prices,
+                market_state.trade_quantities,
+                market_state.tick_history_prices,
+                market_state.tick_history_volumes,
+                market_state.tick_history_amounts,
+                position_inputs[0],
+                position_inputs[1],
+                position_inputs[2],
+                position_inputs[3],
+                pending_inputs[0],
+                pending_inputs[1],
+                pending_inputs[2],
+            )
+            return self._input_buffer
+        else:
+            # 纯 Python 实现：直接复制到预分配数组
+            self._input_buffer[:200] = market_state.bid_data
+            self._input_buffer[200:400] = market_state.ask_data
+            self._input_buffer[400:500] = market_state.trade_prices
+            self._input_buffer[500:600] = market_state.trade_quantities
+            self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
+            self._input_buffer[604:607] = self._get_pending_order_inputs(
+                market_state.mid_price, orderbook
+            )
+            # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
+            self._input_buffer[607:707] = market_state.tick_history_prices
+            self._input_buffer[707:807] = market_state.tick_history_volumes
+            self._input_buffer[807:907] = market_state.tick_history_amounts
+            return self._input_buffer  # 不调用 .tolist()
 
     def _get_position_inputs(self, mid_price: float) -> np.ndarray:
         """获取持仓信息输入（4 个值）

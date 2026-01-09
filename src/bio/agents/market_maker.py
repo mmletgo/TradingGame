@@ -24,6 +24,16 @@ from src.market.matching.trade import Trade
 if TYPE_CHECKING:
     from src.market.matching.matching_engine import MatchingEngine
 
+# 尝试导入 Cython 加速的 observe 函数
+try:
+    from src.bio.agents._cython.fast_observe import (
+        fast_observe_market_maker,
+        get_position_inputs as cython_get_position_inputs,
+    )
+    _HAS_CYTHON_OBSERVE = True
+except ImportError:
+    _HAS_CYTHON_OBSERVE = False
+
 
 class MarketMakerAgent(Agent):
     """做市商 Agent
@@ -89,20 +99,57 @@ class MarketMakerAgent(Agent):
         Returns:
             神经网络输入向量（934 维 ndarray）
         """
-        # 直接复制到预分配数组
-        self._input_buffer[:200] = market_state.bid_data
-        self._input_buffer[200:400] = market_state.ask_data
-        self._input_buffer[400:500] = market_state.trade_prices
-        self._input_buffer[500:600] = market_state.trade_quantities
-        self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
-        self._input_buffer[604:634] = self._get_pending_order_inputs(
-            market_state.mid_price, orderbook
-        )
-        # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
-        self._input_buffer[634:734] = market_state.tick_history_prices
-        self._input_buffer[734:834] = market_state.tick_history_volumes
-        self._input_buffer[834:934] = market_state.tick_history_amounts
-        return self._input_buffer  # 不调用 .tolist()
+        if _HAS_CYTHON_OBSERVE:
+            # 使用 Cython 加速版本
+            mid_price = market_state.mid_price
+            equity = self.account.get_equity(mid_price)
+            position_inputs = cython_get_position_inputs(
+                equity,
+                self.account.leverage,
+                self.account.position.quantity,
+                self.account.position.avg_price,
+                self.account.balance,
+                self.account.initial_balance,
+                mid_price,
+            )
+
+            # 获取挂单信息（做市商特有：30个值）
+            pending_order_inputs = self._get_pending_order_inputs(
+                mid_price, orderbook
+            )
+
+            # 调用 Cython 函数填充缓冲区
+            fast_observe_market_maker(
+                self._input_buffer,
+                market_state.bid_data,
+                market_state.ask_data,
+                market_state.trade_prices,
+                market_state.trade_quantities,
+                market_state.tick_history_prices,
+                market_state.tick_history_volumes,
+                market_state.tick_history_amounts,
+                position_inputs[0],
+                position_inputs[1],
+                position_inputs[2],
+                position_inputs[3],
+                pending_order_inputs,
+            )
+            return self._input_buffer
+        else:
+            # 纯 Python 实现：直接复制到预分配数组
+            self._input_buffer[:200] = market_state.bid_data
+            self._input_buffer[200:400] = market_state.ask_data
+            self._input_buffer[400:500] = market_state.trade_prices
+            self._input_buffer[500:600] = market_state.trade_quantities
+            self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
+            self._input_buffer[604:634] = self._get_pending_order_inputs(
+                market_state.mid_price, orderbook
+            )
+            # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
+            self._input_buffer[634:734] = market_state.tick_history_prices
+            self._input_buffer[734:834] = market_state.tick_history_volumes
+            self._input_buffer[834:934] = market_state.tick_history_amounts
+            return self._input_buffer  # 不调用 .tolist()
 
     def _fill_order_inputs(
         self,

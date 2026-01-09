@@ -13,6 +13,18 @@ from src.config.config import AgentConfig, AgentType
 from src.bio.brain.brain import Brain
 from src.market.market_state import NormalizedMarketState
 from src.market.orderbook.orderbook import OrderBook
+from src.market.orderbook.order import OrderSide
+
+# 尝试导入 Cython 加速的 observe 函数
+try:
+    from src.bio.agents._cython.fast_observe import (
+        fast_observe_retail,
+        get_position_inputs as cython_get_position_inputs,
+        get_pending_order_inputs as cython_get_pending_order_inputs,
+    )
+    _HAS_CYTHON_OBSERVE = True
+except ImportError:
+    _HAS_CYTHON_OBSERVE = False
 
 
 class RetailAgent(RetailProAgent):
@@ -70,43 +82,94 @@ class RetailAgent(RetailProAgent):
         Returns:
             神经网络输入向量（127维 ndarray）
         """
-        depth = self.ORDERBOOK_DEPTH
-        trade_size = self.TRADE_HISTORY_SIZE
-        tick_size = self.TICK_HISTORY_SIZE
+        if _HAS_CYTHON_OBSERVE:
+            # 使用 Cython 加速版本
+            mid_price = market_state.mid_price
+            equity = self.account.get_equity(mid_price)
+            position_inputs = cython_get_position_inputs(
+                equity,
+                self.account.leverage,
+                self.account.position.quantity,
+                self.account.position.avg_price,
+                self.account.balance,
+                self.account.initial_balance,
+                mid_price,
+            )
 
-        # 买盘前10档: 每档2个值（价格归一化 + 数量），取前20个值
-        self._input_buffer[:depth * 2] = market_state.bid_data[:depth * 2]
+            # 获取挂单信息
+            pending_id = self.account.pending_order_id
+            if pending_id is not None:
+                order = orderbook.order_map.get(pending_id)
+                if order is not None:
+                    pending_inputs = cython_get_pending_order_inputs(
+                        order.price,
+                        order.quantity,
+                        1 if order.side == OrderSide.BUY else 2,
+                        mid_price,
+                    )
+                else:
+                    pending_inputs = (0.0, 0.0, 0.0)
+            else:
+                pending_inputs = (0.0, 0.0, 0.0)
 
-        # 卖盘前10档: 每档2个值，取前20个值
-        offset = depth * 2  # 20
-        self._input_buffer[offset:offset + depth * 2] = market_state.ask_data[:depth * 2]
+            # 调用 Cython 函数填充缓冲区
+            fast_observe_retail(
+                self._input_buffer,
+                market_state.bid_data,
+                market_state.ask_data,
+                market_state.trade_prices,
+                market_state.trade_quantities,
+                market_state.tick_history_prices,
+                market_state.tick_history_volumes,
+                market_state.tick_history_amounts,
+                position_inputs[0],
+                position_inputs[1],
+                position_inputs[2],
+                position_inputs[3],
+                pending_inputs[0],
+                pending_inputs[1],
+                pending_inputs[2],
+            )
+            return self._input_buffer
+        else:
+            # 纯 Python 实现
+            depth = self.ORDERBOOK_DEPTH
+            trade_size = self.TRADE_HISTORY_SIZE
+            tick_size = self.TICK_HISTORY_SIZE
 
-        # 最近10笔成交价格
-        offset += depth * 2  # 40
-        self._input_buffer[offset:offset + trade_size] = market_state.trade_prices[:trade_size]
+            # 买盘前10档: 每档2个值（价格归一化 + 数量），取前20个值
+            self._input_buffer[:depth * 2] = market_state.bid_data[:depth * 2]
 
-        # 最近10笔成交数量
-        offset += trade_size  # 50
-        self._input_buffer[offset:offset + trade_size] = market_state.trade_quantities[:trade_size]
+            # 卖盘前10档: 每档2个值，取前20个值
+            offset = depth * 2  # 20
+            self._input_buffer[offset:offset + depth * 2] = market_state.ask_data[:depth * 2]
 
-        # 持仓信息（4个值）
-        offset += trade_size  # 60
-        self._input_buffer[offset:offset + 4] = self._get_position_inputs(market_state.mid_price)
+            # 最近10笔成交价格
+            offset += depth * 2  # 40
+            self._input_buffer[offset:offset + trade_size] = market_state.trade_prices[:trade_size]
 
-        # 挂单信息（3个值）
-        offset += 4  # 64
-        self._input_buffer[offset:offset + 3] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
+            # 最近10笔成交数量
+            offset += trade_size  # 50
+            self._input_buffer[offset:offset + trade_size] = market_state.trade_quantities[:trade_size]
 
-        # tick 历史价格（最近20个）
-        offset += 3  # 67
-        self._input_buffer[offset:offset + tick_size] = market_state.tick_history_prices[-tick_size:]
+            # 持仓信息（4个值）
+            offset += trade_size  # 60
+            self._input_buffer[offset:offset + 4] = self._get_position_inputs(market_state.mid_price)
 
-        # tick 历史成交量（最近20个）
-        offset += tick_size  # 87
-        self._input_buffer[offset:offset + tick_size] = market_state.tick_history_volumes[-tick_size:]
+            # 挂单信息（3个值）
+            offset += 4  # 64
+            self._input_buffer[offset:offset + 3] = self._get_pending_order_inputs(market_state.mid_price, orderbook)
 
-        # tick 历史成交额（最近20个）
-        offset += tick_size  # 107
-        self._input_buffer[offset:offset + tick_size] = market_state.tick_history_amounts[-tick_size:]
+            # tick 历史价格（最近20个）
+            offset += 3  # 67
+            self._input_buffer[offset:offset + tick_size] = market_state.tick_history_prices[-tick_size:]
 
-        return self._input_buffer  # 不调用 .tolist()
+            # tick 历史成交量（最近20个）
+            offset += tick_size  # 87
+            self._input_buffer[offset:offset + tick_size] = market_state.tick_history_volumes[-tick_size:]
+
+            # tick 历史成交额（最近20个）
+            offset += tick_size  # 107
+            self._input_buffer[offset:offset + tick_size] = market_state.tick_history_amounts[-tick_size:]
+
+            return self._input_buffer  # 不调用 .tolist()
