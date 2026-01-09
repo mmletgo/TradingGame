@@ -90,6 +90,7 @@ class TrainingConfig:
         enable_parallel_evolution: 是否启用并行进化（默认 True）
         enable_parallel_decision: 是否启用并行决策（默认 True）
         enable_parallel_creation: 是否启用并行创建（默认 True）
+        openmp_threads: OpenMP 并行线程数（默认 8，经测试为最优值）
         random_seed: 随机种子（默认 None，表示不固定）
     """
 
@@ -101,6 +102,7 @@ class TrainingConfig:
     enable_parallel_evolution: bool = True
     enable_parallel_decision: bool = True
     enable_parallel_creation: bool = True
+    openmp_threads: int = 8
     random_seed: int | None = None
 
 

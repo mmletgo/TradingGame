@@ -402,9 +402,10 @@ class Trainer:
             else:  # RETAIL_PRO, WHALE
                 cache_type = CACHE_TYPE_FULL
 
-            # 创建缓存
+            # 创建缓存（使用配置的线程数）
             num_networks = len(population.agents)
-            cache = BatchNetworkCache(num_networks, cache_type)
+            num_threads = self.config.training.openmp_threads
+            cache = BatchNetworkCache(num_networks, cache_type, num_threads)
 
             # 提取网络数据
             networks = [agent.brain.network for agent in population.agents]
@@ -2180,9 +2181,9 @@ class Trainer:
             if state_callback:
                 state_callback(self._get_state())
 
-            # 定期保存检查点
-            if checkpoint_interval > 0 and (ep + 1) % checkpoint_interval == 0:
-                self.save_checkpoint(f"checkpoints/ep_{ep + 1}.pkl")
+            # 定期保存检查点（使用全局 episode 计数）
+            if checkpoint_interval > 0 and self.episode % checkpoint_interval == 0:
+                self.save_checkpoint(f"checkpoints/ep_{self.episode}.pkl")
 
             ep += 1
 

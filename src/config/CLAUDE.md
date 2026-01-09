@@ -94,6 +94,7 @@ Agent 配置，定义特定类型 Agent 的交易参数。
 | enable_parallel_evolution | bool | True | 是否启用并行进化 |
 | enable_parallel_decision | bool | True | 是否启用并行决策 |
 | enable_parallel_creation | bool | True | 是否启用并行创建 |
+| openmp_threads | int | 8 | OpenMP 并行线程数（经测试 8 为最优值，过多反而更慢） |
 | random_seed | int \| None | None | 随机种子（None 表示不固定） |
 
 **并行化说明：**
