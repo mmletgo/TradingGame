@@ -966,17 +966,14 @@ class Trainer:
         # [MEMORY] 记录进化开始前的内存
         mem_before_evolve = _get_memory_mb()
 
-        # 改为串行进化，每个种群进化后立即 GC，避免内存峰值
-        # 并行进化会导致所有旧 genome 同时存在于内存中
+        # 串行进化所有种群
+        # 注意：GC 调用已移至循环外统一执行，减少 GC 开销
         for pop in self.populations.values():
             try:
                 pop.evolve(current_price)
             except Exception as e:
                 self.logger.error(f"种群 {pop.agent_type.value} 进化失败: {e}")
                 raise
-
-            # 每个种群进化后立即 GC
-            gc.collect()
 
         # [MEMORY] 记录进化后、最终 GC 前的内存
         mem_after_evolve = _get_memory_mb()

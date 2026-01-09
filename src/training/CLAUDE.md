@@ -465,7 +465,12 @@ python scripts/train_multi_arena.py --resume checkpoints/multi_arena_ep_50.pkl
 
 **3. 进化后垃圾回收 (`Trainer._evolve_populations_parallel()`)**
 
-并行进化完成后，多次调用 `gc.collect()` 确保释放旧对象。
+所有种群进化完成后，统一调用三代 GC（gc.collect(0/1/2)）和 malloc_trim()，确保释放旧对象。
+
+**GC 策略优化**：
+- `Population.evolve()` 和 `Population.evolve_with_cached_fitness()` 正常流程中不再调用 gc.collect()
+- 异常处理中保留 gc.collect() + malloc_trim()（异常后清理）
+- 由调用方 `_evolve_populations_parallel()` 统一负责 GC，减少 GC 调用次数
 
 **4. 迁移和检查点操作后 GC**
 

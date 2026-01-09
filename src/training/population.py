@@ -424,11 +424,6 @@ class Population:
         del old_genomes
         del old_genomes_to_clean
 
-        # 强制 GC 并调用 malloc_trim 将内存归还给操作系统
-        gc.collect()
-        gc.collect()
-        malloc_trim()
-
         # [MEMORY] 记录 NEAT run 后内存
         mem_after_neat = _get_memory_mb()
 
@@ -438,9 +433,6 @@ class Population:
         # 7. 清理 NEAT 种群中的历史数据，防止内存泄漏
         mem_before_neat_cleanup = _get_memory_mb()
         self._cleanup_neat_history()
-        # 清理后立即 GC 并 malloc_trim
-        gc.collect()
-        malloc_trim()
         mem_after_neat_cleanup = _get_memory_mb()
 
         # 8. 【对象池化优化】复用 Agent 对象，只更新 Brain
@@ -544,17 +536,12 @@ class Population:
         self._cleanup_genome_internals(old_genomes_to_clean)
         del old_genomes
         del old_genomes_to_clean
-        gc.collect()
-        gc.collect()
-        malloc_trim()
 
         # 6. 增加代数计数
         self.generation += 1
 
         # 7. 清理 NEAT 历史数据
         self._cleanup_neat_history()
-        gc.collect()
-        malloc_trim()
 
         # 8. 【对象池化优化】复用 Agent 对象，只更新 Brain
         new_genomes = list(self.neat_pop.population.items())
