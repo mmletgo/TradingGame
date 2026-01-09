@@ -1393,7 +1393,20 @@ class Trainer:
 
         # === 串行执行阶段 ===
         for agent, action, params in decisions:
+            # 庄家下单前记录价格（用于计算波动性贡献）
+            pre_trade_price = (
+                orderbook.last_price
+                if agent.agent_type == AgentType.WHALE else 0.0
+            )
+
             trades = agent.execute_action(action, params, self.matching_engine)
+
+            # 庄家成交后计算波动性贡献
+            if agent.agent_type == AgentType.WHALE and trades:
+                post_trade_price = orderbook.last_price
+                if pre_trade_price > 0 and post_trade_price > 0:
+                    price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
+                    agent.account.volatility_contribution += price_impact
 
             for trade in trades:
                 self.recent_trades.append(trade)
@@ -1733,6 +1746,41 @@ class Trainer:
                 for agent_type, pop in self.populations.items()
             },
         }
+
+    @staticmethod
+    def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> str | None:
+        """查找最新的检查点文件
+
+        按 episode 数字从大到小排序，返回最新的检查点路径。
+
+        Args:
+            checkpoint_dir: 检查点目录路径
+
+        Returns:
+            最新检查点的路径，如果不存在则返回 None
+        """
+        import re
+
+        checkpoint_path = Path(checkpoint_dir)
+        if not checkpoint_path.exists():
+            return None
+
+        # 查找所有 ep_*.pkl 文件
+        pattern = re.compile(r"ep_(\d+)\.pkl$")
+        checkpoints: list[tuple[int, Path]] = []
+
+        for f in checkpoint_path.glob("ep_*.pkl"):
+            match = pattern.match(f.name)
+            if match:
+                episode = int(match.group(1))
+                checkpoints.append((episode, f))
+
+        if not checkpoints:
+            return None
+
+        # 按 episode 数字降序排序，取最新的
+        checkpoints.sort(key=lambda x: x[0], reverse=True)
+        return str(checkpoints[0][1])
 
     def save_checkpoint(self, path: str) -> None:
         """保存检查点

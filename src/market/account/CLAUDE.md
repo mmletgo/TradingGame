@@ -96,6 +96,8 @@
 - `maker_fee_rate: float` - 挂单手续费率
 - `taker_fee_rate: float` - 吃单手续费率
 - `pending_order_id: int | None` - 当前挂单 ID
+- `maker_volume: int` - 作为 maker 的累计成交量（用于做市商适应度计算）
+- `volatility_contribution: float` - 作为 taker 的价格冲击累计（庄家适应度计算用）
 
 #### 核心方法
 
@@ -119,10 +121,12 @@
 - 处理成交回报
 - 步骤：
   1. 确定成交方向（买方/卖方）
-  2. 更新持仓，获取已实现盈亏
-  3. 将已实现盈亏加到余额
-  4. 扣除手续费
+  2. 判断是否为 maker 并累加 `maker_volume`
+  3. 更新持仓，获取已实现盈亏
+  4. 将已实现盈亏加到余额
+  5. 扣除手续费
 - 费用计算：从 `Trade` 对象中获取 `buyer_fee` 或 `seller_fee`
+- maker 判断逻辑：`trade.is_buyer_taker=True` 时卖方是 maker，否则买方是 maker
 
 **on_adl_trade(quantity, price, is_taker) -> float**
 - 处理 ADL（Auto-Deleveraging）自动减仓成交

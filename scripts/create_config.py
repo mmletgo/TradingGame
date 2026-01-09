@@ -25,7 +25,7 @@ def create_default_config(
     episode_length: int = 1000,
     checkpoint_interval: int = 10,
     config_dir: str = "config",
-    catfish_enabled: bool = True,
+    catfish_enabled: bool = False,
     catfish_fund_multiplier: float = 3.0,
 ) -> Config:
     """创建默认配置

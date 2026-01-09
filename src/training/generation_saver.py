@@ -10,7 +10,6 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from src.core.log_engine.logger import get_logger
-from src.training.arena.migration import MigrationSystem
 
 if TYPE_CHECKING:
     from src.config.config import AgentType
@@ -62,6 +61,9 @@ class GenerationSaver:
         Returns:
             保存的文件路径
         """
+        # 延迟导入避免循环依赖
+        from src.training.arena.migration import MigrationSystem
+
         best_genomes: dict[str, tuple[bytes, float]] = {}
 
         for agent_type, population in populations.items():

@@ -267,6 +267,9 @@ class Population:
 
         使用向量化运算计算所有 Agent 的适应度，并按适应度从高到低排序。
 
+        做市商使用复合适应度：0.5 * 收益率 + 0.5 * 流动性排名归一化
+        其他种群使用纯收益率适应度。
+
         Args:
             current_price: 当前市场价格，用于计算未实现盈亏
 
@@ -289,13 +292,49 @@ class Population:
         # 3. 向量化计算净值: balance + unrealized_pnl
         equities = balances + unrealized_pnl
 
-        # 4. 向量化计算适应度: equity / initial_balance
-        fitnesses = equities / initial_balances
+        # 4. 向量化计算收益率: equity / initial_balance
+        return_rates = equities / initial_balances
 
-        # 5. 获取从高到低的排序索引
+        # 5. 根据种群类型计算适应度
+        if self.agent_type == AgentType.MARKET_MAKER:
+            # 做市商：复合适应度 = 0.5 * 收益率 + 0.5 * 流动性排名归一化
+            maker_volumes = np.array([a.account.maker_volume for a in self.agents])
+
+            # 排名归一化到 [0, 1]
+            # 使用 argsort 两次获取排名：第一次获取排序索引，第二次获取每个元素的排名
+            volume_ranks = np.argsort(np.argsort(maker_volumes))  # 从 0 到 n-1
+            if n > 1:
+                volume_rank_normalized = volume_ranks / (n - 1)  # 归一化到 [0, 1]
+            else:
+                volume_rank_normalized = np.zeros(n)  # 只有一个 agent 时，排名为 0
+
+            # 复合适应度
+            fitnesses = 0.5 * return_rates + 0.5 * volume_rank_normalized
+
+        elif self.agent_type == AgentType.WHALE:
+            # 庄家：复合适应度 = 0.5 * 收益率 + 0.5 * 波动性贡献排名归一化
+            volatility_contributions = np.array(
+                [a.account.volatility_contribution for a in self.agents]
+            )
+
+            # 排名归一化到 [0, 1]
+            volatility_ranks = np.argsort(np.argsort(volatility_contributions))
+            if n > 1:
+                volatility_rank_normalized = volatility_ranks / (n - 1)
+            else:
+                volatility_rank_normalized = np.zeros(n)
+
+            # 复合适应度
+            fitnesses = 0.5 * return_rates + 0.5 * volatility_rank_normalized
+
+        else:
+            # 其他种群（散户、高级散户）：纯收益率适应度
+            fitnesses = return_rates
+
+        # 6. 获取从高到低的排序索引
         sorted_indices = np.argsort(fitnesses)[::-1]
 
-        # 6. 按排序索引构建结果
+        # 7. 按排序索引构建结果
         return [(self.agents[i], float(fitnesses[i])) for i in sorted_indices]
 
     def evolve(self, current_price: float) -> None:

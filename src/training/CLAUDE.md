@@ -100,6 +100,21 @@
 - 执行 NEAT 进化算法
 - 重置 Agent 账户状态
 
+**适应度计算公式：**
+
+| 种群类型 | 适应度公式 |
+|---------|-----------|
+| 散户 | 收益率 = equity / initial_balance |
+| 高级散户 | 收益率 = equity / initial_balance |
+| 庄家 | 0.5 × 收益率 + 0.5 × 波动性贡献排名归一化 |
+| 做市商 | 0.5 × 收益率 + 0.5 × maker_volume 排名归一化 |
+
+**庄家波动性贡献说明：**
+- 每次作为 taker 成交时，累加价格冲击
+- 价格冲击 = |成交后价格 - 成交前价格| / 成交前价格
+- 波动性贡献越高，适应度越高（正向激励）
+- 排名计算仅限庄家种群内部
+
 **关键方法：**
 - `create_agents()` - 从基因组列表创建 Agent（小批量串行，大批量并行）
 - `_create_single_agent()` - 创建单个 Agent（线程安全）
@@ -156,6 +171,7 @@
 - `run_episode()` - 运行完整 episode（重置、运行、进化），若满足提前结束条件则提前结束
 - `train()` - 主训练循环
 - `save_checkpoint()` / `load_checkpoint()` - 检查点管理
+- `find_latest_checkpoint(checkpoint_dir)` - 静态方法，查找指定目录下最新的检查点文件（按 episode 数字排序）
 - `save_checkpoint_data()` - 返回检查点数据（不写入文件，用于多竞技场模式）
 - `load_checkpoint_data()` - 从检查点数据恢复（不读取文件）
 - `_update_agents_after_migration(replaced_info)` - 迁移后增量更新内部状态（agent_map、agent_execution_order）
@@ -326,18 +342,21 @@
 
 训练脚本位于 `scripts/` 目录：
 - `train_noui.py` - 单竞技场无 UI 高性能训练模式
+- `train_ui.py` - 单竞技场带 UI 训练模式
 - `train_multi_arena.py` - 多竞技场并行训练模式（默认 16 个竞技场）
+
+**自动恢复检查点**：`train_noui.py` 和 `train_ui.py` 启动时会自动查找 `checkpoints/` 目录下最新的检查点（按 episode 数字排序），如果存在则自动恢复训练。可通过 `--resume` 参数手动指定检查点覆盖此行为。
 
 ### train_noui.py 使用方法（单竞技场）
 
 ```bash
-# 基本训练（100 个 episode）
+# 基本训练（自动从最新检查点恢复，若存在）
 python scripts/train_noui.py --episodes 100
 
 # 自定义参数
 python scripts/train_noui.py --episodes 500 --episode-length 1000 --checkpoint-interval 50
 
-# 从检查点恢复训练
+# 从指定检查点恢复训练
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 ```
 

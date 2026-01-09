@@ -396,6 +396,8 @@ class TestPopulationEvaluate:
         # 创建 Population 实例（不调用 __init__，直接设置属性）
         self.population = object.__new__(Population)
         self.population.agents = []
+        # 设置 agent_type 为 RETAIL（使用纯收益率适应度）
+        self.population.agent_type = AgentType.RETAIL
 
     def _create_mock_agent(
         self,

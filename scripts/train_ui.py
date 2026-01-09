@@ -156,15 +156,22 @@ def main() -> None:
     trainer._reset_market()
     print("预热完成，所有初始化已就绪", flush=True)
 
-    # 加载检查点
-    if args.resume:
-        resume_path = Path(args.resume)
+    # 加载检查点（自动查找最新或使用指定的）
+    resume_path_str = args.resume
+    if resume_path_str is None:
+        # 自动查找最新的检查点
+        resume_path_str = Trainer.find_latest_checkpoint()
+        if resume_path_str:
+            print(f"自动发现最新检查点: {resume_path_str}", flush=True)
+
+    if resume_path_str:
+        resume_path = Path(resume_path_str)
         if resume_path.exists():
-            print(f"正在从检查点恢复: {args.resume}", flush=True)
-            trainer.load_checkpoint(args.resume)
+            print(f"正在从检查点恢复: {resume_path_str}", flush=True)
+            trainer.load_checkpoint(resume_path_str)
             print(f"已恢复到 Episode {trainer.episode}", flush=True)
         else:
-            print(f"警告: 检查点文件不存在: {args.resume}", flush=True)
+            print(f"警告: 检查点文件不存在: {resume_path_str}", flush=True)
             sys.exit(1)
 
     # 创建并运行UI应用

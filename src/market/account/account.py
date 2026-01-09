@@ -49,6 +49,8 @@ class Account:
         self.maker_fee_rate: float = config.maker_fee_rate
         self.taker_fee_rate: float = config.taker_fee_rate
         self.pending_order_id: int | None = None
+        self.maker_volume: int = 0  # 作为 maker 的累计成交量
+        self.volatility_contribution: float = 0.0  # 作为 taker 的价格冲击累计（庄家用）
 
     def get_equity(self, current_price: float) -> float:
         """计算净值
@@ -98,7 +100,7 @@ class Account:
     def on_trade(self, trade: Trade, is_buyer: bool) -> None:
         """处理成交回报
 
-        根据成交记录更新持仓、扣除手续费、更新余额。
+        根据成交记录更新持仓、扣除手续费、更新余额、累计maker成交量。
 
         Args:
             trade: 成交记录对象
@@ -111,6 +113,16 @@ class Account:
         else:
             side = OrderSide.SELL
             fee = trade.seller_fee
+
+        # 判断是否为 maker 并累加成交量
+        # is_buyer_taker=True: 买方是 taker，卖方是 maker
+        # is_buyer_taker=False: 卖方是 taker，买方是 maker
+        if trade.is_buyer_taker:
+            if not is_buyer:  # 当前是卖方，即 maker
+                self.maker_volume += trade.quantity
+        else:
+            if is_buyer:  # 当前是买方，即 maker
+                self.maker_volume += trade.quantity
 
         # 更新持仓，获取已实现盈亏
         realized_pnl = self.position.update(side.value, trade.quantity, trade.price)
