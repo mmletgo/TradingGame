@@ -7,7 +7,13 @@
 
 from typing import TYPE_CHECKING, Any
 
-from src.bio.agents.base import ActionType, Agent
+from src.bio.agents.base import (
+    ActionType,
+    Agent,
+    fast_argmax,
+    fast_round_price,
+    fast_clip,
+)
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType
 from src.market.matching.trade import Trade
@@ -105,14 +111,16 @@ class WhaleAgent(Agent):
             raise ValueError(f"神经网络输出维度不足，期望 9，实际 {len(outputs)}")
 
         # 4. 解析动作类型（选择前 7 个输出中值最大的索引）
-        action_idx = int(max(range(7), key=lambda i: outputs[i]))
+        # 使用统一接口（Cython 或回退）
+        action_idx = fast_argmax(outputs, 0, 7)
         action = ActionType(action_idx)
 
         # 5. 解析参数（由神经网络决定）
         # 输出[7]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
         # 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
-        price_offset_norm = max(-1.0, min(1.0, outputs[7]))  # 限制在 [-1, 1]
-        quantity_ratio_norm = max(-1.0, min(1.0, outputs[8]))  # 限制在 [-1, 1]
+        # 使用统一接口（Cython 或回退）
+        price_offset_norm = fast_clip(outputs[7], -1.0, 1.0)
+        quantity_ratio_norm = fast_clip(outputs[8], -1.0, 1.0)
 
         # 获取参考价格
         mid_price = market_state.mid_price
@@ -134,7 +142,8 @@ class WhaleAgent(Agent):
             raw_price = mid_price + price_offset_ticks * tick_size
             # 舍入到 tick_size 的整数倍，避免浮点数精度问题
             # 确保价格至少为一个 tick_size，防止出现负价格或零价格
-            params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
+            # 使用统一接口（Cython 或回退）
+            params["price"] = fast_round_price(raw_price, tick_size)
             # 数量由神经网络决定（买入方向，限制总持仓）
             params["quantity"] = self._calculate_order_quantity(
                 mid_price, quantity_ratio, is_buy=True
@@ -146,7 +155,8 @@ class WhaleAgent(Agent):
             raw_price = mid_price + price_offset_ticks * tick_size
             # 舍入到 tick_size 的整数倍，避免浮点数精度问题
             # 确保价格至少为一个 tick_size，防止出现负价格或零价格
-            params["price"] = max(tick_size, round(raw_price / tick_size) * tick_size)
+            # 使用统一接口（Cython 或回退）
+            params["price"] = fast_round_price(raw_price, tick_size)
             # 数量由神经网络决定（卖出方向，限制总持仓）
             params["quantity"] = self._calculate_order_quantity(
                 mid_price, quantity_ratio, is_buy=False

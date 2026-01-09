@@ -10,6 +10,36 @@ import numpy as np
 
 from src.config.config import AgentConfig, AgentType
 
+# 纯 Python 备用实现
+def _py_argmax(arr: np.ndarray, start: int, end: int) -> int:
+    """纯 Python argmax 实现"""
+    return int(np.argmax(arr[start:end]))
+
+
+def _py_round_price(price: float, tick_size: float) -> float:
+    """纯 Python 价格取整实现"""
+    return max(tick_size, round(price / tick_size) * tick_size)
+
+
+def _py_clip(value: float, min_val: float, max_val: float) -> float:
+    """纯 Python clip 实现"""
+    return max(min_val, min(max_val, value))
+
+
+# 尝试导入 Cython 加速函数，如果失败则使用纯 Python 实现
+try:
+    from src.bio.agents._cython.fast_decide import (
+        fast_argmax,
+        fast_round_price,
+        fast_clip,
+    )
+    _HAS_CYTHON_DECIDE = True
+except ImportError:
+    fast_argmax = _py_argmax
+    fast_round_price = _py_round_price
+    fast_clip = _py_clip
+    _HAS_CYTHON_DECIDE = False
+
 if TYPE_CHECKING:
     from src.market.matching.matching_engine import MatchingEngine
 import neat
