@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from src.bio.agents.base import AgentType
 
@@ -46,6 +47,7 @@ from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
+from src.training.fast_math import log_normalize_signed, log_normalize_unsigned
 from src.training.population import Population, malloc_trim
 
 
@@ -151,6 +153,17 @@ class Trainer:
 
         # 每代保存器
         self._generation_saver: "GenerationSaver | None" = None
+
+        # 预分配市场状态缓冲区（性能优化）
+        self._market_state_buffers: dict[str, NDArray[np.float32]] = {
+            'bid_data': np.zeros(200, dtype=np.float32),
+            'ask_data': np.zeros(200, dtype=np.float32),
+            'trade_prices': np.zeros(100, dtype=np.float32),
+            'trade_quantities': np.zeros(100, dtype=np.float32),
+            'tick_prices': np.zeros(100, dtype=np.float32),
+            'tick_volumes': np.zeros(100, dtype=np.float32),
+            'tick_amounts': np.zeros(100, dtype=np.float32),
+        }
 
     def set_generation_saver(self, saver: "GenerationSaver") -> None:
         """设置每代保存器
@@ -828,6 +841,11 @@ class Trainer:
         在每个 tick 开始时调用，避免每个 Agent 重复计算相同的归一化数据。
         使用 EMA 平滑后的 mid_price 作为参考价格，减缓价格变化传导速度。
 
+        性能优化：
+        - 使用预分配缓冲区减少内存分配
+        - 使用 get_depth_numpy() 避免列表推导
+        - 使用 Numba JIT 加速对数归一化
+
         Returns:
             NormalizedMarketState: 归一化后的市场状态
         """
@@ -844,57 +862,70 @@ class Trainer:
         smooth_mid_price = self._update_ema_price(current_mid_price)
 
         tick_size = orderbook.tick_size
-        depth = orderbook.get_depth(levels=100)
+
+        # 使用 get_depth_numpy 直接获取 NumPy 数组
+        bid_depth, ask_depth = orderbook.get_depth_numpy(levels=100)
+
+        # 获取并清零缓冲区
+        bid_data = self._market_state_buffers['bid_data']
+        ask_data = self._market_state_buffers['ask_data']
+        trade_prices = self._market_state_buffers['trade_prices']
+        trade_quantities = self._market_state_buffers['trade_quantities']
+        tick_prices_normalized = self._market_state_buffers['tick_prices']
+        tick_volumes_normalized = self._market_state_buffers['tick_volumes']
+        tick_amounts_normalized = self._market_state_buffers['tick_amounts']
+
+        bid_data.fill(0)
+        ask_data.fill(0)
+        trade_prices.fill(0)
+        trade_quantities.fill(0)
+        tick_prices_normalized.fill(0)
+        tick_volumes_normalized.fill(0)
+        tick_amounts_normalized.fill(0)
 
         # 向量化买盘：100档 × 2 = 200（使用平滑价格归一化）
-        bid_data = np.zeros(200, dtype=np.float32)
-        bids = depth["bids"]
-        if bids:
-            bid_prices = np.array([p for p, _ in bids], dtype=np.float32)
-            bid_qtys = np.array([q for _, q in bids], dtype=np.float32)
-            n = len(bids)
-            if smooth_mid_price > 0:
-                bid_data[0 : n * 2 : 2] = (
-                    bid_prices - smooth_mid_price
-                ) / smooth_mid_price
-            # 数量使用对数归一化：log10(qty + 1) / 10，将 1e10 压缩到 ~1.0
-            bid_data[1 : n * 2 : 2] = np.log10(bid_qtys + 1) / 10.0
+        # bid_depth shape: (100, 2), 列0=价格, 列1=数量
+        bid_prices = bid_depth[:, 0]
+        bid_qtys = bid_depth[:, 1]
+        # 找到有效档位数（价格 > 0）
+        bid_valid_mask = bid_prices > 0
+        n_bids = int(np.sum(bid_valid_mask))
+        if n_bids > 0 and smooth_mid_price > 0:
+            bid_data[0 : n_bids * 2 : 2] = (
+                bid_prices[:n_bids] - smooth_mid_price
+            ) / smooth_mid_price
+            # 数量使用对数归一化
+            bid_data[1 : n_bids * 2 : 2] = log_normalize_unsigned(bid_qtys[:n_bids])
 
         # 向量化卖盘：100档 × 2 = 200（使用平滑价格归一化）
-        ask_data = np.zeros(200, dtype=np.float32)
-        asks = depth["asks"]
-        if asks:
-            ask_prices = np.array([p for p, _ in asks], dtype=np.float32)
-            ask_qtys = np.array([q for _, q in asks], dtype=np.float32)
-            n = len(asks)
-            if smooth_mid_price > 0:
-                ask_data[0 : n * 2 : 2] = (
-                    ask_prices - smooth_mid_price
-                ) / smooth_mid_price
+        ask_prices = ask_depth[:, 0]
+        ask_qtys = ask_depth[:, 1]
+        ask_valid_mask = ask_prices > 0
+        n_asks = int(np.sum(ask_valid_mask))
+        if n_asks > 0 and smooth_mid_price > 0:
+            ask_data[0 : n_asks * 2 : 2] = (
+                ask_prices[:n_asks] - smooth_mid_price
+            ) / smooth_mid_price
             # 数量使用对数归一化
-            ask_data[1 : n * 2 : 2] = np.log10(ask_qtys + 1) / 10.0
+            ask_data[1 : n_asks * 2 : 2] = log_normalize_unsigned(ask_qtys[:n_asks])
 
         # 向量化成交：100笔（数量带方向：正=taker买入，负=taker卖出）
-        trade_prices = np.zeros(100, dtype=np.float32)
-        trade_quantities = np.zeros(100, dtype=np.float32)
         trades = list(self.recent_trades)  # deque 转换为 list
         if trades:
-            prices = np.array([t.price for t in trades], dtype=np.float32)
-            qtys = np.array(
-                [t.quantity if t.is_buyer_taker else -t.quantity for t in trades],
-                dtype=np.float32,
-            )
-            n = len(trades)
+            n_trades = len(trades)
+            # 直接构建数组，避免列表推导
+            prices_arr = np.empty(n_trades, dtype=np.float32)
+            qtys_arr = np.empty(n_trades, dtype=np.float32)
+            for i, t in enumerate(trades):
+                prices_arr[i] = t.price
+                qtys_arr[i] = t.quantity if t.is_buyer_taker else -t.quantity
+
             if smooth_mid_price > 0:
-                trade_prices[:n] = (prices - smooth_mid_price) / smooth_mid_price
-            # 成交数量带方向的对数归一化：sign(qty) * log10(|qty| + 1) / 10
-            trade_quantities[:n] = np.sign(qtys) * np.log10(np.abs(qtys) + 1) / 10.0
+                trade_prices[:n_trades] = (prices_arr - smooth_mid_price) / smooth_mid_price
+            # 成交数量带方向的对数归一化
+            trade_quantities[:n_trades] = log_normalize_signed(qtys_arr)
 
         # Tick 历史价格归一化（以第一个 tick 价格为基准）
-        tick_prices_normalized = np.zeros(100, dtype=np.float32)
-        tick_volumes_normalized = np.zeros(100, dtype=np.float32)
-        tick_amounts_normalized = np.zeros(100, dtype=np.float32)
-
         if self._tick_history_prices:
             hist_prices = np.array(self._tick_history_prices[-100:], dtype=np.float32)
             volumes = np.array(self._tick_history_volumes[-100:], dtype=np.float32)
@@ -906,26 +937,22 @@ class Trainer:
             if base_price > 0:
                 tick_prices_normalized[-n:] = (hist_prices - base_price) / base_price
 
-            # 成交量归一化：sign(vol) * log10(|vol| + 1) / 10
-            tick_volumes_normalized[-n:] = (
-                np.sign(volumes) * np.log10(np.abs(volumes) + 1) / 10.0
-            )
+            # 成交量归一化
+            tick_volumes_normalized[-n:] = log_normalize_signed(volumes)
 
-            # 成交额归一化：sign(amt) * log10(|amt| + 1) / 12
-            tick_amounts_normalized[-n:] = (
-                np.sign(amounts) * np.log10(np.abs(amounts) + 1) / 12.0
-            )
+            # 成交额归一化（scale=12）
+            tick_amounts_normalized[-n:] = log_normalize_signed(amounts, scale=12.0)
 
         return NormalizedMarketState(
             mid_price=smooth_mid_price,  # 使用 EMA 平滑后的价格
             tick_size=tick_size,
-            bid_data=bid_data,
-            ask_data=ask_data,
-            trade_prices=trade_prices,
-            trade_quantities=trade_quantities,
-            tick_history_prices=tick_prices_normalized,
-            tick_history_volumes=tick_volumes_normalized,
-            tick_history_amounts=tick_amounts_normalized,
+            bid_data=bid_data.copy(),
+            ask_data=ask_data.copy(),
+            trade_prices=trade_prices.copy(),
+            trade_quantities=trade_quantities.copy(),
+            tick_history_prices=tick_prices_normalized.copy(),
+            tick_history_volumes=tick_volumes_normalized.copy(),
+            tick_history_amounts=tick_amounts_normalized.copy(),
         )
 
     def _evolve_populations_parallel(self, current_price: float) -> None:

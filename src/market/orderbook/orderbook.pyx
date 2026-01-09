@@ -8,6 +8,7 @@
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+import numpy as np
 from sortedcontainers import SortedDict
 
 from src.market.orderbook.order import OrderSide
@@ -277,6 +278,43 @@ cdef class OrderBook:
         self._depth_dirty = False
 
         return result
+
+    def get_depth_numpy(self, int levels=100):
+        """
+        获取盘口深度（NumPy 格式）
+
+        直接返回 NumPy 数组，避免在 Python 层转换。
+        买盘按价格降序，卖盘按价格升序。
+
+        Args:
+            levels: 获取的档位数，默认 100
+
+        Returns:
+            tuple[NDArray, NDArray]: (bid_data, ask_data)
+            各 shape (levels, 2)，列0=价格，列1=数量
+            未填充的档位为 0
+        """
+        bid_data = np.zeros((levels, 2), dtype=np.float32)
+        ask_data = np.zeros((levels, 2), dtype=np.float32)
+
+        # 买盘：从后向前取（降序）
+        bid_keys = self.bids.keys()
+        cdef int bid_count = min(len(bid_keys), levels)
+        cdef int i
+        for i in range(bid_count):
+            price = bid_keys[-(i+1)]  # 从最高价开始
+            bid_data[i, 0] = price
+            bid_data[i, 1] = self.bids[price].get_volume()
+
+        # 卖盘：从前向后取（升序）
+        ask_keys = self.asks.keys()
+        cdef int ask_count = min(len(ask_keys), levels)
+        for i in range(ask_count):
+            price = ask_keys[i]  # 从最低价开始
+            ask_data[i, 0] = price
+            ask_data[i, 1] = self.asks[price].get_volume()
+
+        return bid_data, ask_data
 
     def clear(self, reset_price: float | None = None) -> None:
         """

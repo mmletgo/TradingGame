@@ -11,6 +11,7 @@
 - `trainer.py` - 训练器类
 - `checkpoint_loader.py` - 统一的 checkpoint 加载器
 - `generation_saver.py` - 每代最佳基因组保存器
+- `fast_math.py` - Numba JIT 加速的数学函数（对数归一化等）
 - `arena/` - 多竞技场并行训练子模块（详见 `arena/CLAUDE.md`）
   - `config.py` - 配置类（ArenaConfig, MultiArenaConfig）
   - `arena.py` - 单个竞技场封装
@@ -19,6 +20,22 @@
   - `metrics.py` - 指标收集
 
 ## 核心类
+
+### fast_math 模块 (fast_math.py)
+
+Numba JIT 加速的高频数学函数模块，提供对数归一化等运算的加速实现。
+
+**特性：**
+- 自动检测 Numba 是否可用
+- Numba 可用时使用 `@njit(cache=True, fastmath=True)` 装饰器加速
+- Numba 不可用时自动降级为纯 NumPy 实现
+
+**提供的函数：**
+- `log_normalize_unsigned(arr, scale=10.0)` - 无符号对数归一化：`log10(x + 1) / scale`
+- `log_normalize_signed(arr, scale=10.0)` - 带符号对数归一化：`sign(x) * log10(|x| + 1) / scale`
+
+**常量：**
+- `HAS_NUMBA: bool` - 标识 Numba 是否可用
 
 ### CheckpointLoader (checkpoint_loader.py)
 

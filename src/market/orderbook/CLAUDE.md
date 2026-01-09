@@ -156,6 +156,28 @@
 - 缓存机制避免重复计算
 - 使用切片而不是循环，提高性能
 
+#### get_depth_numpy(levels: int = 100) -> tuple[NDArray, NDArray]
+
+获取盘口深度数据（NumPy 格式）。
+
+**返回格式：**
+```python
+(bid_data, ask_data)  # 各 shape (levels, 2)
+# 列0=价格，列1=数量
+# 未填充的档位为 0
+```
+
+**执行流程：**
+1. 创建两个 shape (levels, 2) 的零数组，dtype=np.float32
+2. 买盘：从后向前取价格键，填充降序排列的买盘数据
+3. 卖盘：从前向后取价格键，填充升序排列的卖盘数据
+4. 返回 NumPy 数组元组
+
+**与 get_depth 的区别：**
+- 直接返回 NumPy 数组，避免在 Python 层转换
+- 不使用缓存机制（因为返回可变数组）
+- 适用于需要直接进行数值计算的场景
+
 #### clear(reset_price: float | None = None) -> None
 
 清空订单簿。
@@ -273,6 +295,7 @@ ob.clear()
 
 ## 依赖关系
 
+- `numpy` - 数值计算（用于 get_depth_numpy 返回 NumPy 数组）
 - `sortedcontainers.SortedDict` - 高性能排序字典
 - `collections.OrderedDict` - 保持插入顺序的字典
 - `typing.TYPE_CHECKING` - 类型检查时的类型提示
