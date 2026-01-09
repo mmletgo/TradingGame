@@ -12,6 +12,8 @@ from src.config.config import AgentConfig, AgentType
 
 if TYPE_CHECKING:
     from src.market.matching.matching_engine import MatchingEngine
+import neat
+
 from src.bio.brain.brain import Brain
 from src.market.account.account import Account
 from src.market.matching.trade import Trade
@@ -465,3 +467,14 @@ class Agent:
 
         # 重置订单计数器
         self._order_counter = 0
+
+    def update_brain(
+        self, genome: neat.DefaultGenome, config: neat.Config
+    ) -> None:
+        """原地更新 brain，复用 Agent 对象
+
+        Args:
+            genome: 新的 NEAT 基因组
+            config: NEAT 配置
+        """
+        self.brain.update_from_genome(genome, config)

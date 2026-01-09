@@ -643,8 +643,11 @@ class TestPopulationEvolve:
         mock_neat_config.return_value = mock_config_instance
 
         # 创建 mock 基因组和种群
+        # 注意：必须设置 genome.key 以匹配 population 的 key
         mock_genome1 = MagicMock()
+        mock_genome1.key = 1
         mock_genome2 = MagicMock()
+        mock_genome2.key = 2
         mock_pop_instance = MagicMock()
         mock_pop_instance.population = {1: mock_genome1, 2: mock_genome2}
         mock_neat_pop.return_value = mock_pop_instance
@@ -692,7 +695,9 @@ class TestPopulationEvolve:
         mock_neat_config.return_value = mock_config_instance
 
         # 初始基因组
+        # 注意：必须设置 genome.key 以匹配 population 的 key
         mock_genome1 = MagicMock()
+        mock_genome1.key = 1
         mock_pop_instance = MagicMock()
         mock_pop_instance.population = {1: mock_genome1}
         mock_neat_pop.return_value = mock_pop_instance
@@ -708,7 +713,9 @@ class TestPopulationEvolve:
         initial_agents = population.agents.copy()
 
         # evolve 后更新种群的基因组（模拟 NEAT 进化）
+        # 新 genome 使用新的 key=2
         mock_genome2 = MagicMock()
+        mock_genome2.key = 2
         mock_pop_instance.population = {2: mock_genome2}
 
         # 创建新 brain
@@ -720,8 +727,9 @@ class TestPopulationEvolve:
         population.evolve(100.0)
 
         # 验证 agents 列表被重建（不是同一个对象）
+        # 注意：由于对象池化优化，agents 列表是同一个对象，但内容已更新
         assert population.agents is not initial_agents
-        # 验证新 agents 的 agent_id 基于 offset + idx（散户 offset=0, idx=0）
+        # 验证 agents 的 agent_id 保持不变（对象被复用）
         assert population.agents[0].agent_id == 0
 
     @patch("src.training.population.get_logger")
@@ -740,10 +748,14 @@ class TestPopulationEvolve:
         mock_neat_config.return_value = mock_config_instance
 
         # 创建基因组，初始 fitness 设为 None
+        # 注意：必须设置 genome.key 以匹配 population 的 key，
+        # 否则 _cleanup_genome_internals 会清理所有 genome（因为 key 不匹配）
         mock_genome1 = MagicMock()
         mock_genome1.fitness = None
+        mock_genome1.key = 1
         mock_genome2 = MagicMock()
         mock_genome2.fitness = None
+        mock_genome2.key = 2
         mock_pop_instance = MagicMock()
         mock_pop_instance.population = {1: mock_genome1, 2: mock_genome2}
         mock_neat_pop.return_value = mock_pop_instance
