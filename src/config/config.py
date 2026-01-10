@@ -94,6 +94,8 @@ class TrainingConfig:
         random_seed: 随机种子（默认 None，表示不固定）
         retail_sub_population_count: 散户子种群数量（默认 10）
         evolution_interval: 每多少个 episode 进化一次（默认 10）
+        num_arenas: 竞技场数量（默认 10）
+        episodes_per_arena: 每个竞技场运行的 episode 数（默认 10）
     """
 
     episode_length: int
@@ -110,6 +112,9 @@ class TrainingConfig:
     retail_sub_population_count: int = 10
     # 进化间隔配置
     evolution_interval: int = 10
+    # 多竞技场配置
+    num_arenas: int = 10
+    episodes_per_arena: int = 10
 
 
 @dataclass
