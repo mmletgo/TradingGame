@@ -127,21 +127,18 @@ class Trainer:
     _tick_history_amounts: list[float]
     _episode_high_price: float  # 当前 episode 最高价
     _episode_low_price: float  # 当前 episode 最低价
-    arena_id: int | None  # 竞技场 ID（多竞技场场景）
     _generation_saver: "GenerationSaver | None"
     _retail_worker_pool: "PersistentWorkerPool | None"  # RETAIL 子种群的多进程 Worker 池（已废弃）
     _unified_worker_pool: "MultiPopulationWorkerPool | None"  # 统一多种群 Worker 池
     _worker_pool_synced: bool  # Worker 池是否已同步基因组
 
-    def __init__(self, config: Config, arena_id: int | None = None) -> None:
+    def __init__(self, config: Config) -> None:
         """创建训练器
 
         Args:
             config: 全局配置对象
-            arena_id: 竞技场 ID（多竞技场场景，默认 None）
         """
         self.config = config
-        self.arena_id = arena_id
         self.logger = get_logger("trainer")
 
         self.tick = 0
@@ -651,44 +648,6 @@ class Trainer:
         """更新各种群总数"""
         for agent_type, population in self.populations.items():
             self._pop_total_counts[agent_type] = len(population.agents)
-
-    def _update_agents_after_migration(
-        self,
-        replaced_info: dict[AgentType, list[tuple[int, "Agent", "Agent"]]],
-    ) -> None:
-        """迁移后增量更新内部状态
-
-        仅更新被替换的 Agent 相关状态，避免重建整个 agent_map 和 agent_execution_order。
-
-        Args:
-            replaced_info: {agent_type: [(idx, old_agent, new_agent), ...]}
-        """
-        if not self.matching_engine:
-            return
-
-        # 1. 遍历所有被替换的 agent
-        for agent_type, replacements in replaced_info.items():
-            for idx, old_agent, new_agent in replacements:
-                # 2. 更新 agent_map：移除旧 agent 的映射，添加新 agent 的映射
-                if old_agent.agent_id in self.agent_map:
-                    del self.agent_map[old_agent.agent_id]
-                self.agent_map[new_agent.agent_id] = new_agent
-
-                # 3. 更新 agent_execution_order：找到旧 agent 的位置，替换为新 agent
-                try:
-                    exec_idx = self.agent_execution_order.index(old_agent)
-                    self.agent_execution_order[exec_idx] = new_agent
-                except ValueError:
-                    # 旧 agent 不在执行顺序中（可能已被移除），添加新 agent
-                    self.agent_execution_order.append(new_agent)
-
-                # 4. 注册新 agent 的费率到撮合引擎
-                agent_config = self.populations[agent_type].agent_config
-                self.matching_engine.register_agent(
-                    new_agent.agent_id,
-                    agent_config.maker_fee_rate,
-                    agent_config.taker_fee_rate,
-                )
 
     def _mark_agent_liquidated(self, agent_id: int) -> None:
         """标记 Agent 已被强平
@@ -1206,9 +1165,8 @@ class Trainer:
         malloc_trim()
 
         mem_after_gc = _get_memory_mb()
-        arena_tag = f"Arena-{self.arena_id}" if self.arena_id is not None else "Trainer"
         self.logger.info(
-            f"[MEMORY_EVOLVE_PARALLEL] {arena_tag} ep_{self.episode}: "
+            f"[MEMORY_EVOLVE_PARALLEL] ep_{self.episode}: "
             f"evolve={mem_after_evolve - mem_before_evolve:+.1f}MB, "
             f"gc_released={mem_after_evolve - mem_after_gc:.1f}MB, "
             f"net={mem_after_gc - mem_before_evolve:+.1f}MB"
@@ -2514,23 +2472,6 @@ class Trainer:
                 "neat_pop": pop.neat_pop,
             }
 
-    def save_checkpoint_data(self) -> dict:
-        """返回检查点数据（不写入文件）
-
-        用于多竞技场场景下由 ArenaManager 统一保存。
-
-        Returns:
-            检查点数据字典
-        """
-        return {
-            "tick": self.tick,
-            "episode": self.episode,
-            "populations": {
-                agent_type: self._serialize_population_data(pop)
-                for agent_type, pop in self.populations.items()
-            },
-        }
-
     @staticmethod
     def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> str | None:
         """查找最新的检查点文件
@@ -2753,50 +2694,6 @@ class Trainer:
             pop.clear_accumulated_fitness()
 
         self.logger.info(f"检查点已加载: {path}")
-
-    def load_checkpoint_data(self, checkpoint: dict) -> None:
-        """从检查点数据恢复（不读取文件）
-
-        用于多竞技场场景下由 ArenaManager 统一加载。
-        支持新旧两种格式的 checkpoint。
-
-        Args:
-            checkpoint: 检查点数据字典
-        """
-        self.tick = checkpoint["tick"]
-        self.episode = checkpoint["episode"]
-
-        for agent_type, pop_data in checkpoint["populations"].items():
-            if agent_type in self.populations:
-                pop = self.populations[agent_type]
-                # 【关键修复】先清理旧 Agent，防止内存泄漏
-                # setup() 时已创建了 Agent，加载检查点时需要先清理
-                if isinstance(pop, SubPopulationManager):
-                    for sub_pop in pop.sub_populations:
-                        sub_pop._cleanup_old_agents()
-                else:
-                    pop._cleanup_old_agents()
-                gc.collect()
-                gc.collect()
-
-                # 使用统一的加载方法（支持新旧格式）
-                self._load_population_data(pop, pop_data, agent_type)
-
-        self._register_all_agents()
-        self._build_agent_map()
-        self._build_execution_order()
-        self._update_pop_total_counts()
-
-        # 更新网络数据缓存
-        self._update_network_caches()
-
-        # 重置 Worker 池同步标志（需要重新同步基因组）
-        self._worker_pool_synced = False
-
-        # 重置累积状态（不保存累积数据到 checkpoint）
-        self._episodes_since_evolution = 0
-        for pop in self.populations.values():
-            pop.clear_accumulated_fitness()
 
     def pause(self) -> None:
         """暂停训练"""

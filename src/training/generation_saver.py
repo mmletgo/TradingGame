@@ -61,9 +61,6 @@ class GenerationSaver:
         Returns:
             保存的文件路径
         """
-        # 延迟导入避免循环依赖
-        from src.training.arena.migration import MigrationSystem
-
         best_genomes: dict[str, tuple[bytes, float]] = {}
 
         for agent_type, population in populations.items():
@@ -95,7 +92,7 @@ class GenerationSaver:
             best_genome = sorted_genomes[0]
 
             # 序列化 genome
-            genome_data = MigrationSystem.serialize_genome(best_genome)
+            genome_data = pickle.dumps(best_genome)
             fitness = float(best_genome.fitness)  # type: ignore[arg-type]
 
             # 使用 agent_type 的小写值作为键

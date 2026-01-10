@@ -21,7 +21,7 @@ pytest tests/training/test_population.py         # 运行单个文件
 pytest tests/training/test_population.py::TestPopulation::test_create_agents  # 运行特定测试
 ```
 
-### 单竞技场训练
+### 训练
 ```bash
 python scripts/train_noui.py --episodes 100                    # 无UI高性能训练
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl    # 从检查点恢复
@@ -29,21 +29,13 @@ python scripts/train_noui.py --episodes 100 --catfish          # 启用鲶鱼机
 python scripts/train_ui.py                                      # 带UI训练
 ```
 
-### 多竞技场并行训练
-```bash
-python scripts/train_multi_arena.py --num-arenas 16 --episodes 100
-```
-
 ### 演示模式
 ```bash
-python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl           # 单竞技场检查点
-python scripts/demo_ui.py --checkpoint checkpoints/multi_arena          # 多竞技场（自动选最优）
-python scripts/demo_ui.py --checkpoint checkpoints/multi_arena --list-arenas  # 列出所有arena
-python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --catfish       # 启用鲶鱼
+python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl           # 加载检查点
+python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --catfish # 启用鲶鱼
 ```
 
 **演示模式特点：**
-- 兼容单/多竞技场检查点
 - 鲶鱼默认禁用，启用时鲶鱼爆仓不结束 episode
 - 结束条件：任意物种淘汰到只剩 1/4
 - 结束后自动生成分析图和终端摘要
@@ -154,8 +146,7 @@ src/
 │   └── agents/     # 四种Agent类型
 ├── training/       # 训练引擎
 │   ├── population.py   # 种群管理
-│   ├── trainer.py      # 训练协调器
-│   └── arena/          # 多竞技场模块
+│   └── trainer.py      # 训练协调器
 ├── ui/             # DearPyGui可视化
 ├── analysis/       # 演示分析器
 └── config/         # 配置管理
@@ -182,7 +173,6 @@ src/
 | Agent | src/bio/agents/CLAUDE.md | 四种Agent行为与输入输出 |
 | 神经网络 | src/bio/brain/CLAUDE.md | NEAT封装与前向传播 |
 | 训练引擎 | src/training/CLAUDE.md | Episode循环、强平处理 |
-| 多竞技场 | src/training/arena/CLAUDE.md | 并行训练、物种迁移 |
 | 鲶鱼 | src/market/catfish/CLAUDE.md | 三种模式详解 |
 | ADL | src/market/adl/CLAUDE.md | 自动减仓机制 |
 
@@ -206,7 +196,6 @@ src/
 - `FastFeedForwardNetwork` - 神经网络推理（10-100倍提升）
 
 ### 并行化策略
-- 多竞技场：独立进程并行（绕过GIL）
 - Agent创建：8个worker线程池
 - Agent决策：16个worker线程池
 
@@ -214,4 +203,3 @@ src/
 - 预分配输入缓冲区
 - NEAT历史数据定期清理
 - Episode后强制垃圾回收
-- 多竞技场分离存储（轻重分离）

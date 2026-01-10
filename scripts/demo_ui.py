@@ -32,7 +32,7 @@ sys.path.insert(0, str(project_root))
 
 from src.core.log_engine.logger import setup_logging
 from src.training.trainer import Trainer
-from src.training.checkpoint_loader import CheckpointLoader, CheckpointType
+from src.training.checkpoint_loader import CheckpointLoader
 from src.ui.demo_app import DemoUIApp
 from src.analysis.demo_analyzer import DemoAnalyzer
 
@@ -70,17 +70,6 @@ def main() -> None:
         help="日志目录（默认: logs）",
     )
     parser.add_argument(
-        "--arena-id",
-        type=int,
-        default=None,
-        help="多训练场模式下指定加载哪个 arena（默认选最高 episode）",
-    )
-    parser.add_argument(
-        "--list-arenas",
-        action="store_true",
-        help="列出多训练场的所有 arena 信息（不启动演示）",
-    )
-    parser.add_argument(
         "--catfish",
         action="store_true",
         help="启用鲶鱼（默认禁用）",
@@ -102,31 +91,6 @@ def main() -> None:
     # 设置日志
     setup_logging(args.log_dir)
 
-    # 如果指定了 --list-arenas，列出所有 arena 并退出
-    if args.list_arenas:
-        if not args.checkpoint:
-            print("错误: --list-arenas 需要指定 --checkpoint 路径")
-            sys.exit(1)
-
-        checkpoint_type = CheckpointLoader.detect_type(args.checkpoint)
-        if checkpoint_type != CheckpointType.MULTI_ARENA:
-            print(f"错误: {args.checkpoint} 不是多训练场 checkpoint")
-            sys.exit(1)
-
-        arenas = CheckpointLoader.list_arenas(args.checkpoint)
-        print(f"\n多训练场 Checkpoint: {args.checkpoint}")
-        print(f"共 {len(arenas)} 个 Arena:\n")
-        print(f"{'Arena ID':>10}  {'Episode':>10}  {'更新时间'}")
-        print("-" * 50)
-        for arena in arenas:
-            from datetime import datetime
-
-            updated_at = datetime.fromtimestamp(arena["updated_at"]).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-            print(f"{arena['arena_id']:>10}  {arena['episode']:>10}  {updated_at}")
-        sys.exit(0)
-
     # 加载 checkpoint（如果指定）
     checkpoint_data = None
     if args.checkpoint:
@@ -136,13 +100,8 @@ def main() -> None:
             sys.exit(1)
 
         # 使用 CheckpointLoader 加载
-        checkpoint_type = CheckpointLoader.detect_type(args.checkpoint)
-        print(f"Checkpoint 类型: {checkpoint_type.value}")
-
-        checkpoint_data = CheckpointLoader.load(args.checkpoint, arena_id=args.arena_id)
+        checkpoint_data = CheckpointLoader.load(args.checkpoint)
         print(f"Episode: {checkpoint_data['episode']}")
-        if checkpoint_data["source_arena_id"] is not None:
-            print(f"Arena ID: {checkpoint_data['source_arena_id']}")
 
     print("=" * 60)
     print("NEAT AI 交易模拟竞技场 - 演示模式")
@@ -150,8 +109,6 @@ def main() -> None:
     print(f"Episode Length: {args.episode_length} ticks")
     if args.checkpoint:
         print(f"Checkpoint: {args.checkpoint}")
-        if args.arena_id is not None:
-            print(f"Arena ID: {args.arena_id}")
     else:
         print("Checkpoint: 未指定（使用随机初始化的Agent）")
     print(f"鲶鱼: {'启用' if args.catfish else '禁用'}")

@@ -22,7 +22,6 @@ from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLManager
 from src.market.matching.matching_engine import MatchingEngine
-from src.training.arena.migration import MigrationSystem
 
 
 # Agent ID 偏移量，与 Population 保持一致
@@ -101,7 +100,7 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
             continue
 
         # 反序列化 genome
-        genome = MigrationSystem.deserialize_genome(genome_data)
+        genome = pickle.loads(genome_data)
         if not isinstance(genome, neat.DefaultGenome):
             continue
 
@@ -360,7 +359,7 @@ class EvolutionTester:
             Agent 列表，每个 Agent 有独立账户
         """
         # 反序列化 genome
-        genome = MigrationSystem.deserialize_genome(genome_data)
+        genome = pickle.loads(genome_data)
         if not isinstance(genome, neat.DefaultGenome):
             raise ValueError("无效的 genome 数据")
 
