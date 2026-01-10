@@ -2,6 +2,13 @@
 """单训练场性能基准测试脚本
 
 用于分析单训练场模式的性能瓶颈，测量各阶段耗时。
+适配当前实现的并行进化和 OpenMP 决策优化。
+
+功能特性:
+- 测量 Tick 循环各阶段耗时（OpenMP决策、串行执行、市场状态计算等）
+- 测量进化阶段各环节耗时（NEAT run、Agent创建、评估、清理、缓存更新）
+- 支持 RetailSubPopulationManager 子种群架构
+- 支持 BatchNetworkCache + OpenMP 多核并行决策
 
 使用方法:
     python scripts/benchmark_single_arena.py [选项]
@@ -111,6 +118,7 @@ class EvolutionTimings:
     neat_run: dict[AgentType, float] = field(default_factory=dict)
     create_agents: dict[AgentType, float] = field(default_factory=dict)
     gc_time: float = 0.0
+    cache_update_time: float = 0.0  # 网络缓存更新时间
 
 
 class BenchmarkTrainer(Trainer):
@@ -229,7 +237,7 @@ class BenchmarkTrainer(Trainer):
         # 随机打乱执行顺序
         random.shuffle(self.agent_execution_order)
 
-        # === 并行决策 ===
+        # === OpenMP 并行决策（使用 BatchNetworkCache 缓存优化） ===
         t0 = time.perf_counter()
         decisions = self._batch_decide_parallel(
             self.agent_execution_order, market_state, orderbook
@@ -491,6 +499,11 @@ class BenchmarkTrainer(Trainer):
         self._build_execution_order()
         self._update_pop_total_counts()
 
+        # 更新网络数据缓存（关键：进化后需要更新缓存以适应新的网络结构）
+        t0 = time.perf_counter()
+        self._update_network_caches()
+        evolution_timings.cache_update_time = time.perf_counter() - t0
+
         return evolution_timings
 
     def sample_inference_times(self, n_samples: int = 1000) -> list[float]:
@@ -722,7 +735,7 @@ class SingleArenaBenchmarker:
         # Tick 阶段明细
         if tick_total > 0:
             print(
-                f"    - 并行决策: {episode_timing.tick_parallel_decide:.2f}s "
+                f"    - OpenMP决策: {episode_timing.tick_parallel_decide:.2f}s "
                 f"({episode_timing.tick_parallel_decide / tick_total * 100:.1f}%)"
             )
             print(
@@ -771,6 +784,10 @@ class SingleArenaBenchmarker:
                 f"    - GC: {evolution_timing.gc_time:.2f}s "
                 f"({evolution_timing.gc_time / evo_total * 100:.1f}%)"
             )
+            print(
+                f"    - 缓存更新: {evolution_timing.cache_update_time:.2f}s "
+                f"({evolution_timing.cache_update_time / evo_total * 100:.1f}%)"
+            )
 
         total = tick_total + evo_total
         print(f"  Episode 总耗时: {total:.2f}s")
@@ -780,7 +797,7 @@ class SingleArenaBenchmarker:
         """计算汇总统计"""
         # Tick 阶段统计
         self.tick_stats = {
-            "parallel_decide": TimingStats(),
+            "openmp_decide": TimingStats(),
             "serial_execute": TimingStats(),
             "market_state": TimingStats(),
             "liquidation_check": TimingStats(),
@@ -791,7 +808,7 @@ class SingleArenaBenchmarker:
         for et in self.episode_timings:
             n_ticks = self.episode_length
             if et.tick_loop_total > 0 and n_ticks > 0:
-                self.tick_stats["parallel_decide"].add(
+                self.tick_stats["openmp_decide"].add(
                     et.tick_parallel_decide / n_ticks * 1000
                 )
                 self.tick_stats["serial_execute"].add(
@@ -837,11 +854,19 @@ class SingleArenaBenchmarker:
         # Tick 阶段平均耗时
         print("Tick 阶段平均耗时 (每 tick):")
         total_mean = self.tick_stats["total"].mean
-        for key in ["parallel_decide", "serial_execute", "market_state", "liquidation_check", "other"]:
+        key_labels = {
+            "openmp_decide": "OpenMP决策",
+            "serial_execute": "串行执行",
+            "market_state": "市场状态",
+            "liquidation_check": "强平检查",
+            "other": "其他",
+        }
+        for key in ["openmp_decide", "serial_execute", "market_state", "liquidation_check", "other"]:
             stats = self.tick_stats[key]
             if stats.count > 0:
                 pct = stats.mean / total_mean * 100 if total_mean > 0 else 0
-                print(f"  {key}: {stats.mean:.2f}ms +/- {stats.std:.2f}ms ({pct:.1f}%)")
+                label = key_labels.get(key, key)
+                print(f"  {label}: {stats.mean:.2f}ms +/- {stats.std:.2f}ms ({pct:.1f}%)")
         print(f"  总计: {total_mean:.2f}ms +/- {self.tick_stats['total'].std:.2f}ms")
         print()
 
