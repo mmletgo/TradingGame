@@ -1213,6 +1213,7 @@ class Trainer:
         pop: Population,
         genome_data: tuple[np.ndarray, ...],
         network_params: tuple[np.ndarray, ...],
+        deserialize_genomes: bool = False,
     ) -> None:
         """从 Worker 结果更新种群
 
@@ -1220,36 +1221,49 @@ class Trainer:
             pop: 种群对象
             genome_data: 基因组数据元组
             network_params: 网络参数数据元组
+            deserialize_genomes: 是否反序列化基因组（默认 False，延迟反序列化）
         """
         # 增加代数
         pop.generation += 1
 
-        # 保存旧基因组用于清理
-        old_genomes = list(pop.neat_pop.population.values())
-
-        # 反序列化基因组
-        new_keys, new_fitnesses, new_metadata, new_nodes, new_conns = genome_data
-        pop.neat_pop.population = _deserialize_genomes_numpy(
-            new_keys, new_fitnesses, new_metadata, new_nodes, new_conns,
-            pop.neat_config.genome_config
-        )
-
-        # 清理旧基因组
-        new_genome_ids = set(pop.neat_pop.population.keys())
-        old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
-        pop._cleanup_genome_internals(old_to_clean)
-
-        # 清理 NEAT 历史
-        pop._cleanup_neat_history()
-
-        # 解包网络参数并更新 Agent Brain
+        # 解包网络参数
         params_list = _unpack_network_params_numpy(*network_params)
-        new_genomes = list(pop.neat_pop.population.items())
-        for idx, (gid, genome) in enumerate(new_genomes):
-            if idx < len(pop.agents) and idx < len(params_list):
-                pop.agents[idx].brain.update_from_network_params(
-                    genome, params_list[idx]
-                )
+
+        if deserialize_genomes:
+            # 完整反序列化：重建 NEAT 种群
+            old_genomes = list(pop.neat_pop.population.values())
+
+            # 反序列化基因组
+            new_keys, new_fitnesses, new_metadata, new_nodes, new_conns = genome_data
+            pop.neat_pop.population = _deserialize_genomes_numpy(
+                new_keys, new_fitnesses, new_metadata, new_nodes, new_conns,
+                pop.neat_config.genome_config
+            )
+
+            # 清理旧基因组
+            new_genome_ids = set(pop.neat_pop.population.keys())
+            old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+            pop._cleanup_genome_internals(old_to_clean)
+
+            # 清理 NEAT 历史
+            pop._cleanup_neat_history()
+
+            # 更新 Agent Brain（使用完整的 genome + params）
+            new_genomes = list(pop.neat_pop.population.items())
+            for idx, (gid, genome) in enumerate(new_genomes):
+                if idx < len(pop.agents) and idx < len(params_list):
+                    pop.agents[idx].brain.update_from_network_params(
+                        genome, params_list[idx]
+                    )
+        else:
+            # 延迟反序列化：只更新网络参数（不更新 genome 引用）
+            for idx, params in enumerate(params_list):
+                if idx < len(pop.agents):
+                    pop.agents[idx].brain.update_network_only(params)
+
+            # 存储待反序列化数据（用于保存检查点时）
+            pop._pending_genome_data = genome_data
+            pop._genomes_dirty = True
 
     def _evolve_populations_with_cached_fitness(self) -> None:
         """使用缓存适应度进化所有种群
@@ -2542,10 +2556,12 @@ class Trainer:
         Args:
             path: 检查点文件路径
         """
-        # 保存检查点前同步基因组（延迟反序列化模式下需要）
-        retail_manager = self.populations.get(AgentType.RETAIL)
-        if isinstance(retail_manager, SubPopulationManager):
-            retail_manager.sync_genomes_from_pending()
+        # 保存检查点前同步所有种群的基因组（延迟反序列化模式下需要）
+        for agent_type, pop in self.populations.items():
+            if isinstance(pop, SubPopulationManager):
+                pop.sync_genomes_from_pending()
+            elif isinstance(pop, Population) and pop._genomes_dirty:
+                pop.sync_genomes_from_pending()
 
         checkpoint_path = Path(path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

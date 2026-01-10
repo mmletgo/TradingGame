@@ -479,7 +479,11 @@ pool.shutdown()
   - RETAIL_PRO: 1 个种群
   - WHALE: 1 个种群
   - MARKET_MAKER: 2 个子种群
-- `_update_population_from_worker()` - 从 Worker 结果更新种群（反序列化基因组、更新 Agent Brain）
+  - **延迟反序列化优化**：默认只更新网络参数，不重建完整 genome 对象
+  - **性能提升**：~20秒/episode（比旧版本 40秒快一倍）
+- `_update_population_from_worker(pop, genome_data, network_params, deserialize_genomes=False)` - 从 Worker 结果更新种群
+  - `deserialize_genomes=False`（默认）：只调用 `brain.update_network_only(params)`，不反序列化 genome
+  - `deserialize_genomes=True`：完整反序列化 genome，用于保存 checkpoint 时
 - `_batch_decide_serial()` - Agent 决策阶段**串行执行**（经测试，由于 GIL 限制，串行比并行快 ~30%）
 - `_check_liquidations_vectorized()` - 向量化强平检查（NumPy 批量计算）
 - 决策阶段串行，执行阶段串行（保证订单簿一致性，避免 GIL 竞争）

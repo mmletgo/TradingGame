@@ -1233,6 +1233,8 @@ class Population:
     _executor: ThreadPoolExecutor | None
     _num_workers: int
     sub_population_id: int | None  # 子种群ID（仅散户使用）
+    _pending_genome_data: tuple[np.ndarray, ...] | None  # 待反序列化的基因组数据
+    _genomes_dirty: bool  # 标记基因组是否需要同步
 
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取实例级别线程池"""
@@ -1265,6 +1267,10 @@ class Population:
         self._executor = None
         self._num_workers = 8
         self.sub_population_id = None  # 默认不是子种群
+
+        # 延迟反序列化支持
+        self._pending_genome_data: tuple[np.ndarray, ...] | None = None
+        self._genomes_dirty: bool = False
 
         # 根据 Agent 类型选择 NEAT 配置文件
         # 散户使用 67 个输入（10档订单簿 + 10笔成交），庄家使用 607 个输入，做市商使用 634 个输入
@@ -2137,6 +2143,42 @@ class Population:
                     best_avg = avg
 
         return best_avg
+
+    def sync_genomes_from_pending(self) -> None:
+        """从待处理数据同步基因组（延迟反序列化）
+
+        当需要保存检查点时调用此方法，将待处理的基因组数据
+        反序列化到主进程的 NEAT 种群中。
+        """
+        if not self._genomes_dirty or self._pending_genome_data is None:
+            return
+
+        # 保存旧基因组用于清理
+        old_genomes = list(self.neat_pop.population.values())
+
+        # 反序列化基因组
+        new_keys, new_fitnesses, new_metadata, new_nodes, new_conns = self._pending_genome_data
+        self.neat_pop.population = _deserialize_genomes_numpy(
+            new_keys, new_fitnesses, new_metadata, new_nodes, new_conns,
+            self.neat_config.genome_config
+        )
+
+        # 清理旧基因组
+        new_genome_ids = set(self.neat_pop.population.keys())
+        old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+        self._cleanup_genome_internals(old_to_clean)
+
+        # 清理 NEAT 历史
+        self._cleanup_neat_history()
+
+        # 更新 Agent Brain 的 genome 引用
+        new_genomes = list(self.neat_pop.population.items())
+        for idx, (gid, genome) in enumerate(new_genomes):
+            if idx < len(self.agents):
+                self.agents[idx].brain.genome = genome
+
+        self._pending_genome_data = None
+        self._genomes_dirty = False
 
 
 class SubPopulationManager:
