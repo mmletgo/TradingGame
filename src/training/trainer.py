@@ -48,7 +48,7 @@ from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.training.fast_math import log_normalize_signed, log_normalize_unsigned
-from src.training.population import Population, malloc_trim
+from src.training.population import Population, RetailSubPopulationManager, malloc_trim
 
 # 缓存类型常量 - 直接在 Python 中定义，避免 Cython 导出问题
 CACHE_TYPE_RETAIL = 0
@@ -86,7 +86,7 @@ class Trainer:
     """
 
     config: Config
-    populations: dict[AgentType, Population]
+    populations: dict[AgentType, Population | RetailSubPopulationManager]
     matching_engine: MatchingEngine | None
     adl_manager: ADLManager | None
     tick: int
@@ -452,7 +452,14 @@ class Trainer:
         else:
             # 创建全新种群（每个种群内部的Agent创建是并行的）
             for agent_type in AgentType:
-                self.populations[agent_type] = Population(agent_type, self.config)
+                if agent_type == AgentType.RETAIL:
+                    # 散户使用子种群管理器
+                    sub_count = self.config.training.retail_sub_population_count
+                    self.populations[agent_type] = RetailSubPopulationManager(
+                        self.config, sub_count=sub_count
+                    )
+                else:
+                    self.populations[agent_type] = Population(agent_type, self.config)
 
         # 创建撮合引擎
         self.matching_engine = MatchingEngine(self.config.market)
@@ -1045,18 +1052,16 @@ class Trainer:
         )
 
     def _evolve_populations_parallel(self, current_price: float) -> None:
-        """并行进化所有种群
+        """进化所有种群
 
-        关键优化：
-        1. 串行进化每个种群，避免并行导致的内存峰值
-        2. 每个种群进化后立即 GC，释放旧对象
-        3. 清理 futures 引用，避免持有已完成任务的引用
+        当前实现使用串行进化。
+        子种群并行进化方案因 Python GIL 和序列化开销限制而无法提供性能提升。
+        保留方法名以保持 API 兼容性。
         """
         # [MEMORY] 记录进化开始前的内存
         mem_before_evolve = _get_memory_mb()
 
         # 串行进化所有种群
-        # 注意：GC 调用已移至循环外统一执行，减少 GC 开销
         for pop in self.populations.values():
             try:
                 pop.evolve(current_price)

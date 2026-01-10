@@ -31,6 +31,18 @@ def malloc_trim() -> None:
     except (OSError, AttributeError):
         # 非 Linux 系统或无法加载 libc，静默跳过
         pass
+
+
+def _evolve_single_population(pop: "Population", current_price: float) -> None:
+    """进化单个种群
+
+    Args:
+        pop: 种群对象
+        current_price: 当前价格
+    """
+    pop.evolve(current_price)
+
+
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
@@ -77,6 +89,7 @@ class Population:
     logger: logging.Logger
     _executor: ThreadPoolExecutor | None
     _num_workers: int
+    sub_population_id: int | None  # 子种群ID（仅散户使用）
 
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取实例级别线程池"""
@@ -108,6 +121,7 @@ class Population:
         self.logger = get_logger("population")
         self._executor = None
         self._num_workers = 8
+        self.sub_population_id = None  # 默认不是子种群
 
         # 根据 Agent 类型选择 NEAT 配置文件
         # 散户使用 67 个输入（10档订单簿 + 10笔成交），庄家使用 607 个输入，做市商使用 634 个输入
@@ -147,13 +161,23 @@ class Population:
         )
 
     # Agent ID 偏移量，确保不同种群的 agent_id 不冲突
-    # 每个种群类型使用不同的高位，每种群最多支持 100 万个 Agent
+    # 新的ID分配方案：
+    # RETAIL_SUB_0:  0 ~ 99,999 (每个子种群预留100K空间)
+    # RETAIL_SUB_1: 100,000 ~ 199,999
+    # ...
+    # RETAIL_SUB_9: 900,000 ~ 999,999
+    # RETAIL_PRO:  1,000,000+
+    # WHALE:       2,000,000+
+    # MARKET_MAKER: 3,000,000+
     _AGENT_ID_OFFSET = {
-        AgentType.RETAIL: 0,
+        AgentType.RETAIL: 0,  # 基础偏移，子种群会在此基础上再加偏移
         AgentType.RETAIL_PRO: 1_000_000,
         AgentType.WHALE: 2_000_000,
         AgentType.MARKET_MAKER: 3_000_000,
     }
+
+    # 子种群偏移量（每个散户子种群的ID空间）
+    _RETAIL_SUB_POPULATION_OFFSET = 100_000
 
     def _create_single_agent(
         self,
@@ -209,6 +233,10 @@ class Population:
             raise ValueError(f"未知的 Agent 类型: {self.agent_type}")
 
         agent_id_offset = self._AGENT_ID_OFFSET.get(self.agent_type, 0)
+
+        # 如果是子种群，添加子种群偏移
+        if self.sub_population_id is not None:
+            agent_id_offset += self.sub_population_id * self._RETAIL_SUB_POPULATION_OFFSET
 
         # 小批量直接串行处理，避免线程池开销
         if len(genomes) < 50:
@@ -789,6 +817,14 @@ class Population:
         for agent in self.agents:
             agent.reset(self.agent_config)
 
+    def get_all_genomes(self) -> list[neat.DefaultGenome]:
+        """获取所有基因组（用于GenerationSaver等）
+
+        Returns:
+            所有基因组列表
+        """
+        return list(self.neat_pop.population.values())
+
     def replace_worst_agents(
         self,
         new_genomes: list[neat.DefaultGenome],
@@ -969,3 +1005,187 @@ class Population:
                     best_avg = avg
 
         return best_avg
+
+
+class RetailSubPopulationManager:
+    """散户子种群管理器
+
+    将散户拆分成多个子种群，支持并行进化。
+    每个子种群独立进行NEAT进化，但在训练过程中共享市场环境。
+
+    Attributes:
+        sub_populations: 子种群列表
+        sub_population_count: 子种群数量
+        agents_per_sub: 每个子种群的Agent数量
+        agent_type: Agent类型（固定为RETAIL）
+        logger: 日志器
+    """
+
+    sub_populations: list[Population]
+    sub_population_count: int
+    agents_per_sub: int
+    agent_type: AgentType
+    logger: logging.Logger
+
+    def __init__(self, config: Config, sub_count: int = 10) -> None:
+        """创建子种群管理器
+
+        Args:
+            config: 全局配置对象
+            sub_count: 子种群数量（默认10）
+        """
+        self.agent_type = AgentType.RETAIL
+        self.sub_population_count = sub_count
+        self.logger = get_logger("retail_sub_pop_manager")
+
+        # 计算每个子种群的Agent数量
+        total_count = config.agents[AgentType.RETAIL].count
+        self.agents_per_sub = total_count // sub_count
+
+        # 检查是否能整除
+        if total_count % sub_count != 0:
+            self.logger.warning(
+                f"散户总数 {total_count} 不能被子种群数 {sub_count} 整除，"
+                f"每个子种群将有 {self.agents_per_sub} 个Agent"
+            )
+
+        # 创建子种群
+        self.sub_populations = []
+        for i in range(sub_count):
+            # 创建子种群专用配置
+            sub_config = self._create_sub_config(config, i)
+
+            # 创建Population，设置子种群ID
+            pop = Population(AgentType.RETAIL, sub_config)
+            pop.sub_population_id = i
+
+            # 重新创建agents（因为需要正确的ID偏移）
+            # 注意：Population.__init__已经创建了agents，这里需要重新创建以应用正确的ID
+            genomes = list(pop.neat_pop.population.items())
+            pop.agents = pop.create_agents(genomes)
+
+            self.sub_populations.append(pop)
+
+        self.logger.info(
+            f"创建散户子种群管理器: {sub_count} 个子种群，每个 {self.agents_per_sub} 个Agent"
+        )
+
+    def _create_sub_config(self, config: Config, sub_id: int) -> Config:
+        """创建子种群专用配置
+
+        Args:
+            config: 原始配置
+            sub_id: 子种群ID
+
+        Returns:
+            子种群专用配置（修改了RETAIL的count）
+        """
+        from copy import deepcopy
+        sub_config = deepcopy(config)
+        sub_config.agents[AgentType.RETAIL].count = self.agents_per_sub
+        return sub_config
+
+    @property
+    def agents(self) -> list[Agent]:
+        """返回所有子种群的Agent（合并视图）"""
+        all_agents: list[Agent] = []
+        for pop in self.sub_populations:
+            all_agents.extend(pop.agents)
+        return all_agents
+
+    @property
+    def generation(self) -> int:
+        """返回第一个子种群的代数（所有子种群应该同步）"""
+        if self.sub_populations:
+            return self.sub_populations[0].generation
+        return 0
+
+    @property
+    def agent_config(self) -> AgentConfig:
+        """返回散户的Agent配置（从第一个子种群获取）"""
+        if self.sub_populations:
+            return self.sub_populations[0].agent_config
+        raise RuntimeError("No sub-populations available")
+
+    def reset_agents(self) -> None:
+        """重置所有子种群的Agent"""
+        for pop in self.sub_populations:
+            pop.reset_agents()
+
+    def evaluate(self, current_price: float) -> list[tuple[Agent, float]]:
+        """评估所有Agent适应度
+
+        Args:
+            current_price: 当前价格
+
+        Returns:
+            (Agent, fitness) 元组列表
+        """
+        all_results: list[tuple[Agent, float]] = []
+        for pop in self.sub_populations:
+            results = pop.evaluate(current_price)
+            all_results.extend(results)
+        return all_results
+
+    def evolve(self, current_price: float) -> None:
+        """进化所有子种群（串行版本）
+
+        Args:
+            current_price: 当前价格
+        """
+        for pop in self.sub_populations:
+            pop.evolve(current_price)
+
+    def evolve_parallel(self, current_price: float, max_workers: int = 10) -> None:
+        """并行进化所有子种群
+
+        当前实现使用串行进化。原因：
+        1. ProcessPoolExecutor 需要序列化 NEAT 种群对象，开销巨大
+        2. 即使使用轻量级序列化（只传输基因组数据），
+           主进程的反序列化和重建开销仍然很大（约 20s）
+        3. ThreadPoolExecutor 受 GIL 限制，无法真正并行
+
+        保留此接口以便未来使用更高效的方案：
+        - Cython nogil 实现 NEAT 进化核心逻辑
+        - Rust PyO3 扩展
+        - 多竞技场分布式进化（已实现）
+
+        Args:
+            current_price: 当前价格（用于计算适应度）
+            max_workers: 最大并行进程数（未使用）
+        """
+        # 直接调用串行进化
+        for pop in self.sub_populations:
+            pop.evolve(current_price)
+
+        self.logger.debug(
+            f"散户子种群进化完成，共 {len(self.sub_populations)} 个子种群"
+        )
+
+    def evolve_with_cached_fitness(self) -> bool:
+        """使用缓存的适应度进化所有子种群
+
+        Returns:
+            是否成功进化
+        """
+        all_success = True
+        for pop in self.sub_populations:
+            success = pop.evolve_with_cached_fitness()
+            all_success = all_success and success
+        return all_success
+
+    def shutdown_executor(self) -> None:
+        """关闭所有子种群的线程池"""
+        for pop in self.sub_populations:
+            pop.shutdown_executor()
+
+    def get_all_genomes(self) -> list[neat.DefaultGenome]:
+        """获取所有子种群的基因组（用于GenerationSaver等）
+
+        Returns:
+            所有子种群的基因组列表
+        """
+        all_genomes: list[neat.DefaultGenome] = []
+        for pop in self.sub_populations:
+            all_genomes.extend(pop.neat_pop.population.values())
+        return all_genomes

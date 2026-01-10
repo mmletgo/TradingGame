@@ -41,6 +41,7 @@ sys.path.insert(0, str(project_root))
 from src.bio.agents.base import AgentType
 from src.core.log_engine.logger import setup_logging
 from src.training.trainer import Trainer
+from src.training.population import RetailSubPopulationManager
 
 from create_config import create_default_config
 
@@ -363,64 +364,119 @@ class BenchmarkTrainer(Trainer):
         current_price = self.matching_engine._orderbook.last_price
 
         for agent_type, population in self.populations.items():
-            # 1. 评估适应度
-            t0 = time.perf_counter()
-            agent_fitnesses = population.evaluate(current_price)
-            for agent, fitness in agent_fitnesses:
-                genome = agent.brain.get_genome()
-                genome.fitness = fitness
-            evolution_timings.evaluate[agent_type] = time.perf_counter() - t0
+            # 处理 RetailSubPopulationManager
+            if isinstance(population, RetailSubPopulationManager):
+                # 对子种群管理器，遍历所有子种群
+                eval_time = 0.0
+                cleanup_time = 0.0
+                neat_time = 0.0
+                create_time = 0.0
 
-            # 2. 保存旧基因组，清理旧 Agent
-            t0 = time.perf_counter()
-            old_genomes = list(population.neat_pop.population.values())
-            population._cleanup_old_agents()
-            gc.collect()
-            gc.collect()
-            evolution_timings.cleanup_old_agents[agent_type] = time.perf_counter() - t0
+                for sub_pop in population.sub_populations:
+                    # 1. 评估适应度
+                    t0 = time.perf_counter()
+                    agent_fitnesses = sub_pop.evaluate(current_price)
+                    for agent, fitness in agent_fitnesses:
+                        genome = agent.brain.get_genome()
+                        genome.fitness = fitness
+                    eval_time += time.perf_counter() - t0
 
-            # 3. NEAT run
-            t0 = time.perf_counter()
+                    # 2. 清理
+                    t0 = time.perf_counter()
+                    old_genomes = list(sub_pop.neat_pop.population.values())
+                    sub_pop._cleanup_old_agents()
+                    cleanup_time += time.perf_counter() - t0
 
-            def eval_genomes(
-                genomes: list[tuple[int, Any]], config: Any
-            ) -> None:
-                # 适应度已设置，无需计算
-                _ = genomes, config
+                    # 3. NEAT run
+                    t0 = time.perf_counter()
+                    def eval_genomes(genomes: list, config: Any) -> None:
+                        pass
+                    try:
+                        sub_pop.neat_pop.run(eval_genomes, n=1)
+                    except Exception as e:
+                        self.logger.warning(f"子种群进化失败: {e}")
+                        sub_pop._cleanup_genome_internals(old_genomes)
+                        continue
+                    neat_time += time.perf_counter() - t0
 
-            try:
-                population.neat_pop.run(eval_genomes, n=1)
-            except Exception as e:
-                self.logger.warning(f"{agent_type.value} 进化失败: {e}")
-                population._cleanup_genome_internals(old_genomes)
-                del old_genomes
+                    # 清理旧基因组
+                    new_genome_ids = set(sub_pop.neat_pop.population.keys())
+                    old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+                    sub_pop._cleanup_genome_internals(old_to_clean)
+                    del old_genomes, old_to_clean
+
+                    sub_pop.generation += 1
+                    sub_pop._cleanup_neat_history()
+
+                    # 4. 创建新 Agent
+                    t0 = time.perf_counter()
+                    new_genomes = list(sub_pop.neat_pop.population.items())
+                    sub_pop.agents = sub_pop.create_agents(new_genomes)
+                    create_time += time.perf_counter() - t0
+
+                evolution_timings.evaluate[agent_type] = eval_time
+                evolution_timings.cleanup_old_agents[agent_type] = cleanup_time
+                evolution_timings.neat_run[agent_type] = neat_time
+                evolution_timings.create_agents[agent_type] = create_time
+            else:
+                # 普通 Population
+                # 1. 评估适应度
+                t0 = time.perf_counter()
+                agent_fitnesses = population.evaluate(current_price)
+                for agent, fitness in agent_fitnesses:
+                    genome = agent.brain.get_genome()
+                    genome.fitness = fitness
+                evolution_timings.evaluate[agent_type] = time.perf_counter() - t0
+
+                # 2. 保存旧基因组，清理旧 Agent
+                t0 = time.perf_counter()
+                old_genomes = list(population.neat_pop.population.values())
+                population._cleanup_old_agents()
                 gc.collect()
-                population._reset_neat_population()
+                gc.collect()
+                evolution_timings.cleanup_old_agents[agent_type] = time.perf_counter() - t0
+
+                # 3. NEAT run
+                t0 = time.perf_counter()
+
+                def eval_genomes(
+                    genomes: list[tuple[int, Any]], config: Any
+                ) -> None:
+                    _ = genomes, config
+
+                try:
+                    population.neat_pop.run(eval_genomes, n=1)
+                except Exception as e:
+                    self.logger.warning(f"{agent_type.value} 进化失败: {e}")
+                    population._cleanup_genome_internals(old_genomes)
+                    del old_genomes
+                    gc.collect()
+                    population._reset_neat_population()
+                    evolution_timings.neat_run[agent_type] = time.perf_counter() - t0
+                    evolution_timings.create_agents[agent_type] = 0.0
+                    continue
+
                 evolution_timings.neat_run[agent_type] = time.perf_counter() - t0
-                evolution_timings.create_agents[agent_type] = 0.0
-                continue
 
-            evolution_timings.neat_run[agent_type] = time.perf_counter() - t0
+                # 清理旧基因组
+                new_genome_ids = set(population.neat_pop.population.keys())
+                old_genomes_to_clean = [
+                    g for g in old_genomes if g.key not in new_genome_ids
+                ]
+                population._cleanup_genome_internals(old_genomes_to_clean)
+                del old_genomes
+                del old_genomes_to_clean
+                gc.collect()
 
-            # 清理旧基因组
-            new_genome_ids = set(population.neat_pop.population.keys())
-            old_genomes_to_clean = [
-                g for g in old_genomes if g.key not in new_genome_ids
-            ]
-            population._cleanup_genome_internals(old_genomes_to_clean)
-            del old_genomes
-            del old_genomes_to_clean
-            gc.collect()
+                population.generation += 1
+                population._cleanup_neat_history()
+                gc.collect()
 
-            population.generation += 1
-            population._cleanup_neat_history()
-            gc.collect()
-
-            # 4. 创建新 Agent
-            t0 = time.perf_counter()
-            new_genomes = list(population.neat_pop.population.items())
-            population.agents = population.create_agents(new_genomes)
-            evolution_timings.create_agents[agent_type] = time.perf_counter() - t0
+                # 4. 创建新 Agent
+                t0 = time.perf_counter()
+                new_genomes = list(population.neat_pop.population.items())
+                population.agents = population.create_agents(new_genomes)
+                evolution_timings.create_agents[agent_type] = time.perf_counter() - t0
 
         # GC 时间
         t0 = time.perf_counter()

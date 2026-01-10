@@ -13,7 +13,7 @@ from src.core.log_engine.logger import get_logger
 
 if TYPE_CHECKING:
     from src.config.config import AgentType
-    from src.training.population import Population
+    from src.training.population import Population, RetailSubPopulationManager
 
 
 class GenerationSaver:
@@ -46,7 +46,7 @@ class GenerationSaver:
     def save_generation(
         self,
         generation: int,
-        populations: dict["AgentType", "Population"],
+        populations: dict["AgentType", "Population | RetailSubPopulationManager"],
         current_price: float,
     ) -> str:
         """保存一代的最佳基因组
@@ -67,8 +67,8 @@ class GenerationSaver:
         best_genomes: dict[str, tuple[bytes, float]] = {}
 
         for agent_type, population in populations.items():
-            # 获取种群中的所有基因组
-            genomes = list(population.neat_pop.population.values())
+            # 获取种群中的所有基因组（兼容 Population 和 RetailSubPopulationManager）
+            genomes = population.get_all_genomes()
 
             if not genomes:
                 self.logger.warning(
