@@ -1141,6 +1141,10 @@ class Trainer:
                 # 子种群管理器：评估每个子种群
                 for i, sub_pop in enumerate(pop.sub_populations):
                     agent_fitnesses = sub_pop.evaluate(current_price)
+                    # 更新 genome.fitness（供 GenerationSaver 使用）
+                    for agent, fitness in agent_fitnesses:
+                        genome = agent.brain.get_genome()
+                        genome.fitness = fitness
                     fitness_arr = np.array(
                         [f for _, f in agent_fitnesses], dtype=np.float32
                     )
@@ -1148,6 +1152,10 @@ class Trainer:
             else:
                 # 普通种群
                 agent_fitnesses = pop.evaluate(current_price)
+                # 更新 genome.fitness（供 GenerationSaver 使用）
+                for agent, fitness in agent_fitnesses:
+                    genome = agent.brain.get_genome()
+                    genome.fitness = fitness
                 fitness_arr = np.array(
                     [f for _, f in agent_fitnesses], dtype=np.float32
                 )
