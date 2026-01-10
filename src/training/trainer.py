@@ -2263,6 +2263,40 @@ class Trainer:
 
         return stats
 
+    def _serialize_population_data(
+        self, pop: "Population | RetailSubPopulationManager"
+    ) -> dict:
+        """序列化单个种群数据
+
+        支持普通 Population 和 RetailSubPopulationManager 两种类型。
+
+        Args:
+            pop: 种群对象
+
+        Returns:
+            序列化的种群数据字典
+        """
+        if isinstance(pop, RetailSubPopulationManager):
+            # RetailSubPopulationManager: 保存所有子种群
+            return {
+                "is_sub_population_manager": True,
+                "generation": pop.generation,
+                "sub_population_count": pop.sub_population_count,
+                "sub_populations": [
+                    {
+                        "neat_pop": sub_pop.neat_pop,
+                        "generation": sub_pop.generation,
+                    }
+                    for sub_pop in pop.sub_populations
+                ],
+            }
+        else:
+            # 普通 Population
+            return {
+                "generation": pop.generation,
+                "neat_pop": pop.neat_pop,
+            }
+
     def save_checkpoint_data(self) -> dict:
         """返回检查点数据（不写入文件）
 
@@ -2275,10 +2309,7 @@ class Trainer:
             "tick": self.tick,
             "episode": self.episode,
             "populations": {
-                agent_type: {
-                    "generation": pop.generation,
-                    "neat_pop": pop.neat_pop,
-                }
+                agent_type: self._serialize_population_data(pop)
                 for agent_type, pop in self.populations.items()
             },
         }
@@ -2331,10 +2362,7 @@ class Trainer:
             "tick": self.tick,
             "episode": self.episode,
             "populations": {
-                agent_type: {
-                    "generation": pop.generation,
-                    "neat_pop": pop.neat_pop,
-                }
+                agent_type: self._serialize_population_data(pop)
                 for agent_type, pop in self.populations.items()
             },
         }
@@ -2344,8 +2372,130 @@ class Trainer:
 
         self.logger.info(f"检查点已保存: {path}")
 
+    def _load_population_data(
+        self,
+        pop: "Population | RetailSubPopulationManager",
+        pop_data: dict,
+        agent_type: AgentType,
+    ) -> None:
+        """加载单个种群数据
+
+        支持普通 Population 和 RetailSubPopulationManager 两种类型。
+        自动检测旧格式并迁移。
+
+        Args:
+            pop: 种群对象
+            pop_data: checkpoint 中的种群数据
+            agent_type: Agent 类型
+        """
+        if isinstance(pop, RetailSubPopulationManager):
+            # 当前代码使用 RetailSubPopulationManager
+            if pop_data.get("is_sub_population_manager"):
+                # 新格式：直接加载子种群数据
+                self._load_sub_population_manager_new_format(pop, pop_data)
+            else:
+                # 旧格式：单个 neat_pop，需要迁移
+                self.logger.info(
+                    f"检测到旧格式 checkpoint（单个 RETAIL 种群），自动迁移到子种群格式"
+                )
+                self._migrate_old_checkpoint_to_sub_populations(pop, pop_data)
+        else:
+            # 普通 Population
+            pop.generation = pop_data["generation"]
+            pop.neat_pop = pop_data["neat_pop"]
+            genomes = list(pop.neat_pop.population.items())
+            pop.agents = pop.create_agents(genomes)
+
+    def _load_sub_population_manager_new_format(
+        self,
+        manager: "RetailSubPopulationManager",
+        pop_data: dict,
+    ) -> None:
+        """加载新格式的子种群管理器数据
+
+        Args:
+            manager: 子种群管理器
+            pop_data: checkpoint 中的种群数据
+        """
+        saved_sub_count = pop_data["sub_population_count"]
+        current_sub_count = manager.sub_population_count
+
+        if saved_sub_count != current_sub_count:
+            self.logger.warning(
+                f"checkpoint 子种群数量 ({saved_sub_count}) 与当前配置 "
+                f"({current_sub_count}) 不匹配，将尝试加载"
+            )
+
+        # 加载每个子种群
+        for i, sub_pop_data in enumerate(pop_data["sub_populations"]):
+            if i >= len(manager.sub_populations):
+                self.logger.warning(f"跳过多余的子种群 {i}")
+                break
+
+            sub_pop = manager.sub_populations[i]
+            sub_pop.generation = sub_pop_data["generation"]
+            sub_pop.neat_pop = sub_pop_data["neat_pop"]
+            genomes = list(sub_pop.neat_pop.population.items())
+            sub_pop.agents = sub_pop.create_agents(genomes)
+
+    def _migrate_old_checkpoint_to_sub_populations(
+        self,
+        manager: "RetailSubPopulationManager",
+        pop_data: dict,
+    ) -> None:
+        """将旧格式 checkpoint 迁移到子种群格式
+
+        将单个大 neat_pop 拆分成多个子种群。
+
+        Args:
+            manager: 子种群管理器
+            pop_data: checkpoint 中的旧格式种群数据
+        """
+        old_neat_pop = pop_data["neat_pop"]
+        old_generation = pop_data["generation"]
+        old_genomes = list(old_neat_pop.population.items())
+        total_count = len(old_genomes)
+
+        sub_count = manager.sub_population_count
+        per_sub = total_count // sub_count
+
+        self.logger.info(
+            f"迁移旧 checkpoint: {total_count} 个基因组 -> "
+            f"{sub_count} 个子种群，每个 {per_sub} 个"
+        )
+
+        # 按顺序拆分基因组到各子种群
+        for i, sub_pop in enumerate(manager.sub_populations):
+            start_idx = i * per_sub
+            end_idx = start_idx + per_sub if i < sub_count - 1 else total_count
+            sub_genomes = old_genomes[start_idx:end_idx]
+
+            # 更新子种群的 neat_pop.population
+            sub_pop.neat_pop.population = {gid: genome for gid, genome in sub_genomes}
+            sub_pop.generation = old_generation
+
+            # 重新进行物种划分
+            sub_pop.neat_pop.species.speciate(
+                sub_pop.neat_config,
+                sub_pop.neat_pop.population,
+                old_generation,
+            )
+
+            # 重建 agents
+            genomes = list(sub_pop.neat_pop.population.items())
+            sub_pop.agents = sub_pop.create_agents(genomes)
+
+            self.logger.debug(
+                f"子种群 {i}: 加载 {len(genomes)} 个基因组 "
+                f"(索引 {start_idx}-{end_idx-1})"
+            )
+
     def load_checkpoint(self, path: str) -> None:
         """加载检查点
+
+        支持新旧两种格式：
+        - 新格式：RetailSubPopulationManager 保存为多个子种群
+        - 旧格式：单个 RETAIL 种群，自动迁移到子种群格式
 
         Args:
             path: 检查点文件路径
@@ -2359,11 +2509,7 @@ class Trainer:
         for agent_type, pop_data in checkpoint["populations"].items():
             if agent_type in self.populations:
                 pop = self.populations[agent_type]
-                pop.generation = pop_data["generation"]
-                pop.neat_pop = pop_data["neat_pop"]
-                # 重建 agents
-                genomes = list(pop.neat_pop.population.items())
-                pop.agents = pop.create_agents(genomes)
+                self._load_population_data(pop, pop_data, agent_type)
 
         # 注册恢复的 Agent 费率，重建映射表和执行顺序
         self._register_all_agents()
@@ -2380,6 +2526,7 @@ class Trainer:
         """从检查点数据恢复（不读取文件）
 
         用于多竞技场场景下由 ArenaManager 统一加载。
+        支持新旧两种格式的 checkpoint。
 
         Args:
             checkpoint: 检查点数据字典
@@ -2392,14 +2539,16 @@ class Trainer:
                 pop = self.populations[agent_type]
                 # 【关键修复】先清理旧 Agent，防止内存泄漏
                 # setup() 时已创建了 Agent，加载检查点时需要先清理
-                pop._cleanup_old_agents()
+                if isinstance(pop, RetailSubPopulationManager):
+                    for sub_pop in pop.sub_populations:
+                        sub_pop._cleanup_old_agents()
+                else:
+                    pop._cleanup_old_agents()
                 gc.collect()
                 gc.collect()
 
-                pop.generation = pop_data["generation"]
-                pop.neat_pop = pop_data["neat_pop"]
-                genomes = list(pop.neat_pop.population.items())
-                pop.agents = pop.create_agents(genomes)
+                # 使用统一的加载方法（支持新旧格式）
+                self._load_population_data(pop, pop_data, agent_type)
 
         self._register_all_agents()
         self._build_agent_map()
