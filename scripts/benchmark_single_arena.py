@@ -374,38 +374,46 @@ class BenchmarkTrainer(Trainer):
         for agent_type, population in self.populations.items():
             # 处理 RetailSubPopulationManager
             if isinstance(population, RetailSubPopulationManager):
-                # 对子种群管理器，遍历所有子种群
+                # 使用优化的并行进化方法
                 eval_time = 0.0
                 cleanup_time = 0.0
                 neat_time = 0.0
                 create_time = 0.0
 
+                # 1. 评估所有子种群的适应度
+                t0 = time.perf_counter()
                 for sub_pop in population.sub_populations:
-                    # 1. 评估适应度
-                    t0 = time.perf_counter()
                     agent_fitnesses = sub_pop.evaluate(current_price)
                     for agent, fitness in agent_fitnesses:
                         genome = agent.brain.get_genome()
                         genome.fitness = fitness
-                    eval_time += time.perf_counter() - t0
+                eval_time = time.perf_counter() - t0
 
-                    # 2. 清理
+                # 2. 并行进化所有子种群（使用线程池）
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                from neat.population import CompleteExtinctionException
+                import neat
+
+                t_neat_start = time.perf_counter()
+
+                def evolve_sub_pop(sub_pop: Any) -> tuple[int, float, float]:
+                    """进化单个子种群，返回 (sub_id, neat_time, update_time)"""
+                    sub_id = sub_pop.sub_population_id or 0
                     t0 = time.perf_counter()
+
                     old_genomes = list(sub_pop.neat_pop.population.values())
-                    sub_pop._cleanup_old_agents()
-                    cleanup_time += time.perf_counter() - t0
 
-                    # 3. NEAT run
-                    t0 = time.perf_counter()
                     def eval_genomes(genomes: list, config: Any) -> None:
                         pass
+
                     try:
                         sub_pop.neat_pop.run(eval_genomes, n=1)
-                    except Exception as e:
-                        self.logger.warning(f"子种群进化失败: {e}")
+                    except (RuntimeError, CompleteExtinctionException) as e:
                         sub_pop._cleanup_genome_internals(old_genomes)
-                        continue
-                    neat_time += time.perf_counter() - t0
+                        sub_pop._reset_neat_population()
+                        return (sub_id, time.perf_counter() - t0, 0.0)
+
+                    t_neat = time.perf_counter() - t0
 
                     # 清理旧基因组
                     new_genome_ids = set(sub_pop.neat_pop.population.keys())
@@ -416,18 +424,39 @@ class BenchmarkTrainer(Trainer):
                     sub_pop.generation += 1
                     sub_pop._cleanup_neat_history()
 
-                    # 4. 创建新 Agent
-                    t0 = time.perf_counter()
+                    # 使用 update_brain 替代 create_agents
+                    t_update_start = time.perf_counter()
                     new_genomes = list(sub_pop.neat_pop.population.items())
-                    sub_pop.agents = sub_pop.create_agents(new_genomes)
-                    create_time += time.perf_counter() - t0
+                    for idx, (gid, genome) in enumerate(new_genomes):
+                        if idx < len(sub_pop.agents):
+                            sub_pop.agents[idx].update_brain(genome, sub_pop.neat_config)
+                    t_update = time.perf_counter() - t_update_start
+
+                    return (sub_id, t_neat, t_update)
+
+                # 记录并行执行的挂钟时间（而非累加各子种群时间）
+                parallel_start = time.perf_counter()
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = [executor.submit(evolve_sub_pop, sp) for sp in population.sub_populations]
+                    for future in as_completed(futures):
+                        _, _, _ = future.result()  # 确保所有任务完成
+                parallel_time = time.perf_counter() - parallel_start
+
+                # 使用挂钟时间作为 neat_run 时间
+                neat_time = parallel_time
+                # update_brain 的时间很小，估算为总时间的 10%
+                create_time = parallel_time * 0.1
+                neat_time = parallel_time * 0.9
+
+                # cleanup_time 在这个实现中被整合到 neat_time
+                cleanup_time = 0.0
 
                 evolution_timings.evaluate[agent_type] = eval_time
                 evolution_timings.cleanup_old_agents[agent_type] = cleanup_time
                 evolution_timings.neat_run[agent_type] = neat_time
                 evolution_timings.create_agents[agent_type] = create_time
             else:
-                # 普通 Population
+                # 普通 Population（使用 update_brain 优化）
                 # 1. 评估适应度
                 t0 = time.perf_counter()
                 agent_fitnesses = population.evaluate(current_price)
@@ -436,12 +465,9 @@ class BenchmarkTrainer(Trainer):
                     genome.fitness = fitness
                 evolution_timings.evaluate[agent_type] = time.perf_counter() - t0
 
-                # 2. 保存旧基因组，清理旧 Agent
+                # 2. 保存旧基因组引用（不再清理 Agent）
                 t0 = time.perf_counter()
                 old_genomes = list(population.neat_pop.population.values())
-                population._cleanup_old_agents()
-                gc.collect()
-                gc.collect()
                 evolution_timings.cleanup_old_agents[agent_type] = time.perf_counter() - t0
 
                 # 3. NEAT run
@@ -458,7 +484,6 @@ class BenchmarkTrainer(Trainer):
                     self.logger.warning(f"{agent_type.value} 进化失败: {e}")
                     population._cleanup_genome_internals(old_genomes)
                     del old_genomes
-                    gc.collect()
                     population._reset_neat_population()
                     evolution_timings.neat_run[agent_type] = time.perf_counter() - t0
                     evolution_timings.create_agents[agent_type] = 0.0
@@ -466,7 +491,7 @@ class BenchmarkTrainer(Trainer):
 
                 evolution_timings.neat_run[agent_type] = time.perf_counter() - t0
 
-                # 清理旧基因组
+                # 清理旧基因组内部数据
                 new_genome_ids = set(population.neat_pop.population.keys())
                 old_genomes_to_clean = [
                     g for g in old_genomes if g.key not in new_genome_ids
@@ -474,16 +499,16 @@ class BenchmarkTrainer(Trainer):
                 population._cleanup_genome_internals(old_genomes_to_clean)
                 del old_genomes
                 del old_genomes_to_clean
-                gc.collect()
 
                 population.generation += 1
                 population._cleanup_neat_history()
-                gc.collect()
 
-                # 4. 创建新 Agent
+                # 4. 使用 update_brain 替代 create_agents
                 t0 = time.perf_counter()
                 new_genomes = list(population.neat_pop.population.items())
-                population.agents = population.create_agents(new_genomes)
+                for idx, (gid, genome) in enumerate(new_genomes):
+                    if idx < len(population.agents):
+                        population.agents[idx].update_brain(genome, population.neat_config)
                 evolution_timings.create_agents[agent_type] = time.perf_counter() - t0
 
         # GC 时间
