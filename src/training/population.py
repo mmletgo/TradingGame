@@ -1475,53 +1475,42 @@ class Population:
         显式打破循环引用，帮助垃圾回收器及时回收内存。
         必须在 neat_pop.run() 之前调用，以确保旧 genome 对象可以被立即回收。
 
+        优化版本：将原来的多次循环合并为单次循环，减少遍历开销。
+        对于大种群（如10000个散户），可以显著减少清理时间。
+
         清理策略：
-        1. 先收集所有需要清理的对象引用
-        2. 断开 Brain -> genome/network/config 的引用
-        3. 断开 Agent -> brain/account 的引用
-        4. 清空 agents 列表
-        5. 删除本地引用并强制 GC
+        1. 单次遍历所有 Agent，同时清理 Network/Brain/Account
+        2. 清空 agents 列表
         """
-        # 收集所有需要清理的 Brain 和 Network 对象
-        brains_to_cleanup = []
-        networks_to_cleanup = []
-        accounts_to_cleanup = []
-
         for agent in self.agents:
+            # 清理 Brain 及其内部 Network
             if hasattr(agent, 'brain') and agent.brain is not None:
-                brains_to_cleanup.append(agent.brain)
-                if hasattr(agent.brain, 'network') and agent.brain.network is not None:
-                    networks_to_cleanup.append(agent.brain.network)
+                brain = agent.brain
+                # 清理 Network 内部状态（先清理最内层）
+                if hasattr(brain, 'network') and brain.network is not None:
+                    network = brain.network
+                    if hasattr(network, 'node_evals'):
+                        network.node_evals = None  # type: ignore[assignment]
+                    if hasattr(network, 'values'):
+                        network.values = None  # type: ignore[assignment]
+                    if hasattr(network, 'input_nodes'):
+                        network.input_nodes = None  # type: ignore[assignment]
+                    if hasattr(network, 'output_nodes'):
+                        network.output_nodes = None  # type: ignore[assignment]
+                    # Cython FastFeedForwardNetwork 可能有额外属性
+                    if hasattr(network, 'active'):
+                        network.active = None  # type: ignore[assignment]
+                # 清理 Brain 引用
+                brain.genome = None  # type: ignore[assignment]
+                brain.network = None  # type: ignore[assignment]
+                brain.config = None  # type: ignore[assignment]
+
+            # 清理 Account 引用
             if hasattr(agent, 'account') and agent.account is not None:
-                accounts_to_cleanup.append(agent.account)
+                if hasattr(agent.account, 'position'):
+                    agent.account.position = None  # type: ignore[assignment]
 
-        # 清理 Network 内部状态（先清理最内层）
-        for network in networks_to_cleanup:
-            if hasattr(network, 'node_evals'):
-                network.node_evals = None  # type: ignore[assignment]
-            if hasattr(network, 'values'):
-                network.values = None  # type: ignore[assignment]
-            if hasattr(network, 'input_nodes'):
-                network.input_nodes = None  # type: ignore[assignment]
-            if hasattr(network, 'output_nodes'):
-                network.output_nodes = None  # type: ignore[assignment]
-            # Cython FastFeedForwardNetwork 可能有额外属性
-            if hasattr(network, 'active'):
-                network.active = None  # type: ignore[assignment]
-
-        # 清理 Brain 引用
-        for brain in brains_to_cleanup:
-            brain.genome = None  # type: ignore[assignment]
-            brain.network = None  # type: ignore[assignment]
-            brain.config = None  # type: ignore[assignment]
-
-        # 清理 Account 引用
-        for account in accounts_to_cleanup:
-            if hasattr(account, 'position'):
-                account.position = None  # type: ignore[assignment]
-
-        # 断开 Agent 的引用
-        for agent in self.agents:
+            # 断开 Agent 的引用
             agent.brain = None  # type: ignore[assignment]
             agent.account = None  # type: ignore[assignment]
             # 清理 Agent 可能持有的其他引用
@@ -1530,11 +1519,6 @@ class Population:
 
         # 清空列表
         self.agents.clear()
-
-        # 删除本地引用
-        del brains_to_cleanup
-        del networks_to_cleanup
-        del accounts_to_cleanup
 
         # 注意：这里不调用 gc.collect()，让调用方决定何时 GC
         # 这样可以批量处理多个种群后再统一 GC，提高效率
@@ -2010,6 +1994,157 @@ class RetailSubPopulationManager:
         """
         for pop in self.sub_populations:
             pop.evolve(current_price)
+
+    def _evolve_single_sub_pop(
+        self, pop: Population, current_price: float
+    ) -> tuple[int, bool]:
+        """进化单个子种群（在线程中调用）
+
+        Args:
+            pop: 子种群对象
+            current_price: 当前价格
+
+        Returns:
+            (子种群ID, 是否成功) 元组
+        """
+        try:
+            pop.evolve(current_price)
+            return (pop.sub_population_id or 0, True)
+        except Exception as e:
+            self.logger.error(
+                f"子种群 {pop.sub_population_id} 进化失败: {e}"
+            )
+            return (pop.sub_population_id or 0, False)
+
+    def evolve_parallel_simple(
+        self, current_price: float, max_workers: int = 10
+    ) -> None:
+        """简化的并行进化方法 - 使用线程池
+
+        使用 ThreadPoolExecutor 并行进化所有子种群。
+        相比 ProcessPoolExecutor，线程池避免了序列化开销，
+        虽然受 GIL 限制，但 NEAT 内部有很多 C 扩展操作可以释放 GIL。
+
+        实现流程:
+        1. 先串行评估所有子种群的适应度（共用同一个价格）
+        2. 为每个子种群的基因组设置适应度
+        3. 使用线程池并行执行各子种群的 NEAT 进化
+        4. 等待所有子种群完成
+
+        Args:
+            current_price: 当前价格（用于计算适应度）
+            max_workers: 最大并行线程数（默认10，对应10个子种群）
+        """
+        import time
+        start_time = time.perf_counter()
+
+        # 1. 先评估所有子种群的适应度并设置到基因组
+        for pop in self.sub_populations:
+            agent_fitnesses = pop.evaluate(current_price)
+            for agent, fitness in agent_fitnesses:
+                genome = agent.brain.get_genome()
+                genome.fitness = fitness
+
+        eval_time = time.perf_counter() - start_time
+
+        # 2. 使用线程池并行进化
+        # 注意：虽然 Python 有 GIL，但 NEAT 的 C 扩展操作可以释放 GIL
+        # 同时，IO 等待和对象创建开销也可以并行化
+        evolve_start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有进化任务
+            futures: list[Future[tuple[int, bool]]] = []
+            for pop in self.sub_populations:
+                # 创建一个专门执行进化（不重新评估）的函数
+                future = executor.submit(
+                    self._evolve_sub_pop_without_eval, pop
+                )
+                futures.append(future)
+
+            # 等待所有任务完成
+            for future in as_completed(futures):
+                try:
+                    sub_id, success = future.result()
+                    if not success:
+                        self.logger.warning(f"子种群 {sub_id} 进化失败")
+                except Exception as e:
+                    self.logger.error(f"子种群进化异常: {e}")
+
+        evolve_time = time.perf_counter() - evolve_start
+        total_time = time.perf_counter() - start_time
+
+        self.logger.info(
+            f"散户子种群简化并行进化完成，共 {len(self.sub_populations)} 个子种群，"
+            f"耗时: eval={eval_time:.2f}s, evolve={evolve_time:.2f}s, "
+            f"total={total_time:.2f}s"
+        )
+
+    def _evolve_sub_pop_without_eval(
+        self, pop: Population
+    ) -> tuple[int, bool]:
+        """进化单个子种群（不重新评估适应度，在线程中调用）
+
+        Args:
+            pop: 子种群对象
+
+        Returns:
+            (子种群ID, 是否成功) 元组
+        """
+        try:
+            # 保存旧基因组引用
+            old_genomes = list(pop.neat_pop.population.values())
+
+            # 调用 NEAT 进化（适应度已经设置好了）
+            def eval_genomes(
+                _genomes: list[tuple[int, neat.DefaultGenome]],
+                _config: neat.Config
+            ) -> None:
+                pass  # 适应度已设置
+
+            try:
+                pop.neat_pop.run(eval_genomes, n=1)
+            except (RuntimeError, CompleteExtinctionException) as e:
+                self.logger.warning(
+                    f"子种群 {pop.sub_population_id} NEAT 进化失败: {e}"
+                )
+                pop._cleanup_genome_internals(old_genomes)
+                del old_genomes
+                pop._reset_neat_population()
+                return (pop.sub_population_id or 0, False)
+            except Exception as e:
+                self.logger.error(
+                    f"子种群 {pop.sub_population_id} NEAT 进化异常: {e}"
+                )
+                pop._cleanup_genome_internals(old_genomes)
+                del old_genomes
+                pop._reset_neat_population()
+                return (pop.sub_population_id or 0, False)
+
+            # 清理旧基因组
+            new_genome_ids = set(pop.neat_pop.population.keys())
+            old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+            pop._cleanup_genome_internals(old_to_clean)
+            del old_genomes
+            del old_to_clean
+
+            # 增加代数
+            pop.generation += 1
+
+            # 清理 NEAT 历史
+            pop._cleanup_neat_history()
+
+            # 更新 Agent Brain
+            new_genomes = list(pop.neat_pop.population.items())
+            for idx, (gid, genome) in enumerate(new_genomes):
+                if idx < len(pop.agents):
+                    pop.agents[idx].update_brain(genome, pop.neat_config)
+
+            return (pop.sub_population_id or 0, True)
+        except Exception as e:
+            self.logger.error(
+                f"子种群 {pop.sub_population_id} 进化失败: {e}"
+            )
+            return (pop.sub_population_id or 0, False)
 
     def evolve_parallel(self, current_price: float, max_workers: int = 10) -> None:
         """并行进化所有子种群（NumPy 格式）

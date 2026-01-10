@@ -1054,19 +1054,28 @@ class Trainer:
     def _evolve_populations_parallel(self, current_price: float) -> None:
         """进化所有种群
 
-        当前实现使用串行进化。
-        子种群并行进化方案因 Python GIL 和序列化开销限制而无法提供性能提升。
-        保留方法名以保持 API 兼容性。
+        对于 RetailSubPopulationManager，使用简化并行进化方法（线程池）。
+        对于其他种群（Population），使用串行进化。
+
+        优化策略：
+        1. RETAIL 子种群使用 evolve_parallel_simple 进行线程池并行进化
+        2. 其他种群（RETAIL_PRO/WHALE/MARKET_MAKER）使用普通串行进化
+        3. 所有进化完成后统一进行 GC
         """
         # [MEMORY] 记录进化开始前的内存
         mem_before_evolve = _get_memory_mb()
 
-        # 串行进化所有种群
-        for pop in self.populations.values():
+        # 进化所有种群
+        for agent_type, pop in self.populations.items():
             try:
-                pop.evolve(current_price)
+                if isinstance(pop, RetailSubPopulationManager):
+                    # RETAIL 子种群使用简化并行进化
+                    pop.evolve_parallel_simple(current_price)
+                else:
+                    # 其他种群使用串行进化
+                    pop.evolve(current_price)
             except Exception as e:
-                self.logger.error(f"种群 {pop.agent_type.value} 进化失败: {e}")
+                self.logger.error(f"种群 {agent_type.value} 进化失败: {e}")
                 raise
 
         # [MEMORY] 记录进化后、最终 GC 前的内存
