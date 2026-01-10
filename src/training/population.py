@@ -8,6 +8,7 @@ import gc
 import logging
 import traceback
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
 from typing import Any
@@ -878,6 +879,284 @@ class PersistentWorkerPool:
                 p.terminate()
 
 
+@dataclass
+class WorkerConfig:
+    """Worker 配置
+
+    Attributes:
+        agent_type: Agent 类型
+        sub_pop_id: 子种群 ID
+        neat_config_path: NEAT 配置文件路径
+        pop_size: 种群大小
+    """
+    agent_type: "AgentType"
+    sub_pop_id: int
+    neat_config_path: str
+    pop_size: int
+
+
+class MultiPopulationWorkerPool:
+    """多种群统一 Worker 池
+
+    管理多个不同配置的 Worker，每个 Worker 可以有不同的 NEAT 配置和种群大小。
+    使用统一的 result_queue 收集所有 Worker 的结果，支持一次性发送/收集所有进化结果（真正并行）。
+
+    Attributes:
+        config_dir: NEAT 配置文件目录
+        worker_configs: Worker 配置列表
+        workers: Worker 进程列表
+        cmd_queues: 每个 Worker 的命令队列
+        result_queue: 统一结果队列
+        worker_id_map: Worker ID 到配置的映射
+    """
+
+    config_dir: str
+    worker_configs: list[WorkerConfig]
+    workers: list[multiprocessing.Process]
+    cmd_queues: dict[tuple["AgentType", int], "multiprocessing.Queue[tuple[str, Any]]"]
+    result_queue: "multiprocessing.Queue[tuple[tuple[AgentType, int], Any]]"
+    worker_id_map: dict[tuple["AgentType", int], WorkerConfig]
+
+    def __init__(self, config_dir: str, worker_configs: list[WorkerConfig]) -> None:
+        """初始化多种群 Worker 池
+
+        Args:
+            config_dir: NEAT 配置文件目录
+            worker_configs: Worker 配置列表，每个配置指定一个 Worker 的参数
+        """
+        self.config_dir = config_dir
+        self.worker_configs = worker_configs
+
+        # 创建统一结果队列
+        self.result_queue = multiprocessing.Queue()
+
+        # 创建命令队列和 Worker 进程
+        self.cmd_queues = {}
+        self.workers = []
+        self.worker_id_map = {}
+
+        for wc in worker_configs:
+            worker_id = (wc.agent_type, wc.sub_pop_id)
+            self.worker_id_map[worker_id] = wc
+
+            # 为每个 Worker 创建独立的命令队列
+            cmd_queue: multiprocessing.Queue[tuple[str, Any]] = multiprocessing.Queue()
+            self.cmd_queues[worker_id] = cmd_queue
+
+            # 启动 Worker 进程
+            p = multiprocessing.Process(
+                target=_multi_worker_process_main,
+                args=(
+                    worker_id,
+                    wc.neat_config_path,
+                    wc.pop_size,
+                    cmd_queue,
+                    self.result_queue,
+                ),
+                daemon=True,
+            )
+            p.start()
+            self.workers.append(p)
+
+    def evolve_all_parallel(
+        self,
+        fitness_map: dict[tuple["AgentType", int], np.ndarray],
+        sync_genomes: bool = False,
+    ) -> dict[
+        tuple["AgentType", int],
+        tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]
+    ]:
+        """同时进化所有 Worker 的种群
+
+        1. 同时向所有 Worker 发送进化命令（非阻塞）
+        2. 一次性收集所有结果（真正并行）
+
+        Args:
+            fitness_map: 字典，key 为 (agent_type, sub_pop_id)，value 为适应度数组
+            sync_genomes: 是否在结果中包含基因组数据（默认 False）
+
+        Returns:
+            字典，key 为 (agent_type, sub_pop_id)，
+            value 为 (genome_data, network_params_data) 元组
+        """
+        # 1. 同时向所有 Worker 发送进化命令（非阻塞）
+        cmd = "evolve_return_params" if not sync_genomes else "evolve_return_params"
+        for worker_id, fitnesses in fitness_map.items():
+            if worker_id in self.cmd_queues:
+                self.cmd_queues[worker_id].put((cmd, fitnesses))
+
+        # 2. 收集所有结果
+        results: dict[
+            tuple["AgentType", int],
+            tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]
+        ] = {}
+        expected_count = len(fitness_map)
+
+        for _ in range(expected_count):
+            worker_id, result = self.result_queue.get()
+            if result[0] == "success_params":
+                # result = ("success_params", genome_data, network_params_data)
+                results[worker_id] = (result[1], result[2])
+            elif result[0] == "error":
+                raise RuntimeError(f"Worker {worker_id} evolve failed: {result[1]}")
+            else:
+                raise RuntimeError(f"Worker {worker_id} unexpected result: {result}")
+
+        return results
+
+    def set_genomes(
+        self,
+        genomes_map: dict[tuple["AgentType", int], tuple[np.ndarray, ...]]
+    ) -> None:
+        """同步基因组到所有 Worker
+
+        Args:
+            genomes_map: 字典，key 为 (agent_type, sub_pop_id)，
+                        value 为基因组数据元组
+        """
+        # 发送 set_genomes 命令
+        for worker_id, genome_data in genomes_map.items():
+            if worker_id in self.cmd_queues:
+                self.cmd_queues[worker_id].put(("set_genomes", genome_data))
+
+        # 等待所有 Worker 完成
+        for _ in range(len(genomes_map)):
+            worker_id, result = self.result_queue.get()
+            if result != "ok":
+                raise RuntimeError(f"Worker {worker_id} set_genomes failed: {result}")
+
+    def shutdown(self) -> None:
+        """关闭所有 Worker"""
+        for worker_id, cmd_queue in self.cmd_queues.items():
+            try:
+                cmd_queue.put(("shutdown", None))
+            except Exception:
+                pass
+
+        for p in self.workers:
+            p.join(timeout=5.0)
+            if p.is_alive():
+                p.terminate()
+
+
+def _multi_worker_process_main(
+    worker_id: tuple["AgentType", int],
+    neat_config_path: str,
+    pop_size: int,
+    cmd_queue: "multiprocessing.Queue[tuple[str, Any]]",
+    result_queue: "multiprocessing.Queue[tuple[tuple[AgentType, int], Any]]",
+) -> None:
+    """多种群 Worker 进程主函数
+
+    与 _worker_process_main 类似，但使用 (agent_type, sub_pop_id) 作为 worker_id。
+
+    Args:
+        worker_id: Worker ID，(agent_type, sub_pop_id) 元组
+        neat_config_path: NEAT 配置文件路径
+        pop_size: 种群大小
+        cmd_queue: 命令队列 (command, args)
+        result_queue: 结果队列 (worker_id, result)
+    """
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)  # 忽略 Ctrl+C
+
+    # 1. 初始化 NEAT 配置和种群
+    neat_config = neat.Config(
+        neat.DefaultGenome,
+        neat.DefaultReproduction,
+        neat.DefaultSpeciesSet,
+        neat.DefaultStagnation,
+        neat_config_path,
+    )
+    neat_config.pop_size = pop_size
+    neat_pop = neat.Population(neat_config)
+    generation = 0
+
+    # 2. 主循环：等待命令
+    while True:
+        try:
+            cmd, args = cmd_queue.get()
+        except Exception:
+            break
+
+        if cmd == "shutdown":
+            break
+
+        elif cmd == "evolve":
+            # args: np.ndarray of fitnesses (shape: pop_size,)
+            fitnesses = args
+
+            # 更新适应度
+            for i, (gid, genome) in enumerate(neat_pop.population.items()):
+                if i < len(fitnesses):
+                    genome.fitness = float(fitnesses[i])
+
+            # 执行进化
+            def eval_genomes(genomes: list, config: Any) -> None:
+                pass  # 适应度已设置
+
+            try:
+                neat_pop.run(eval_genomes, n=1)
+                generation += 1
+            except Exception as e:
+                result_queue.put((worker_id, ("error", str(e))))
+                continue
+
+            # 返回新基因组数据（NumPy 格式）
+            new_data = _serialize_genomes_numpy(neat_pop.population)
+            result_queue.put((worker_id, ("success", new_data)))
+
+        elif cmd == "get_genomes":
+            # 返回当前基因组数据
+            data = _serialize_genomes_numpy(neat_pop.population)
+            result_queue.put((worker_id, data))
+
+        elif cmd == "set_genomes":
+            # 设置基因组数据
+            keys, fitnesses, metadata, nodes, conns = args
+            neat_pop.population = _deserialize_genomes_numpy(
+                keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
+            )
+            neat_pop.species.speciate(neat_config, neat_pop.population, generation)
+            result_queue.put((worker_id, "ok"))
+
+        elif cmd == "evolve_return_params":
+            # args: np.ndarray of fitnesses (shape: pop_size,)
+            # 返回 genome 数据 + 网络参数，减少主进程重建网络的开销
+            fitnesses = args
+
+            # 更新适应度
+            for i, (gid, genome) in enumerate(neat_pop.population.items()):
+                if i < len(fitnesses):
+                    genome.fitness = float(fitnesses[i])
+
+            # 执行进化
+            def eval_genomes_params(genomes: list, config: Any) -> None:
+                pass  # 适应度已设置
+
+            try:
+                neat_pop.run(eval_genomes_params, n=1)
+                generation += 1
+            except Exception as e:
+                result_queue.put((worker_id, ("error", str(e))))
+                continue
+
+            # 1. 序列化基因组数据（NumPy 格式）
+            genome_data = _serialize_genomes_numpy(neat_pop.population)
+
+            # 2. 提取所有网络参数
+            params_list = []
+            for gid, genome in neat_pop.population.items():
+                params = _extract_network_params_from_genome(genome, neat_config)
+                params_list.append(params)
+
+            # 3. 打包网络参数（NumPy 格式）
+            network_params_data = _pack_network_params_numpy(params_list)
+
+            # 4. 返回两者
+            result_queue.put((worker_id, ("success_params", genome_data, network_params_data)))
+
+
 def malloc_trim() -> None:
     """调用 glibc 的 malloc_trim 将释放的内存归还给操作系统
 
@@ -1035,16 +1314,18 @@ class Population:
     # RETAIL_SUB_9: 900,000 ~ 999,999
     # RETAIL_PRO:  1,000,000+
     # WHALE:       2,000,000+
-    # MARKET_MAKER: 3,000,000+
+    # MARKET_MAKER_SUB_0: 3,000,000 ~ 3,099,999
+    # MARKET_MAKER_SUB_1: 3,100,000 ~ 3,199,999
+    # ...
     _AGENT_ID_OFFSET = {
         AgentType.RETAIL: 0,  # 基础偏移，子种群会在此基础上再加偏移
         AgentType.RETAIL_PRO: 1_000_000,
         AgentType.WHALE: 2_000_000,
-        AgentType.MARKET_MAKER: 3_000_000,
+        AgentType.MARKET_MAKER: 3_000_000,  # 基础偏移，子种群会在此基础上再加偏移
     }
 
-    # 子种群偏移量（每个散户子种群的ID空间）
-    _RETAIL_SUB_POPULATION_OFFSET = 100_000
+    # 子种群偏移量（每个子种群的ID空间，适用于所有支持子种群的类型）
+    _SUB_POPULATION_OFFSET = 100_000
 
     def _create_single_agent(
         self,
@@ -1103,7 +1384,7 @@ class Population:
 
         # 如果是子种群，添加子种群偏移
         if self.sub_population_id is not None:
-            agent_id_offset += self.sub_population_id * self._RETAIL_SUB_POPULATION_OFFSET
+            agent_id_offset += self.sub_population_id * self._SUB_POPULATION_OFFSET
 
         # 小批量直接串行处理，避免线程池开销
         if len(genomes) < 50:
@@ -1858,17 +2139,17 @@ class Population:
         return best_avg
 
 
-class RetailSubPopulationManager:
-    """散户子种群管理器
+class SubPopulationManager:
+    """通用子种群管理器
 
-    将散户拆分成多个子种群，支持并行进化。
+    将指定类型的种群拆分成多个子种群，支持并行进化。
     每个子种群独立进行NEAT进化，但在训练过程中共享市场环境。
 
     Attributes:
         sub_populations: 子种群列表
         sub_population_count: 子种群数量
         agents_per_sub: 每个子种群的Agent数量
-        agent_type: Agent类型（固定为RETAIL）
+        agent_type: Agent类型
         logger: 日志器
         _pending_genome_data: 待反序列化的基因组数据（延迟反序列化用）
         _genomes_dirty: 标记基因组是否需要同步
@@ -1882,36 +2163,46 @@ class RetailSubPopulationManager:
     _pending_genome_data: list[tuple[np.ndarray, ...]] | None
     _genomes_dirty: bool
 
-    def __init__(self, config: Config, sub_count: int = 10) -> None:
+    def __init__(
+        self,
+        config: Config,
+        agent_type: AgentType,
+        sub_count: int = 10,
+    ) -> None:
         """创建子种群管理器
 
         Args:
             config: 全局配置对象
+            agent_type: Agent类型（RETAIL 或 MARKET_MAKER）
             sub_count: 子种群数量（默认10）
         """
-        self.agent_type = AgentType.RETAIL
+        self.agent_type = agent_type
         self.sub_population_count = sub_count
-        self.logger = get_logger("retail_sub_pop_manager")
+        self.logger = get_logger(f"{agent_type.value}_sub_pop_manager")
 
         # 计算每个子种群的Agent数量
-        total_count = config.agents[AgentType.RETAIL].count
+        total_count = config.agents[agent_type].count
         self.agents_per_sub = total_count // sub_count
 
         # 检查是否能整除
         if total_count % sub_count != 0:
             self.logger.warning(
-                f"散户总数 {total_count} 不能被子种群数 {sub_count} 整除，"
+                f"{agent_type.value} 总数 {total_count} 不能被子种群数 {sub_count} 整除，"
                 f"每个子种群将有 {self.agents_per_sub} 个Agent"
             )
 
         # 创建子种群
+        # Agent ID 偏移由 Population.create_agents 自动处理
+        # 基于 agent_type 和 sub_population_id 计算
         self.sub_populations = []
         for i in range(sub_count):
             # 创建子种群专用配置
             sub_config = self._create_sub_config(config, i)
 
             # 创建Population，设置子种群ID
-            pop = Population(AgentType.RETAIL, sub_config)
+            pop = Population(agent_type, sub_config)
+            # 子种群 ID 用于 Agent ID 计算
+            # 实际 ID 偏移 = base_id_offset + sub_population_id * _SUB_POPULATION_OFFSET
             pop.sub_population_id = i
 
             # 重新创建agents（因为需要正确的ID偏移）
@@ -1926,7 +2217,7 @@ class RetailSubPopulationManager:
         self._genomes_dirty = False
 
         self.logger.info(
-            f"创建散户子种群管理器: {sub_count} 个子种群，每个 {self.agents_per_sub} 个Agent"
+            f"创建 {agent_type.value} 子种群管理器: {sub_count} 个子种群，每个 {self.agents_per_sub} 个Agent"
         )
 
     def _create_sub_config(self, config: Config, sub_id: int) -> Config:
@@ -1937,11 +2228,11 @@ class RetailSubPopulationManager:
             sub_id: 子种群ID
 
         Returns:
-            子种群专用配置（修改了RETAIL的count）
+            子种群专用配置（修改了对应类型的count）
         """
         from copy import deepcopy
         sub_config = deepcopy(config)
-        sub_config.agents[AgentType.RETAIL].count = self.agents_per_sub
+        sub_config.agents[self.agent_type].count = self.agents_per_sub
         return sub_config
 
     @property
@@ -2437,3 +2728,7 @@ class RetailSubPopulationManager:
         for pop in self.sub_populations:
             all_genomes.extend(pop.neat_pop.population.values())
         return all_genomes
+
+
+# 兼容别名，保持向后兼容性
+RetailSubPopulationManager = SubPopulationManager

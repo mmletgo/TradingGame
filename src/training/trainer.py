@@ -49,9 +49,14 @@ from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.training.fast_math import log_normalize_signed, log_normalize_unsigned
 from src.training.population import (
+    MultiPopulationWorkerPool,
     PersistentWorkerPool,
     Population,
-    RetailSubPopulationManager,
+    SubPopulationManager,
+    WorkerConfig,
+    _deserialize_genomes_numpy,
+    _serialize_genomes_numpy,
+    _unpack_network_params_numpy,
     malloc_trim,
 )
 
@@ -91,7 +96,7 @@ class Trainer:
     """
 
     config: Config
-    populations: dict[AgentType, Population | RetailSubPopulationManager]
+    populations: dict[AgentType, Population | SubPopulationManager]
     matching_engine: MatchingEngine | None
     adl_manager: ADLManager | None
     tick: int
@@ -124,7 +129,8 @@ class Trainer:
     _episode_low_price: float  # 当前 episode 最低价
     arena_id: int | None  # 竞技场 ID（多竞技场场景）
     _generation_saver: "GenerationSaver | None"
-    _retail_worker_pool: "PersistentWorkerPool | None"  # RETAIL 子种群的多进程 Worker 池
+    _retail_worker_pool: "PersistentWorkerPool | None"  # RETAIL 子种群的多进程 Worker 池（已废弃）
+    _unified_worker_pool: "MultiPopulationWorkerPool | None"  # 统一多种群 Worker 池
     _worker_pool_synced: bool  # Worker 池是否已同步基因组
 
     def __init__(self, config: Config, arena_id: int | None = None) -> None:
@@ -196,8 +202,9 @@ class Trainer:
         # 是否使用 OpenMP 决策（可通过配置关闭）
         self.use_openmp_decide: bool = True
 
-        # RETAIL 多进程 Worker 池
-        self._retail_worker_pool: "PersistentWorkerPool | None" = None
+        # 多进程 Worker 池
+        self._retail_worker_pool: "PersistentWorkerPool | None" = None  # 已废弃
+        self._unified_worker_pool: "MultiPopulationWorkerPool | None" = None
         self._worker_pool_synced: bool = False
 
     def set_generation_saver(self, saver: "GenerationSaver") -> None:
@@ -462,15 +469,23 @@ class Trainer:
             self.episode = checkpoint.get("episode", 0)
         else:
             # 创建全新种群（每个种群内部的Agent创建是并行的）
-            for agent_type in AgentType:
-                if agent_type == AgentType.RETAIL:
-                    # 散户使用子种群管理器
-                    sub_count = self.config.training.retail_sub_population_count
-                    self.populations[agent_type] = RetailSubPopulationManager(
-                        self.config, sub_count=sub_count
-                    )
-                else:
-                    self.populations[agent_type] = Population(agent_type, self.config)
+            # RETAIL: 10个子种群
+            self.populations[AgentType.RETAIL] = SubPopulationManager(
+                self.config, AgentType.RETAIL, sub_count=10
+            )
+
+            # RETAIL_PRO: 1个种群（不拆分，使用普通 Population）
+            self.populations[AgentType.RETAIL_PRO] = Population(
+                AgentType.RETAIL_PRO, self.config
+            )
+
+            # WHALE: 1个种群（不拆分，使用普通 Population）
+            self.populations[AgentType.WHALE] = Population(AgentType.WHALE, self.config)
+
+            # MARKET_MAKER: 2个子种群
+            self.populations[AgentType.MARKET_MAKER] = SubPopulationManager(
+                self.config, AgentType.MARKET_MAKER, sub_count=2
+            )
 
         # 创建撮合引擎
         self.matching_engine = MatchingEngine(self.config.market)
@@ -546,20 +561,45 @@ class Trainer:
         # 初始化网络数据缓存（OpenMP 优化）
         self._init_network_caches()
 
-        # 创建 RETAIL 子种群的多进程 Worker 池
-        retail_manager = self.populations.get(AgentType.RETAIL)
-        if isinstance(retail_manager, RetailSubPopulationManager):
-            self._retail_worker_pool = PersistentWorkerPool(
-                num_workers=retail_manager.sub_population_count,
-                neat_config_path=retail_manager.sub_populations[0].neat_config_path,
-                pop_size=retail_manager.agents_per_sub,
-            )
-            self._worker_pool_synced = False
-            self.logger.info(
-                f"RETAIL 多进程 Worker 池已创建: "
-                f"{retail_manager.sub_population_count} 个 Worker, "
-                f"每个 {retail_manager.agents_per_sub} 个 Agent"
-            )
+        # 创建统一的 Worker 池（14个Worker：RETAIL 10 + RETAIL_PRO 1 + WHALE 1 + MARKET_MAKER 2）
+        config_dir = self.config.training.neat_config_path
+        worker_configs: list[WorkerConfig] = []
+
+        # RETAIL: 10 Workers
+        retail_pop = self.populations[AgentType.RETAIL]
+        if isinstance(retail_pop, SubPopulationManager):
+            for i in range(retail_pop.sub_population_count):
+                worker_configs.append(WorkerConfig(
+                    AgentType.RETAIL, i, f"{config_dir}/neat_retail.cfg",
+                    retail_pop.agents_per_sub
+                ))
+
+        # RETAIL_PRO: 1 Worker
+        worker_configs.append(WorkerConfig(
+            AgentType.RETAIL_PRO, 0, f"{config_dir}/neat_retail_pro.cfg",
+            self.config.agents[AgentType.RETAIL_PRO].count
+        ))
+
+        # WHALE: 1 Worker
+        worker_configs.append(WorkerConfig(
+            AgentType.WHALE, 0, f"{config_dir}/neat_whale.cfg",
+            self.config.agents[AgentType.WHALE].count
+        ))
+
+        # MARKET_MAKER: 2 Workers
+        mm_pop = self.populations[AgentType.MARKET_MAKER]
+        if isinstance(mm_pop, SubPopulationManager):
+            for i in range(mm_pop.sub_population_count):
+                worker_configs.append(WorkerConfig(
+                    AgentType.MARKET_MAKER, i, f"{config_dir}/neat_market_maker.cfg",
+                    mm_pop.agents_per_sub
+                ))
+
+        self._unified_worker_pool = MultiPopulationWorkerPool(config_dir, worker_configs)
+        self._worker_pool_synced = False
+        self.logger.info(
+            f"统一多种群 Worker 池已创建: {len(worker_configs)} 个 Worker"
+        )
 
         self.logger.info("训练环境初始化完成")
 
@@ -1078,64 +1118,88 @@ class Trainer:
         )
 
     def _evolve_populations_parallel(self, current_price: float) -> None:
-        """进化所有种群
+        """真正并行进化所有种群
 
-        对于 RetailSubPopulationManager，使用多进程并行进化（绕过 GIL）。
-        对于其他种群（Population），使用串行进化。
+        使用 MultiPopulationWorkerPool 同时进化所有种群（14个 Worker 并行）：
+        - RETAIL: 10 个子种群
+        - RETAIL_PRO: 1 个种群
+        - WHALE: 1 个种群
+        - MARKET_MAKER: 2 个子种群
 
         优化策略：
-        1. RETAIL 子种群使用 evolve_parallel_with_network_params 进行多进程并行进化
-        2. 其他种群（RETAIL_PRO/WHALE/MARKET_MAKER）使用普通串行进化
-        3. 所有进化完成后统一进行 GC
+        1. 一次性构建所有种群的适应度数据
+        2. 一次性向所有 Worker 发送进化命令
+        3. 一次性收集所有结果并更新 Agent
         """
-        # [MEMORY] 记录进化开始前的内存
         mem_before_evolve = _get_memory_mb()
 
-        # 进化所有种群
-        for agent_type, pop in self.populations.items():
-            try:
-                if isinstance(pop, RetailSubPopulationManager):
-                    # RETAIL 子种群使用多进程并行进化
-                    if self._retail_worker_pool is not None:
-                        # 首次使用需要同步基因组
-                        sync_genomes = not self._worker_pool_synced
-                        pop.evolve_parallel_with_network_params(
-                            current_price,
-                            worker_pool=self._retail_worker_pool,
-                            sync_genomes=sync_genomes,
-                            deserialize_genomes=False,  # 延迟反序列化
-                        )
-                        self._worker_pool_synced = True
-                    else:
-                        # 无 Worker 池时回退到串行
-                        pop.evolve(current_price)
-                else:
-                    # 其他种群使用串行进化
-                    pop.evolve(current_price)
-            except Exception as e:
-                self.logger.error(f"种群 {agent_type.value} 进化失败: {e}")
-                raise
+        # 1. 构建所有种群的适应度数据
+        fitness_map: dict[tuple[AgentType, int], np.ndarray] = {}
 
-        # [MEMORY] 记录进化后、最终 GC 前的内存
+        for agent_type, pop in self.populations.items():
+            if isinstance(pop, SubPopulationManager):
+                # 子种群管理器：评估每个子种群
+                for i, sub_pop in enumerate(pop.sub_populations):
+                    agent_fitnesses = sub_pop.evaluate(current_price)
+                    fitness_arr = np.array(
+                        [f for _, f in agent_fitnesses], dtype=np.float32
+                    )
+                    fitness_map[(agent_type, i)] = fitness_arr
+            else:
+                # 普通种群
+                agent_fitnesses = pop.evaluate(current_price)
+                fitness_arr = np.array(
+                    [f for _, f in agent_fitnesses], dtype=np.float32
+                )
+                fitness_map[(agent_type, 0)] = fitness_arr
+
+        # 2. 一次性向所有 Worker 发送进化命令并收集结果（真正并行）
+        if self._unified_worker_pool is None:
+            # 无 Worker 池时回退到串行进化
+            for agent_type, pop in self.populations.items():
+                pop.evolve(current_price)
+        else:
+            # 首次调用时，先同步基因组到 Worker
+            if not self._worker_pool_synced:
+                genomes_map: dict[tuple[AgentType, int], tuple[np.ndarray, ...]] = {}
+                for agent_type, pop in self.populations.items():
+                    if isinstance(pop, SubPopulationManager):
+                        for i, sub_pop in enumerate(pop.sub_populations):
+                            genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
+                            genomes_map[(agent_type, i)] = genome_data
+                    else:
+                        genome_data = _serialize_genomes_numpy(pop.neat_pop.population)
+                        genomes_map[(agent_type, 0)] = genome_data
+                self._unified_worker_pool.set_genomes(genomes_map)
+                self.logger.info("首次进化：基因组已同步到 Worker 池")
+
+            results = self._unified_worker_pool.evolve_all_parallel(
+                fitness_map,
+                sync_genomes=False,
+            )
+            self._worker_pool_synced = True
+
+            # 3. 更新各种群的 Agent
+            for (agent_type, sub_id), (genome_data, network_params) in results.items():
+                pop = self.populations[agent_type]
+                if isinstance(pop, SubPopulationManager):
+                    sub_pop = pop.sub_populations[sub_id]
+                    self._update_population_from_worker(sub_pop, genome_data, network_params)
+                else:
+                    self._update_population_from_worker(pop, genome_data, network_params)
+
         mem_after_evolve = _get_memory_mb()
 
-        # 所有种群进化完成后，更新网络数据缓存
+        # 更新网络数据缓存
         self._update_network_caches()
 
-        # 最终全面 GC，确保所有临时对象被回收
-        # 包括 Python 2 代和 3 代垃圾
-        gc.collect(0)  # 年轻代
-        gc.collect(1)  # 中年代
-        gc.collect(2)  # 老年代
-
-        # 【关键】调用 malloc_trim 将释放的内存归还给操作系统
-        # Python 的内存分配器通常不会主动归还内存，导致 VmRSS 持续增长
+        # GC
+        gc.collect(0)
+        gc.collect(1)
+        gc.collect(2)
         malloc_trim()
 
-        # [MEMORY] 记录 GC 后的内存
         mem_after_gc = _get_memory_mb()
-
-        # 输出内存变化统计
         arena_tag = f"Arena-{self.arena_id}" if self.arena_id is not None else "Trainer"
         self.logger.info(
             f"[MEMORY_EVOLVE_PARALLEL] {arena_tag} ep_{self.episode}: "
@@ -1143,6 +1207,49 @@ class Trainer:
             f"gc_released={mem_after_evolve - mem_after_gc:.1f}MB, "
             f"net={mem_after_gc - mem_before_evolve:+.1f}MB"
         )
+
+    def _update_population_from_worker(
+        self,
+        pop: Population,
+        genome_data: tuple[np.ndarray, ...],
+        network_params: tuple[np.ndarray, ...],
+    ) -> None:
+        """从 Worker 结果更新种群
+
+        Args:
+            pop: 种群对象
+            genome_data: 基因组数据元组
+            network_params: 网络参数数据元组
+        """
+        # 增加代数
+        pop.generation += 1
+
+        # 保存旧基因组用于清理
+        old_genomes = list(pop.neat_pop.population.values())
+
+        # 反序列化基因组
+        new_keys, new_fitnesses, new_metadata, new_nodes, new_conns = genome_data
+        pop.neat_pop.population = _deserialize_genomes_numpy(
+            new_keys, new_fitnesses, new_metadata, new_nodes, new_conns,
+            pop.neat_config.genome_config
+        )
+
+        # 清理旧基因组
+        new_genome_ids = set(pop.neat_pop.population.keys())
+        old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+        pop._cleanup_genome_internals(old_to_clean)
+
+        # 清理 NEAT 历史
+        pop._cleanup_neat_history()
+
+        # 解包网络参数并更新 Agent Brain
+        params_list = _unpack_network_params_numpy(*network_params)
+        new_genomes = list(pop.neat_pop.population.items())
+        for idx, (gid, genome) in enumerate(new_genomes):
+            if idx < len(pop.agents) and idx < len(params_list):
+                pop.agents[idx].brain.update_from_network_params(
+                    genome, params_list[idx]
+                )
 
     def _evolve_populations_with_cached_fitness(self) -> None:
         """使用缓存适应度进化所有种群
@@ -2344,11 +2451,11 @@ class Trainer:
         return stats
 
     def _serialize_population_data(
-        self, pop: "Population | RetailSubPopulationManager"
+        self, pop: "Population | SubPopulationManager"
     ) -> dict:
         """序列化单个种群数据
 
-        支持普通 Population 和 RetailSubPopulationManager 两种类型。
+        支持普通 Population 和 SubPopulationManager 两种类型。
 
         Args:
             pop: 种群对象
@@ -2356,8 +2463,8 @@ class Trainer:
         Returns:
             序列化的种群数据字典
         """
-        if isinstance(pop, RetailSubPopulationManager):
-            # RetailSubPopulationManager: 保存所有子种群
+        if isinstance(pop, SubPopulationManager):
+            # SubPopulationManager: 保存所有子种群
             return {
                 "is_sub_population_manager": True,
                 "generation": pop.generation,
@@ -2437,7 +2544,7 @@ class Trainer:
         """
         # 保存检查点前同步基因组（延迟反序列化模式下需要）
         retail_manager = self.populations.get(AgentType.RETAIL)
-        if isinstance(retail_manager, RetailSubPopulationManager):
+        if isinstance(retail_manager, SubPopulationManager):
             retail_manager.sync_genomes_from_pending()
 
         checkpoint_path = Path(path)
@@ -2459,13 +2566,13 @@ class Trainer:
 
     def _load_population_data(
         self,
-        pop: "Population | RetailSubPopulationManager",
+        pop: "Population | SubPopulationManager",
         pop_data: dict,
         agent_type: AgentType,
     ) -> None:
         """加载单个种群数据
 
-        支持普通 Population 和 RetailSubPopulationManager 两种类型。
+        支持普通 Population 和 SubPopulationManager 两种类型。
         自动检测旧格式并迁移。
 
         Args:
@@ -2473,8 +2580,8 @@ class Trainer:
             pop_data: checkpoint 中的种群数据
             agent_type: Agent 类型
         """
-        if isinstance(pop, RetailSubPopulationManager):
-            # 当前代码使用 RetailSubPopulationManager
+        if isinstance(pop, SubPopulationManager):
+            # 当前代码使用 SubPopulationManager
             if pop_data.get("is_sub_population_manager"):
                 # 新格式：直接加载子种群数据
                 self._load_sub_population_manager_new_format(pop, pop_data)
@@ -2493,7 +2600,7 @@ class Trainer:
 
     def _load_sub_population_manager_new_format(
         self,
-        manager: "RetailSubPopulationManager",
+        manager: "SubPopulationManager",
         pop_data: dict,
     ) -> None:
         """加载新格式的子种群管理器数据
@@ -2525,7 +2632,7 @@ class Trainer:
 
     def _migrate_old_checkpoint_to_sub_populations(
         self,
-        manager: "RetailSubPopulationManager",
+        manager: "SubPopulationManager",
         pop_data: dict,
     ) -> None:
         """将旧格式 checkpoint 迁移到子种群格式
@@ -2579,7 +2686,7 @@ class Trainer:
         """加载检查点
 
         支持新旧两种格式：
-        - 新格式：RetailSubPopulationManager 保存为多个子种群
+        - 新格式：SubPopulationManager 保存为多个子种群
         - 旧格式：单个 RETAIL 种群，自动迁移到子种群格式
 
         Args:
@@ -2605,6 +2712,9 @@ class Trainer:
         # 更新网络数据缓存
         self._update_network_caches()
 
+        # 重置 Worker 池同步标志（需要重新同步基因组）
+        self._worker_pool_synced = False
+
         self.logger.info(f"检查点已加载: {path}")
 
     def load_checkpoint_data(self, checkpoint: dict) -> None:
@@ -2624,7 +2734,7 @@ class Trainer:
                 pop = self.populations[agent_type]
                 # 【关键修复】先清理旧 Agent，防止内存泄漏
                 # setup() 时已创建了 Agent，加载检查点时需要先清理
-                if isinstance(pop, RetailSubPopulationManager):
+                if isinstance(pop, SubPopulationManager):
                     for sub_pop in pop.sub_populations:
                         sub_pop._cleanup_old_agents()
                 else:
@@ -2643,6 +2753,9 @@ class Trainer:
         # 更新网络数据缓存
         self._update_network_caches()
 
+        # 重置 Worker 池同步标志（需要重新同步基因组）
+        self._worker_pool_synced = False
+
     def pause(self) -> None:
         """暂停训练"""
         self.is_paused = True
@@ -2659,7 +2772,13 @@ class Trainer:
         self.logger.info("训练已停止")
         self._shutdown_executor()
 
-        # 关闭 RETAIL Worker 池
+        # 关闭统一 Worker 池
+        if self._unified_worker_pool is not None:
+            self._unified_worker_pool.shutdown()
+            self._unified_worker_pool = None
+            self.logger.info("统一 Worker 池已关闭")
+
+        # 关闭 RETAIL Worker 池（已废弃，保留兼容性）
         if self._retail_worker_pool is not None:
             self._retail_worker_pool.shutdown()
             self._retail_worker_pool = None
