@@ -48,19 +48,24 @@ def main() -> None:
         "--episodes",
         type=int,
         default=4000,
-        help="训练的 episode 数量（默认: 4000）",
+        help="训练的 episode 数量（默认: 4000）。与 --infinite 互斥",
+    )
+    parser.add_argument(
+        "--infinite",
+        action="store_true",
+        help="无限训练模式，直到手动中断（Ctrl+C）。与 --episodes 互斥",
     )
     parser.add_argument(
         "--episode-length",
         type=int,
-        default=100,
-        help="每个 episode 的 tick 数量（默认: 100）",
+        default=1000,
+        help="每个 episode 的 tick 数量（默认: 1000）",
     )
     parser.add_argument(
         "--checkpoint-interval",
         type=int,
-        default=10,
-        help="检查点保存间隔（episode 数，默认: 10，0 表示不保存）",
+        default=100,
+        help="检查点保存间隔（episode 数，默认: 100，0 表示不保存）",
     )
     parser.add_argument(
         "--resume",
@@ -92,6 +97,12 @@ def main() -> None:
         type=float,
         default=3.0,
         help="鲶鱼资金倍数（相对于做市商，默认: 3.0）",
+    )
+    parser.add_argument(
+        "--evolution-interval",
+        type=int,
+        default=10,
+        help="每多少个 episode 进化一次（默认: 10）",
     )
 
     args = parser.parse_args()

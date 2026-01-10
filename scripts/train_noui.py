@@ -79,14 +79,14 @@ def main() -> None:
     parser.add_argument(
         "--episode-length",
         type=int,
-        default=100,
-        help="每个 episode 的 tick 数量（默认: 100）",
+        default=1000,
+        help="每个 episode 的 tick 数量（默认: 1000）",
     )
     parser.add_argument(
         "--checkpoint-interval",
         type=int,
-        default=10,
-        help="检查点保存间隔（episode 数，默认: 10，0 表示不保存）",
+        default=100,
+        help="检查点保存间隔（episode 数，默认: 100，0 表示不保存）",
     )
     parser.add_argument(
         "--resume",
