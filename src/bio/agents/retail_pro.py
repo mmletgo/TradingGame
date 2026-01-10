@@ -213,18 +213,11 @@ class RetailProAgent(Agent):
         if self.is_liquidated:
             return []
 
-        trades: list[Trade] = []
-
+        # PLACE_BID/PLACE_ASK 需要先撤旧单再挂新单
         if action == ActionType.PLACE_BID or action == ActionType.PLACE_ASK:
-            # 高级散户特定：先撤旧单再挂新单
             if self.account.pending_order_id is not None:
                 matching_engine.cancel_order(self.account.pending_order_id)
                 self.account.pending_order_id = None  # 清除旧挂单ID
-            side = OrderSide.BUY if action == ActionType.PLACE_BID else OrderSide.SELL
-            trades = self._place_limit_order(
-                side, params["price"], params["quantity"], matching_engine
-            )
-            # 其他动作使用父类实现
-            trades = super().execute_action(action, params, matching_engine)
 
-        return trades
+        # 所有动作都委托给父类处理
+        return super().execute_action(action, params, matching_engine)

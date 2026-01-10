@@ -1402,9 +1402,9 @@ class Trainer:
             ask_weights_sum *= ask_multiplier
             total_weights = bid_weights_sum + ask_weights_sum
 
-        # 构建订单列表
-        bid_orders: list[tuple[float, int]] = []
-        ask_orders: list[tuple[float, int]] = []
+        # 构建订单列表（使用字典格式以匹配 _place_quote_orders 期望的输入）
+        bid_orders: list[dict[str, float]] = []
+        ask_orders: list[dict[str, float]] = []
 
         for i in range(5):
             # 买单
@@ -1420,7 +1420,7 @@ class Trainer:
                     price, ratio, is_buy=True, ref_price=mid_price
                 )
                 if qty > 0:
-                    bid_orders.append((price, qty))
+                    bid_orders.append({"price": price, "quantity": float(qty)})
 
             # 卖单
             offset = fast_clip(ask_price_offsets[i], -1.0, 1.0)
@@ -1435,7 +1435,7 @@ class Trainer:
                     price, ratio, is_buy=False, ref_price=mid_price
                 )
                 if qty > 0:
-                    ask_orders.append((price, qty))
+                    ask_orders.append({"price": price, "quantity": float(qty)})
 
         return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 
@@ -1519,8 +1519,8 @@ class Trainer:
             for i, (idx, agent) in enumerate(group):
                 try:
                     if is_market_maker:
-                        # 做市商返回原始输出
-                        nn_output = raw_results[i]
+                        # 做市商返回 (nn_output, mid_price, tick_size) 元组
+                        nn_output, _, _ = raw_results[i]
                         action, params = self._parse_market_maker_output(
                             agent, nn_output, mid_price, tick_size
                         )
@@ -1553,10 +1553,17 @@ class Trainer:
 
         Args:
             agent: Agent 对象
-            action_type_int: 动作类型整数（0=挂单, 1=撤单, 2=吃单, 3=不动, 4=清仓）
-            side_int: 方向整数（0=买, 1=卖）
+            action_type_int: 动作类型整数（与 Cython batch_decide_openmp.pyx 一致）
+                - 0: HOLD
+                - 1: PLACE_BID
+                - 2: PLACE_ASK
+                - 3: CANCEL
+                - 4: MARKET_BUY
+                - 5: MARKET_SELL
+                - 6: CLEAR_POSITION（仅庄家）
+            side_int: 方向整数（1=买, 2=卖）
             price: 价格
-            quantity: 数量
+            quantity: 数量（实际上是比例值，需要转换）
             mid_price: 中间价
             is_whale: 是否为庄家
 
@@ -1567,31 +1574,57 @@ class Trainer:
 
         params: dict[str, Any] = {}
 
-        # 动作类型映射
-        # 0=挂单, 1=撤单, 2=吃单, 3=不动, 4=清仓
+        # 动作类型映射（与 Cython 的 ACTION_* 常量一致）
         if action_type_int == 0:
-            # 挂单
-            if side_int == 0:
-                action = ActionType.PLACE_BID
-            else:
-                action = ActionType.PLACE_ASK
-            params["price"] = price
-            params["quantity"] = quantity
+            # HOLD - 不动
+            action = ActionType.HOLD
         elif action_type_int == 1:
-            # 撤单
-            action = ActionType.CANCEL
+            # PLACE_BID - 挂买单
+            action = ActionType.PLACE_BID
+            params["price"] = price
+            # quantity 是比例值（0-1），需要转换为实际数量
+            actual_qty = agent._calculate_order_quantity(
+                price, quantity, is_buy=True
+            )
+            params["quantity"] = actual_qty
         elif action_type_int == 2:
-            # 吃单
-            if side_int == 0:
-                action = ActionType.MARKET_BUY
+            # PLACE_ASK - 挂卖单
+            action = ActionType.PLACE_ASK
+            params["price"] = price
+            actual_qty = agent._calculate_order_quantity(
+                price, quantity, is_buy=False
+            )
+            params["quantity"] = actual_qty
+        elif action_type_int == 3:
+            # CANCEL - 撤单
+            action = ActionType.CANCEL
+        elif action_type_int == 4:
+            # MARKET_BUY - 市价买入
+            action = ActionType.MARKET_BUY
+            actual_qty = agent._calculate_order_quantity(
+                mid_price, quantity, is_buy=True
+            )
+            params["quantity"] = actual_qty
+        elif action_type_int == 5:
+            # MARKET_SELL - 市价卖出
+            action = ActionType.MARKET_SELL
+            # 对于市价卖出，需要考虑持仓情况
+            position_qty = agent.account.position.quantity
+            if position_qty > 0:
+                # 有多仓时卖出
+                sell_qty = max(1, int(position_qty * quantity))
+                params["quantity"] = min(sell_qty, int(position_qty))
             else:
-                action = ActionType.MARKET_SELL
-            params["quantity"] = quantity
-        elif action_type_int == 4 and is_whale:
-            # 清仓（仅庄家）
-            action = ActionType.CLOSE_POSITION
+                # 空仓或空头，开空仓
+                actual_qty = agent._calculate_order_quantity(
+                    mid_price, quantity, is_buy=False
+                )
+                params["quantity"] = actual_qty
+        elif action_type_int == 6 and is_whale:
+            # CLEAR_POSITION - 清仓（仅庄家）
+            action = ActionType.CLEAR_POSITION
         else:
-            # 不动
+            # 默认不动
             action = ActionType.HOLD
 
         return action, params
