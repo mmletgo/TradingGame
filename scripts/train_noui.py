@@ -119,6 +119,12 @@ def main() -> None:
         default=3.0,
         help="鲶鱼资金倍数（相对于做市商，默认: 3.0）",
     )
+    parser.add_argument(
+        "--evolution-interval",
+        type=int,
+        default=10,
+        help="每多少个 episode 进化一次（默认: 10）",
+    )
 
     args = parser.parse_args()
 
@@ -138,6 +144,7 @@ def main() -> None:
         print(f"Episodes: {args.episodes}")
     print(f"Episode Length: {args.episode_length} ticks")
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
+    print(f"Evolution Interval: {args.evolution_interval}")
     if args.resume:
         print(f"Resume From: {args.resume}")
 
@@ -147,6 +154,7 @@ def main() -> None:
         "checkpoint_interval": args.checkpoint_interval,
         "config_dir": args.config_dir,
         "catfish_fund_multiplier": args.catfish_fund_multiplier,
+        "evolution_interval": args.evolution_interval,
     }
     # 只有在用户明确指定 --catfish 时才覆盖默认值
     if args.catfish is not None:

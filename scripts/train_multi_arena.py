@@ -123,6 +123,12 @@ def main() -> None:
         help="检查点保存间隔（episode 数，默认: 10，0 表示不保存）",
     )
     parser.add_argument(
+        "--evolution-interval",
+        type=int,
+        default=10,
+        help="每多少个 episode 进化一次（默认: 10）",
+    )
+    parser.add_argument(
         "--config-dir",
         type=str,
         default="config",
@@ -213,6 +219,7 @@ def main() -> None:
     print(f"每个竞技场最大 Episodes: {args.episodes}")
     print(f"Episode Length: {args.episode_length} ticks")
     print(f"Checkpoint Interval: {args.checkpoint_interval}")
+    print(f"Evolution Interval: {args.evolution_interval}")
     print(f"迁移间隔: 每 {args.migration_interval} 个 episode")
     print(f"迁移数量: {args.migration_count} 个 Agent/种群")
     print(f"迁移策略: {args.migration_strategy}")
@@ -226,6 +233,7 @@ def main() -> None:
         "checkpoint_interval": args.checkpoint_interval,
         "config_dir": args.config_dir,
         "catfish_fund_multiplier": args.catfish_fund_multiplier,
+        "evolution_interval": args.evolution_interval,
     }
     if args.catfish is not None:
         config_kwargs["catfish_enabled"] = args.catfish

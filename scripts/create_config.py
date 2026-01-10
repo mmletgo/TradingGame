@@ -27,6 +27,7 @@ def create_default_config(
     config_dir: str = "config",
     catfish_enabled: bool = True,
     catfish_fund_multiplier: float = 3.0,
+    evolution_interval: int = 10,
 ) -> Config:
     """创建默认配置
 
@@ -36,6 +37,7 @@ def create_default_config(
         config_dir: 配置文件目录（Population 会在此目录下查找对应的 NEAT 配置）
         catfish_enabled: 是否启用鲶鱼（启用后三种行为模式同时运行）
         catfish_fund_multiplier: 鲶鱼资金倍数
+        evolution_interval: 每多少个 episode 进化一次
 
     Returns:
         默认配置对象
@@ -89,6 +91,7 @@ def create_default_config(
         episode_length=episode_length,
         checkpoint_interval=checkpoint_interval,
         neat_config_path=config_dir,  # 配置目录，Population 会自动选择对应的配置文件
+        evolution_interval=evolution_interval,
     )
 
     demo = DemoConfig(

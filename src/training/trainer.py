@@ -207,6 +207,9 @@ class Trainer:
         self._unified_worker_pool: "MultiPopulationWorkerPool | None" = None
         self._worker_pool_synced: bool = False
 
+        # 适应度累积与进化间隔
+        self._episodes_since_evolution: int = 0  # 距上次进化的 episode 数
+
     def set_generation_saver(self, saver: "GenerationSaver") -> None:
         """设置每代保存器
 
@@ -600,6 +603,9 @@ class Trainer:
         self.logger.info(
             f"统一多种群 Worker 池已创建: {len(worker_configs)} 个 Worker"
         )
+
+        # 重置适应度累积状态
+        self._episodes_since_evolution = 0
 
         self.logger.info("训练环境初始化完成")
 
@@ -1133,31 +1139,23 @@ class Trainer:
         """
         mem_before_evolve = _get_memory_mb()
 
-        # 1. 构建所有种群的适应度数据
+        # 1. 构建所有种群的适应度数据（从已设置的 genome.fitness 获取）
         fitness_map: dict[tuple[AgentType, int], np.ndarray] = {}
 
         for agent_type, pop in self.populations.items():
             if isinstance(pop, SubPopulationManager):
-                # 子种群管理器：评估每个子种群
+                # 子种群管理器：从每个子种群的 agent 获取 fitness
                 for i, sub_pop in enumerate(pop.sub_populations):
-                    agent_fitnesses = sub_pop.evaluate(current_price)
-                    # 更新 genome.fitness（供 GenerationSaver 使用）
-                    for agent, fitness in agent_fitnesses:
-                        genome = agent.brain.get_genome()
-                        genome.fitness = fitness
                     fitness_arr = np.array(
-                        [f for _, f in agent_fitnesses], dtype=np.float32
+                        [a.brain.get_genome().fitness for a in sub_pop.agents],
+                        dtype=np.float32
                     )
                     fitness_map[(agent_type, i)] = fitness_arr
             else:
                 # 普通种群
-                agent_fitnesses = pop.evaluate(current_price)
-                # 更新 genome.fitness（供 GenerationSaver 使用）
-                for agent, fitness in agent_fitnesses:
-                    genome = agent.brain.get_genome()
-                    genome.fitness = fitness
                 fitness_arr = np.array(
-                    [f for _, f in agent_fitnesses], dtype=np.float32
+                    [a.brain.get_genome().fitness for a in pop.agents],
+                    dtype=np.float32
                 )
                 fitness_map[(agent_type, 0)] = fitness_arr
 
@@ -2329,15 +2327,30 @@ class Trainer:
                     # self._log_market_maker_status()
                 break
 
-        # 3. 进化
-        # - tick 数 >= 10 时：正常进化（重新计算适应度）
-        # - tick 数 < 10 时：使用缓存适应度进化（打破死循环）
-        min_ticks_for_evolution = 10
+        # 3. 适应度累积与进化
         if self.is_running and not self.is_paused:
-            if self.tick >= min_ticks_for_evolution:
-                # 正常进化：重新计算适应度 + 选择 + 繁殖
-                current_price = self.matching_engine._orderbook.last_price
+            current_price = self.matching_engine._orderbook.last_price
+            evolution_interval = self.config.training.evolution_interval
+
+            # 累积当前 episode 的适应度
+            for agent_type, population in self.populations.items():
+                population.accumulate_fitness(current_price)
+
+            self._episodes_since_evolution += 1
+
+            # 检查是否达到进化间隔
+            if self._episodes_since_evolution >= evolution_interval:
+                # 应用累积的平均适应度
+                for agent_type, population in self.populations.items():
+                    population.apply_accumulated_fitness()
+
+                # 执行进化
                 self._evolve_populations_parallel(current_price)
+
+                # 清空累积数据
+                for agent_type, population in self.populations.items():
+                    population.clear_accumulated_fitness()
+                self._episodes_since_evolution = 0
 
                 # 保存每代的 best_genome（如果设置了保存器）
                 if self._generation_saver is not None:
@@ -2354,20 +2367,15 @@ class Trainer:
                 self._build_execution_order()
                 self._update_pop_total_counts()
 
-                self.logger.info(f"Episode {self.episode} 完成，tick={self.tick}")
-            else:
-                # tick 不足：使用缓存适应度进化，打破死循环
-                self.logger.warning(
-                    f"Episode {self.episode} tick 数不足（{self.tick} < {min_ticks_for_evolution}），"
-                    f"使用缓存适应度进化"
+                self.logger.info(
+                    f"Episode {self.episode} 完成进化，"
+                    f"累积了 {evolution_interval} 个 episode 的适应度"
                 )
-                self._evolve_populations_with_cached_fitness()
-
-                # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
-                self._register_all_agents()
-                self._build_agent_map()
-                self._build_execution_order()
-                self._update_pop_total_counts()
+            else:
+                self.logger.info(
+                    f"Episode {self.episode} 完成，"
+                    f"累积适应度 ({self._episodes_since_evolution}/{evolution_interval})"
+                )
 
     def train(
         self,
@@ -2739,6 +2747,11 @@ class Trainer:
         # 重置 Worker 池同步标志（需要重新同步基因组）
         self._worker_pool_synced = False
 
+        # 重置累积状态（不保存累积数据到 checkpoint）
+        self._episodes_since_evolution = 0
+        for pop in self.populations.values():
+            pop.clear_accumulated_fitness()
+
         self.logger.info(f"检查点已加载: {path}")
 
     def load_checkpoint_data(self, checkpoint: dict) -> None:
@@ -2779,6 +2792,11 @@ class Trainer:
 
         # 重置 Worker 池同步标志（需要重新同步基因组）
         self._worker_pool_synced = False
+
+        # 重置累积状态（不保存累积数据到 checkpoint）
+        self._episodes_since_evolution = 0
+        for pop in self.populations.values():
+            pop.clear_accumulated_fitness()
 
     def pause(self) -> None:
         """暂停训练"""

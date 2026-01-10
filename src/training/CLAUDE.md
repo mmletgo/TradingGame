@@ -560,9 +560,12 @@ pool.shutdown()
      - 鲶鱼被强平（立即结束 episode）
      - 任意种群存活少于初始值的 1/4（确保有足够的幸存者用于 NEAT 进化）
      - 订单簿只有单边挂单（确保市场流动性正常）
-   - **进化条件**：
-     - tick 数 >= 10：正常进化（重新计算适应度 + 选择 + 繁殖）
-     - tick 数 < 10：使用缓存适应度进化（跳过适应度计算，使用之前 episode 的适应度进行选择和繁殖，打破死循环）
+   - **适应度累积与进化**：
+     - 每个 episode 结束时累积当前适应度到各 Agent 的 `genome.fitness`
+     - 累积使用平均值：`genome.fitness = 累积适应度总和 / 累积次数`
+     - 每 N 个 episode 进化一次（N 由 `TrainingConfig.evolution_interval` 配置，默认 10）
+     - 进化时应用累积的平均适应度，然后执行 NEAT 选择和繁殖
+     - 进化后清空累积数据，重置 `_episodes_since_evolution` 计数器
    - 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
 
 3. **Tick 执行** (`run_tick`)

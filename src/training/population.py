@@ -1312,6 +1312,10 @@ class Population:
             f"创建 {agent_type.value} 种群，初始 Agent 数量: {len(self.agents)}"
         )
 
+        # 适应度累积存储
+        self._accumulated_fitness: dict[int, float] = {}  # genome_id -> 累积适应度
+        self._accumulation_count: int = 0  # 累积的 episode 数量
+
     # Agent ID 偏移量，确保不同种群的 agent_id 不冲突
     # 新的ID分配方案：
     # RETAIL_SUB_0:  0 ~ 99,999 (每个子种群预留100K空间)
@@ -2180,6 +2184,43 @@ class Population:
         self._pending_genome_data = None
         self._genomes_dirty = False
 
+    def accumulate_fitness(self, current_price: float) -> None:
+        """累积当前 episode 的适应度
+
+        计算当前 episode 的适应度并累加到内部存储。
+
+        Args:
+            current_price: 当前市场价格，用于计算未实现盈亏
+        """
+        agent_fitnesses = self.evaluate(current_price)
+        for agent, fitness in agent_fitnesses:
+            genome = agent.brain.get_genome()
+            gid = genome.key
+            if gid in self._accumulated_fitness:
+                self._accumulated_fitness[gid] += fitness
+            else:
+                self._accumulated_fitness[gid] = fitness
+        self._accumulation_count += 1
+
+    def apply_accumulated_fitness(self) -> None:
+        """将累积的平均适应度应用到基因组
+
+        在进化前调用，将累积的平均适应度设置到每个基因组。
+        """
+        if self._accumulation_count == 0:
+            return
+
+        for agent in self.agents:
+            genome = agent.brain.get_genome()
+            gid = genome.key
+            if gid in self._accumulated_fitness:
+                genome.fitness = self._accumulated_fitness[gid] / self._accumulation_count
+
+    def clear_accumulated_fitness(self) -> None:
+        """清空累积的适应度数据"""
+        self._accumulated_fitness.clear()
+        self._accumulation_count = 0
+
 
 class SubPopulationManager:
     """通用子种群管理器
@@ -2770,6 +2811,21 @@ class SubPopulationManager:
         for pop in self.sub_populations:
             all_genomes.extend(pop.neat_pop.population.values())
         return all_genomes
+
+    def accumulate_fitness(self, current_price: float) -> None:
+        """累积所有子种群的适应度"""
+        for sub_pop in self.sub_populations:
+            sub_pop.accumulate_fitness(current_price)
+
+    def apply_accumulated_fitness(self) -> None:
+        """应用所有子种群的累积适应度"""
+        for sub_pop in self.sub_populations:
+            sub_pop.apply_accumulated_fitness()
+
+    def clear_accumulated_fitness(self) -> None:
+        """清空所有子种群的累积适应度"""
+        for sub_pop in self.sub_populations:
+            sub_pop.clear_accumulated_fitness()
 
 
 # 兼容别名，保持向后兼容性
