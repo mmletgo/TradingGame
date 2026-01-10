@@ -7,13 +7,875 @@ import ctypes
 import gc
 import logging
 import traceback
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from itertools import count
+from pathlib import Path
+from typing import Any
+
 import neat
+from neat.genes import DefaultConnectionGene, DefaultNodeGene
 from neat.population import CompleteExtinctionException
 import numpy as np
 
 from src.bio.agents.base import Agent
+
+
+# =============================================
+# 轻量级基因组序列化/反序列化函数（模块级）
+# =============================================
+
+
+# =============================================
+# 激活函数和聚合函数的索引映射
+# =============================================
+_ACTIVATION_TO_IDX: dict[str, int] = {
+    'sigmoid': 0, 'tanh': 1, 'relu': 2, 'identity': 3,
+    'sin': 4, 'gauss': 5, 'softplus': 6, 'clamped': 7,
+    'exp': 8, 'abs': 9, 'inv': 10, 'log': 11, 'hat': 12,
+    'square': 13, 'cube': 14,
+}
+_IDX_TO_ACTIVATION: dict[int, str] = {v: k for k, v in _ACTIVATION_TO_IDX.items()}
+
+_AGGREGATION_TO_IDX: dict[str, int] = {
+    'sum': 0, 'product': 1, 'min': 2, 'max': 3, 'mean': 4,
+    'median': 5, 'maxabs': 6,
+}
+_IDX_TO_AGGREGATION: dict[int, str] = {v: k for k, v in _AGGREGATION_TO_IDX.items()}
+
+# NumPy 结构化数组 dtype
+_NODE_DTYPE = np.dtype([
+    ('key', 'i4'),
+    ('bias', 'f4'),
+    ('response', 'f4'),
+    ('activation', 'u1'),
+    ('aggregation', 'u1'),
+])
+
+_CONN_DTYPE = np.dtype([
+    ('in_node', 'i4'),
+    ('out_node', 'i4'),
+    ('innovation', 'i4'),
+    ('weight', 'f4'),
+    ('enabled', '?'),
+])
+
+
+def _serialize_genomes_numpy(
+    genomes: dict[int, neat.DefaultGenome],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """将基因组字典序列化为 NumPy 紧凑格式
+
+    使用 NumPy 结构化数组，显著减少 pickle 序列化开销。
+
+    Args:
+        genomes: NEAT 基因组字典 {genome_key: genome}
+
+    Returns:
+        (keys, fitnesses, all_nodes, all_connections) 元组
+        - keys: shape=(N,), 基因组 key
+        - fitnesses: shape=(N,), 适应度
+        - all_nodes: 所有基因组的节点数据（连续存储）
+        - all_connections: 所有基因组的连接数据（连续存储）
+    """
+    genome_list = list(genomes.values())
+    n_genomes = len(genome_list)
+
+    # 1. 基因组 key 和适应度
+    keys = np.array([g.key for g in genome_list], dtype=np.int32)
+    fitnesses = np.array(
+        [g.fitness if g.fitness is not None else np.nan for g in genome_list],
+        dtype=np.float32,
+    )
+
+    # 2. 统计总节点数和连接数
+    total_nodes = sum(len(g.nodes) for g in genome_list)
+    total_conns = sum(len(g.connections) for g in genome_list)
+
+    # 3. 分配数组
+    all_nodes = np.empty(total_nodes, dtype=_NODE_DTYPE)
+    all_conns = np.empty(total_conns, dtype=_CONN_DTYPE)
+
+    # 4. 记录每个基因组的节点/连接起始位置和数量
+    node_offsets = np.empty(n_genomes + 1, dtype=np.int32)
+    conn_offsets = np.empty(n_genomes + 1, dtype=np.int32)
+    node_offsets[0] = 0
+    conn_offsets[0] = 0
+
+    node_idx = 0
+    conn_idx = 0
+
+    for i, genome in enumerate(genome_list):
+        # 序列化节点
+        for nk, node in genome.nodes.items():
+            all_nodes[node_idx]['key'] = nk
+            all_nodes[node_idx]['bias'] = node.bias
+            all_nodes[node_idx]['response'] = node.response
+            all_nodes[node_idx]['activation'] = _ACTIVATION_TO_IDX.get(node.activation, 0)
+            all_nodes[node_idx]['aggregation'] = _AGGREGATION_TO_IDX.get(node.aggregation, 0)
+            node_idx += 1
+
+        # 序列化连接
+        for ck, conn in genome.connections.items():
+            all_conns[conn_idx]['in_node'] = ck[0]
+            all_conns[conn_idx]['out_node'] = ck[1]
+            all_conns[conn_idx]['innovation'] = conn.innovation
+            all_conns[conn_idx]['weight'] = conn.weight
+            all_conns[conn_idx]['enabled'] = conn.enabled
+            conn_idx += 1
+
+        node_offsets[i + 1] = node_idx
+        conn_offsets[i + 1] = conn_idx
+
+    # 5. 打包偏移量到元数据数组
+    # 使用 node_offsets 和 conn_offsets 重建时恢复每个基因组的边界
+    metadata = np.stack([node_offsets, conn_offsets], axis=1)  # shape: (N+1, 2)
+
+    return keys, fitnesses, metadata, all_nodes, all_conns
+
+
+def _deserialize_genomes_numpy(
+    keys: np.ndarray,
+    fitnesses: np.ndarray,
+    metadata: np.ndarray,
+    all_nodes: np.ndarray,
+    all_conns: np.ndarray,
+    genome_config: Any,
+) -> dict[int, neat.DefaultGenome]:
+    """从 NumPy 紧凑格式重建基因组字典
+
+    Args:
+        keys: 基因组 key 数组
+        fitnesses: 适应度数组
+        metadata: 偏移量元数据 (N+1, 2)
+        all_nodes: 所有节点数据
+        all_conns: 所有连接数据
+        genome_config: NEAT genome_config（未使用）
+
+    Returns:
+        NEAT 基因组字典 {genome_key: genome}
+    """
+    population: dict[int, neat.DefaultGenome] = {}
+    n_genomes = len(keys)
+    node_offsets = metadata[:, 0]
+    conn_offsets = metadata[:, 1]
+
+    for i in range(n_genomes):
+        key = int(keys[i])
+        fitness = float(fitnesses[i]) if not np.isnan(fitnesses[i]) else None
+
+        genome = neat.DefaultGenome(key)
+        genome.fitness = fitness
+        genome.nodes = {}
+        genome.connections = {}
+
+        # 恢复节点
+        node_start = node_offsets[i]
+        node_end = node_offsets[i + 1]
+        for j in range(node_start, node_end):
+            node_data = all_nodes[j]
+            node_key = int(node_data['key'])
+            node = DefaultNodeGene(node_key)
+            node.bias = float(node_data['bias'])
+            node.response = float(node_data['response'])
+            node.activation = _IDX_TO_ACTIVATION.get(int(node_data['activation']), 'sigmoid')
+            node.aggregation = _IDX_TO_AGGREGATION.get(int(node_data['aggregation']), 'sum')
+            genome.nodes[node_key] = node
+
+        # 恢复连接
+        conn_start = conn_offsets[i]
+        conn_end = conn_offsets[i + 1]
+        for j in range(conn_start, conn_end):
+            conn_data = all_conns[j]
+            ck = (int(conn_data['in_node']), int(conn_data['out_node']))
+            conn = DefaultConnectionGene(ck, innovation=int(conn_data['innovation']))
+            conn.weight = float(conn_data['weight'])
+            conn.enabled = bool(conn_data['enabled'])
+            genome.connections[ck] = conn
+
+        population[key] = genome
+
+    return population
+
+
+# 保留旧接口用于兼容
+def _serialize_genomes(genomes: dict[int, neat.DefaultGenome]) -> list[tuple[Any, ...]]:
+    """将基因组字典序列化为轻量级格式（紧凑版）
+
+    使用元组列表而非字典，减少序列化开销。
+    格式：(key, fitness, nodes_list, connections_list)
+    其中：
+    - nodes_list: [(node_key, bias, response, activation, aggregation), ...]
+    - connections_list: [(in_node, out_node, innovation, weight, enabled), ...]
+
+    Args:
+        genomes: NEAT 基因组字典 {genome_key: genome}
+
+    Returns:
+        轻量级基因组数据列表
+    """
+    result: list[tuple[Any, ...]] = []
+    for gid, genome in genomes.items():
+        # 序列化节点为元组列表
+        nodes_list: list[tuple[int, float, float, str, str]] = [
+            (int(nk), float(node.bias), float(node.response), node.activation, node.aggregation)
+            for nk, node in genome.nodes.items()
+        ]
+        # 序列化连接为元组列表
+        connections_list: list[tuple[int, int, int, float, bool]] = [
+            (int(ck[0]), int(ck[1]), int(conn.innovation), float(conn.weight), bool(conn.enabled))
+            for ck, conn in genome.connections.items()
+        ]
+        result.append((
+            int(genome.key),
+            float(genome.fitness) if genome.fitness is not None else None,
+            nodes_list,
+            connections_list,
+        ))
+    return result
+
+
+def _deserialize_genomes(
+    genome_data_list: list[tuple[Any, ...]],
+    genome_config: Any,
+) -> dict[int, neat.DefaultGenome]:
+    """从轻量级格式重建基因组字典（紧凑版）
+
+    Args:
+        genome_data_list: 轻量级基因组数据列表
+        genome_config: NEAT 的 genome_config（未使用，保留接口一致性）
+
+    Returns:
+        NEAT 基因组字典 {genome_key: genome}
+    """
+    population: dict[int, neat.DefaultGenome] = {}
+
+    for gdata in genome_data_list:
+        key, fitness, nodes_list, connections_list = gdata
+        genome = neat.DefaultGenome(key)
+        genome.fitness = fitness
+        genome.nodes = {}
+        genome.connections = {}
+
+        # 重建节点
+        for node_key, bias, response, activation, aggregation in nodes_list:
+            node = DefaultNodeGene(node_key)
+            node.bias = bias
+            node.response = response
+            node.activation = activation
+            node.aggregation = aggregation
+            genome.nodes[node_key] = node
+
+        # 重建连接
+        for in_node, out_node, innovation, weight, enabled in connections_list:
+            ck = (in_node, out_node)
+            conn = DefaultConnectionGene(ck, innovation=innovation)
+            conn.weight = weight
+            conn.enabled = enabled
+            genome.connections[ck] = conn
+
+        population[genome.key] = genome
+
+    return population
+
+
+def _evolve_subpop_lightweight(
+    args: tuple[str, list[tuple[Any, ...]], int, int],
+) -> list[tuple[Any, ...]]:
+    """在子进程中执行轻量级进化（元组格式，已废弃）
+
+    这是一个模块级函数，可被 ProcessPoolExecutor 调用。
+
+    Args:
+        args: (neat_config_path, genome_data_list, pop_size, generation)
+
+    Returns:
+        新基因组的轻量级数据列表
+    """
+    neat_config_path, genome_data_list, pop_size, generation = args
+
+    # 1. 加载 NEAT 配置
+    neat_config = neat.Config(
+        neat.DefaultGenome,
+        neat.DefaultReproduction,
+        neat.DefaultSpeciesSet,
+        neat.DefaultStagnation,
+        neat_config_path,
+    )
+    neat_config.pop_size = pop_size
+
+    # 2. 创建新的 NEAT Population（空的）
+    neat_pop = neat.Population(neat_config)
+
+    # 3. 用传入的数据重建种群
+    neat_pop.population = _deserialize_genomes(genome_data_list, neat_config.genome_config)
+    neat_pop.generation = generation
+
+    # 4. 重新进行物种划分
+    neat_pop.species.speciate(neat_config, neat_pop.population, generation)
+
+    # 5. 执行繁殖
+    def eval_genomes(
+        genomes: list[tuple[int, neat.DefaultGenome]],
+        config: neat.Config,
+    ) -> None:
+        pass  # 适应度已设置
+
+    try:
+        neat_pop.run(eval_genomes, n=1)
+    except Exception:
+        # 进化失败，返回原始基因组
+        return genome_data_list
+
+    # 6. 序列化新种群返回
+    return _serialize_genomes(neat_pop.population)
+
+
+def _evolve_subpop_numpy(
+    args: tuple[str, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """在子进程中执行进化（NumPy 格式）
+
+    使用 NumPy 结构化数组，显著减少序列化开销。
+
+    Args:
+        args: (neat_config_path, keys, fitnesses, metadata, nodes, conns, pop_size, generation)
+
+    Returns:
+        (new_keys, new_fitnesses, new_metadata, new_nodes, new_conns)
+    """
+    neat_config_path, keys, fitnesses, metadata, nodes, conns, pop_size, generation = args
+
+    # 1. 加载 NEAT 配置
+    neat_config = neat.Config(
+        neat.DefaultGenome,
+        neat.DefaultReproduction,
+        neat.DefaultSpeciesSet,
+        neat.DefaultStagnation,
+        neat_config_path,
+    )
+    neat_config.pop_size = pop_size
+
+    # 2. 创建新的 NEAT Population
+    neat_pop = neat.Population(neat_config)
+
+    # 3. 用传入的 NumPy 数据重建种群
+    neat_pop.population = _deserialize_genomes_numpy(
+        keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
+    )
+    neat_pop.generation = generation
+
+    # 4. 重新进行物种划分
+    neat_pop.species.speciate(neat_config, neat_pop.population, generation)
+
+    # 5. 执行繁殖
+    def eval_genomes(
+        genomes: list[tuple[int, neat.DefaultGenome]],
+        config: neat.Config,
+    ) -> None:
+        pass  # 适应度已设置
+
+    try:
+        neat_pop.run(eval_genomes, n=1)
+    except Exception:
+        # 进化失败，返回原始数据
+        return keys, fitnesses, metadata, nodes, conns
+
+    # 6. 序列化新种群返回（NumPy 格式）
+    return _serialize_genomes_numpy(neat_pop.population)
+
+
+# =============================================
+# 网络参数序列化/反序列化函数（用于快速传输）
+# =============================================
+
+# 网络参数 NumPy dtype
+_NETWORK_PARAM_HEADER_DTYPE = np.dtype([
+    ('num_inputs', 'i4'),
+    ('num_outputs', 'i4'),
+    ('num_nodes', 'i4'),
+    ('n_input_keys', 'i4'),
+    ('n_output_keys', 'i4'),
+    ('n_node_ids', 'i4'),
+    ('n_connections', 'i4'),  # conn_weights 的长度
+])
+
+
+def _extract_network_params_from_genome(
+    genome: neat.DefaultGenome,
+    config: neat.Config,
+) -> dict[str, np.ndarray | int]:
+    """从基因组提取网络参数（在 Worker 进程中使用）
+
+    创建临时网络并提取参数，然后释放网络。
+    这样 Worker 不需要维护网络对象。
+
+    Args:
+        genome: NEAT 基因组
+        config: NEAT 配置
+
+    Returns:
+        网络参数字典
+    """
+    from neat.nn import FastFeedForwardNetwork
+    network = FastFeedForwardNetwork.create(genome, config)
+    params = network.get_params()
+    return params
+
+
+def _pack_network_params_numpy(
+    params_list: list[dict[str, np.ndarray | int]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+           np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """将多个网络参数打包成 NumPy 数组
+
+    将多个网络的参数打包成紧凑的 NumPy 数组格式，减少 pickle 开销。
+
+    Args:
+        params_list: 网络参数字典列表
+
+    Returns:
+        (headers, all_input_keys, all_output_keys, all_node_ids,
+         all_biases, all_responses, all_act_types,
+         all_conn_indptr, all_conn_sources, all_conn_weights,
+         all_output_indices) 元组
+    """
+    n_networks = len(params_list)
+
+    # 1. 构建 header 数组
+    headers = np.empty(n_networks, dtype=_NETWORK_PARAM_HEADER_DTYPE)
+
+    # 2. 统计总大小
+    total_input_keys = 0
+    total_output_keys = 0
+    total_node_ids = 0
+    total_connections = 0
+
+    for i, params in enumerate(params_list):
+        n_input_keys = len(params['input_keys'])
+        n_output_keys = len(params['output_keys'])
+        n_node_ids = len(params['node_ids'])
+        n_connections = len(params['conn_weights'])
+
+        headers[i]['num_inputs'] = params['num_inputs']
+        headers[i]['num_outputs'] = params['num_outputs']
+        headers[i]['num_nodes'] = params['num_nodes']
+        headers[i]['n_input_keys'] = n_input_keys
+        headers[i]['n_output_keys'] = n_output_keys
+        headers[i]['n_node_ids'] = n_node_ids
+        headers[i]['n_connections'] = n_connections
+
+        total_input_keys += n_input_keys
+        total_output_keys += n_output_keys
+        total_node_ids += n_node_ids
+        total_connections += n_connections
+
+    # 3. 分配连续数组
+    all_input_keys = np.empty(total_input_keys, dtype=np.int32)
+    all_output_keys = np.empty(total_output_keys, dtype=np.int32)
+    all_node_ids = np.empty(total_node_ids, dtype=np.int32)
+    all_biases = np.empty(total_node_ids, dtype=np.float32)
+    all_responses = np.empty(total_node_ids, dtype=np.float32)
+    all_act_types = np.empty(total_node_ids, dtype=np.int32)
+    # conn_indptr 的长度是 num_nodes + 1
+    total_conn_indptr = sum(params['num_nodes'] + 1 for params in params_list)
+    all_conn_indptr = np.empty(total_conn_indptr, dtype=np.int32)
+    all_conn_sources = np.empty(total_connections, dtype=np.int32)
+    all_conn_weights = np.empty(total_connections, dtype=np.float32)
+    all_output_indices = np.empty(total_output_keys, dtype=np.int32)
+
+    # 4. 填充数据
+    input_keys_offset = 0
+    output_keys_offset = 0
+    node_ids_offset = 0
+    conn_indptr_offset = 0
+    connections_offset = 0
+
+    for params in params_list:
+        n_input_keys = len(params['input_keys'])
+        n_output_keys = len(params['output_keys'])
+        n_node_ids = len(params['node_ids'])
+        n_conn_indptr = params['num_nodes'] + 1
+        n_connections = len(params['conn_weights'])
+
+        # 复制数据
+        all_input_keys[input_keys_offset:input_keys_offset + n_input_keys] = params['input_keys']
+        all_output_keys[output_keys_offset:output_keys_offset + n_output_keys] = params['output_keys']
+        all_node_ids[node_ids_offset:node_ids_offset + n_node_ids] = params['node_ids']
+        all_biases[node_ids_offset:node_ids_offset + n_node_ids] = params['biases']
+        all_responses[node_ids_offset:node_ids_offset + n_node_ids] = params['responses']
+        all_act_types[node_ids_offset:node_ids_offset + n_node_ids] = params['act_types']
+        all_conn_indptr[conn_indptr_offset:conn_indptr_offset + n_conn_indptr] = params['conn_indptr']
+        all_conn_sources[connections_offset:connections_offset + n_connections] = params['conn_sources']
+        all_conn_weights[connections_offset:connections_offset + n_connections] = params['conn_weights']
+        all_output_indices[output_keys_offset:output_keys_offset + n_output_keys] = params['output_indices']
+
+        input_keys_offset += n_input_keys
+        output_keys_offset += n_output_keys
+        node_ids_offset += n_node_ids
+        conn_indptr_offset += n_conn_indptr
+        connections_offset += n_connections
+
+    return (
+        headers, all_input_keys, all_output_keys, all_node_ids,
+        all_biases, all_responses, all_act_types,
+        all_conn_indptr, all_conn_sources, all_conn_weights,
+        all_output_indices,
+    )
+
+
+def _unpack_network_params_numpy(
+    headers: np.ndarray,
+    all_input_keys: np.ndarray,
+    all_output_keys: np.ndarray,
+    all_node_ids: np.ndarray,
+    all_biases: np.ndarray,
+    all_responses: np.ndarray,
+    all_act_types: np.ndarray,
+    all_conn_indptr: np.ndarray,
+    all_conn_sources: np.ndarray,
+    all_conn_weights: np.ndarray,
+    all_output_indices: np.ndarray,
+) -> list[dict[str, np.ndarray | int]]:
+    """从 NumPy 数组解包网络参数
+
+    Args:
+        headers: 网络头信息数组
+        all_*: 各类数据的连续数组
+
+    Returns:
+        网络参数字典列表
+    """
+    n_networks = len(headers)
+    params_list: list[dict[str, np.ndarray | int]] = []
+
+    input_keys_offset = 0
+    output_keys_offset = 0
+    node_ids_offset = 0
+    conn_indptr_offset = 0
+    connections_offset = 0
+
+    for i in range(n_networks):
+        h = headers[i]
+        num_inputs = int(h['num_inputs'])
+        num_outputs = int(h['num_outputs'])
+        num_nodes = int(h['num_nodes'])
+        n_input_keys = int(h['n_input_keys'])
+        n_output_keys = int(h['n_output_keys'])
+        n_node_ids = int(h['n_node_ids'])
+        n_connections = int(h['n_connections'])
+        n_conn_indptr = num_nodes + 1
+
+        params = {
+            'num_inputs': num_inputs,
+            'num_outputs': num_outputs,
+            'num_nodes': num_nodes,
+            'input_keys': all_input_keys[input_keys_offset:input_keys_offset + n_input_keys],
+            'output_keys': all_output_keys[output_keys_offset:output_keys_offset + n_output_keys],
+            'node_ids': all_node_ids[node_ids_offset:node_ids_offset + n_node_ids],
+            'biases': all_biases[node_ids_offset:node_ids_offset + n_node_ids],
+            'responses': all_responses[node_ids_offset:node_ids_offset + n_node_ids],
+            'act_types': all_act_types[node_ids_offset:node_ids_offset + n_node_ids],
+            'conn_indptr': all_conn_indptr[conn_indptr_offset:conn_indptr_offset + n_conn_indptr],
+            'conn_sources': all_conn_sources[connections_offset:connections_offset + n_connections],
+            'conn_weights': all_conn_weights[connections_offset:connections_offset + n_connections],
+            'output_indices': all_output_indices[output_keys_offset:output_keys_offset + n_output_keys],
+        }
+        params_list.append(params)
+
+        input_keys_offset += n_input_keys
+        output_keys_offset += n_output_keys
+        node_ids_offset += n_node_ids
+        conn_indptr_offset += n_conn_indptr
+        connections_offset += n_connections
+
+    return params_list
+
+
+# =============================================
+# 持久 Worker 进程相关函数
+# =============================================
+
+
+def _worker_process_main(
+    worker_id: int,
+    neat_config_path: str,
+    pop_size: int,
+    cmd_queue: "multiprocessing.Queue[tuple[str, Any]]",
+    result_queue: "multiprocessing.Queue[tuple[int, Any]]",
+) -> None:
+    """Worker 进程主函数
+
+    在子进程中运行，维护一个 NEAT 种群，接收命令并执行。
+
+    Args:
+        worker_id: Worker ID
+        neat_config_path: NEAT 配置文件路径
+        pop_size: 种群大小
+        cmd_queue: 命令队列 (command, args)
+        result_queue: 结果队列 (worker_id, result)
+    """
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)  # 忽略 Ctrl+C
+
+    # 1. 初始化 NEAT 配置和种群
+    neat_config = neat.Config(
+        neat.DefaultGenome,
+        neat.DefaultReproduction,
+        neat.DefaultSpeciesSet,
+        neat.DefaultStagnation,
+        neat_config_path,
+    )
+    neat_config.pop_size = pop_size
+    neat_pop = neat.Population(neat_config)
+    generation = 0
+
+    # 2. 主循环：等待命令
+    while True:
+        try:
+            cmd, args = cmd_queue.get()
+        except Exception:
+            break
+
+        if cmd == "shutdown":
+            break
+
+        elif cmd == "evolve":
+            # args: np.ndarray of fitnesses (shape: pop_size,)
+            fitnesses = args
+
+            # 更新适应度
+            for i, (gid, genome) in enumerate(neat_pop.population.items()):
+                if i < len(fitnesses):
+                    genome.fitness = float(fitnesses[i])
+
+            # 执行进化
+            def eval_genomes(genomes: list, config: Any) -> None:
+                pass  # 适应度已设置
+
+            try:
+                neat_pop.run(eval_genomes, n=1)
+                generation += 1
+            except Exception as e:
+                result_queue.put((worker_id, ("error", str(e))))
+                continue
+
+            # 返回新基因组数据（NumPy 格式）
+            new_data = _serialize_genomes_numpy(neat_pop.population)
+            result_queue.put((worker_id, ("success", new_data)))
+
+        elif cmd == "get_genomes":
+            # 返回当前基因组数据
+            data = _serialize_genomes_numpy(neat_pop.population)
+            result_queue.put((worker_id, data))
+
+        elif cmd == "set_genomes":
+            # 设置基因组数据
+            keys, fitnesses, metadata, nodes, conns = args
+            neat_pop.population = _deserialize_genomes_numpy(
+                keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
+            )
+            neat_pop.species.speciate(neat_config, neat_pop.population, generation)
+            result_queue.put((worker_id, "ok"))
+
+        elif cmd == "evolve_return_params":
+            # args: np.ndarray of fitnesses (shape: pop_size,)
+            # 返回 genome 数据 + 网络参数，减少主进程重建网络的开销
+            fitnesses = args
+
+            # 更新适应度
+            for i, (gid, genome) in enumerate(neat_pop.population.items()):
+                if i < len(fitnesses):
+                    genome.fitness = float(fitnesses[i])
+
+            # 执行进化
+            def eval_genomes_params(genomes: list, config: Any) -> None:
+                pass  # 适应度已设置
+
+            try:
+                neat_pop.run(eval_genomes_params, n=1)
+                generation += 1
+            except Exception as e:
+                result_queue.put((worker_id, ("error", str(e))))
+                continue
+
+            # 1. 序列化基因组数据（NumPy 格式）
+            genome_data = _serialize_genomes_numpy(neat_pop.population)
+
+            # 2. 提取所有网络参数
+            params_list = []
+            for gid, genome in neat_pop.population.items():
+                params = _extract_network_params_from_genome(genome, neat_config)
+                params_list.append(params)
+
+            # 3. 打包网络参数（NumPy 格式）
+            network_params_data = _pack_network_params_numpy(params_list)
+
+            # 4. 返回两者
+            result_queue.put((worker_id, ("success_params", genome_data, network_params_data)))
+
+
+import multiprocessing
+
+
+class PersistentWorkerPool:
+    """持久 Worker 进程池
+
+    维护多个持久的子进程，每个子进程维护自己的 NEAT 种群。
+    避免每次进化都需要序列化整个种群数据。
+    """
+
+    def __init__(
+        self,
+        num_workers: int,
+        neat_config_path: str,
+        pop_size: int,
+    ):
+        """初始化 Worker 池
+
+        Args:
+            num_workers: Worker 数量
+            neat_config_path: NEAT 配置文件路径
+            pop_size: 每个 Worker 的种群大小
+        """
+        self.num_workers = num_workers
+        self.neat_config_path = neat_config_path
+        self.pop_size = pop_size
+
+        # 创建队列
+        self.cmd_queues: list[multiprocessing.Queue[tuple[str, Any]]] = [
+            multiprocessing.Queue() for _ in range(num_workers)
+        ]
+        self.result_queue: multiprocessing.Queue[tuple[int, Any]] = multiprocessing.Queue()
+
+        # 启动 Worker 进程
+        self.workers: list[multiprocessing.Process] = []
+        for i in range(num_workers):
+            p = multiprocessing.Process(
+                target=_worker_process_main,
+                args=(i, neat_config_path, pop_size, self.cmd_queues[i], self.result_queue),
+                daemon=True,
+            )
+            p.start()
+            self.workers.append(p)
+
+    def evolve_all(
+        self,
+        fitnesses_list: list[np.ndarray],
+    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+        """并行进化所有 Worker 的种群
+
+        Args:
+            fitnesses_list: 每个 Worker 的适应度数组列表
+
+        Returns:
+            每个 Worker 的新基因组数据列表
+        """
+        # 发送进化命令
+        for i, fitnesses in enumerate(fitnesses_list):
+            self.cmd_queues[i].put(("evolve", fitnesses))
+
+        # 收集结果
+        results: dict[int, tuple[np.ndarray, ...]] = {}
+        for _ in range(self.num_workers):
+            worker_id, result = self.result_queue.get()
+            if result[0] == "success":
+                results[worker_id] = result[1]
+            else:
+                raise RuntimeError(f"Worker {worker_id} evolve failed: {result[1]}")
+
+        # 按 Worker ID 排序返回
+        return [results[i] for i in range(self.num_workers)]
+
+    def get_all_genomes(
+        self,
+    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+        """获取所有 Worker 的基因组数据
+
+        Returns:
+            每个 Worker 的基因组数据列表
+        """
+        for i in range(self.num_workers):
+            self.cmd_queues[i].put(("get_genomes", None))
+
+        results: dict[int, tuple[np.ndarray, ...]] = {}
+        for _ in range(self.num_workers):
+            worker_id, data = self.result_queue.get()
+            results[worker_id] = data
+
+        return [results[i] for i in range(self.num_workers)]
+
+    def set_all_genomes(
+        self,
+        genomes_list: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    ) -> None:
+        """同步所有 Worker 的基因组数据
+
+        用于初始化 Worker 进程的种群，确保与主进程同步。
+
+        Args:
+            genomes_list: 每个 Worker 的基因组数据列表（NumPy 格式）
+        """
+        # 发送 set_genomes 命令
+        for i, genome_data in enumerate(genomes_list):
+            self.cmd_queues[i].put(("set_genomes", genome_data))
+
+        # 等待所有 Worker 完成
+        for _ in range(self.num_workers):
+            worker_id, result = self.result_queue.get()
+            if result != "ok":
+                raise RuntimeError(f"Worker {worker_id} set_genomes failed: {result}")
+
+    def evolve_all_return_params(
+        self,
+        fitnesses_list: list[np.ndarray],
+    ) -> list[tuple[
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],  # genome_data
+        tuple[np.ndarray, ...],  # network_params_data (11 arrays)
+    ]]:
+        """并行进化所有 Worker 的种群，返回基因组数据和网络参数
+
+        相比 evolve_all()，此方法在 Worker 进程中直接提取网络参数，
+        主进程可以直接使用网络参数重建网络，避免从基因组重建的开销。
+
+        Args:
+            fitnesses_list: 每个 Worker 的适应度数组列表
+
+        Returns:
+            每个 Worker 的 (genome_data, network_params_data) 列表
+            - genome_data: (keys, fitnesses, metadata, nodes, conns)
+            - network_params_data: 11个数组的元组
+        """
+        # 发送进化命令
+        for i, fitnesses in enumerate(fitnesses_list):
+            self.cmd_queues[i].put(("evolve_return_params", fitnesses))
+
+        # 收集结果
+        results: dict[int, tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]] = {}
+        for _ in range(self.num_workers):
+            worker_id, result = self.result_queue.get()
+            if result[0] == "success_params":
+                # result = ("success_params", genome_data, network_params_data)
+                results[worker_id] = (result[1], result[2])
+            elif result[0] == "error":
+                raise RuntimeError(f"Worker {worker_id} evolve failed: {result[1]}")
+            else:
+                raise RuntimeError(f"Worker {worker_id} unexpected result: {result}")
+
+        # 按 Worker ID 排序返回
+        return [results[i] for i in range(self.num_workers)]
+
+    def shutdown(self) -> None:
+        """关闭所有 Worker"""
+        for i in range(self.num_workers):
+            try:
+                self.cmd_queues[i].put(("shutdown", None))
+            except Exception:
+                pass
+
+        for p in self.workers:
+            p.join(timeout=5.0)
+            if p.is_alive():
+                p.terminate()
 
 
 def malloc_trim() -> None:
@@ -75,6 +937,7 @@ class Population:
         agents: Agent 列表
         neat_pop: NEAT 种群对象
         neat_config: NEAT 配置
+        neat_config_path: NEAT 配置文件路径（用于并行进化时在子进程中重新加载）
         agent_config: Agent 配置
         generation: 当前代数
         logger: 日志器
@@ -84,6 +947,7 @@ class Population:
     agents: list[Agent]
     neat_pop: neat.Population
     neat_config: neat.Config
+    neat_config_path: str  # NEAT 配置文件路径
     agent_config: AgentConfig
     generation: int
     logger: logging.Logger
@@ -137,13 +1001,16 @@ class Population:
         else:
             neat_config_path = config_dir / "neat_retail.cfg"
 
+        # 保存 NEAT 配置文件路径（用于并行进化时在子进程中重新加载）
+        self.neat_config_path = str(neat_config_path)
+
         # 加载 NEAT 配置
         self.neat_config = neat.Config(
             neat.DefaultGenome,
             neat.DefaultReproduction,
             neat.DefaultSpeciesSet,
             neat.DefaultStagnation,
-            str(neat_config_path),
+            self.neat_config_path,
         )
 
         # 动态设置 pop_size 为 AgentConfig.count
@@ -1019,6 +1886,8 @@ class RetailSubPopulationManager:
         agents_per_sub: 每个子种群的Agent数量
         agent_type: Agent类型（固定为RETAIL）
         logger: 日志器
+        _pending_genome_data: 待反序列化的基因组数据（延迟反序列化用）
+        _genomes_dirty: 标记基因组是否需要同步
     """
 
     sub_populations: list[Population]
@@ -1026,6 +1895,8 @@ class RetailSubPopulationManager:
     agents_per_sub: int
     agent_type: AgentType
     logger: logging.Logger
+    _pending_genome_data: list[tuple[np.ndarray, ...]] | None
+    _genomes_dirty: bool
 
     def __init__(self, config: Config, sub_count: int = 10) -> None:
         """创建子种群管理器
@@ -1065,6 +1936,10 @@ class RetailSubPopulationManager:
             pop.agents = pop.create_agents(genomes)
 
             self.sub_populations.append(pop)
+
+        # 延迟反序列化相关
+        self._pending_genome_data = None
+        self._genomes_dirty = False
 
         self.logger.info(
             f"创建散户子种群管理器: {sub_count} 个子种群，每个 {self.agents_per_sub} 个Agent"
@@ -1137,30 +2012,268 @@ class RetailSubPopulationManager:
             pop.evolve(current_price)
 
     def evolve_parallel(self, current_price: float, max_workers: int = 10) -> None:
-        """并行进化所有子种群
+        """并行进化所有子种群（NumPy 格式）
 
-        当前实现使用串行进化。原因：
-        1. ProcessPoolExecutor 需要序列化 NEAT 种群对象，开销巨大
-        2. 即使使用轻量级序列化（只传输基因组数据），
-           主进程的反序列化和重建开销仍然很大（约 20s）
-        3. ThreadPoolExecutor 受 GIL 限制，无法真正并行
+        使用 NumPy 结构化数组序列化，显著减少序列化开销。
 
-        保留此接口以便未来使用更高效的方案：
-        - Cython nogil 实现 NEAT 进化核心逻辑
-        - Rust PyO3 扩展
-        - 多竞技场分布式进化（已实现）
+        实现原理：
+        1. 在主进程中评估所有子种群的适应度
+        2. 将基因组数据序列化为 NumPy 紧凑格式
+        3. 使用 ProcessPoolExecutor 并行进化各子种群
+        4. 子进程中重建 NEAT Population 并执行一代进化
+        5. 将新基因组以 NumPy 格式返回主进程
+        6. 主进程重建种群并更新 Agent Brain
 
         Args:
             current_price: 当前价格（用于计算适应度）
-            max_workers: 最大并行进程数（未使用）
+            max_workers: 最大并行进程数
         """
-        # 直接调用串行进化
-        for pop in self.sub_populations:
-            pop.evolve(current_price)
+        import pickle
+        import time
+        start_time = time.perf_counter()
 
-        self.logger.debug(
-            f"散户子种群进化完成，共 {len(self.sub_populations)} 个子种群"
+        # 1. 评估所有子种群的适应度
+        for pop in self.sub_populations:
+            agent_fitnesses = pop.evaluate(current_price)
+            for agent, fitness in agent_fitnesses:
+                genome = agent.brain.get_genome()
+                genome.fitness = fitness
+
+        eval_time = time.perf_counter() - start_time
+
+        # 2. 准备 NumPy 格式进化参数
+        evolve_args: list[tuple[str, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int]] = []
+        total_serialize_size = 0
+
+        for pop in self.sub_populations:
+            # 序列化基因组数据（NumPy 格式）
+            keys, fitnesses, metadata, nodes, conns = _serialize_genomes_numpy(pop.neat_pop.population)
+
+            # 统计序列化大小
+            arg_tuple = (
+                pop.neat_config_path,
+                keys, fitnesses, metadata, nodes, conns,
+                len(pop.agents),
+                pop.generation,
+            )
+            total_serialize_size += len(pickle.dumps(arg_tuple))
+            evolve_args.append(arg_tuple)
+
+        serialize_time = time.perf_counter() - start_time - eval_time
+
+        # 3. 并行进化
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(_evolve_subpop_numpy, evolve_args))
+
+        parallel_time = time.perf_counter() - start_time - eval_time - serialize_time
+
+        # 4. 更新子种群
+        for i, result in enumerate(results):
+            pop = self.sub_populations[i]
+            new_keys, new_fitnesses, new_metadata, new_nodes, new_conns = result
+
+            # 保存旧基因组用于清理
+            old_genomes = list(pop.neat_pop.population.values())
+
+            # 重建种群（NumPy 格式）
+            pop.neat_pop.population = _deserialize_genomes_numpy(
+                new_keys, new_fitnesses, new_metadata, new_nodes, new_conns,
+                pop.neat_config.genome_config
+            )
+
+            # 更新 generation
+            pop.generation += 1
+
+            # 清理旧基因组
+            new_genome_ids = set(pop.neat_pop.population.keys())
+            old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+            pop._cleanup_genome_internals(old_to_clean)
+
+            # 清理 NEAT 历史
+            pop._cleanup_neat_history()
+
+            # 更新 Agent Brain
+            new_genomes = list(pop.neat_pop.population.items())
+            for idx, (gid, genome) in enumerate(new_genomes):
+                if idx < len(pop.agents):
+                    pop.agents[idx].update_brain(genome, pop.neat_config)
+
+        update_time = time.perf_counter() - start_time - eval_time - serialize_time - parallel_time
+        total_time = time.perf_counter() - start_time
+
+        self.logger.info(
+            f"散户子种群并行进化完成，共 {len(self.sub_populations)} 个子种群，"
+            f"序列化大小: {total_serialize_size / 1024 / 1024:.2f} MB，"
+            f"耗时: eval={eval_time:.2f}s, serialize={serialize_time:.2f}s, "
+            f"parallel={parallel_time:.2f}s, update={update_time:.2f}s, total={total_time:.2f}s"
         )
+
+    def evolve_parallel_with_network_params(
+        self,
+        current_price: float,
+        worker_pool: PersistentWorkerPool,
+        sync_genomes: bool = False,
+        deserialize_genomes: bool = False,
+    ) -> None:
+        """使用 PersistentWorkerPool 并行进化，直接传输网络参数
+
+        相比 evolve_parallel()，此方法有以下优势：
+        1. Worker 进程持久化，避免每次创建新进程的开销
+        2. 只传输适应度数组（~40KB），不传输基因组数据（~25MB）
+        3. 返回网络参数，主进程直接使用参数重建网络，跳过基因组解析
+        4. 延迟反序列化：默认不反序列化基因组，只在需要时（检查点/迁移）反序列化
+
+        Args:
+            current_price: 当前价格（用于计算适应度）
+            worker_pool: 持久 Worker 进程池
+            sync_genomes: 是否在进化前同步基因组（首次调用时需设为 True）
+            deserialize_genomes: 是否反序列化基因组（检查点保存时设为 True）
+        """
+        import time
+        start_time = time.perf_counter()
+        sync_time = 0.0
+
+        # 0. 如果需要，先同步基因组到 Worker
+        if sync_genomes:
+            genomes_list: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+            for pop in self.sub_populations:
+                genome_data = _serialize_genomes_numpy(pop.neat_pop.population)
+                genomes_list.append(genome_data)
+            worker_pool.set_all_genomes(genomes_list)
+            sync_time = time.perf_counter() - start_time
+            self.logger.info(f"同步基因组到 Worker 完成，耗时: {sync_time:.2f}s")
+
+        # 1. 评估所有子种群的适应度，构建适应度数组列表
+        fitnesses_list: list[np.ndarray] = []
+        for pop in self.sub_populations:
+            # 先评估获取每个 agent 的适应度
+            agent_fitnesses = pop.evaluate(current_price)
+            fitness_dict = {agent.agent_id: fitness for agent, fitness in agent_fitnesses}
+
+            # 构建适应度数组（按 agent 顺序）
+            fitness_arr = np.empty(len(pop.agents), dtype=np.float32)
+            for idx, agent in enumerate(pop.agents):
+                fitness = fitness_dict.get(agent.agent_id, 0.0)
+                fitness_arr[idx] = fitness
+            fitnesses_list.append(fitness_arr)
+
+        eval_time = time.perf_counter() - start_time - sync_time
+
+        # 2. 并行进化，返回基因组数据和网络参数
+        results = worker_pool.evolve_all_return_params(fitnesses_list)
+        evolve_time = time.perf_counter() - start_time - sync_time - eval_time
+
+        # 3. 更新子种群
+        update_start = time.perf_counter()
+
+        # 存储待反序列化的基因组数据
+        pending_genome_data: list[tuple[np.ndarray, ...]] = []
+
+        for i, (genome_data, network_params_data) in enumerate(results):
+            pop = self.sub_populations[i]
+
+            # 更新 generation
+            pop.generation += 1
+
+            if deserialize_genomes:
+                # 完整反序列化：重建 NEAT 种群
+                old_genomes = list(pop.neat_pop.population.values())
+
+                new_keys, new_fitnesses, new_metadata, new_nodes, new_conns = genome_data
+                pop.neat_pop.population = _deserialize_genomes_numpy(
+                    new_keys, new_fitnesses, new_metadata, new_nodes, new_conns,
+                    pop.neat_config.genome_config
+                )
+
+                # 清理旧基因组
+                new_genome_ids = set(pop.neat_pop.population.keys())
+                old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+                pop._cleanup_genome_internals(old_to_clean)
+
+                # 清理 NEAT 历史
+                pop._cleanup_neat_history()
+
+                # 解包网络参数并更新 Brain（包含 genome 引用）
+                params_list = _unpack_network_params_numpy(*network_params_data)
+                new_genomes = list(pop.neat_pop.population.items())
+                for idx, (gid, genome) in enumerate(new_genomes):
+                    if idx < len(pop.agents) and idx < len(params_list):
+                        pop.agents[idx].brain.update_from_network_params(
+                            genome, params_list[idx]
+                        )
+            else:
+                # 延迟反序列化：只更新网络，不更新基因组
+                pending_genome_data.append(genome_data)
+
+                # 解包网络参数并只更新网络（不更新 genome 引用）
+                params_list = _unpack_network_params_numpy(*network_params_data)
+                for idx, params in enumerate(params_list):
+                    if idx < len(pop.agents):
+                        pop.agents[idx].brain.update_network_only(params)
+
+        # 存储待反序列化数据
+        if not deserialize_genomes:
+            self._pending_genome_data = pending_genome_data
+            self._genomes_dirty = True
+        else:
+            self._pending_genome_data = None
+            self._genomes_dirty = False
+
+        update_time = time.perf_counter() - update_start
+        total_time = time.perf_counter() - start_time
+
+        mode = "完整" if deserialize_genomes else "延迟"
+        self.logger.info(
+            f"散户子种群网络参数并行进化完成（{mode}反序列化），"
+            f"共 {len(self.sub_populations)} 个子种群，"
+            f"耗时: sync={sync_time:.2f}s, eval={eval_time:.2f}s, evolve={evolve_time:.2f}s, "
+            f"update={update_time:.2f}s, total={total_time:.2f}s"
+        )
+
+    def sync_genomes_from_pending(self) -> None:
+        """从待处理数据同步基因组（延迟反序列化）
+
+        当需要保存检查点或迁移时调用此方法，将待处理的基因组数据
+        反序列化到主进程的 NEAT 种群中。
+        """
+        if not self._genomes_dirty or self._pending_genome_data is None:
+            return
+
+        import time
+        start_time = time.perf_counter()
+
+        for i, genome_data in enumerate(self._pending_genome_data):
+            pop = self.sub_populations[i]
+
+            # 保存旧基因组用于清理
+            old_genomes = list(pop.neat_pop.population.values())
+
+            # 反序列化基因组
+            new_keys, new_fitnesses, new_metadata, new_nodes, new_conns = genome_data
+            pop.neat_pop.population = _deserialize_genomes_numpy(
+                new_keys, new_fitnesses, new_metadata, new_nodes, new_conns,
+                pop.neat_config.genome_config
+            )
+
+            # 清理旧基因组
+            new_genome_ids = set(pop.neat_pop.population.keys())
+            old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+            pop._cleanup_genome_internals(old_to_clean)
+
+            # 清理 NEAT 历史
+            pop._cleanup_neat_history()
+
+            # 更新 Agent Brain 的 genome 引用
+            new_genomes = list(pop.neat_pop.population.items())
+            for idx, (gid, genome) in enumerate(new_genomes):
+                if idx < len(pop.agents):
+                    pop.agents[idx].brain.genome = genome
+
+        self._pending_genome_data = None
+        self._genomes_dirty = False
+
+        elapsed = time.perf_counter() - start_time
+        self.logger.info(f"延迟反序列化基因组完成，耗时: {elapsed:.2f}s")
 
     def evolve_with_cached_fitness(self) -> bool:
         """使用缓存的适应度进化所有子种群

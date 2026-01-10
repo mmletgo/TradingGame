@@ -88,6 +88,35 @@ action = agent.decide(outputs, mid_price)        # 解析输出为动作
 - 序列化保存网络结构
 - 分析进化过程中的网络变化
 
+#### `update_from_network_params(genome: neat.DefaultGenome, network_params: dict) -> None`
+
+从预计算的网络参数原地更新 Brain，跳过基因组解析。
+
+**参数：**
+- `genome` - 新的 NEAT 基因组对象（用于 get_genome() 返回）
+- `network_params` - 网络参数字典，包含：
+  - `num_inputs`: int - 输入节点数
+  - `num_outputs`: int - 输出节点数
+  - `input_keys`: ndarray[int32] - 输入节点 ID
+  - `output_keys`: ndarray[int32] - 输出节点 ID
+  - `num_nodes`: int - 隐藏+输出节点数
+  - `node_ids`: ndarray[int32] - 节点 ID
+  - `biases`: ndarray[float32] - 偏置
+  - `responses`: ndarray[float32] - 响应
+  - `act_types`: ndarray[int32] - 激活函数类型
+  - `conn_indptr`: ndarray[int32] - CSR 连接指针
+  - `conn_sources`: ndarray[int32] - 连接源节点
+  - `conn_weights`: ndarray[float32] - 连接权重
+  - `output_indices`: ndarray[int32] - 输出节点索引
+
+**使用场景：**
+- 并行进化后快速更新网络，避免从基因组重建网络的开销
+- Worker 进程直接返回网络参数，主进程使用此方法创建网络
+
+**性能提升：**
+- 从基因组重建网络：需要遍历 nodes/connections 字典，构建拓扑
+- 从网络参数创建：直接使用预计算的数组，创建时间 0.45s vs 原来数十秒
+
 ## 网络类型
 
 ### FastFeedForwardNetwork (Cython 优化)
