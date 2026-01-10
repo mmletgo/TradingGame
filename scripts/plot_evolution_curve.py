@@ -52,20 +52,24 @@ SPECIES_NAMES: dict[AgentType, str] = {
 }
 
 
-def load_baseline_results(results_dir: str) -> dict[int, dict[AgentType, float]]:
+def load_baseline_results(
+    results_dir: str,
+) -> tuple[dict[int, dict[AgentType, float]], int | None]:
     """加载所有基准测试结果
 
     Args:
         results_dir: 测试结果目录
 
     Returns:
-        {generation: {AgentType: avg_return_rate}}
+        ({generation: {AgentType: avg_fitness}}, episodes_per_run)
+        episodes_per_run 为 None 表示数据中不存在该字段
     """
     baseline_dir = Path(results_dir) / "baseline"
     results: dict[int, dict[AgentType, float]] = {}
+    episodes_per_run: int | None = None
 
     if not baseline_dir.exists():
-        return results
+        return results, episodes_per_run
 
     for pkl_file in baseline_dir.glob("gen_*.pkl"):
         # 解析文件名：gen_{N}.pkl
@@ -79,13 +83,17 @@ def load_baseline_results(results_dir: str) -> dict[int, dict[AgentType, float]]
             with open(pkl_file, "rb") as f:
                 data = pickle.load(f)
 
+            # 尝试提取 episodes_per_run（只需读取一次）
+            if episodes_per_run is None:
+                episodes_per_run = data.get("episodes_per_run")
+
             species_summary = data.get("species_summary", {})
             gen_results: dict[AgentType, float] = {}
 
             for agent_type in AgentType:
                 species_data = species_summary.get(agent_type, {})
-                avg_return_rate = species_data.get("avg_return_rate", 0.0)
-                gen_results[agent_type] = avg_return_rate
+                avg_fitness = species_data.get("avg_fitness", 0.0)
+                gen_results[agent_type] = avg_fitness
 
             results[generation] = gen_results
 
@@ -93,7 +101,7 @@ def load_baseline_results(results_dir: str) -> dict[int, dict[AgentType, float]]
             print(f"加载 {pkl_file} 失败: {e}")
             continue
 
-    return results
+    return results, episodes_per_run
 
 
 def load_comparison_results(
@@ -121,7 +129,7 @@ def load_comparison_results(
             continue
 
         generation = int(match.group(1))
-        base_generation = int(match.group(2))
+        _base_generation = int(match.group(2))  # 提取但不使用，仅用于文件名解析
         species_name = match.group(3)
 
         # 找到对应的 AgentType
@@ -147,19 +155,19 @@ def load_comparison_results(
             with open(baseline_file, "rb") as f:
                 baseline_data = pickle.load(f)
 
-            # 获取该物种的收益率
+            # 获取该物种的适应度
             baseline_species = baseline_data.get("species_summary", {}).get(agent_type, {})
             comparison_species = comparison_data.get("species_summary", {}).get(agent_type, {})
 
-            baseline_return = baseline_species.get("avg_return_rate", 0.0)
-            comparison_return = comparison_species.get("avg_return_rate", 0.0)
+            baseline_fitness = baseline_species.get("avg_fitness", 0.0)
+            comparison_fitness = comparison_species.get("avg_fitness", 0.0)
 
             if generation not in results:
                 results[generation] = {}
 
             results[generation][agent_type] = {
-                "baseline_return": baseline_return,
-                "comparison_return": comparison_return,
+                "baseline_fitness": baseline_fitness,
+                "comparison_fitness": comparison_fitness,
             }
 
         except Exception as e:
@@ -185,14 +193,14 @@ def calculate_relative_improvement(
     for generation, species_data in comparison_results.items():
         improvements[generation] = {}
 
-        for agent_type, returns in species_data.items():
-            baseline_return = returns["baseline_return"]
-            comparison_return = returns["comparison_return"]
+        for agent_type, fitness_data in species_data.items():
+            baseline_fitness = fitness_data["baseline_fitness"]
+            comparison_fitness = fitness_data["comparison_fitness"]
 
             # 计算相对改善百分比
-            improvement = comparison_return - baseline_return
-            if abs(baseline_return) > 0.001:
-                relative_improvement = improvement / abs(baseline_return) * 100
+            improvement = comparison_fitness - baseline_fitness
+            if abs(baseline_fitness) > 0.001:
+                relative_improvement = improvement / abs(baseline_fitness) * 100
             else:
                 relative_improvement = 100.0 if improvement > 0 else 0.0
 
@@ -326,6 +334,7 @@ def plot_evolution_curves(
     combined: dict[int, float],
     output_path: str,
     verbose: bool = False,
+    episodes_per_run: int | None = None,
 ) -> str:
     """绘制进化曲线图
 
@@ -334,6 +343,7 @@ def plot_evolution_curves(
         combined: 综合进化值
         output_path: 输出路径
         verbose: 是否显示详细信息
+        episodes_per_run: 每代测试的 episode 数量
 
     Returns:
         保存的文件路径
@@ -404,7 +414,12 @@ def plot_evolution_curves(
     # 设置图表属性
     ax.set_xlabel("代数 (Generation)", fontsize=12)
     ax.set_ylabel("累积进化值 (以第 1 代为 1.0)", fontsize=12)
-    ax.set_title("进化曲线图 - 各物种相对于第 1 代的累积进化效果", fontsize=14)
+
+    # 构建标题，如果 episodes_per_run > 1 则添加说明
+    title = "进化曲线图 - 各物种相对于第 1 代的累积进化效果"
+    if episodes_per_run is not None and episodes_per_run > 1:
+        title += f"（每代测试 {episodes_per_run} 个 episode）"
+    ax.set_title(title, fontsize=14)
 
     # 设置网格
     ax.grid(True, linestyle="-", alpha=0.3)
@@ -437,9 +452,17 @@ def plot_evolution_curves(
 def print_summary(
     cumulative: dict[AgentType, dict[int, float]],
     combined: dict[int, float],
-    improvements: dict[int, dict[AgentType, float]],
+    _improvements: dict[int, dict[AgentType, float]],
+    episodes_per_run: int | None = None,
 ) -> None:
-    """打印进化摘要"""
+    """打印进化摘要
+
+    Args:
+        cumulative: 各物种的累积进化值
+        combined: 综合进化值
+        _improvements: 各代各物种的改善百分比（保留参数，未来可能用于详细输出）
+        episodes_per_run: 每代测试的 episode 数量
+    """
     if not cumulative or not combined:
         print("没有可用的数据")
         return
@@ -453,6 +476,10 @@ def print_summary(
     print("=" * 64)
 
     print(f"\n代数范围: 第 {min_gen} 代 ~ 第 {max_gen} 代 (共 {len(generations)} 代)")
+
+    # 显示 episodes_per_run 信息
+    if episodes_per_run is not None:
+        print(f"每代测试 episode 数: {episodes_per_run}")
 
     print(f"\n最终累积进化值 (第 {max_gen} 代):")
     for agent_type in AgentType:
@@ -512,7 +539,7 @@ def main() -> None:
     # 加载数据
     if args.verbose:
         print("加载基准测试结果...")
-    baseline_results = load_baseline_results(args.results_dir)
+    baseline_results, episodes_per_run = load_baseline_results(args.results_dir)
 
     if args.verbose:
         print("加载比较测试结果...")
@@ -541,7 +568,7 @@ def main() -> None:
     combined = calculate_combined_evolution(cumulative)
 
     # 打印摘要
-    print_summary(cumulative, combined, improvements)
+    print_summary(cumulative, combined, improvements, episodes_per_run)
 
     # 绘制图表
     if args.verbose:
@@ -551,6 +578,7 @@ def main() -> None:
         combined,
         args.output,
         args.verbose,
+        episodes_per_run,
     )
 
     if output_path:

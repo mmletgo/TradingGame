@@ -206,13 +206,14 @@ Agent 类型中文名称映射：
 
 返回：Agent 列表
 
-#### `run_baseline_test(generation, num_runs, episode_length, force) -> dict`
+#### `run_baseline_test(generation, num_runs, episode_length, episodes_per_run, force) -> dict`
 基准测试：使用第 N 代 4 个物种的 best_genome 竞技。
 
 参数：
 - `generation: int` - 代数
 - `num_runs: int` - 运行次数（默认 3）
-- `episode_length: int` - episode 长度（默认 1000）
+- `episode_length: int` - 每个 episode 的 tick 数量（默认 1000）
+- `episodes_per_run: int` - 每次运行的 episode 数量（默认 10）
 - `force: bool` - 是否强制重新运行（默认 False）
 
 返回格式：
@@ -221,10 +222,11 @@ Agent 类型中文名称映射：
     "test_type": "baseline",
     "generation": int,
     "num_runs": int,
+    "episodes_per_run": int,
     "species_summary": {
         AgentType: {
-            "avg_return_rate": float,
-            "std_return_rate": float,
+            "avg_fitness": float,      # 平均适应度（不同物种计算方式不同）
+            "std_fitness": float,
             "avg_survival_rate": float,
             "std_survival_rate": float,
             "runs": int
@@ -234,6 +236,11 @@ Agent 类型中文名称映射：
 }
 ```
 
+**适应度计算方式：**
+- 散户/高级散户：适应度 = 收益率 = equity / initial_balance
+- 做市商：适应度 = 0.5 × 收益率 + 0.5 × maker_volume 排名归一化
+- 庄家：适应度 = 0.5 × 收益率 + 0.5 × volatility_contribution 排名归一化
+
 #### `run_comparison_test(target_generation, base_generation, target_species, ...) -> dict`
 比较测试：第 N 代某物种 + 第 N-1 代其他物种。
 
@@ -242,18 +249,20 @@ Agent 类型中文名称映射：
 - `base_generation: int` - 基准代数（旧的代）
 - `target_species: AgentType` - 目标物种（使用新代）
 - `num_runs: int` - 运行次数（默认 3）
-- `episode_length: int` - episode 长度（默认 1000）
+- `episode_length: int` - 每个 episode 的 tick 数量（默认 1000）
+- `episodes_per_run: int` - 每次运行的 episode 数量（默认 10）
 - `force: bool` - 是否强制重新运行（默认 False）
 
 返回格式同基准测试，额外包含 `base_generation` 和 `target_species` 字段。
 
-#### `evaluate_evolution_effectiveness(generation, num_runs, episode_length, force) -> dict`
+#### `evaluate_evolution_effectiveness(generation, num_runs, episode_length, episodes_per_run, force) -> dict`
 评估进化有效性（并行运行所有测试）。
 
 参数：
 - `generation: int` - 要评估的代数（N）
 - `num_runs: int` - 每个测试的运行次数（默认 3）
-- `episode_length: int` - 每次运行的 episode 长度（默认 1000）
+- `episode_length: int` - 每个 episode 的 tick 数量（默认 1000）
+- `episodes_per_run: int` - 每次运行的 episode 数量（默认 10）
 - `force: bool` - 是否强制重新运行（默认 False）
 
 返回格式：
@@ -265,11 +274,11 @@ Agent 类型中文名称映射：
     "comparisons": {AgentType: {...}, ...},  # 各物种比较测试结果
     "effectiveness": {
         AgentType: {
-            "baseline_return_rate": float,
-            "comparison_return_rate": float,
-            "absolute_improvement": float,
-            "relative_improvement_pct": float,
-            "is_effective": bool
+            "baseline_fitness": float,      # 基准适应度
+            "comparison_fitness": float,    # 比较测试适应度
+            "absolute_improvement": float,  # 绝对改善
+            "relative_improvement_pct": float,  # 相对改善百分比
+            "is_effective": bool            # 进化是否有效
         },
         ...
     },
@@ -291,8 +300,11 @@ Worker 函数 `_run_single_test_worker(params)` 在独立进程中执行：
 1. 创建 Trainer
 2. 从 genome_data 创建各物种的 Agent 种群
 3. 初始化鲶鱼（如果 config.catfish.enabled=True）
-4. 运行单次 episode（鲶鱼爆仓不结束，物种淘汰到 1/4 时结束）
-5. 收集并返回结果
+4. 运行多个 episode（由 episodes_per_run 参数控制，默认 10）
+   - 每个 episode 前重置 Agent 和市场状态
+   - 鲶鱼爆仓不结束 episode，物种淘汰到 1/4 时结束
+5. 每个 episode 结束时调用 `population.evaluate()` 计算各物种的适应度
+6. 汇总多个 episode 的平均适应度和存活率并返回结果
 
 **鲶鱼机制：**
 - 测试默认启用鲶鱼，可通过 `--no-catfish` 参数禁用
@@ -336,10 +348,12 @@ tester = EvolutionTester(
 )
 
 # 评估第 10 代的进化有效性
+# 每次运行执行 10 个 episode，取平均表现
 report = tester.evaluate_evolution_effectiveness(
     generation=10,
     num_runs=3,
-    episode_length=1000
+    episode_length=1000,
+    episodes_per_run=10  # 每次运行 10 个 episode
 )
 
 # 查看结果

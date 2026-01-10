@@ -18,6 +18,9 @@
 
     # 指定测试参数
     python scripts/test_evolution.py --num-runs 5 --episode-length 2000
+
+    # 指定每次测试运行的 episode 数量（应与训练时的 evolution_interval 一致）
+    python scripts/test_evolution.py --episodes-per-run 10
 """
 
 import argparse
@@ -55,7 +58,7 @@ def get_chinese_name(agent_type: AgentType) -> str:
 def check_test_status(
     generation: int,
     results_dir: str,
-) -> dict[str, bool]:
+) -> dict[str, bool | dict[str, bool]]:
     """检查某代的测试完成状态
 
     Args:
@@ -173,8 +176,13 @@ def list_generations_with_status(
                 completed_count += 1
             elif status["baseline"]:
                 # 部分完成
-                done_comparisons = sum(1 for v in status["comparisons"].values() if v)
-                total_comparisons = len(status["comparisons"])
+                comparisons = status["comparisons"]
+                if isinstance(comparisons, dict):
+                    done_comparisons = sum(1 for v in comparisons.values() if v)
+                    total_comparisons = len(comparisons)
+                else:
+                    done_comparisons = 0
+                    total_comparisons = 0
                 status_str = f"◐ 部分完成 ({done_comparisons}/{total_comparisons})"
                 pending_count += 1
             else:
@@ -207,13 +215,13 @@ def print_baseline_result(result: dict[str, Any], verbose: bool = True) -> None:
             continue
 
         chinese_name = get_chinese_name(agent_type)
-        avg_return = data.get("avg_return_rate", 0.0) * 100
-        std_return = data.get("std_return_rate", 0.0) * 100
+        avg_fitness = data.get("avg_fitness", 0.0)
+        std_fitness = data.get("std_fitness", 0.0)
         survival_rate = data.get("avg_survival_rate", 0.0) * 100
 
         if verbose:
             print(
-                f"  {chinese_name:<8} 平均收益率: {avg_return:+6.1f}% (±{std_return:.1f}%)  "
+                f"  {chinese_name:<8} 平均适应度: {avg_fitness:+.4f} (±{std_fitness:.4f})  "
                 f"存活率: {survival_rate:.1f}%"
             )
 
@@ -244,8 +252,8 @@ def print_evaluation_result(result: dict[str, Any], verbose: bool = True) -> Non
             continue
 
         chinese_name = get_chinese_name(agent_type)
-        baseline_return = eff.get("baseline_return_rate", 0.0) * 100
-        comparison_return = eff.get("comparison_return_rate", 0.0) * 100
+        baseline_fitness = eff.get("baseline_fitness", 0.0)
+        comparison_fitness = eff.get("comparison_fitness", 0.0)
         relative_improvement = eff.get("relative_improvement_pct", 0.0)
         is_effective = eff.get("is_effective", False)
 
@@ -254,8 +262,8 @@ def print_evaluation_result(result: dict[str, Any], verbose: bool = True) -> Non
 
         if verbose:
             print(
-                f"  {chinese_name:<8} 收益率: {comparison_return:+6.1f}% "
-                f"(基准: {baseline_return:+6.1f}%)  "
+                f"  {chinese_name:<8} 适应度: {comparison_fitness:+.4f} "
+                f"(基准: {baseline_fitness:+.4f})  "
                 f"变化: {relative_improvement:+6.1f}%  {symbol} {status}"
             )
 
@@ -273,6 +281,7 @@ def test_single_generation(
     generation: int,
     num_runs: int,
     episode_length: int,
+    episodes_per_run: int,
     force: bool,
     verbose: bool = True,
 ) -> dict[str, Any] | None:
@@ -283,6 +292,7 @@ def test_single_generation(
         generation: 代数
         num_runs: 测试运行次数
         episode_length: 每次测试的 tick 数
+        episodes_per_run: 每次测试运行的 episode 数量
         force: 是否强制重新运行
         verbose: 是否详细输出
 
@@ -300,6 +310,7 @@ def test_single_generation(
             generation=generation,
             num_runs=num_runs,
             episode_length=episode_length,
+            episodes_per_run=episodes_per_run,
             force=force,
         )
         if verbose:
@@ -311,6 +322,7 @@ def test_single_generation(
             generation=generation,
             num_runs=num_runs,
             episode_length=episode_length,
+            episodes_per_run=episodes_per_run,
             force=force,
         )
         if verbose:
@@ -327,6 +339,7 @@ def test_all_pending_generations(
     pending_generations: list[int],
     num_runs: int,
     episode_length: int,
+    episodes_per_run: int,
     force: bool,
 ) -> None:
     """测试所有待测试的代
@@ -336,6 +349,7 @@ def test_all_pending_generations(
         pending_generations: 待测试的代列表
         num_runs: 测试运行次数
         episode_length: 每次测试的 tick 数
+        episodes_per_run: 每次测试运行的 episode 数量
         force: 是否强制重新运行
     """
     total = len(pending_generations)
@@ -357,6 +371,7 @@ def test_all_pending_generations(
                 generation=generation,
                 num_runs=num_runs,
                 episode_length=episode_length,
+                episodes_per_run=episodes_per_run,
                 force=force,
                 verbose=True,
             )
@@ -402,6 +417,12 @@ def main() -> None:
         type=int,
         default=1000,
         help="每次测试的 tick 数（默认: 1000）",
+    )
+    parser.add_argument(
+        "--episodes-per-run",
+        type=int,
+        default=10,
+        help="每次测试运行的 episode 数量（默认: 10，应与训练时的 evolution_interval 一致）",
     )
     parser.add_argument(
         "--list",
@@ -484,6 +505,7 @@ def main() -> None:
         print("鲶鱼机制: 已启用")
     else:
         print("鲶鱼机制: 已禁用")
+    print(f"每次测试运行的 episode 数量: {args.episodes_per_run}")
 
     # 创建测试器
     tester = EvolutionTester(
@@ -504,6 +526,7 @@ def main() -> None:
             generation=args.generation,
             num_runs=args.num_runs,
             episode_length=args.episode_length,
+            episodes_per_run=args.episodes_per_run,
             force=args.force,
             verbose=True,
         )
@@ -530,6 +553,7 @@ def main() -> None:
             pending_generations=pending,
             num_runs=args.num_runs,
             episode_length=args.episode_length,
+            episodes_per_run=args.episodes_per_run,
             force=args.force,
         )
 

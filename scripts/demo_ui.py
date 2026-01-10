@@ -36,7 +36,7 @@ from src.training.checkpoint_loader import CheckpointLoader
 from src.ui.demo_app import DemoUIApp
 from src.analysis.demo_analyzer import DemoAnalyzer
 
-from create_config import create_default_config
+from scripts.create_config import create_default_config
 
 
 def main() -> None:
