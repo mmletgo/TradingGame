@@ -48,7 +48,12 @@ from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.training.fast_math import log_normalize_signed, log_normalize_unsigned
-from src.training.population import Population, RetailSubPopulationManager, malloc_trim
+from src.training.population import (
+    PersistentWorkerPool,
+    Population,
+    RetailSubPopulationManager,
+    malloc_trim,
+)
 
 # 缓存类型常量 - 直接在 Python 中定义，避免 Cython 导出问题
 CACHE_TYPE_RETAIL = 0
@@ -119,6 +124,8 @@ class Trainer:
     _episode_low_price: float  # 当前 episode 最低价
     arena_id: int | None  # 竞技场 ID（多竞技场场景）
     _generation_saver: "GenerationSaver | None"
+    _retail_worker_pool: "PersistentWorkerPool | None"  # RETAIL 子种群的多进程 Worker 池
+    _worker_pool_synced: bool  # Worker 池是否已同步基因组
 
     def __init__(self, config: Config, arena_id: int | None = None) -> None:
         """创建训练器
@@ -188,6 +195,10 @@ class Trainer:
         self._cache_initialized: bool = False
         # 是否使用 OpenMP 决策（可通过配置关闭）
         self.use_openmp_decide: bool = True
+
+        # RETAIL 多进程 Worker 池
+        self._retail_worker_pool: "PersistentWorkerPool | None" = None
+        self._worker_pool_synced: bool = False
 
     def set_generation_saver(self, saver: "GenerationSaver") -> None:
         """设置每代保存器
@@ -534,6 +545,21 @@ class Trainer:
 
         # 初始化网络数据缓存（OpenMP 优化）
         self._init_network_caches()
+
+        # 创建 RETAIL 子种群的多进程 Worker 池
+        retail_manager = self.populations.get(AgentType.RETAIL)
+        if isinstance(retail_manager, RetailSubPopulationManager):
+            self._retail_worker_pool = PersistentWorkerPool(
+                num_workers=retail_manager.sub_population_count,
+                neat_config_path=retail_manager.sub_populations[0].neat_config_path,
+                pop_size=retail_manager.agents_per_sub,
+            )
+            self._worker_pool_synced = False
+            self.logger.info(
+                f"RETAIL 多进程 Worker 池已创建: "
+                f"{retail_manager.sub_population_count} 个 Worker, "
+                f"每个 {retail_manager.agents_per_sub} 个 Agent"
+            )
 
         self.logger.info("训练环境初始化完成")
 
@@ -1054,11 +1080,11 @@ class Trainer:
     def _evolve_populations_parallel(self, current_price: float) -> None:
         """进化所有种群
 
-        对于 RetailSubPopulationManager，使用简化并行进化方法（线程池）。
+        对于 RetailSubPopulationManager，使用多进程并行进化（绕过 GIL）。
         对于其他种群（Population），使用串行进化。
 
         优化策略：
-        1. RETAIL 子种群使用 evolve_parallel_simple 进行线程池并行进化
+        1. RETAIL 子种群使用 evolve_parallel_with_network_params 进行多进程并行进化
         2. 其他种群（RETAIL_PRO/WHALE/MARKET_MAKER）使用普通串行进化
         3. 所有进化完成后统一进行 GC
         """
@@ -1069,8 +1095,20 @@ class Trainer:
         for agent_type, pop in self.populations.items():
             try:
                 if isinstance(pop, RetailSubPopulationManager):
-                    # RETAIL 子种群使用简化并行进化
-                    pop.evolve_parallel_simple(current_price)
+                    # RETAIL 子种群使用多进程并行进化
+                    if self._retail_worker_pool is not None:
+                        # 首次使用需要同步基因组
+                        sync_genomes = not self._worker_pool_synced
+                        pop.evolve_parallel_with_network_params(
+                            current_price,
+                            worker_pool=self._retail_worker_pool,
+                            sync_genomes=sync_genomes,
+                            deserialize_genomes=False,  # 延迟反序列化
+                        )
+                        self._worker_pool_synced = True
+                    else:
+                        # 无 Worker 池时回退到串行
+                        pop.evolve(current_price)
                 else:
                     # 其他种群使用串行进化
                     pop.evolve(current_price)
@@ -2397,6 +2435,11 @@ class Trainer:
         Args:
             path: 检查点文件路径
         """
+        # 保存检查点前同步基因组（延迟反序列化模式下需要）
+        retail_manager = self.populations.get(AgentType.RETAIL)
+        if isinstance(retail_manager, RetailSubPopulationManager):
+            retail_manager.sync_genomes_from_pending()
+
         checkpoint_path = Path(path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2615,6 +2658,12 @@ class Trainer:
         self.is_running = False
         self.logger.info("训练已停止")
         self._shutdown_executor()
+
+        # 关闭 RETAIL Worker 池
+        if self._retail_worker_pool is not None:
+            self._retail_worker_pool.shutdown()
+            self._retail_worker_pool = None
+            self.logger.info("RETAIL Worker 池已关闭")
 
         # 清理网络数据缓存
         self._network_caches = None
