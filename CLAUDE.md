@@ -29,6 +29,27 @@ python scripts/train_noui.py --episodes 100 --catfish          # 启用鲶鱼机
 python scripts/train_ui.py                                      # 带UI训练
 ```
 
+### 多竞技场并行训练
+```bash
+# 默认：10个竞技场，每个10个episode，无限轮
+python scripts/train_multi_arena.py
+
+# 指定轮数
+python scripts/train_multi_arena.py --rounds 100
+
+# 自定义竞技场数量和episode数
+python scripts/train_multi_arena.py --num-arenas 8 --episodes-per-arena 5 --rounds 200
+
+# 从检查点恢复
+python scripts/train_multi_arena.py --resume checkpoints/multi_arena_gen_50.pkl
+```
+
+**多竞技场特点：**
+- 同时启动多个竞技场进程，使用同一批基因组
+- 所有竞技场完成后汇总适应度（简单平均）
+- 每轮进行一次进化
+- 10竞技场×10episode = 每轮100个样本，提高适应度评估稳定性
+
 ### 演示模式
 ```bash
 python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl           # 加载检查点
@@ -146,7 +167,8 @@ src/
 │   └── agents/     # 四种Agent类型
 ├── training/       # 训练引擎
 │   ├── population.py   # 种群管理
-│   └── trainer.py      # 训练协调器
+│   ├── trainer.py      # 训练协调器
+│   └── arena/          # 多竞技场并行训练模块
 ├── ui/             # DearPyGui可视化
 ├── analysis/       # 演示分析器
 └── config/         # 配置管理
@@ -173,6 +195,7 @@ src/
 | Agent | src/bio/agents/CLAUDE.md | 四种Agent行为与输入输出 |
 | 神经网络 | src/bio/brain/CLAUDE.md | NEAT封装与前向传播 |
 | 训练引擎 | src/training/CLAUDE.md | Episode循环、强平处理 |
+| 多竞技场 | src/training/arena/CLAUDE.md | 并行训练、适应度汇总 |
 | 鲶鱼 | src/market/catfish/CLAUDE.md | 三种模式详解 |
 | ADL | src/market/adl/CLAUDE.md | 自动减仓机制 |
 

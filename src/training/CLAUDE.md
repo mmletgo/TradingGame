@@ -12,6 +12,10 @@
 - `checkpoint_loader.py` - checkpoint 加载器
 - `generation_saver.py` - 每代最佳基因组保存器
 - `fast_math.py` - Numba JIT 加速的数学函数（对数归一化等）
+- `arena/` - 竞技场模块（详见 `arena/CLAUDE.md`）
+  - `__init__.py` - 模块导出
+  - `arena_worker.py` - 竞技场工作进程
+  - `fitness_aggregator.py` - 适应度汇总器
 
 ## 核心类
 
@@ -87,6 +91,45 @@ checkpoint 加载器，用于加载训练检查点。
 - 按 `genome.fitness` 降序排序，取第一个作为 best_genome
 - 使用 pickle 保存到 `{output_dir}/gen_{N}.pkl`
 - 默认输出目录为 `checkpoints/generations`
+
+### FitnessAggregator (arena/fitness_aggregator.py)
+
+适应度汇总器，用于汇总多个竞技场、多个 episode 的适应度数据。
+
+**主要方法：**
+- `aggregate_simple_average(arena_fitnesses, episode_counts)` - 简单加权平均
+
+**汇总公式：**
+```
+avg_fitness = sum(arena_fitness) / total_episodes
+```
+
+其中：
+- `arena_fitness` 是每个竞技场返回的累积适应度（已累加多个 episode）
+- `total_episodes = sum(episode_counts)`
+
+**参数说明：**
+- `arena_fitnesses: list[dict[tuple[AgentType, int], np.ndarray]]` - 每个竞技场返回的适应度累积值
+  - key: `(agent_type, sub_pop_id)` 元组
+  - value: 累积适应度数组，`shape=(pop_size,)`
+- `episode_counts: list[int]` - 每个竞技场运行的 episode 数量
+
+**返回值：**
+- `dict[tuple[AgentType, int], np.ndarray]` - 平均适应度字典
+
+**示例：**
+```python
+# 假设有2个竞技场，每个运行了10个episode
+arena_fitnesses = [
+    {(AgentType.RETAIL, 0): np.array([10.0, 20.0, 30.0])},  # 竞技场0累积值
+    {(AgentType.RETAIL, 0): np.array([20.0, 30.0, 40.0])},  # 竞技场1累积值
+]
+episode_counts = [10, 10]
+
+# 结果：(10 + 20) / 20 = 1.5, (20 + 30) / 20 = 2.5, (30 + 40) / 20 = 3.5
+result = FitnessAggregator.aggregate_simple_average(arena_fitnesses, episode_counts)
+# result = {(AgentType.RETAIL, 0): np.array([1.5, 2.5, 3.5])}
+```
 
 ### Population (population.py)
 
