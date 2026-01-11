@@ -34,7 +34,6 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.core.log_engine.logger import setup_logging
-from src.training.generation_saver import GenerationSaver
 from src.training.trainer import Trainer
 
 
@@ -173,10 +172,6 @@ def main() -> None:
 
     # 创建训练器
     trainer = Trainer(config)
-
-    # 设置每代保存器
-    generation_saver = GenerationSaver(output_dir="checkpoints/generations")
-    trainer.set_generation_saver(generation_saver)
 
     # 初始化
     print("初始化训练环境...")
