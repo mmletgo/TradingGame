@@ -8,12 +8,137 @@
 
 - `__init__.py` - 模块导出
 - `arena_pool.py` - 竞技场进程池管理
+- `arena_state.py` - 竞技场状态类（AgentAccountState、CatfishAccountState、ArenaState）
 - `arena_worker.py` - 竞技场工作进程
 - `fitness_aggregator.py` - 适应度汇总器
 - `multi_arena_trainer.py` - 多竞技场训练协调器（多进程并行）
 - `single_arena_trainer.py` - 单进程多竞技场训练器（串行执行，OpenMP 并行）
 
 ## 核心类和函数
+
+### AgentAccountState (arena_state.py)
+
+Agent 账户状态类，用于多竞技场并行推理架构。将 Agent 账户状态与 Agent 对象解耦，每个竞技场维护独立副本。
+
+**类定义：**
+```python
+@dataclass
+class AgentAccountState:
+    """Agent 账户状态（轻量级，约 200 bytes）"""
+    agent_id: int
+    agent_type: AgentType
+    balance: float
+    position_quantity: int
+    position_avg_price: float
+    realized_pnl: float
+    leverage: float
+    maintenance_margin_rate: float
+    initial_balance: float
+    pending_order_id: int | None
+    maker_volume: int
+    volatility_contribution: float
+    is_liquidated: bool
+    order_counter: int
+    maker_fee_rate: float
+    taker_fee_rate: float
+```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `from_agent(agent)` | 类方法，从 Agent 对象创建状态副本 |
+| `reset(config)` | 重置到初始状态 |
+| `get_equity(current_price)` | 计算净值（余额 + 浮动盈亏） |
+| `get_margin_ratio(current_price)` | 计算保证金率 |
+| `check_liquidation(current_price)` | 检查是否需要强平 |
+| `on_trade(trade_price, trade_quantity, is_buyer, fee, is_maker)` | 处理成交，返回已实现盈亏 |
+| `generate_order_id(arena_id)` | 生成跨竞技场唯一的订单 ID |
+
+**持仓更新逻辑（_update_position）：**
+- 空仓开仓：直接设置持仓和均价
+- 加仓：加权平均计算新均价
+- 减仓：计算已实现盈亏
+- 完全平仓：清零持仓和均价
+- 反向开仓：先平仓再反向开仓
+
+### CatfishAccountState (arena_state.py)
+
+鲶鱼账户状态类，类似 AgentAccountState，但包含鲶鱼特有的策略状态。
+
+**类定义：**
+```python
+@dataclass
+class CatfishAccountState:
+    """鲶鱼账户状态"""
+    catfish_id: int
+    balance: float
+    position_quantity: int
+    position_avg_price: float
+    realized_pnl: float
+    leverage: float
+    maintenance_margin_rate: float
+    initial_balance: float
+    is_liquidated: bool
+    order_counter: int
+    current_direction: int  # 趋势创造者方向
+    ema: float              # 均值回归 EMA
+    ema_initialized: bool
+    last_action_tick: int
+```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `from_catfish(catfish)` | 类方法，从 CatfishBase 对象创建状态副本 |
+| `reset(initial_balance)` | 重置到初始状态 |
+| `get_equity(current_price)` | 计算净值 |
+| `get_margin_ratio(current_price)` | 计算保证金率 |
+| `check_liquidation(current_price)` | 检查是否需要强平（仅资金归零时） |
+| `on_trade(trade_price, trade_quantity, is_buyer)` | 处理成交（无手续费） |
+| `generate_order_id(arena_id)` | 生成跨竞技场唯一的订单 ID（负数空间） |
+| `update_ema(price, ma_period)` | 更新 EMA 值（均值回归策略用） |
+
+### ArenaState (arena_state.py)
+
+单个竞技场的独立状态，封装竞技场运行所需的所有状态。
+
+**类定义：**
+```python
+@dataclass
+class ArenaState:
+    """单个竞技场的独立状态"""
+    arena_id: int
+    matching_engine: MatchingEngine
+    adl_manager: ADLManager
+    agent_states: dict[int, AgentAccountState]
+    catfish_states: dict[int, CatfishAccountState]
+    recent_trades: deque
+    price_history: list[float]
+    tick_history_prices: list[float]
+    tick_history_volumes: list[float]
+    tick_history_amounts: list[float]
+    smooth_mid_price: float
+    tick: int
+    pop_liquidated_counts: dict[AgentType, int]
+    eliminating_agents: set[int]
+    episode_high_price: float
+    episode_low_price: float
+    catfish_liquidated: bool
+```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `reset_episode(initial_price)` | 重置 Episode 状态 |
+| `get_agent_state(agent_id)` | 获取 Agent 状态 |
+| `get_catfish_state(catfish_id)` | 获取鲶鱼状态 |
+| `update_price_stats(price)` | 更新价格统计信息（最高/最低价） |
+| `mark_agent_liquidated(agent_id, agent_type)` | 标记 Agent 已被强平 |
+
+---
 
 ### ArenaPool (arena_pool.py)
 
@@ -422,3 +547,118 @@ python scripts/train_single_arena.py --num-arenas 8 --episodes-per-arena 5 --rou
 # 从检查点恢复
 python scripts/train_single_arena.py --resume checkpoints/single_arena_gen_50.pkl
 ```
+
+---
+
+### ParallelArenaTrainer (parallel_arena_trainer.py)
+
+多竞技场并行推理训练器，核心特性是将多个竞技场的神经网络推理合并成一个批量操作。
+
+**与 SingleArenaTrainer 的对比：**
+
+| 方面 | SingleArenaTrainer | ParallelArenaTrainer |
+|------|-------------------|---------------------|
+| 竞技场执行 | 串行（一个接一个） | 同步推进（tick 对齐） |
+| 神经网络 | 共享 | 共享 |
+| 账户状态 | 复用 Trainer | 独立 ArenaState |
+| 推理方式 | 每竞技场单独推理 | 跨竞技场批量推理 |
+| 订单簿 | 复用（重置） | 每竞技场独立 |
+
+**设计理念：**
+1. **神经网络共享**：所有竞技场使用同一套 `BatchNetworkCache`，进化后统一更新
+2. **账户状态独立**：每个竞技场维护独立的 `ArenaState`，包含所有 Agent 的账户状态
+3. **批量推理合并**：N 个竞技场 × M 个 Agent 的推理合并成单次 OpenMP 并行操作
+4. **订单簿独立**：每个竞技场有独立的 `MatchingEngine` 和 `OrderBook`
+
+**核心流程：**
+1. 初始化：创建共享种群、N 个独立竞技场状态、共享网络缓存、进化 Worker 池
+2. 训练循环：
+   a. 重置所有竞技场
+   b. 同步推进所有竞技场的 tick（批量推理）
+   c. 汇总适应度
+   d. 执行 NEAT 进化
+   e. 更新网络缓存和 Agent 状态
+
+**类定义：**
+```python
+class ParallelArenaTrainer:
+    """多竞技场并行推理训练器
+
+    Attributes:
+        config: 全局配置
+        multi_config: 多竞技场配置
+        populations: 共享的种群（神经网络）
+        arena_states: N 个独立的竞技场状态
+        network_caches: 共享的网络缓存
+        evolution_worker_pool: 进化 Worker 池
+        generation: 当前代数
+        total_episodes: 总 episode 数
+    """
+```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `setup()` | 初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池 |
+| `run_round()` | 运行一轮训练（所有竞技场的所有 episode + 进化） |
+| `run_tick_all_arenas()` | 并行执行所有竞技场的一个 tick |
+| `_batch_inference_all_arenas()` | 批量推理所有竞技场的所有 Agent |
+| `_run_episode_all_arenas()` | 运行所有竞技场的一个 episode |
+| `_collect_fitness_all_arenas()` | 收集并汇总所有竞技场的适应度 |
+| `train(num_rounds, checkpoint_callback, progress_callback)` | 主训练循环 |
+| `save_checkpoint(path)` | 保存检查点 |
+| `load_checkpoint(path)` | 加载检查点 |
+| `stop()` | 停止训练并清理资源 |
+
+**tick 执行流程（run_tick_all_arenas）：**
+```python
+# 阶段1: 准备（串行）
+for arena in arena_states:
+    handle_liquidations(arena)  # 强平检查
+    market_state = compute_market_state(arena)
+    active_agents = get_active_agents(arena)
+
+# 阶段2: 批量推理（并行）- 一次性推理所有竞技场的所有 Agent
+all_decisions = _batch_inference_all_arenas(market_states, active_agents)
+
+# 阶段3: 执行（串行）
+for arena in arena_states:
+    execute_trades(arena, all_decisions[arena.arena_id])
+```
+
+**批量推理合并（_batch_inference_all_arenas）：**
+- 使用 `AgentStateAdapter` 将 `AgentAccountState` 适配为 Agent-like 接口
+- 按 AgentType 分组（跨所有竞技场）
+- 对每种类型调用对应的 `BatchNetworkCache.decide()`
+- 将结果重组为 `dict[arena_id, list[decision]]`
+
+**使用示例：**
+```python
+from src.training.arena import ParallelArenaTrainer, MultiArenaConfig
+
+# 方式1：使用上下文管理器
+multi_config = MultiArenaConfig(num_arenas=10, episodes_per_arena=10)
+with ParallelArenaTrainer(config, multi_config) as trainer:
+    trainer.train(
+        num_rounds=100,
+        checkpoint_callback=lambda gen: print(f"Gen {gen}"),
+        progress_callback=lambda stats: print(stats)
+    )
+
+# 方式2：手动管理
+trainer = ParallelArenaTrainer(config, multi_config)
+trainer.setup()
+try:
+    for _ in range(100):
+        stats = trainer.run_round()
+        if trainer.generation % 10 == 0:
+            trainer.save_checkpoint(f"checkpoints/gen_{trainer.generation}.pkl")
+finally:
+    trainer.stop()
+```
+
+**检查点兼容性：**
+- 检查点格式与 MultiArenaTrainer 和 SingleArenaTrainer 完全相同
+- 可以互相加载检查点
+- 支持 gzip 压缩和普通 pickle 格式
