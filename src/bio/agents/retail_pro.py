@@ -77,12 +77,12 @@ class RetailProAgent(Agent):
         """决策下一步动作（接收预计算的市场状态）
 
         观察市场状态，通过神经网络前向传播，解析输出为动作类型和参数。
-        此方法实现了散户/高级散户通用的决策逻辑（9个输出节点，7种动作）。
+        此方法实现了散户/高级散户通用的决策逻辑（8个输出节点，6种动作）。
 
         神经网络输出结构：
-        - 输出[0-6]: 7 种动作类型的得分（选择最大值）
-        - 输出[7]: 价格偏移（归一化值，-1 到 1，相对于 mid_price）
-        - 输出[8]: 数量比例（归一化值，0 到 1，相对于可用购买力）
+        - 输出[0-5]: 6 种动作类型的得分（选择最大值）
+        - 输出[6]: 价格偏移（归一化值，-1 到 1，相对于 mid_price）
+        - 输出[7]: 数量比例（归一化值，0 到 1，相对于可用购买力）
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -92,7 +92,7 @@ class RetailProAgent(Agent):
             (动作类型, 动作参数字典)
             - PLACE_BID/PLACE_ASK: {"price": float, "quantity": float}
             - MARKET_BUY/MARKET_SELL: {"quantity": float}
-            - CANCEL/CLEAR_POSITION/HOLD: {}
+            - CANCEL/HOLD: {}
         """
         # 如果已被强平，直接返回 HOLD
         if self.is_liquidated:
@@ -104,19 +104,19 @@ class RetailProAgent(Agent):
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
 
-        # 3. 验证输出维度（至少需要 9 个值：7个动作 + 价格偏移 + 数量比例）
-        if len(outputs) < 9:
-            raise ValueError(f"神经网络输出维度不足，期望 9，实际 {len(outputs)}")
+        # 3. 验证输出维度（至少需要 8 个值：6个动作 + 价格偏移 + 数量比例）
+        if len(outputs) < 8:
+            raise ValueError(f"神经网络输出维度不足，期望 8，实际 {len(outputs)}")
 
-        # 4. 解析动作类型（选择前 7 个输出中值最大的索引）
-        action_idx = fast_argmax(outputs, 0, 7)
+        # 4. 解析动作类型（选择前 6 个输出中值最大的索引）
+        action_idx = fast_argmax(outputs, 0, 6)
         action = ActionType(action_idx)
 
         # 5. 解析参数（由神经网络决定）
-        # 输出[7]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
-        # 输出[8]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
-        price_offset_norm = fast_clip(outputs[7], -1.0, 1.0)
-        quantity_ratio_norm = fast_clip(outputs[8], -1.0, 1.0)
+        # 输出[6]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
+        # 输出[7]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
+        price_offset_norm = fast_clip(outputs[6], -1.0, 1.0)
+        quantity_ratio_norm = fast_clip(outputs[7], -1.0, 1.0)
 
         # 获取参考价格
         mid_price = market_state.mid_price
@@ -180,10 +180,6 @@ class RetailProAgent(Agent):
 
         elif action == ActionType.CANCEL:
             # 撤单：无参数
-            pass
-
-        elif action == ActionType.CLEAR_POSITION:
-            # 清仓：无参数（由调用方处理）
             pass
 
         elif action == ActionType.HOLD:

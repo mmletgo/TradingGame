@@ -68,7 +68,8 @@ from src.market.orderbook.orderbook import OrderBook
 class ActionType(Enum):
     """动作类型枚举
 
-    定义 Agent 可以执行的所有交易动作。
+    定义散户/高级散户/庄家可以执行的所有交易动作。
+    做市商不使用 ActionType，直接执行挂单操作。
     """
 
     HOLD = 0  # 不动
@@ -77,8 +78,6 @@ class ActionType(Enum):
     CANCEL = 3  # 撤单
     MARKET_BUY = 4  # 市价买入
     MARKET_SELL = 5  # 市价卖出
-    CLEAR_POSITION = 6  # 清仓
-    QUOTE = 7  # 做市商双边挂单（每边1-10单）
 
 
 class Agent:
@@ -377,7 +376,7 @@ class Agent:
                 - PLACE_BID/PLACE_ASK: {"price": float, "quantity": float}
                 - MARKET_BUY/MARKET_SELL: {"quantity": float}
                 - CANCEL: {"order_id": int} (可选，默认使用账户的 pending_order_id)
-                - CLEAR_POSITION/HOLD: {}
+                - HOLD: {}
             matching_engine: 撮合引擎
 
         Returns:
@@ -408,8 +407,6 @@ class Agent:
             trades = self._place_market_order(
                 OrderSide.SELL, params["quantity"], matching_engine
             )
-        elif action == ActionType.CLEAR_POSITION:
-            trades = self._handle_clear_position(matching_engine)
         # HOLD: 不执行任何操作
 
         return trades
@@ -486,38 +483,6 @@ class Agent:
         trades = matching_engine.process_order(order)
         self._process_trades(trades)
         return trades
-
-    def _handle_clear_position(
-        self,
-        matching_engine: "MatchingEngine",
-    ) -> list[Trade]:
-        """处理清仓
-
-        先撤掉挂单，再根据持仓方向市价平仓。
-        做市商重写此方法以处理多个挂单。
-
-        Args:
-            matching_engine: 撮合引擎
-
-        Returns:
-            成交列表
-        """
-        # 先撤掉挂单
-        if self.account.pending_order_id is not None:
-            matching_engine.cancel_order(self.account.pending_order_id)
-            self.account.pending_order_id = None
-
-        # 再根据持仓方向市价平仓
-        position_qty = self.account.position.quantity
-        if position_qty > 0:
-            return self._place_market_order(
-                OrderSide.SELL, position_qty, matching_engine
-            )
-        elif position_qty < 0:
-            return self._place_market_order(
-                OrderSide.BUY, abs(position_qty), matching_engine
-            )
-        return []
 
     def _process_trades(self, trades: list[Trade]) -> None:
         """处理成交列表，更新账户

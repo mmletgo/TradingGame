@@ -319,12 +319,12 @@ class MarketMakerAgent(Agent):
 
         Returns:
             (动作类型, 动作参数字典)
-            - QUOTE: {"bid_orders": [{"price": float, "quantity": float}, ...],
-                      "ask_orders": [{"price": float, "quantity": float}, ...]}
+            - HOLD: {"bid_orders": [{"price": float, "quantity": float}, ...],
+                     "ask_orders": [{"price": float, "quantity": float}, ...]}
         """
         # 如果已被强平，返回空订单列表
         if self.is_liquidated:
-            return ActionType.QUOTE, {"bid_orders": [], "ask_orders": []}
+            return ActionType.HOLD, {"bid_orders": [], "ask_orders": []}
 
         # 1. 观察市场，获取神经网络输入（复用基类方法）
         inputs = self.observe(market_state, orderbook)
@@ -454,7 +454,7 @@ class MarketMakerAgent(Agent):
                 f"ask_prices=[{', '.join(f'{p:.1f}' for p in ask_prices)}]"
             )
 
-        return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
+        return ActionType.HOLD, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 
     def _cancel_all_orders(self, matching_engine: "MatchingEngine") -> None:
         """撤销所有挂单
@@ -540,32 +540,6 @@ class MarketMakerAgent(Agent):
         )
         return all_trades
 
-    def _handle_clear_position(
-        self,
-        matching_engine: "MatchingEngine",
-    ) -> list[Trade]:
-        """处理做市商清仓
-
-        先撤掉所有挂单，再根据持仓方向市价平仓。
-
-        Args:
-            matching_engine: 撮合引擎
-
-        Returns:
-            成交列表
-        """
-        self._cancel_all_orders(matching_engine)
-        position_qty = self.account.position.quantity
-        if position_qty > 0:
-            return self._place_market_order(
-                OrderSide.SELL, position_qty, matching_engine
-            )
-        elif position_qty < 0:
-            return self._place_market_order(
-                OrderSide.BUY, abs(position_qty), matching_engine
-            )
-        return []
-
     def execute_action(
         self,
         action: ActionType,
@@ -577,7 +551,7 @@ class MarketMakerAgent(Agent):
         做市商默认每 tick 双边挂单，先撤所有旧单再挂新单。
 
         Args:
-            action: 动作类型（固定为 QUOTE）
+            action: 动作类型（忽略此参数，做市商始终执行双边挂单）
             params: 动作参数字典
             matching_engine: 撮合引擎
 

@@ -671,9 +671,9 @@ pool.shutdown()
 ## NEAT 配置
 
 不同 Agent 类型使用不同的 NEAT 配置文件（由 Population 自动选择）：
-- `config/neat_retail.cfg` - 散户（127 个输入节点，9 个输出节点）
-- `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，9 个输出节点）
-- `config/neat_whale.cfg` - 庄家（907 个输入节点，9 个输出节点）
+- `config/neat_retail.cfg` - 散户（127 个输入节点，8 个输出节点）
+- `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，8 个输出节点）
+- `config/neat_whale.cfg` - 庄家（907 个输入节点，8 个输出节点）
 - `config/neat_market_maker.cfg` - 做市商（934 个输入节点，21 个输出节点）
 
 散户只能看到买卖各10档订单簿和最近10笔成交，高级散户和庄家可以看到完整的100档订单簿和100笔成交。

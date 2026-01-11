@@ -31,7 +31,7 @@ Agent (base.py) - 基类，不包含 decide 方法
 
 ### ActionType (base.py)
 
-动作类型枚举，定义 Agent 可执行的所有交易动作：
+动作类型枚举，定义散户/高级散户/庄家可执行的所有交易动作。做市商不使用 ActionType，直接执行挂单操作。
 
 - `HOLD = 0` - 不动
 - `PLACE_BID = 1` - 挂买单
@@ -39,8 +39,6 @@ Agent (base.py) - 基类，不包含 decide 方法
 - `CANCEL = 3` - 撤单
 - `MARKET_BUY = 4` - 市价买入
 - `MARKET_SELL = 5` - 市价卖出
-- `CLEAR_POSITION = 6` - 清仓
-- `QUOTE = 7` - 做市商双边挂单（每边1-5单）
 
 ### Agent (base.py)
 
@@ -98,9 +96,9 @@ Agent 基类，提供通用属性和方法。
 生成唯一订单ID。使用 agent_id 和递增计数器组合（agent_id 占高 32 位，计数器占低 32 位），确保多 Agent 时的唯一性。
 
 **注意**: Agent 基类不包含 `decide` 方法。`decide` 方法由各子类根据自己的动作空间实现：
-- **RetailProAgent**: 实现散户/高级散户通用的 decide 方法（9个输出节点，6种动作：HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL）
+- **RetailProAgent**: 实现散户/高级散户通用的 decide 方法（8个输出节点，6种动作：HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL）
 - **RetailAgent**: 继承 RetailProAgent 的 decide 方法
-- **WhaleAgent**: 实现庄家专用的 decide 方法（9个输出节点，7种动作，比散户多一个 CLEAR_POSITION）
+- **WhaleAgent**: 实现庄家专用的 decide 方法（8个输出节点，6种动作，与散户相同）
 - **MarketMakerAgent**: 实现做市商专用的 decide 方法（21个输出节点，直接输出买卖双边订单参数）
 
 **订单数量约束：** 所有订单数量（quantity）均为 int 类型，最小单位为 1，最大为 `MAX_ORDER_QUANTITY`（100,000,000）。`_calculate_order_quantity` 方法会将计算结果取整，小于 1 时返回 0。
@@ -113,10 +111,7 @@ Agent 基类，提供通用属性和方法。
 创建并处理限价单的私有辅助方法。被 `execute_action` 中的 PLACE_BID 和 PLACE_ASK 动作调用。quantity 参数为 int 类型。返回成交列表。如果订单未完全成交，更新账户的 `pending_order_id`。
 
 #### `_place_market_order(side: OrderSide, quantity: int, matching_engine: MatchingEngine) -> list[Trade]`
-创建并处理市价单的私有辅助方法。被 `execute_action` 中的 MARKET_BUY、MARKET_SELL 和 CLEAR_POSITION 动作调用。quantity 参数为 int 类型。返回成交列表。
-
-#### `_handle_clear_position(matching_engine: MatchingEngine) -> list[Trade]`
-处理清仓动作。先撤掉挂单（`pending_order_id`），再根据当前持仓方向下市价单平仓（多仓卖出，空仓买入）。返回成交列表。做市商重写此方法以处理多个挂单（调用 `_cancel_all_orders`）。
+创建并处理市价单的私有辅助方法。被 `execute_action` 中的 MARKET_BUY 和 MARKET_SELL 动作调用。quantity 参数为 int 类型。返回成交列表。
 
 #### `execute_action(action, params, matching_engine) -> list[Trade]`
 执行动作。直接调用撮合引擎处理订单，成交后直接更新账户。如果已被强平（`is_liquidated=True`），不执行任何动作直接返回空列表。返回成交列表。
@@ -124,8 +119,8 @@ Agent 基类，提供通用属性和方法。
 各子类重写此方法以实现特定行为：
 - **RetailAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单，其他动作使用父类实现
 - **RetailProAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单，其他动作使用父类实现
-- **WhaleAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单，其他动作（包括 CLEAR_POSITION）使用父类实现
-- **MarketMakerAgent**: 仅处理 QUOTE 动作，调用 `_handle_quote` 先撤所有旧单再挂新单
+- **WhaleAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单，其他动作使用父类实现
+- **MarketMakerAgent**: 始终执行双边挂单，调用 `_handle_quote` 先撤所有旧单再挂新单
 
 #### `_process_trades(trades: list[Trade]) -> None`
 处理成交列表，更新账户。遍历成交列表，使用 `trade.is_buyer_taker` 判断 taker 方向，调用 `account.on_trade` 更新账户。
@@ -141,15 +136,15 @@ Agent 基类，提供通用属性和方法。
 返回高级散户可用动作空间（6种动作：HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL）。
 
 #### `decide(market_state, orderbook) -> tuple[ActionType, dict]`
-决策下一步动作。观察市场状态，通过神经网络前向传播（9个输出节点），解析输出为动作类型和参数。输出结构：[0-6]动作得分、[7]价格偏移、[8]数量比例。如果已被强平，直接返回 HOLD。
+决策下一步动作。观察市场状态，通过神经网络前向传播（8个输出节点），解析输出为动作类型和参数。输出结构：[0-5]动作得分、[6]价格偏移、[7]数量比例。如果已被强平，直接返回 HOLD。
 
 ### WhaleAgent
 
 #### `get_action_space() -> list[ActionType]`
-返回庄家可用动作空间（7种动作：比高级散户多一个 CLEAR_POSITION）。
+返回庄家可用动作空间（6种动作：与散户相同）。
 
 #### `decide(market_state, orderbook) -> tuple[ActionType, dict]`
-决策下一步动作。与 RetailProAgent 类似（9个输出节点），但动作空间包含 CLEAR_POSITION。
+决策下一步动作。与 RetailProAgent 相同（8个输出节点，6种动作）。
 
 ### MarketMakerAgent
 
@@ -179,10 +174,7 @@ Agent 基类，提供通用属性和方法。
 挂限价单并记录订单ID到指定列表，返回成交列表。被 `_handle_quote` 方法调用。
 
 #### `_handle_quote(params, matching_engine) -> list[Trade]`
-处理 QUOTE 动作。先撤掉所有旧挂单，然后双边各挂 1-5 单（每单价格和数量由神经网络决定）。
-
-#### `_handle_clear_position(matching_engine) -> list[Trade]`
-处理做市商清仓。先撤掉所有挂单（调用 `_cancel_all_orders`），再根据持仓方向市价平仓。
+处理双边挂单。先撤掉所有旧挂单，然后双边各挂 1-5 单（每单价格和数量由神经网络决定）。
 
 ## 做市商仓位倾斜挂单机制
 
@@ -303,23 +295,14 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 | 734-833 | 100 | tick 历史成交量（最近 100 个 tick 的成交量归一化）|
 | 834-933 | 100 | tick 历史成交额（最近 100 个 tick 的成交额归一化）|
 
-### 散户/高级散户神经网络输出（9 个值）
+### 散户/高级散户/庄家神经网络输出（8 个值）
 | 索引 | 说明 |
 |------|------|
-| 0-6 | 动作类型得分（HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL）|
-| 7 | 价格偏移（-1 到 1）|
-| 8 | 数量比例（-1 到 1）|
+| 0-5 | 动作类型得分（HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL）|
+| 6 | 价格偏移（-1 到 1）|
+| 7 | 数量比例（-1 到 1）|
 
-散户和高级散户使用相同的动作空间（6种动作）和神经网络输出结构。
-
-### 庄家神经网络输出（9 个值）
-| 索引 | 说明 |
-|------|------|
-| 0-6 | 动作类型得分（HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL/CLEAR_POSITION）|
-| 7 | 价格偏移（-1 到 1）|
-| 8 | 数量比例（-1 到 1）|
-
-庄家与散户/高级散户的区别在于动作空间包含 CLEAR_POSITION（7种动作）。
+散户、高级散户和庄家使用相同的动作空间（6种动作）和神经网络输出结构。
 
 ### 做市商神经网络输出（21 个值）
 | 索引 | 说明 |
@@ -354,8 +337,8 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 | 订单簿深度 | 10档 | 100档 | 100档 | 100档 |
 | 成交历史 | 10笔 | 100笔 | 100笔 | 100笔 |
 | 输入维度 | 127 | 907 | 907 | 934 |
-| 输出维度 | 9 | 9 | 9 | 21 |
-| 动作空间 | 6种 | 6种 | 7种（多CLEAR_POSITION） | QUOTE（双边挂单）|
+| 输出维度 | 8 | 8 | 8 | 21 |
+| 动作空间 | 6种 | 6种 | 6种 | 双边挂单（无动作选择）|
 | 同时挂单数 | 1个 | 1个 | 1个 | 10个（买卖各5个）|
 | 撤单再挂 | 是 | 是 | 是 | 是（每tick全撤全挂）|
 
@@ -377,9 +360,8 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 - **基类（散户/高级散户/庄家）**: 3个值（价格归一化、数量、方向）
 - **做市商**: 30个值（5买单 x 3 + 5卖单 x 3，包含价格归一化、数量、有效标志）
 
-### 清仓行为差异
-- **基类**: 先撤单（`pending_order_id`），再市价平仓
-- **做市商**: 先撤所有单（`_cancel_all_orders`），再市价平仓
+### 做市商双边挂单
+做市商每 tick 必然执行双边挂单，先撤销所有旧挂单（调用 `_cancel_all_orders`），然后双边各挂 1-5 单。
 
 ### MARKET_SELL 的特殊逻辑
 对于散户/庄家的 MARKET_SELL 动作：
