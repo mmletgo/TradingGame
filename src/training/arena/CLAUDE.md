@@ -10,7 +10,8 @@
 - `arena_pool.py` - 竞技场进程池管理
 - `arena_worker.py` - 竞技场工作进程
 - `fitness_aggregator.py` - 适应度汇总器
-- `multi_arena_trainer.py` - 多竞技场训练协调器
+- `multi_arena_trainer.py` - 多竞技场训练协调器（多进程并行）
+- `single_arena_trainer.py` - 单进程多竞技场训练器（串行执行，OpenMP 并行）
 
 ## 核心类和函数
 
@@ -321,3 +322,103 @@ finally:
    - 保存前清理 NEAT 历史数据（`_cleanup_neat_history()`）
    - 使用 gzip 压缩保存检查点文件
    - 加载时自动检测文件格式（gzip 或普通 pickle），支持向后兼容
+
+---
+
+### SingleArenaTrainer (single_arena_trainer.py)
+
+单进程多竞技场训练器，串行运行多个竞技场，充分利用 OpenMP 多核并行推理。
+
+**与 MultiArenaTrainer 的对比：**
+
+| 方面 | MultiArenaTrainer | SingleArenaTrainer |
+|------|------------------|-------------------|
+| 竞技场执行 | 多进程并行 | 单进程串行 |
+| OpenMP 线程 | 8×10=80（竞争 32 核） | 32（充分利用） |
+| 进程通讯 | 有（序列化） | 无 |
+| 内存占用 | 高（N 份种群） | 低（1 份种群） |
+| 进化 | 多进程并行（保留） | 多进程并行（保留） |
+| 适应度汇总 | FitnessAggregator | FitnessAggregator（相同） |
+
+**设计理念：**
+当 OpenMP 已经在单进程内实现了多核并行推理时，多进程竞技场会导致 OpenMP 线程竞争（80 线程抢 32 核）。SingleArenaTrainer 通过单进程串行执行竞技场，让每个竞技场都能充分利用所有 CPU 核心进行 OpenMP 并行推理。
+
+**核心流程：**
+1. 初始化：创建单个 Trainer 实例（包含种群、撮合引擎等），创建进化 Worker 池
+2. 训练循环：
+   a. 串行运行所有竞技场（每个竞技场重置市场状态后运行 M 个 episode）
+   b. 累积并汇总适应度
+   c. 执行 NEAT 进化（多进程并行）
+   d. 更新种群网络参数
+   e. 保存检查点
+
+**类定义：**
+```python
+class SingleArenaTrainer:
+    """单进程多竞技场训练器
+
+    Attributes:
+        config: 全局配置
+        multi_config: 多竞技场配置
+        trainer: Trainer 实例（复用）
+        evolution_worker_pool: 进化 Worker 池
+        generation: 当前代数
+        total_episodes: 总 episode 数
+    """
+```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `setup()` | 初始化训练环境，创建 Trainer 和 Worker 池 |
+| `run_round()` | 运行一轮训练（串行运行竞技场->汇总->进化） |
+| `_run_arena()` | 运行单个竞技场的 M 个 episode |
+| `_reset_for_arena()` | 重置市场状态（不重置种群） |
+| `_accumulate_fitness()` | 累积单个 episode 的适应度 |
+| `train(num_rounds, checkpoint_callback, progress_callback)` | 主训练循环 |
+| `save_checkpoint(path)` | 保存检查点 |
+| `load_checkpoint(path)` | 加载检查点 |
+| `stop()` | 停止训练并清理资源 |
+
+**使用示例：**
+```python
+from src.training.arena import SingleArenaTrainer, MultiArenaConfig
+
+# 方式1：使用上下文管理器
+multi_config = MultiArenaConfig(num_arenas=10, episodes_per_arena=10)
+with SingleArenaTrainer(config, multi_config) as trainer:
+    trainer.train(
+        num_rounds=100,
+        checkpoint_callback=lambda gen: print(f"Gen {gen}"),
+        progress_callback=lambda stats: print(stats)
+    )
+
+# 方式2：手动管理
+trainer = SingleArenaTrainer(config, multi_config)
+trainer.setup()
+try:
+    for _ in range(100):
+        stats = trainer.run_round()
+        if trainer.generation % 10 == 0:
+            trainer.save_checkpoint(f"checkpoints/gen_{trainer.generation}.pkl")
+finally:
+    trainer.stop()
+```
+
+**检查点兼容性：**
+- 检查点格式与 MultiArenaTrainer 完全相同
+- 可以互相加载检查点
+- 支持 gzip 压缩和普通 pickle 格式
+
+**启动脚本：**
+```bash
+# 默认训练
+python scripts/train_single_arena.py --rounds 100
+
+# 自定义参数
+python scripts/train_single_arena.py --num-arenas 8 --episodes-per-arena 5 --rounds 200
+
+# 从检查点恢复
+python scripts/train_single_arena.py --resume checkpoints/single_arena_gen_50.pkl
+```
