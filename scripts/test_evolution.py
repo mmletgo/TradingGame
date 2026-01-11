@@ -34,10 +34,10 @@ from typing import Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from src.analysis.checkpoint_loader import CheckpointLoader
 from src.analysis.evolution_tester import EvolutionTester
 from src.config.config import AgentType
 from src.core.log_engine.logger import setup_logging
-from src.training.generation_saver import GenerationSaver
 
 from create_config import create_default_config
 
@@ -109,22 +109,22 @@ def check_test_status(
 
 
 def get_testable_generations(
-    generations_dir: str,
+    checkpoint_dir: str,
     results_dir: str,
     force: bool = False,
 ) -> tuple[list[int], list[int], list[int]]:
     """获取可测试的代列表
 
     Args:
-        generations_dir: 代数据保存目录
+        checkpoint_dir: checkpoint 文件目录
         results_dir: 测试结果保存目录
         force: 是否强制重新测试
 
     Returns:
         (所有代列表, 未完成测试的代列表, 已完成测试的代列表)
     """
-    saver = GenerationSaver(generations_dir)
-    all_generations = saver.list_generations()
+    loader = CheckpointLoader(checkpoint_dir)
+    all_generations = loader.list_generations()
 
     if force:
         return all_generations, all_generations, []
@@ -143,15 +143,15 @@ def get_testable_generations(
 
 
 def list_generations_with_status(
-    generations_dir: str,
+    checkpoint_dir: str,
     results_dir: str,
 ) -> None:
     """列出所有代及其测试状态"""
-    saver = GenerationSaver(generations_dir)
-    generations = saver.list_generations()
+    loader = CheckpointLoader(checkpoint_dir)
+    generations = loader.list_generations()
 
     if not generations:
-        print(f"在 {generations_dir} 中未找到任何已保存的代")
+        print(f"在 {checkpoint_dir} 中未找到任何已保存的代")
         return
 
     print("=" * 80)
@@ -164,11 +164,11 @@ def list_generations_with_status(
     pending_count = 0
 
     for gen_num in generations:
-        gen_data = saver.load_generation(gen_num)
-        if gen_data:
-            timestamp = gen_data.get("timestamp", 0)
+        checkpoint_path = loader.find_checkpoint_for_generation(gen_num)
+        if checkpoint_path:
+            timestamp = os.path.getmtime(checkpoint_path)
             save_time = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-            species_count = len(gen_data.get("best_genomes", {}))
+            species_count = 4  # 固定为 4 个物种
 
             status = check_test_status(gen_num, results_dir)
             if status["complete"]:
@@ -436,10 +436,10 @@ def main() -> None:
         help="强制重新运行（忽略已完成的测试结果）",
     )
     parser.add_argument(
-        "--generations-dir",
+        "--checkpoint-dir",
         type=str,
-        default="checkpoints/generations",
-        help="代数据保存目录（默认: checkpoints/generations）",
+        default="checkpoints",
+        help="checkpoint 文件目录（默认: checkpoints）",
     )
     parser.add_argument(
         "--results-dir",
@@ -478,18 +478,18 @@ def main() -> None:
 
     # 处理 --list 参数
     if args.list_generations:
-        list_generations_with_status(args.generations_dir, args.results_dir)
+        list_generations_with_status(args.checkpoint_dir, args.results_dir)
         return
 
     # 设置日志
     setup_logging(args.log_dir)
 
-    # 检查 generations 目录
-    saver = GenerationSaver(args.generations_dir)
-    all_generations = saver.list_generations()
+    # 检查 checkpoint 目录
+    loader = CheckpointLoader(args.checkpoint_dir)
+    all_generations = loader.list_generations()
 
     if not all_generations:
-        print(f"在 {args.generations_dir} 中未找到任何已保存的代")
+        print(f"在 {args.checkpoint_dir} 中未找到任何已保存的代")
         print("请先运行训练以生成代数据")
         sys.exit(1)
 
@@ -510,13 +510,13 @@ def main() -> None:
     # 创建测试器
     tester = EvolutionTester(
         config=config,
-        generations_dir=args.generations_dir,
+        checkpoint_dir=args.checkpoint_dir,
         results_dir=args.results_dir,
     )
 
     if args.generation is not None:
         # 测试指定代
-        if not saver.generation_exists(args.generation):
+        if loader.find_checkpoint_for_generation(args.generation) is None:
             print(f"错误: 第 {args.generation} 代不存在")
             print(f"请使用 --list 查看已保存的代列表")
             sys.exit(1)
@@ -533,7 +533,7 @@ def main() -> None:
     else:
         # 自动测试所有未完成的代
         _, pending, completed = get_testable_generations(
-            args.generations_dir,
+            args.checkpoint_dir,
             args.results_dir,
             force=args.force,
         )
