@@ -31,7 +31,7 @@ python scripts/train_ui.py                                      # 带UI训练
 
 ### 多竞技场并行推理训练
 ```bash
-# 默认：10个竞技场，每个10个episode，无限轮
+# 默认：2个竞技场，每个50个episode，无限轮
 python scripts/train_parallel_arena.py
 
 # 指定轮数
@@ -49,7 +49,7 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 - 交易配对和账户更新串行执行（保证正确性）
 - 所有竞技场完成后汇总适应度（简单平均）
 - 每轮进行一次进化
-- 10竞技场×10episode = 每轮100个样本，提高适应度评估稳定性
+- 2竞技场×50episode = 每轮100个样本，提高适应度评估稳定性
 
 ### 演示模式
 ```bash

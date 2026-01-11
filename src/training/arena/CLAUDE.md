@@ -140,8 +140,8 @@ avg_fitness = sum(arena_fitness) / total_episodes
 @dataclass
 class MultiArenaConfig:
     """多竞技场配置"""
-    num_arenas: int = 10
-    episodes_per_arena: int = 10
+    num_arenas: int = 2
+    episodes_per_arena: int = 50
 
 
 class ParallelArenaTrainer:
@@ -206,7 +206,7 @@ for arena in arena_states:
 from src.training.arena import ParallelArenaTrainer, MultiArenaConfig
 
 # 方式1：使用上下文管理器
-multi_config = MultiArenaConfig(num_arenas=10, episodes_per_arena=10)
+multi_config = MultiArenaConfig(num_arenas=2, episodes_per_arena=50)
 with ParallelArenaTrainer(config, multi_config) as trainer:
     trainer.train(
         num_rounds=100,

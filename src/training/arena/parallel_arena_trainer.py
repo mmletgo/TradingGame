@@ -26,8 +26,8 @@ import numpy as np
 class MultiArenaConfig:
     """多竞技场配置"""
 
-    num_arenas: int = 10
-    episodes_per_arena: int = 10
+    num_arenas: int = 2
+    episodes_per_arena: int = 50
 
 if TYPE_CHECKING:
     from src.training._cython.batch_decide_openmp import BatchNetworkCache
