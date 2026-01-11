@@ -301,3 +301,7 @@ finally:
 2. **并行训练**：使用 ArenaPool 在多个进程中并行运行 episode
 3. **网络参数传输**：只传输网络参数而非完整基因组，减少序列化开销
 4. **内存管理**：每轮训练后进行垃圾回收和 malloc_trim
+5. **Checkpoint 体积优化**：
+   - 保存前清理 NEAT 历史数据（`_cleanup_neat_history()`）
+   - 使用 gzip 压缩保存检查点文件
+   - 加载时自动检测文件格式（gzip 或普通 pickle），支持向后兼容

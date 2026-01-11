@@ -4,6 +4,7 @@
 """
 
 import gc
+import gzip
 import pickle
 import time
 from dataclasses import dataclass
@@ -579,6 +580,14 @@ class MultiArenaTrainer:
         Args:
             path: 检查点文件路径
         """
+        # 清理 NEAT 历史数据以减少 checkpoint 体积
+        for agent_type, population in self.populations.items():
+            if isinstance(population, SubPopulationManager):
+                for sub_pop in population.sub_populations:
+                    sub_pop._cleanup_neat_history()
+            else:
+                population._cleanup_neat_history()
+
         checkpoint_data: dict[str, Any] = {
             "generation": self.generation,
             "populations": {},
@@ -611,7 +620,8 @@ class MultiArenaTrainer:
         checkpoint_path = Path(path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(checkpoint_path, "wb") as f:
+        # 使用 gzip 压缩保存
+        with gzip.open(checkpoint_path, "wb") as f:
             pickle.dump(checkpoint_data, f)
 
         self.logger.info(f"检查点已保存: {path}")
@@ -622,8 +632,17 @@ class MultiArenaTrainer:
         Args:
             path: 检查点文件路径
         """
+        # 自动检测文件格式
         with open(path, "rb") as f:
-            checkpoint_data = pickle.load(f)
+            magic = f.read(2)
+
+        # gzip 文件的魔数是 0x1f 0x8b
+        if magic == b'\x1f\x8b':
+            with gzip.open(path, "rb") as f:
+                checkpoint_data = pickle.load(f)
+        else:
+            with open(path, "rb") as f:
+                checkpoint_data = pickle.load(f)
 
         self.generation = checkpoint_data.get("generation", 0)
         populations_data = checkpoint_data.get("populations", {})

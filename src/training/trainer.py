@@ -4,6 +4,7 @@
 """
 
 import gc
+import gzip
 import pickle
 import random
 from collections import deque
@@ -2513,6 +2514,14 @@ class Trainer:
             elif isinstance(pop, Population) and pop._genomes_dirty:
                 pop.sync_genomes_from_pending()
 
+        # 清理 NEAT 历史数据以减少 checkpoint 体积
+        for agent_type, pop in self.populations.items():
+            if isinstance(pop, SubPopulationManager):
+                for sub_pop in pop.sub_populations:
+                    sub_pop._cleanup_neat_history()
+            else:
+                pop._cleanup_neat_history()
+
         checkpoint_path = Path(path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2525,7 +2534,8 @@ class Trainer:
             },
         }
 
-        with open(checkpoint_path, "wb") as f:
+        # 使用 gzip 压缩保存
+        with gzip.open(checkpoint_path, "wb") as f:
             pickle.dump(checkpoint, f)
 
         self.logger.info(f"检查点已保存: {path}")
@@ -2655,11 +2665,24 @@ class Trainer:
         - 新格式：SubPopulationManager 保存为多个子种群
         - 旧格式：单个 RETAIL 种群，自动迁移到子种群格式
 
+        同时支持压缩和非压缩格式：
+        - gzip 压缩格式（新）
+        - 普通 pickle 格式（旧，向后兼容）
+
         Args:
             path: 检查点文件路径
         """
+        # 自动检测文件格式
         with open(path, "rb") as f:
-            checkpoint = pickle.load(f)
+            magic = f.read(2)
+
+        # gzip 文件的魔数是 0x1f 0x8b
+        if magic == b"\x1f\x8b":
+            with gzip.open(path, "rb") as f:
+                checkpoint = pickle.load(f)
+        else:
+            with open(path, "rb") as f:
+                checkpoint = pickle.load(f)
 
         self.tick = checkpoint["tick"]
         self.episode = checkpoint["episode"]

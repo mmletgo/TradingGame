@@ -443,7 +443,17 @@ pool.shutdown()
 
 **Checkpoint 格式兼容性：**
 
-支持新旧两种 checkpoint 格式，加载时自动检测并迁移：
+支持多种 checkpoint 格式，加载时自动检测并迁移：
+
+**压缩格式（自动检测）：**
+- gzip 压缩格式（新）：使用 gzip 压缩 pickle 数据，显著减小文件体积
+- 普通 pickle 格式（旧）：向后兼容，自动检测 gzip 魔数（0x1f 0x8b）
+
+**保存时优化：**
+- 保存前自动清理 NEAT 历史数据（调用 `_cleanup_neat_history()`），进一步减小体积
+- 使用 gzip 压缩保存
+
+**种群数据格式：**
 
 1. **新格式**（SubPopulationManager）：
    ```python

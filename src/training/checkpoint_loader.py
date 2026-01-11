@@ -2,9 +2,10 @@
 """Checkpoint 加载器模块
 
 提供统一的 checkpoint 加载接口：
-- 单训练场：checkpoints/ep_*.pkl 格式
+- 单训练场：checkpoints/ep_*.pkl 格式（支持 gzip 压缩）
 """
 
+import gzip
 import os
 import pickle
 from enum import Enum
@@ -48,9 +49,9 @@ class CheckpointLoader:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Checkpoint 路径不存在: {path}")
 
-        # 如果是文件，检查是否是 .pkl 文件
+        # 如果是文件，检查是否是 .pkl 或 .pkl.gz 文件
         if os.path.isfile(path):
-            if path.endswith(".pkl"):
+            if path.endswith(".pkl") or path.endswith(".pkl.gz"):
                 return CheckpointType.SINGLE_ARENA
             raise ValueError(f"无法识别的 checkpoint 文件格式: {path}")
 
@@ -84,15 +85,26 @@ class CheckpointLoader:
     def _load_single_arena(path: str) -> dict[str, Any]:
         """加载单训练场 checkpoint
 
+        支持 gzip 压缩格式和普通 pickle 格式（自动检测）。
+
         Args:
-            path: .pkl 文件路径
+            path: .pkl 或 .pkl.gz 文件路径
 
         Returns:
             统一格式的 checkpoint 数据
         """
         try:
+            # 自动检测文件格式
             with open(path, "rb") as f:
-                checkpoint = pickle.load(f)
+                magic = f.read(2)
+
+            # gzip 文件的魔数是 0x1f 0x8b
+            if magic == b"\x1f\x8b":
+                with gzip.open(path, "rb") as f:
+                    checkpoint = pickle.load(f)
+            else:
+                with open(path, "rb") as f:
+                    checkpoint = pickle.load(f)
         except (pickle.PickleError, EOFError, OSError) as e:
             raise ValueError(f"加载 checkpoint 文件失败: {e}") from e
 

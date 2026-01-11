@@ -52,7 +52,7 @@ def progress_callback(stats: dict[str, Any]) -> None:
     # 格式化适应度信息
     fitness_info = []
     for (agent_type, _), fitness in avg_fitnesses.items():
-        avg = float(fitness.mean()) if hasattr(fitness, 'mean') else float(fitness)
+        avg = float(fitness.mean()) if hasattr(fitness, "mean") else float(fitness)
         fitness_info.append(f"{agent_type.value}={avg:.4f}")
 
     fitness_str = ", ".join(fitness_info[:4])  # 只显示前4个
@@ -98,8 +98,8 @@ def main() -> None:
     parser.add_argument(
         "--checkpoint-interval",
         type=int,
-        default=10,
-        help="检查点保存间隔（轮数，默认: 10，0 表示不保存）",
+        default=100,
+        help="检查点保存间隔（轮数，默认: 100，0 表示不保存）",
     )
     parser.add_argument(
         "--resume",
@@ -220,7 +220,9 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n\n训练被用户中断")
         # 保存紧急检查点
-        emergency_path = f"checkpoints/emergency_multi_arena_gen_{trainer.generation}.pkl"
+        emergency_path = (
+            f"checkpoints/emergency_multi_arena_gen_{trainer.generation}.pkl"
+        )
         trainer.save_checkpoint(emergency_path)
         print(f"紧急检查点已保存: {emergency_path}")
     finally:
