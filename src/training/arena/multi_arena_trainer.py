@@ -467,7 +467,7 @@ class MultiArenaTrainer:
             raise RuntimeError("训练环境未初始化，请先调用 setup()")
 
         round_start = time.perf_counter()
-        stats: dict[str, Any] = {"generation": self.generation}
+        stats: dict[str, Any] = {}
 
         # 1. 序列化基因组和网络参数
         serialize_start = time.perf_counter()
@@ -516,8 +516,10 @@ class MultiArenaTrainer:
             self.multi_arena_config.episodes_per_arena
         )
         self.total_episodes += episodes_this_round
+        stats["generation"] = self.generation  # 进化后的代数
         stats["episodes_this_round"] = episodes_this_round
         stats["total_episodes"] = self.total_episodes
+        stats["avg_fitnesses"] = avg_fitness  # 添加适应度数据
 
         # 垃圾回收
         gc.collect(0)
@@ -543,12 +545,14 @@ class MultiArenaTrainer:
         self,
         num_rounds: int | None = None,
         checkpoint_callback: Callable[[int], None] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """主训练循环
 
         Args:
             num_rounds: 训练轮数，None 表示无限循环
             checkpoint_callback: 检查点回调函数，参数为当前代数
+            progress_callback: 进度回调函数，参数为本轮统计信息
         """
         if not self._is_setup:
             self.setup()
@@ -564,7 +568,11 @@ class MultiArenaTrainer:
                 stats = self.run_round()
                 round_count += 1
 
-                # 检查点回调
+                # 进度回调（每轮调用）
+                if progress_callback is not None:
+                    progress_callback(stats)
+
+                # 检查点回调（按间隔调用）
                 if checkpoint_callback is not None:
                     checkpoint_callback(self.generation)
 

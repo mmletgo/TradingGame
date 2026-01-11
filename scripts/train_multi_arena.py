@@ -44,7 +44,7 @@ def progress_callback(stats: dict[str, Any]) -> None:
 
     generation = stats.get("generation", 0)
     total_episodes = stats.get("total_episodes", 0)
-    round_time = stats.get("round_time", 0.0)
+    round_time = stats.get("total_time", 0.0)  # 使用 total_time
     avg_fitnesses = stats.get("avg_fitnesses", {})
 
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -98,8 +98,8 @@ def main() -> None:
     parser.add_argument(
         "--checkpoint-interval",
         type=int,
-        default=100,
-        help="检查点保存间隔（轮数，默认: 100，0 表示不保存）",
+        default=10,
+        help="检查点保存间隔（轮数，默认: 10，0 表示不保存）",
     )
     parser.add_argument(
         "--resume",
@@ -216,6 +216,7 @@ def main() -> None:
         trainer.train(
             num_rounds=args.rounds,
             checkpoint_callback=checkpoint_callback,
+            progress_callback=progress_callback,
         )
     except KeyboardInterrupt:
         print("\n\n训练被用户中断")
