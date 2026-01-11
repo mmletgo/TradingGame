@@ -467,6 +467,9 @@ class ParallelArenaTrainer:
         if not self._is_setup:
             raise RuntimeError("训练环境未初始化，请先调用 setup()")
 
+        # 确保 _is_running 为 True，否则 _run_episode_all_arenas 会立即返回
+        self._is_running = True
+
         round_start = time.perf_counter()
         stats: dict[str, Any] = {}
 
