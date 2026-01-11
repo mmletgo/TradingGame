@@ -15,10 +15,19 @@ import pickle
 import random
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
+
+
+@dataclass
+class MultiArenaConfig:
+    """多竞技场配置"""
+
+    num_arenas: int = 10
+    episodes_per_arena: int = 10
 
 if TYPE_CHECKING:
     from src.training._cython.batch_decide_openmp import BatchNetworkCache
@@ -50,7 +59,6 @@ from .arena_state import (
     CatfishAccountState,
 )
 from .fitness_aggregator import FitnessAggregator
-from .multi_arena_trainer import MultiArenaConfig
 
 # 缓存类型常量
 CACHE_TYPE_RETAIL = 0
