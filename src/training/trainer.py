@@ -39,7 +39,6 @@ if TYPE_CHECKING:
         NormalizedMarketState as NormalizedMarketStateType,
     )
     from src.market.orderbook.orderbook import OrderBook
-    from src.training.generation_saver import GenerationSaver
 from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
@@ -128,7 +127,6 @@ class Trainer:
     _tick_history_amounts: list[float]
     _episode_high_price: float  # 当前 episode 最高价
     _episode_low_price: float  # 当前 episode 最低价
-    _generation_saver: "GenerationSaver | None"
     _retail_worker_pool: "PersistentWorkerPool | None"  # RETAIL 子种群的多进程 Worker 池（已废弃）
     _unified_worker_pool: "MultiPopulationWorkerPool | None"  # 统一多种群 Worker 池
     _worker_pool_synced: bool  # Worker 池是否已同步基因组
@@ -180,9 +178,6 @@ class Trainer:
         self._episode_high_price: float = 0.0
         self._episode_low_price: float = 0.0
 
-        # 每代保存器
-        self._generation_saver: "GenerationSaver | None" = None
-
         # 预分配市场状态缓冲区（性能优化）
         self._market_state_buffers: dict[str, NDArray[np.float32]] = {
             'bid_data': np.zeros(200, dtype=np.float32),
@@ -207,16 +202,6 @@ class Trainer:
 
         # 适应度累积与进化间隔
         self._episodes_since_evolution: int = 0  # 距上次进化的 episode 数
-
-    def set_generation_saver(self, saver: "GenerationSaver") -> None:
-        """设置每代保存器
-
-        设置后，每次进化完成会自动保存该代的最佳基因组。
-
-        Args:
-            saver: GenerationSaver 实例
-        """
-        self._generation_saver = saver
 
     def _init_ema_price(self, initial_price: float) -> None:
         """初始化 EMA 平滑价格
@@ -2303,15 +2288,6 @@ class Trainer:
                 for agent_type, population in self.populations.items():
                     population.clear_accumulated_fitness()
                 self._episodes_since_evolution = 0
-
-                # 保存每代的 best_genome（如果设置了保存器）
-                if self._generation_saver is not None:
-                    generation = next(iter(self.populations.values())).generation
-                    self._generation_saver.save_generation(
-                        generation=generation,
-                        populations=self.populations,
-                        current_price=current_price,
-                    )
 
                 # 进化后重新注册新 Agent 的费率，重建映射表和执行顺序
                 self._register_all_agents()

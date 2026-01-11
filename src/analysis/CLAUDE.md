@@ -7,10 +7,173 @@
 ## 文件结构
 
 - `__init__.py` - 模块导出
+- `checkpoint_loader.py` - Checkpoint 加载器
 - `demo_analyzer.py` - 演示模式分析器
 - `evolution_tester.py` - 进化效果测试器
 
 ## 核心类
+
+### CheckpointLoader (checkpoint_loader.py)
+
+Checkpoint 加载器，从主 checkpoint 文件加载所有基因组数据。
+
+**支持的 Checkpoint 格式：**
+- `multi_arena_gen_{N}.pkl`: 文件名直接对应代数
+- `ep_{episode}.pkl`: 代数 = episode / evolution_interval（默认10）
+
+**属性：**
+- `checkpoint_dir: Path` - checkpoint 文件目录
+- `evolution_interval: int` - 进化间隔（默认 10）
+- `logger` - 日志器
+
+**构造参数：**
+- `checkpoint_dir: str` - checkpoint 文件目录（默认 "checkpoints"）
+- `evolution_interval: int | None` - 进化间隔，默认使用 `DEFAULT_EVOLUTION_INTERVAL`（10）
+
+**核心方法：**
+
+#### `list_generations() -> list[int]`
+列出所有可用代数。
+
+扫描两种格式的 checkpoint 文件，返回排序后的代数列表。
+
+返回：排序后的代数列表
+
+#### `find_checkpoint_for_generation(generation: int) -> Path | None`
+查找对应代数的 checkpoint。
+
+优先使用 multi_arena 格式。ep_{N}.pkl 的代数 = N / evolution_interval。
+
+参数：
+- `generation: int` - 代数
+
+返回：checkpoint 文件路径，不存在返回 None
+
+#### `load_genomes(generation: int) -> dict[AgentType, list[bytes]] | None`
+加载某代的全部基因组。
+
+参数：
+- `generation: int` - 代数
+
+返回：
+- `dict[AgentType, list[bytes]]` - 每物种的序列化基因组列表
+- `None` - 文件不存在或加载失败
+
+#### `load_checkpoint_data(path: str | Path) -> dict[str, Any] | None`
+直接加载 checkpoint 数据。
+
+参数：
+- `path: str | Path` - checkpoint 文件路径
+
+返回：checkpoint 数据字典，加载失败返回 None
+
+#### `get_generation_from_checkpoint_path(path: str | Path) -> int | None`
+从 checkpoint 路径解析代数。
+
+参数：
+- `path: str | Path` - checkpoint 文件路径
+
+返回：代数，无法解析返回 None
+
+**内部方法：**
+
+#### `_load_checkpoint(path: Path) -> dict[str, Any] | None`
+加载 checkpoint（自动检测 gzip 压缩格式）。
+
+通过检测 magic bytes（0x1f 0x8b）自动识别 gzip 压缩文件。
+
+#### `_extract_genomes_from_pop_data(pop_data: dict) -> list[bytes]`
+从种群数据提取全部基因组。
+
+支持两种格式：
+1. SubPopulationManager: `is_sub_population_manager=True`
+2. 普通 Population: 有 `neat_pop` 字段
+
+#### `_extract_genomes_from_neat_pop(neat_pop) -> list[bytes]`
+从 neat.Population 对象提取基因组。
+
+使用 `pickle.dumps(genome)` 序列化每个基因组。
+
+**Checkpoint 数据结构：**
+
+普通训练 checkpoint (ep_{N}.pkl):
+```python
+{
+    "tick": int,
+    "episode": int,
+    "populations": {
+        AgentType.RETAIL: {...},
+        AgentType.RETAIL_PRO: {...},
+        AgentType.WHALE: {...},
+        AgentType.MARKET_MAKER: {...},
+    }
+}
+```
+
+多竞技场 checkpoint (multi_arena_gen_{N}.pkl):
+```python
+{
+    "generation": int,
+    "populations": {...}
+}
+```
+
+**种群数据格式：**
+
+SubPopulationManager (RETAIL/MARKET_MAKER):
+```python
+{
+    "is_sub_population_manager": True,
+    "sub_population_count": int,
+    "sub_populations": [
+        {"neat_pop": neat.Population, "generation": int},
+        ...
+    ]
+}
+```
+
+普通 Population (RETAIL_PRO/WHALE):
+```python
+{
+    "generation": int,
+    "neat_pop": neat.Population,
+}
+```
+
+**使用示例：**
+
+```python
+from src.analysis.checkpoint_loader import CheckpointLoader
+from src.config.config import AgentType
+
+# 创建加载器
+loader = CheckpointLoader(checkpoint_dir="checkpoints")
+
+# 列出所有可用代数
+generations = loader.list_generations()
+print(f"可用代数: {generations}")
+
+# 加载某代的全部基因组
+genomes = loader.load_genomes(generation=10)
+if genomes:
+    for agent_type, genome_list in genomes.items():
+        print(f"{agent_type.value}: {len(genome_list)} 个基因组")
+
+# 直接加载 checkpoint 数据
+data = loader.load_checkpoint_data("checkpoints/ep_100.pkl")
+if data:
+    print(f"Episode: {data.get('episode')}")
+
+# 从路径解析代数
+gen = loader.get_generation_from_checkpoint_path("checkpoints/multi_arena_gen_50.pkl")
+print(f"代数: {gen}")  # 输出: 50
+```
+
+**依赖关系：**
+- `src.config.config.AgentType` - Agent 类型枚举
+- `src.core.log_engine.logger` - 日志器
+
+---
 
 ### DemoAnalyzer
 
@@ -186,12 +349,12 @@ Agent 类型中文名称映射：
 
 **属性：**
 - `config: Config` - 全局配置
-- `generations_dir: str` - 代数据保存目录
+- `checkpoint_dir: str` - checkpoint 文件目录
 - `results_dir: str` - 测试结果保存目录
 
 **构造参数：**
 - `config: Config` - 全局配置对象
-- `generations_dir: str` - 代数据保存目录（默认 "checkpoints/generations"）
+- `checkpoint_dir: str` - checkpoint 文件目录（默认 "checkpoints"）
 - `results_dir: str` - 测试结果保存目录（默认 "checkpoints/test_results"）
 
 **核心方法：**
@@ -207,7 +370,7 @@ Agent 类型中文名称映射：
 返回：Agent 列表
 
 #### `run_baseline_test(generation, num_runs, episode_length, episodes_per_run, force) -> dict`
-基准测试：使用第 N 代 4 个物种的 best_genome 竞技。
+基准测试：使用第 N 代 4 个物种的全部基因组竞技。
 
 参数：
 - `generation: int` - 代数

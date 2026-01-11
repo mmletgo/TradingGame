@@ -12,6 +12,7 @@ from typing import Any, Callable
 import neat
 import numpy as np
 
+from src.analysis.checkpoint_loader import CheckpointLoader
 from src.bio.agents.base import Agent, AgentType
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.bio.agents.retail import RetailAgent
@@ -50,7 +51,7 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
     Args:
         params: 测试参数字典，包含：
             - config: Config 对象
-            - populations_data: 各物种的 genome_data 字典
+            - populations_data: 各物种的 genome_data 列表字典
             - episode_length: 每个 episode 的 tick 数量
             - episodes_per_run: 每次运行的 episode 数量（默认 10）
             - test_type: 测试类型 ("baseline" 或 "comparison")
@@ -64,7 +65,7 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
     from src.market.catfish import create_all_catfish, create_catfish
 
     config: Config = params["config"]
-    populations_data: dict[AgentType, bytes] = params["populations_data"]
+    populations_data: dict[AgentType, list[bytes]] = params["populations_data"]
     episode_length: int = params["episode_length"]
     episodes_per_run: int = params.get("episodes_per_run", 10)
     test_type: str = params["test_type"]
@@ -100,13 +101,18 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
 
     # 从 genome 创建 Agent
     for agent_type in AgentType:
-        genome_data = populations_data.get(agent_type)
-        if genome_data is None:
+        genome_data_list = populations_data.get(agent_type, [])
+        if not genome_data_list:
             continue
 
-        # 反序列化 genome
-        genome = pickle.loads(genome_data)
-        if not isinstance(genome, neat.DefaultGenome):
+        # 反序列化所有 genome
+        genome_list: list[neat.DefaultGenome] = []
+        for gd in genome_data_list:
+            genome = pickle.loads(gd)
+            if isinstance(genome, neat.DefaultGenome):
+                genome_list.append(genome)
+
+        if not genome_list:
             continue
 
         # 获取该物种的配置
@@ -115,9 +121,11 @@ def _run_single_test_worker(params: dict[str, Any]) -> dict[str, Any]:
         agent_class = _AGENT_CLASSES[agent_type]
         agent_id_offset = _AGENT_ID_OFFSET[agent_type]
 
-        # 创建 count 个 Agent（每个有独立的 Brain 实例）
+        # 创建 count 个 Agent（循环使用 genome 列表中的基因组）
         agents: list[Agent] = []
         for i in range(agent_config.count):
+            # 循环使用 genome 列表中的基因组
+            genome = genome_list[i % len(genome_list)]
             brain = Brain.from_genome(genome, neat_config)
             agent = agent_class(agent_id_offset + i, brain, agent_config)
             agents.append(agent)
@@ -320,31 +328,31 @@ class EvolutionTester:
     通过对比测试评估进化是否有效。
 
     测试方法：
-    1. 基准测试：使用第 N 代 4 个物种的 best_genome 竞技
+    1. 基准测试：使用第 N 代 4 个物种的全部基因组竞技
     2. 比较测试：第 N 代某物种 + 第 N-1 代其他物种
 
     如果进化有效，第 N 代物种在比较测试中应表现更好。
     """
 
     config: Config
-    generations_dir: str
+    checkpoint_dir: str
     results_dir: str
 
     def __init__(
         self,
         config: Config,
-        generations_dir: str = "checkpoints/generations",
+        checkpoint_dir: str = "checkpoints",
         results_dir: str = "checkpoints/test_results",
     ) -> None:
         """初始化测试器
 
         Args:
             config: 全局配置对象
-            generations_dir: 代数据保存目录
+            checkpoint_dir: checkpoint 文件目录
             results_dir: 测试结果保存目录
         """
         self.config = config
-        self.generations_dir = generations_dir
+        self.checkpoint_dir = checkpoint_dir
         self.results_dir = results_dir
         self.logger = get_logger("evolution_tester")
 
@@ -353,41 +361,19 @@ class EvolutionTester:
         os.makedirs(f"{self.results_dir}/baseline", exist_ok=True)
         os.makedirs(f"{self.results_dir}/comparison", exist_ok=True)
 
-    def _load_generation_data(self, generation: int) -> dict[AgentType, bytes] | None:
-        """加载某一代的 best_genome 数据
+    def _load_generation_data(
+        self, generation: int
+    ) -> dict[AgentType, list[bytes]] | None:
+        """加载某一代的全部基因组数据
 
         Args:
             generation: 代数
 
         Returns:
-            各物种的 genome_data 字典，如果文件不存在返回 None
+            各物种的 genome_data 列表字典，如果文件不存在返回 None
         """
-        gen_path = Path(self.generations_dir) / f"gen_{generation}.pkl"
-        if not gen_path.exists():
-            self.logger.warning(f"代数据文件不存在: {gen_path}")
-            return None
-
-        with open(gen_path, "rb") as f:
-            gen_data = pickle.load(f)
-
-        # 提取各物种的 best_genome
-        # GenerationSaver 保存格式: {"generation": int, "timestamp": float, "best_genomes": {agent_type_value: (genome_data, fitness)}}
-        result: dict[AgentType, bytes] = {}
-        best_genomes = gen_data.get("best_genomes", {})
-
-        for agent_type in AgentType:
-            # key 是 agent_type.value（如 "retail"）
-            type_key = agent_type.value.lower()
-            genome_tuple = best_genomes.get(type_key)
-            if genome_tuple is None:
-                self.logger.warning(f"代 {generation} 缺少 {agent_type.value} 数据")
-                continue
-
-            # genome_tuple 格式: (genome_data: bytes, fitness: float)
-            genome_data, fitness = genome_tuple
-            result[agent_type] = genome_data
-
-        return result if len(result) == 4 else None
+        loader = CheckpointLoader(self.checkpoint_dir)
+        return loader.load_genomes(generation)
 
     def create_agents_from_genome(
         self,
@@ -569,7 +555,7 @@ class EvolutionTester:
             return {"error": f"无法加载代 {base_generation} 的数据"}
 
         # 构建混合种群数据
-        mixed_data: dict[AgentType, bytes] = {}
+        mixed_data: dict[AgentType, list[bytes]] = {}
         for agent_type in AgentType:
             if agent_type == target_species:
                 # 目标物种使用新代
@@ -787,7 +773,7 @@ class EvolutionTester:
         # 比较测试参数（每个物种）
         for target_species in AgentType:
             # 构建混合种群数据
-            mixed_data: dict[AgentType, bytes] = {}
+            mixed_data: dict[AgentType, list[bytes]] = {}
             for agent_type in AgentType:
                 if agent_type == target_species:
                     mixed_data[agent_type] = target_data[agent_type]

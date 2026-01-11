@@ -10,7 +10,6 @@
 - `population.py` - 种群管理类
 - `trainer.py` - 训练器类
 - `checkpoint_loader.py` - checkpoint 加载器
-- `generation_saver.py` - 每代最佳基因组保存器
 - `fast_math.py` - Numba JIT 加速的数学函数（对数归一化等）
 - `arena/` - 竞技场模块（详见 `arena/CLAUDE.md`）
   - `__init__.py` - 模块导出
@@ -59,38 +58,6 @@ checkpoint 加载器，用于加载训练检查点。
     },
 }
 ```
-
-### GenerationSaver (generation_saver.py)
-
-每代最佳基因组保存器，在进化后保存各物种的最佳基因组，用于后续进化效果评估。
-
-**主要方法：**
-- `save_generation(generation, populations, current_price)` - 保存一代的最佳基因组
-  - 对每个种群获取 fitness 最高的 genome，序列化后保存
-  - 返回保存的文件路径
-- `load_generation(generation)` - 加载指定代的最佳基因组数据，不存在返回 None
-- `list_generations()` - 列出所有已保存的代数（升序）
-
-**保存格式：**
-```python
-{
-    "generation": int,
-    "timestamp": float,  # time.time()
-    "best_genomes": {
-        "retail": (genome_data: bytes, fitness: float),
-        "retail_pro": (genome_data: bytes, fitness: float),
-        "whale": (genome_data: bytes, fitness: float),
-        "market_maker": (genome_data: bytes, fitness: float),
-    }
-}
-```
-
-**实现细节：**
-- 使用 `pickle.dumps(genome)` 序列化 genome
-- 通过 `population.get_all_genomes()` 获取所有 genome（兼容 Population 和 SubPopulationManager）
-- 按 `genome.fitness` 降序排序，取第一个作为 best_genome
-- 使用 pickle 保存到 `{output_dir}/gen_{N}.pkl`
-- 默认输出目录为 `checkpoints/generations`
 
 ### FitnessAggregator (arena/fitness_aggregator.py)
 
