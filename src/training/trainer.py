@@ -1454,14 +1454,14 @@ class Trainer:
         """解析散户/高级散户/庄家的神经网络输出"""
         from src.bio.agents.base import ActionType, fast_argmax, fast_round_price, fast_clip
 
-        # 解析动作类型
-        num_actions = 7 if agent_type == AgentType.WHALE else 6
+        # 解析动作类型（统一使用 6 个动作）
+        num_actions = 6
         action_idx = fast_argmax(output, 0, num_actions)
         action = ActionType(action_idx)
 
         # 解析参数
-        price_offset_norm = fast_clip(output[7], -1.0, 1.0)
-        quantity_ratio_norm = fast_clip(output[8], -1.0, 1.0)
+        price_offset_norm = fast_clip(output[6], -1.0, 1.0)
+        quantity_ratio_norm = fast_clip(output[7], -1.0, 1.0)
         quantity_ratio = (quantity_ratio_norm + 1) * 0.5
 
         params: dict[str, Any] = {}
@@ -1644,7 +1644,6 @@ class Trainer:
                 continue
 
             # 转换结果
-            is_whale = (agent_type == AgentType.WHALE)
             is_market_maker = (agent_type == AgentType.MARKET_MAKER)
             tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
@@ -1661,7 +1660,7 @@ class Trainer:
                         action_type_int, side_int, price, quantity = raw_results[i]
                         action, params = self._convert_retail_result(
                             agent, action_type_int, side_int, price, quantity,
-                            mid_price, is_whale=is_whale
+                            mid_price
                         )
                     all_results.append((idx, agent, action, params))
                 except Exception:
@@ -1679,9 +1678,8 @@ class Trainer:
         price: float,
         quantity: int,
         mid_price: float,
-        is_whale: bool = False,
     ) -> tuple["ActionType", dict[str, Any]]:
-        """将 Cython 返回的散户/庄家结果转换为 ActionType 和 params
+        """将 Cython 返回的散户/高级散户/庄家结果转换为 ActionType 和 params
 
         Args:
             agent: Agent 对象
@@ -1692,12 +1690,10 @@ class Trainer:
                 - 3: CANCEL
                 - 4: MARKET_BUY
                 - 5: MARKET_SELL
-                - 6: CLEAR_POSITION（仅庄家）
             side_int: 方向整数（1=买, 2=卖）
             price: 价格
             quantity: 数量（实际上是比例值，需要转换）
             mid_price: 中间价
-            is_whale: 是否为庄家
 
         Returns:
             (动作类型, 参数字典)
@@ -1752,9 +1748,6 @@ class Trainer:
                     mid_price, quantity, is_buy=False
                 )
                 params["quantity"] = actual_qty
-        elif action_type_int == 6 and is_whale:
-            # CLEAR_POSITION - 清仓（仅庄家）
-            action = ActionType.CLEAR_POSITION
         else:
             # 默认不动
             action = ActionType.HOLD

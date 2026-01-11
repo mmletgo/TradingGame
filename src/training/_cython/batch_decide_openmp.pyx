@@ -56,18 +56,17 @@ DEF AGENT_MARKET_MAKER = 3
 DEF INPUT_DIM_RETAIL = 127
 DEF INPUT_DIM_FULL = 907
 DEF INPUT_DIM_MARKET_MAKER = 934
-DEF OUTPUT_DIM_RETAIL = 9
+DEF OUTPUT_DIM_RETAIL = 8
 DEF OUTPUT_DIM_MARKET_MAKER = 21
 
-# 动作类型
+# 动作类型（散户/高级散户/庄家共用6种动作）
 DEF ACTION_HOLD = 0
 DEF ACTION_PLACE_BID = 1
 DEF ACTION_PLACE_ASK = 2
 DEF ACTION_CANCEL = 3
 DEF ACTION_MARKET_BUY = 4
 DEF ACTION_MARKET_SELL = 5
-DEF ACTION_CLEAR_POSITION = 6
-DEF ACTION_QUOTE = 7
+DEF ACTION_QUOTE = 6  # 做市商专用
 
 
 # ============================================================================
@@ -921,38 +920,35 @@ cdef void _parse_retail_single(
     DecisionResult* result,
     double mid_price,
     double tick_size,
-    int is_whale,
 ) noexcept nogil:
     """解析散户/高级散户/庄家的神经网络输出
 
-    输出结构（9个值）：
-    - [0-6]: 动作类型得分
-    - [7]: 价格偏移（-1 到 1）
-    - [8]: 数量比例（-1 到 1）
+    输出结构（8个值）：
+    - [0-5]: 动作类型得分（6种动作）
+    - [6]: 价格偏移（-1 到 1）
+    - [7]: 数量比例（-1 到 1）
 
-    动作类型：
+    动作类型（统一6种）：
     - 0: HOLD
     - 1: PLACE_BID
     - 2: PLACE_ASK
     - 3: CANCEL
     - 4: MARKET_BUY
     - 5: MARKET_SELL
-    - 6: CLEAR_POSITION（仅庄家）
     """
     # 所有变量声明必须在函数开头
-    cdef int num_actions
     cdef int action_idx
     cdef double price_offset_norm
     cdef double quantity_ratio_norm
     cdef double quantity_ratio
     cdef double price_offset_ticks
 
-    num_actions = 7 if is_whale else 6
-    action_idx = argmax(nn_output, 0, num_actions)
+    # 统一使用6种动作
+    action_idx = argmax(nn_output, 0, 6)
 
-    # 解析参数
-    price_offset_norm = clip(nn_output[7], -1.0, 1.0)
-    quantity_ratio_norm = clip(nn_output[8], -1.0, 1.0)
+    # 解析参数（索引已调整）
+    price_offset_norm = clip(nn_output[6], -1.0, 1.0)
+    quantity_ratio_norm = clip(nn_output[7], -1.0, 1.0)
     quantity_ratio = (quantity_ratio_norm + 1.0) * 0.5
 
     # 设置结果
@@ -992,7 +988,7 @@ cdef void batch_parse_retail_nogil(
     cdef int i
 
     for i in prange(num_agents, nogil=True, num_threads=num_threads, schedule='static'):
-        _parse_retail_single(i, &nn_outputs[i, 0], &results[i], mid_price, tick_size, 0)
+        _parse_retail_single(i, &nn_outputs[i, 0], &results[i], mid_price, tick_size)
 
 
 cdef void _parse_market_maker_single(
