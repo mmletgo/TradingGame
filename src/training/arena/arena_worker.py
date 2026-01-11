@@ -5,9 +5,10 @@
 
 import logging
 import pickle
+import queue
 import signal
 from dataclasses import dataclass
-from multiprocessing import Queue
+from multiprocessing import Event, Queue
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -23,7 +24,7 @@ from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.agents.whale import WhaleAgent
 from src.bio.brain.brain import Brain
-from src.config.config import AgentConfig, Config
+from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLManager
 from src.market.matching.matching_engine import MatchingEngine
@@ -64,6 +65,7 @@ def arena_worker_process(
     config: Config,
     cmd_queue: "Queue[Any]",
     result_queue: "Queue[tuple[str, int, Any]]",
+    shutdown_event: Any = None,
 ) -> None:
     """竞技场工作进程主函数
 
@@ -84,6 +86,7 @@ def arena_worker_process(
         config: 全局配置对象
         cmd_queue: 命令队列
         result_queue: 结果队列
+        shutdown_event: 可选的 shutdown 事件，用于立即通知进程退出
     """
     # 延迟导入，避免循环依赖
     from src.training.trainer import Trainer
@@ -119,10 +122,25 @@ def arena_worker_process(
             str(neat_config_path),
         )
 
+    # 辅助函数：检查是否需要退出
+    def should_exit() -> bool:
+        return shutdown_event is not None and shutdown_event.is_set()
+
     # 主循环
     while True:
+        # 检查 shutdown 事件
+        if should_exit():
+            logger.info(f"Arena {arena_id} worker 检测到 shutdown 事件")
+            break
+
         try:
-            cmd_data = cmd_queue.get()
+            # 使用超时的 get，这样可以定期检查 shutdown 事件
+            try:
+                cmd_data = cmd_queue.get(timeout=1.0)
+            except queue.Empty:
+                # 超时，继续循环以检查 shutdown 事件
+                continue
+
             if cmd_data is None:
                 break
 

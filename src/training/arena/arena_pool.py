@@ -4,7 +4,7 @@
 """
 
 import logging
-from multiprocessing import Process, Queue
+from multiprocessing import Event, Process, Queue
 from typing import Any
 
 import numpy as np
@@ -28,6 +28,7 @@ class ArenaPool:
         workers: 工作进程列表
         cmd_queues: 命令队列（每个竞技场一个）
         result_queue: 结果队列（共享）
+        shutdown_event: 共享的 shutdown 事件
         logger: 日志器
         _started: 是否已启动
     """
@@ -37,6 +38,7 @@ class ArenaPool:
     workers: list[Process]
     cmd_queues: list["Queue[Any]"]
     result_queue: "Queue[tuple[str, int, Any]]"
+    shutdown_event: Any  # multiprocessing.Event
     logger: logging.Logger
     _started: bool
 
@@ -54,6 +56,9 @@ class ArenaPool:
         # 创建共享结果队列
         self.result_queue = Queue()
 
+        # 创建共享 shutdown 事件
+        self.shutdown_event = Event()
+
         # 为每个竞技场创建独立的命令队列
         self.cmd_queues = [Queue() for _ in range(num_arenas)]
 
@@ -67,6 +72,9 @@ class ArenaPool:
             self.logger.warning("ArenaPool 已启动，跳过重复启动")
             return
 
+        # 重置 shutdown 事件
+        self.shutdown_event.clear()
+
         self.logger.info(f"正在启动 {self.num_arenas} 个竞技场工作进程...")
 
         for arena_id in range(self.num_arenas):
@@ -77,6 +85,7 @@ class ArenaPool:
                     self.config,
                     self.cmd_queues[arena_id],
                     self.result_queue,
+                    self.shutdown_event,  # 传递 shutdown 事件
                 ),
                 daemon=True,
             )
@@ -260,17 +269,20 @@ class ArenaPool:
 
         self.logger.info("正在关闭所有竞技场工作进程...")
 
-        # 向所有竞技场发送 shutdown 命令
+        # 首先设置 shutdown 事件，这会让工作进程在下次循环时退出
+        self.shutdown_event.set()
+
+        # 向所有竞技场发送 shutdown 命令（双重保障）
         for arena_id in range(self.num_arenas):
             try:
                 self.cmd_queues[arena_id].put(("shutdown",))
             except Exception as e:
                 self.logger.warning(f"向 Arena {arena_id} 发送 shutdown 命令失败: {e}")
 
-        # 等待所有进程退出（超时 5 秒）
+        # 等待所有进程退出（超时 3 秒，因为有 shutdown_event 所以应该更快）
         for i, p in enumerate(self.workers):
             try:
-                p.join(timeout=5.0)
+                p.join(timeout=3.0)
                 if p.is_alive():
                     self.logger.warning(f"Arena {i} 工作进程未能正常退出，强制终止")
                     p.terminate()

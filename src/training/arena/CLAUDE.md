@@ -29,6 +29,7 @@ class ArenaPool:
         workers: 工作进程列表
         cmd_queues: 命令队列（每个竞技场一个）
         result_queue: 结果队列（共享）
+        shutdown_event: 共享的 shutdown 事件，用于通知工作进程退出
     """
 ```
 
@@ -96,8 +97,14 @@ def arena_worker_process(
     config: Config,
     cmd_queue: Queue[tuple[str, Any]],
     result_queue: Queue[tuple[str, int, Any]],
+    shutdown_event: Any = None,  # multiprocessing.Event，用于通知进程退出
 ) -> None
 ```
+
+**进程退出机制：**
+- 工作进程使用带超时的 `cmd_queue.get(timeout=1.0)` 等待命令
+- 每次循环检查 `shutdown_event.is_set()` 状态
+- 收到 `shutdown` 命令或检测到 shutdown 事件时退出主循环
 
 **命令格式：**
 
