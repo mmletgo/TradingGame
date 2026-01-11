@@ -777,7 +777,7 @@ class ParallelArenaTrainer:
         """
         # 阶段1: 准备（串行）- 强平检查、计算市场状态
         arena_market_states: list[NormalizedMarketState] = []
-        arena_active_agents: list[list[AgentStateAdapter]] = []
+        arena_active_agents: list[list[AgentAccountState]] = []
 
         for arena in self.arena_states:
             arena.tick += 1
@@ -813,18 +813,18 @@ class ParallelArenaTrainer:
             market_state = self._compute_market_state_for_arena(arena)
             arena_market_states.append(market_state)
 
-            # 收集活跃的 Agent 状态适配器
-            active_adapters: list[AgentStateAdapter] = []
-            for agent_state in arena.agent_states.values():
-                if not agent_state.is_liquidated:
-                    active_adapters.append(AgentStateAdapter(agent_state))
+            # 直接收集活跃的 Agent 状态（无需创建 adapter）
+            active_states: list[AgentAccountState] = [
+                state for state in arena.agent_states.values()
+                if not state.is_liquidated
+            ]
 
             # 随机打乱执行顺序
-            random.shuffle(active_adapters)
-            arena_active_agents.append(active_adapters)
+            random.shuffle(active_states)
+            arena_active_agents.append(active_states)
 
-        # 阶段2: 批量推理（并行）- 合并所有竞技场的推理
-        all_decisions = self._batch_inference_all_arenas(
+        # 阶段2: 批量推理（并行）- 合并所有竞技场的推理（使用 direct 方法）
+        all_decisions = self._batch_inference_all_arenas_direct(
             arena_market_states, arena_active_agents
         )
 
@@ -837,14 +837,13 @@ class ParallelArenaTrainer:
             decisions = all_decisions.get(arena_idx, [])
             tick_trades: list[Trade] = []
 
-            for adapter, action, params in decisions:
-                agent = self._get_agent_by_id(adapter.agent_id)
-                agent_state = arena.agent_states.get(adapter.agent_id)
-                if agent is None or agent_state is None:
+            for state, action, params in decisions:
+                agent = self._get_agent_by_id(state.agent_id)
+                if agent is None:
                     continue
 
                 trades = self._execute_action_in_arena(
-                    arena, agent, agent_state, action, params
+                    arena, agent, state, action, params
                 )
                 tick_trades.extend(trades)
 
@@ -1018,6 +1017,140 @@ class ParallelArenaTrainer:
                             )
 
                         results[arena_idx].append((adapter, action, params))
+                    except Exception:
+                        pass
+
+        return results
+
+    def _batch_inference_all_arenas_direct(
+        self,
+        arena_market_states: list[NormalizedMarketState],
+        arena_active_states: list[list[AgentAccountState]],
+    ) -> dict[int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]]:
+        """批量推理所有竞技场的所有 Agent（直接使用 AgentAccountState，无需 adapter）
+
+        核心优化：将 N 个竞技场 x M 个 Agent 的推理合并成单次 OpenMP 并行操作。
+        直接使用 AgentAccountState 对象，避免创建 adapter 的开销。
+
+        Args:
+            arena_market_states: 各竞技场的市场状态
+            arena_active_states: 各竞技场的活跃 Agent 状态列表
+
+        Returns:
+            dict[arena_id, list[(state, action, params)]]
+        """
+        results: dict[
+            int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]
+        ] = {}
+
+        # 初始化结果
+        for arena_idx in range(len(arena_active_states)):
+            results[arena_idx] = []
+
+        if self.network_caches is None:
+            # 回退到串行推理
+            return results
+
+        # 按 AgentType 分组收集数据（跨所有竞技场）
+        # 格式: {agent_type: {arena_idx: [(state, network_idx), ...]}}
+        type_arena_data: dict[
+            AgentType, dict[int, list[tuple[AgentAccountState, int]]]
+        ] = {}
+
+        for arena_idx, states in enumerate(arena_active_states):
+            for state in states:
+                agent_type = state.agent_type
+
+                network_idx = self._get_network_index(agent_type, state.agent_id)
+                if network_idx < 0:
+                    continue
+
+                if agent_type not in type_arena_data:
+                    type_arena_data[agent_type] = {}
+                if arena_idx not in type_arena_data[agent_type]:
+                    type_arena_data[agent_type][arena_idx] = []
+
+                type_arena_data[agent_type][arena_idx].append((state, network_idx))
+
+        # 对每种类型使用 decide_multi_arena_direct 进行批量推理
+        for agent_type, arena_data in type_arena_data.items():
+            cache = self.network_caches.get(agent_type)
+            if cache is None or not cache.is_valid():
+                continue
+
+            # 准备 decide_multi_arena_direct 的参数
+            sorted_arena_indices = sorted(arena_data.keys())
+
+            states_per_arena: list[list[AgentAccountState]] = []
+            market_states: list[NormalizedMarketState] = []
+            network_indices_per_arena: list[list[int]] = []
+            state_mapping: list[list[AgentAccountState]] = []
+
+            for arena_idx in sorted_arena_indices:
+                arena_entries = arena_data[arena_idx]
+
+                arena_states_list: list[AgentAccountState] = []
+                arena_network_indices: list[int] = []
+
+                for state, network_idx in arena_entries:
+                    arena_states_list.append(state)
+                    arena_network_indices.append(network_idx)
+
+                states_per_arena.append(arena_states_list)
+                market_states.append(arena_market_states[arena_idx])
+                network_indices_per_arena.append(arena_network_indices)
+                state_mapping.append(arena_states_list)
+
+            # 调用 decide_multi_arena_direct 进行批量推理
+            try:
+                raw_results = cache.decide_multi_arena_direct(
+                    states_per_arena,
+                    market_states,
+                    network_indices_per_arena,
+                )
+            except Exception as e:
+                self.logger.warning(f"批量决策失败 {agent_type.value}: {e}")
+                continue
+
+            # 解析结果并填充到 results
+            is_market_maker = agent_type == AgentType.MARKET_MAKER
+
+            for result_idx, arena_idx in enumerate(sorted_arena_indices):
+                arena_results = raw_results.get(result_idx, [])
+                arena_states_list = state_mapping[result_idx]
+                market_state = arena_market_states[arena_idx]
+                mid_price = market_state.mid_price
+                tick_size = (
+                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                )
+
+                for i, raw_result in enumerate(arena_results):
+                    if i >= len(arena_states_list):
+                        break
+
+                    state = arena_states_list[i]
+                    agent = self.agent_map.get(state.agent_id)
+                    if agent is None:
+                        continue
+
+                    try:
+                        if is_market_maker:
+                            nn_output, _, _ = raw_result
+                            action, params = self._parse_market_maker_output(
+                                agent, nn_output, mid_price, tick_size
+                            )
+                        else:
+                            action_type_int, side_int, price, quantity = raw_result
+                            action, params = self._convert_retail_result(
+                                agent,
+                                action_type_int,
+                                side_int,
+                                price,
+                                quantity,
+                                mid_price,
+                            )
+
+                        results[arena_idx].append((state, action, params))
                     except Exception:
                         pass
 

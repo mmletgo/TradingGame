@@ -1982,6 +1982,208 @@ cdef class BatchNetworkCache:
 
         return result_dict
 
+    def decide_multi_arena_direct(
+        self,
+        list agent_states_per_arena,
+        list market_states,
+        list network_indices_per_arena,
+    ) -> dict:
+        """跨竞技场批量推理（直接使用 AgentAccountState，无需 adapter）
+
+        将多个竞技场的推理任务合并成一个批量，使用 OpenMP 并行执行。
+        直接从 AgentAccountState 对象提取数据，避免创建 adapter 对象的开销。
+
+        Args:
+            agent_states_per_arena: 每个竞技场的 AgentAccountState 列表，list[list[AgentAccountState]]
+            market_states: 每个竞技场的市场状态，list[MarketState]
+            network_indices_per_arena: 每个竞技场每个 agent 对应的网络索引，list[list[int]]
+
+        Returns:
+            dict[arena_idx, list[(action_type, side, price, quantity)]]
+            对于做市商类型，返回 dict[arena_idx, list[(nn_output, mid_price, tick_size)]]
+        """
+        cdef int num_arenas = len(agent_states_per_arena)
+        if num_arenas == 0 or self.network_data == NULL:
+            return {}
+
+        # 计算总任务数和各竞技场偏移量
+        cdef int total_tasks = 0
+        cdef int arena_idx, i, j
+        cdef list arena_offsets = [0]
+
+        for arena_idx in range(num_arenas):
+            total_tasks += len(agent_states_per_arena[arena_idx])
+            arena_offsets.append(total_tasks)
+
+        if total_tasks == 0:
+            return {}
+
+        # 分配扩展的 Agent 状态数组
+        cdef BatchAgentState* all_agents = alloc_batch_agent_state(total_tasks)
+
+        # 分配多个市场状态
+        cdef MarketStateData** multi_markets = alloc_multi_market_state_data(num_arenas)
+
+        # 分配网络索引数组
+        cdef int* network_indices = <int*>calloc(total_tasks, sizeof(int))
+
+        # 分配市场索引数组
+        cdef int* market_indices = <int*>calloc(total_tasks, sizeof(int))
+
+        # 检查分配
+        if all_agents == NULL or multi_markets == NULL or network_indices == NULL or market_indices == NULL:
+            if all_agents != NULL:
+                free_batch_agent_state(all_agents)
+            if multi_markets != NULL:
+                free_multi_market_state_data(multi_markets, num_arenas)
+            if network_indices != NULL:
+                free(network_indices)
+            if market_indices != NULL:
+                free(market_indices)
+            return {}
+
+        # 提取所有市场状态
+        for arena_idx in range(num_arenas):
+            _extract_market_state(market_states[arena_idx], multi_markets[arena_idx])
+
+        # 直接从 AgentAccountState 提取数据（无需 adapter）
+        cdef int task_idx = 0
+        cdef int pos_qty
+        cdef double mid_price
+        cdef object states, indices, state
+
+        for arena_idx in range(num_arenas):
+            states = agent_states_per_arena[arena_idx]
+            indices = network_indices_per_arena[arena_idx]
+            mid_price = market_states[arena_idx].mid_price
+
+            for i in range(len(states)):
+                state = states[i]
+                pos_qty = state.position_quantity
+
+                # 直接从 AgentAccountState 提取扁平数据
+                all_agents.balance[task_idx] = state.balance
+                all_agents.position_quantity[task_idx] = <double>pos_qty
+                all_agents.position_avg_price[task_idx] = state.position_avg_price
+
+                if pos_qty != 0:
+                    if pos_qty > 0:
+                        all_agents.unrealized_pnl[task_idx] = (mid_price - state.position_avg_price) * pos_qty
+                    else:
+                        all_agents.unrealized_pnl[task_idx] = (state.position_avg_price - mid_price) * (-pos_qty)
+                else:
+                    all_agents.unrealized_pnl[task_idx] = 0.0
+
+                all_agents.margin_ratio[task_idx] = state.get_margin_ratio(mid_price)
+                all_agents.available_margin[task_idx] = state.get_equity(mid_price)
+                all_agents.has_pending_order[task_idx] = 0
+                all_agents.pending_side[task_idx] = 0
+                all_agents.pending_price[task_idx] = 0.0
+                all_agents.pending_quantity[task_idx] = 0.0
+
+                # 设置索引
+                network_indices[task_idx] = indices[i]
+                market_indices[task_idx] = arena_idx
+
+                task_idx += 1
+
+        all_agents.num_agents = total_tasks
+
+        # 分配输入输出数组
+        cdef np.ndarray[DTYPE_t, ndim=2] inputs = np.zeros((total_tasks, self.input_dim), dtype=np.float64)
+        cdef np.ndarray[DTYPE_t, ndim=2] outputs = np.zeros((total_tasks, self.output_dim), dtype=np.float64)
+
+        # 分配结果数组
+        cdef DecisionResult* results = <DecisionResult*>calloc(total_tasks, sizeof(DecisionResult))
+
+        if results == NULL:
+            free_batch_agent_state(all_agents)
+            free_multi_market_state_data(multi_markets, num_arenas)
+            free(network_indices)
+            free(market_indices)
+            return {}
+
+        cdef double[:, :] inputs_view = inputs
+        cdef double[:, :] outputs_view = outputs
+
+        # 执行批量计算
+        with nogil:
+            # 1. 批量观察（使用多市场状态版本）
+            if self.cache_type == 0:  # retail
+                batch_observe_retail_multi_market_nogil(
+                    all_agents, multi_markets, market_indices,
+                    inputs_view, self.num_threads
+                )
+            elif self.cache_type == 1:  # full
+                batch_observe_full_multi_market_nogil(
+                    all_agents, multi_markets, market_indices,
+                    inputs_view, self.num_threads
+                )
+            else:  # market_maker
+                batch_observe_market_maker_multi_market_nogil(
+                    all_agents, multi_markets, market_indices,
+                    inputs_view, self.num_threads
+                )
+
+            # 2. 批量前向传播（使用网络索引版本）
+            batch_forward_with_indices_nogil(
+                self.network_data, network_indices,
+                inputs_view, outputs_view,
+                self.thread_buffers, total_tasks, self.num_threads
+            )
+
+            # 3. 批量解析（使用多市场状态版本）
+            if self.cache_type != 2:  # retail or full
+                batch_parse_retail_multi_market_nogil(
+                    outputs_view, results, multi_markets, market_indices,
+                    total_tasks, self.num_threads
+                )
+            else:  # market_maker
+                batch_parse_market_maker_multi_market_nogil(
+                    outputs_view, results, multi_markets, market_indices,
+                    total_tasks, self.num_threads
+                )
+
+        # 转换结果为 Python 字典
+        cdef dict result_dict = {}
+        cdef int offset, num_agents_in_arena
+        cdef list result_list
+        cdef double tick_size
+
+        for arena_idx in range(num_arenas):
+            result_list = []
+            offset = arena_offsets[arena_idx]
+            num_agents_in_arena = arena_offsets[arena_idx + 1] - offset
+
+            if self.cache_type == 2:  # market_maker
+                mid_price = market_states[arena_idx].mid_price
+                tick_size = market_states[arena_idx].tick_size
+                for i in range(num_agents_in_arena):
+                    result_list.append((
+                        np.asarray(outputs[offset + i]).copy(),
+                        mid_price,
+                        tick_size,
+                    ))
+            else:  # retail/full
+                for i in range(num_agents_in_arena):
+                    result_list.append((
+                        results[offset + i].action_type,
+                        results[offset + i].side,
+                        results[offset + i].price,
+                        results[offset + i].quantity,
+                    ))
+
+            result_dict[arena_idx] = result_list
+
+        # 清理
+        free_batch_agent_state(all_agents)
+        free_multi_market_state_data(multi_markets, num_arenas)
+        free(network_indices)
+        free(market_indices)
+        free(results)
+
+        return result_dict
+
     def is_valid(self) -> bool:
         """检查缓存是否有效（已初始化网络数据）"""
         return self.network_data != NULL and len(self.network_ids) > 0
