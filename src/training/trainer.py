@@ -1569,7 +1569,7 @@ class Trainer:
                 if qty > 0:
                     ask_orders.append({"price": price, "quantity": float(qty)})
 
-        return ActionType.QUOTE, {"bid_orders": bid_orders, "ask_orders": ask_orders}
+        return ActionType.HOLD, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 
     def _batch_decide_parallel(
         self,

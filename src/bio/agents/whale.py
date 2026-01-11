@@ -116,7 +116,7 @@ class WhaleAgent(Agent):
 
         # 5. 解析参数（由神经网络决定）
         # 输出[6]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
-        # 输出[7]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
+        # 输出[7]: 数量比例（-1 到 1，映射到 0.0-1.0 的购买力比例）
         # 使用统一接口（Cython 或回退）
         price_offset_norm = fast_clip(outputs[6], -1.0, 1.0)
         quantity_ratio_norm = fast_clip(outputs[7], -1.0, 1.0)

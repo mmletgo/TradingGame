@@ -10,6 +10,7 @@ import numpy as np
 
 from src.config.config import AgentConfig, AgentType
 
+
 # 纯 Python 备用实现
 def _py_argmax(arr: np.ndarray | list[float], start: int, end: int) -> int:
     """纯 Python argmax 实现"""
@@ -35,6 +36,7 @@ try:
         fast_round_price,
         fast_clip,
     )
+
     _HAS_CYTHON_DECIDE = True
 except ImportError:
     fast_argmax = _py_argmax
@@ -49,6 +51,7 @@ try:
         get_position_inputs as cython_get_position_inputs,
         get_pending_order_inputs as cython_get_pending_order_inputs,
     )
+
     _HAS_CYTHON_OBSERVE = True
 except ImportError:
     _HAS_CYTHON_OBSERVE = False
@@ -207,7 +210,9 @@ class Agent:
             self._input_buffer[200:400] = market_state.ask_data
             self._input_buffer[400:500] = market_state.trade_prices
             self._input_buffer[500:600] = market_state.trade_quantities
-            self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
+            self._input_buffer[600:604] = self._get_position_inputs(
+                market_state.mid_price
+            )
             self._input_buffer[604:607] = self._get_pending_order_inputs(
                 market_state.mid_price, orderbook
             )
@@ -308,7 +313,7 @@ class Agent:
 
         Args:
             price: 订单价格（用于计算最终数量）
-            ratio: 数量比例（0.1 到 1.0，表示使用可用空间的比例）
+            ratio: 数量比例（0.0 到 1.0，表示使用可用空间的比例）
             is_buy: 是否为买入方向
             ref_price: 参考价格（用于计算 equity 和仓位价值，默认为 0 则使用 price）
 
@@ -527,9 +532,7 @@ class Agent:
         # 重置订单计数器
         self._order_counter = 0
 
-    def update_brain(
-        self, genome: neat.DefaultGenome, config: neat.Config
-    ) -> None:
+    def update_brain(self, genome: neat.DefaultGenome, config: neat.Config) -> None:
         """原地更新 brain，复用 Agent 对象
 
         Args:
