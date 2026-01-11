@@ -41,6 +41,7 @@ class ArenaPool:
     shutdown_event: Any  # multiprocessing.Event
     logger: logging.Logger
     _started: bool
+    _agents_initialized: bool
 
     def __init__(self, num_arenas: int, config: Config) -> None:
         """初始化进程池
@@ -65,6 +66,9 @@ class ArenaPool:
         # 工作进程列表（启动时填充）
         self.workers = []
         self._started = False
+
+        # 跟踪是否已完成首次 setup
+        self._agents_initialized = False
 
     def start(self) -> None:
         """启动所有工作进程"""
@@ -101,22 +105,37 @@ class ArenaPool:
         genome_data: dict[AgentType, bytes],
         network_params: dict[AgentType, tuple[np.ndarray, ...]],
     ) -> None:
-        """广播基因组到所有竞技场
+        """广播基因组/网络参数到所有竞技场
 
-        一次序列化，广播到所有队列，等待所有竞技场 setup 完成。
+        首次调用发送 setup 命令（创建 Agent），后续调用发送 update_networks 命令（只更新网络）。
 
         Args:
             genome_data: 各物种的序列化基因组数据
             network_params: 各物种的网络参数
 
         Raises:
-            RuntimeError: 当任意竞技场 setup 失败时
-            TimeoutError: 当等待 setup 完成超时时
+            RuntimeError: 当任意竞技场 setup/update 失败时
+            TimeoutError: 当等待 setup/update 完成超时时
         """
         if not self._started:
             raise RuntimeError("ArenaPool 尚未启动，请先调用 start()")
 
-        self.logger.debug(f"广播基因组到 {self.num_arenas} 个竞技场...")
+        # 判断是首次 setup 还是后续更新
+        if not self._agents_initialized:
+            # 首次：发送 setup 命令
+            self._broadcast_setup(genome_data, network_params)
+            self._agents_initialized = True
+        else:
+            # 后续：只发送 update_networks 命令
+            self._broadcast_update_networks(network_params)
+
+    def _broadcast_setup(
+        self,
+        genome_data: dict[AgentType, bytes],
+        network_params: dict[AgentType, tuple[np.ndarray, ...]],
+    ) -> None:
+        """发送 setup 命令到所有竞技场（首次调用）"""
+        self.logger.debug(f"广播 setup 命令到 {self.num_arenas} 个竞技场...")
 
         # 向所有竞技场发送 setup 命令
         for arena_id in range(self.num_arenas):
@@ -128,7 +147,6 @@ class ArenaPool:
 
         while setup_done_count < self.num_arenas:
             try:
-                # 超时 60 秒，防止无限等待
                 result = self.result_queue.get(timeout=60.0)
                 result_type, arena_id, data = result
 
@@ -140,28 +158,71 @@ class ArenaPool:
                     )
                 elif result_type == "error":
                     errors.append((arena_id, str(data)))
-                    setup_done_count += 1  # 计入已处理
+                    setup_done_count += 1
                     self.logger.error(f"Arena {arena_id} setup 失败: {data}")
                 else:
                     self.logger.warning(
                         f"收到未预期的结果类型: {result_type}, "
                         f"arena_id={arena_id}, data={data}"
                     )
-
             except Exception as e:
                 raise TimeoutError(
                     f"等待竞技场 setup 完成超时 "
                     f"(已完成: {setup_done_count}/{self.num_arenas})"
                 ) from e
 
-        # 检查是否有错误
         if errors:
-            error_details = ", ".join(
-                [f"Arena {aid}: {msg}" for aid, msg in errors]
-            )
+            error_details = ", ".join([f"Arena {aid}: {msg}" for aid, msg in errors])
             raise RuntimeError(f"部分竞技场 setup 失败: {error_details}")
 
         self.logger.info(f"所有 {self.num_arenas} 个竞技场 setup 完成")
+
+    def _broadcast_update_networks(
+        self,
+        network_params: dict[AgentType, tuple[np.ndarray, ...]],
+    ) -> None:
+        """发送 update_networks 命令到所有竞技场（后续调用）"""
+        self.logger.debug(f"广播 update_networks 命令到 {self.num_arenas} 个竞技场...")
+
+        # 向所有竞技场发送 update_networks 命令
+        for arena_id in range(self.num_arenas):
+            self.cmd_queues[arena_id].put(("update_networks", network_params))
+
+        # 等待所有竞技场 update 完成
+        update_done_count = 0
+        errors: list[tuple[int, str]] = []
+
+        while update_done_count < self.num_arenas:
+            try:
+                result = self.result_queue.get(timeout=30.0)  # 更新比 setup 快，用更短超时
+                result_type, arena_id, data = result
+
+                if result_type == "update_done":
+                    update_done_count += 1
+                    self.logger.debug(
+                        f"Arena {arena_id} update 完成 "
+                        f"({update_done_count}/{self.num_arenas})"
+                    )
+                elif result_type == "error":
+                    errors.append((arena_id, str(data)))
+                    update_done_count += 1
+                    self.logger.error(f"Arena {arena_id} update 失败: {data}")
+                else:
+                    self.logger.warning(
+                        f"收到未预期的结果类型: {result_type}, "
+                        f"arena_id={arena_id}, data={data}"
+                    )
+            except Exception as e:
+                raise TimeoutError(
+                    f"等待竞技场 update 完成超时 "
+                    f"(已完成: {update_done_count}/{self.num_arenas})"
+                ) from e
+
+        if errors:
+            error_details = ", ".join([f"Arena {aid}: {msg}" for aid, msg in errors])
+            raise RuntimeError(f"部分竞技场 update 失败: {error_details}")
+
+        self.logger.info(f"所有 {self.num_arenas} 个竞技场 update 完成")
 
     def run_all(
         self,
@@ -304,6 +365,7 @@ class ArenaPool:
 
         self.workers.clear()
         self._started = False
+        self._agents_initialized = False
         self.logger.info("所有竞技场工作进程已关闭")
 
     def __enter__(self) -> "ArenaPool":

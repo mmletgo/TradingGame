@@ -111,6 +111,7 @@ def arena_worker_process(
 | 命令 | 参数 | 描述 |
 |------|------|------|
 | `setup` | `(genome_data_dict, network_params_dict)` | 从基因组创建 Agent |
+| `update_networks` | `network_params_dict` | 热更新网络参数（不重建 Agent） |
 | `run` | `num_episodes` | 运行 N 个 episode，返回累积适应度 |
 | `shutdown` | 无 | 关闭进程 |
 
@@ -119,6 +120,7 @@ def arena_worker_process(
 | 结果类型 | 数据 | 描述 |
 |----------|------|------|
 | `setup_done` | `(arena_id, None)` | setup 完成 |
+| `update_done` | `(arena_id, None)` | 网络参数更新完成 |
 | `run_done` | `(arena_id, (fitness_data, episode_count))` | 运行完成 |
 | `error` | `(arena_id, error_message)` | 发生错误 |
 
@@ -196,9 +198,16 @@ network_params_dict: dict[AgentType, tuple[np.ndarray, ...]]
 
 ## 性能优化
 
-1. **快速网络更新**：使用 `Brain.update_network_only()` 跳过完整基因组反序列化
-2. **进程隔离**：每个竞技场在独立进程中运行，充分利用多核 CPU
-3. **累积适应度**：运行多个 episode 后一次性返回累积值，减少进程间通信
+1. **Agent 复用**：首次调用 `broadcast_genomes` 发送 `setup` 命令创建 Agent，后续调用只发送 `update_networks` 命令更新网络参数，避免重复创建 Agent 对象
+2. **快速网络更新**：使用 `Brain.update_network_only()` 跳过完整基因组反序列化
+3. **进程隔离**：每个竞技场在独立进程中运行，充分利用多核 CPU
+4. **累积适应度**：运行多个 episode 后一次性返回累积值，减少进程间通信
+
+**Agent 复用机制：**
+- `ArenaPool` 内部维护 `_agents_initialized` 状态
+- 首次调用：发送 `setup` 命令，创建完整的 Agent 对象
+- 后续调用：发送 `update_networks` 命令，仅更新网络参数（~30秒 → ~1秒）
+- `shutdown()` 时重置状态，下次启动时重新初始化
 
 ## 注意事项
 

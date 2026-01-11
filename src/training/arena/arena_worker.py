@@ -175,6 +175,29 @@ def arena_worker_process(
                     traceback.print_exc()
                     result_queue.put(("error", arena_id, str(e)))
 
+            elif cmd == "update_networks":
+                # 解包参数：("update_networks", network_params_dict)
+                network_params_dict = cmd_data[1]
+                # network_params_dict: dict[AgentType, tuple[...]] (network params numpy arrays)
+
+                if trainer is None:
+                    result_queue.put(("error", arena_id, "Trainer 未初始化，请先执行 setup"))
+                    continue
+
+                try:
+                    _update_trainer_networks(
+                        trainer=trainer,
+                        network_params_dict=network_params_dict,
+                        logger=logger,
+                    )
+                    result_queue.put(("update_done", arena_id, None))
+                    logger.debug(f"Arena {arena_id} update_networks 完成")
+                except Exception as e:
+                    logger.error(f"Arena {arena_id} update_networks 失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    result_queue.put(("error", arena_id, str(e)))
+
             elif cmd == "run":
                 # 解包参数：("run", num_episodes)
                 num_episodes = cmd_data[1]
@@ -463,3 +486,33 @@ def _evaluate_population_fitness(
             fitness_arr[idx] = fitness
 
     return fitness_arr
+
+
+def _update_trainer_networks(
+    trainer: "Trainer",
+    network_params_dict: dict[AgentType, tuple[Any, ...]],
+    logger: logging.Logger,
+) -> None:
+    """更新 Trainer 中所有 Agent 的网络参数（不重建 Agent）
+
+    Args:
+        trainer: Trainer 对象
+        network_params_dict: 各物种的网络参数（NumPy 格式）
+        logger: 日志器
+    """
+    for agent_type, population in trainer.populations.items():
+        network_params_tuple = network_params_dict.get(agent_type)
+
+        if network_params_tuple is None:
+            logger.warning(f"缺少 {agent_type.value} 的网络参数")
+            continue
+
+        # 解包网络参数
+        params_list = _unpack_network_params_numpy(*network_params_tuple)
+
+        # 更新每个 Agent 的网络
+        for i, agent in enumerate(population.agents):
+            if i < len(params_list):
+                agent.brain.update_network_only(params_list[i])
+
+    logger.debug("所有 Agent 网络参数已更新")
