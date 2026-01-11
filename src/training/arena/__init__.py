@@ -10,6 +10,7 @@ from .arena_worker import (
 )
 from .fitness_aggregator import FitnessAggregator
 from .multi_arena_trainer import MultiArenaConfig, MultiArenaTrainer
+from src.training.trainer import Trainer as SingleArenaTrainer
 
 __all__ = [
     "ArenaConfig",
@@ -17,5 +18,6 @@ __all__ = [
     "FitnessAggregator",
     "MultiArenaConfig",
     "MultiArenaTrainer",
+    "SingleArenaTrainer",
     "arena_worker_process",
 ]
