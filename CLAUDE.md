@@ -29,23 +29,24 @@ python scripts/train_noui.py --episodes 100 --catfish          # 启用鲶鱼机
 python scripts/train_ui.py                                      # 带UI训练
 ```
 
-### 多竞技场并行训练
+### 多竞技场并行推理训练
 ```bash
 # 默认：10个竞技场，每个10个episode，无限轮
-python scripts/train_multi_arena.py
+python scripts/train_parallel_arena.py
 
 # 指定轮数
-python scripts/train_multi_arena.py --rounds 100
+python scripts/train_parallel_arena.py --rounds 100
 
 # 自定义竞技场数量和episode数
-python scripts/train_multi_arena.py --num-arenas 8 --episodes-per-arena 5 --rounds 200
+python scripts/train_parallel_arena.py --num-arenas 8 --episodes-per-arena 5 --rounds 200
 
 # 从检查点恢复
-python scripts/train_multi_arena.py --resume checkpoints/multi_arena_gen_50.pkl
+python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_50.pkl
 ```
 
 **多竞技场特点：**
-- 同时启动多个竞技场进程，使用同一批基因组
+- 多个竞技场的神经网络推理合并成一个批量，OpenMP 并行执行
+- 交易配对和账户更新串行执行（保证正确性）
 - 所有竞技场完成后汇总适应度（简单平均）
 - 每轮进行一次进化
 - 10竞技场×10episode = 每轮100个样本，提高适应度评估稳定性
