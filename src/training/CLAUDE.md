@@ -500,11 +500,11 @@ pool.shutdown()
 
 **多核并行化优化：**
 - 种群初始化：串行创建种群，但每个种群内部的 Agent 创建是并行的（Agent维度并行）
-- `_evolve_populations_parallel()` - 使用 `MultiPopulationWorkerPool` 真正并行进化所有种群（14个 Worker 并行）
+- `_evolve_populations_parallel()` - 使用 `MultiPopulationWorkerPool` 真正并行进化所有种群（16个 Worker 并行）
   - RETAIL: 10 个子种群
   - RETAIL_PRO: 1 个种群
   - WHALE: 1 个种群
-  - MARKET_MAKER: 2 个子种群
+  - MARKET_MAKER: 4 个子种群
   - **延迟反序列化优化**：默认只更新网络参数，不重建完整 genome 对象
   - **性能提升**：~20秒/episode（比旧版本 40秒快一倍）
 - `_update_population_from_worker(pop, genome_data, network_params, deserialize_genomes=False)` - 从 Worker 结果更新种群
@@ -517,7 +517,7 @@ pool.shutdown()
 - Population 类使用实例级别线程池（8个worker）处理 Agent 创建，支持多进程架构
 
 **统一 Worker 池架构：**
-- `_unified_worker_pool: MultiPopulationWorkerPool` - 统一管理所有 14 个 Worker 进程
+- `_unified_worker_pool: MultiPopulationWorkerPool` - 统一管理所有 16 个 Worker 进程
 - `_worker_pool_synced: bool` - Worker 池是否已同步基因组
 - 在 `setup()` 中创建 Worker 池，在 `stop()` 中关闭
 - 在 `load_checkpoint()` 和 `load_checkpoint_data()` 后重置同步标志

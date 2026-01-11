@@ -483,9 +483,9 @@ class Trainer:
             # WHALE: 1个种群（不拆分，使用普通 Population）
             self.populations[AgentType.WHALE] = Population(AgentType.WHALE, self.config)
 
-            # MARKET_MAKER: 2个子种群
+            # MARKET_MAKER: 4个子种群
             self.populations[AgentType.MARKET_MAKER] = SubPopulationManager(
-                self.config, AgentType.MARKET_MAKER, sub_count=2
+                self.config, AgentType.MARKET_MAKER, sub_count=4
             )
 
         # 创建撮合引擎
@@ -562,7 +562,7 @@ class Trainer:
         # 初始化网络数据缓存（OpenMP 优化）
         self._init_network_caches()
 
-        # 创建统一的 Worker 池（14个Worker：RETAIL 10 + RETAIL_PRO 1 + WHALE 1 + MARKET_MAKER 2）
+        # 创建统一的 Worker 池（16个Worker：RETAIL 10 + RETAIL_PRO 1 + WHALE 1 + MARKET_MAKER 4）
         config_dir = self.config.training.neat_config_path
         worker_configs: list[WorkerConfig] = []
 
@@ -1086,11 +1086,11 @@ class Trainer:
     def _evolve_populations_parallel(self, current_price: float) -> None:
         """真正并行进化所有种群
 
-        使用 MultiPopulationWorkerPool 同时进化所有种群（14个 Worker 并行）：
+        使用 MultiPopulationWorkerPool 同时进化所有种群（16个 Worker 并行）：
         - RETAIL: 10 个子种群
         - RETAIL_PRO: 1 个种群
         - WHALE: 1 个种群
-        - MARKET_MAKER: 2 个子种群
+        - MARKET_MAKER: 4 个子种群
 
         优化策略：
         1. 一次性构建所有种群的适应度数据

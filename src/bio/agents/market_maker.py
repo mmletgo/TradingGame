@@ -48,6 +48,9 @@ class MarketMakerAgent(Agent):
         account: 交易账户
         bid_order_ids: 买单订单ID列表（最多10个）
         ask_order_ids: 卖单订单ID列表（最多10个）
+
+    神经网络输入维度: 964 = 604 + 60 挂单信息 + 300 tick 历史数据
+    神经网络输出维度: 41 = 买单价格(10) + 买单数量(10) + 卖单价格(10) + 卖单数量(10) + 总下单比例基准(1)
     """
 
     agent_id: int
@@ -71,9 +74,9 @@ class MarketMakerAgent(Agent):
         self.bid_order_ids: list[int] = []
         self.ask_order_ids: list[int] = []
 
-        # 做市商输入更大（934 = 604 + 30 挂单信息 + 300 tick 历史数据）
+        # 做市商输入更大（964 = 604 + 60 挂单信息 + 300 tick 历史数据）
         # tick 历史数据：100 个价格 + 100 个成交量 + 100 个成交额
-        self._input_buffer = np.zeros(934, dtype=np.float64)
+        self._input_buffer = np.zeros(964, dtype=np.float64)
 
     def get_action_space(self) -> list[ActionType]:
         """获取做市商可用动作
@@ -90,14 +93,14 @@ class MarketMakerAgent(Agent):
     ) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入
 
-        做市商覆盖基类方法，使用更大的输入缓冲区（934 = 604 + 30 挂单信息 + 300 tick 历史数据）。
+        做市商覆盖基类方法，使用更大的输入缓冲区（964 = 604 + 60 挂单信息 + 300 tick 历史数据）。
 
         Args:
             market_state: 预计算的归一化市场数据
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（934 维 ndarray）
+            神经网络输入向量（964 维 ndarray）
         """
         if _HAS_CYTHON_OBSERVE:
             # 使用 Cython 加速版本
@@ -113,7 +116,7 @@ class MarketMakerAgent(Agent):
                 mid_price,
             )
 
-            # 获取挂单信息（做市商特有：30个值）
+            # 获取挂单信息（做市商特有：60个值）
             pending_order_inputs = self._get_pending_order_inputs(
                 mid_price, orderbook
             )
@@ -142,13 +145,13 @@ class MarketMakerAgent(Agent):
             self._input_buffer[400:500] = market_state.trade_prices
             self._input_buffer[500:600] = market_state.trade_quantities
             self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
-            self._input_buffer[604:634] = self._get_pending_order_inputs(
+            self._input_buffer[604:664] = self._get_pending_order_inputs(
                 market_state.mid_price, orderbook
             )
             # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
-            self._input_buffer[634:734] = market_state.tick_history_prices
-            self._input_buffer[734:834] = market_state.tick_history_volumes
-            self._input_buffer[834:934] = market_state.tick_history_amounts
+            self._input_buffer[664:764] = market_state.tick_history_prices
+            self._input_buffer[764:864] = market_state.tick_history_volumes
+            self._input_buffer[864:964] = market_state.tick_history_amounts
             return self._input_buffer  # 不调用 .tolist()
 
     def _fill_order_inputs(
@@ -168,7 +171,7 @@ class MarketMakerAgent(Agent):
             mid_price: 中间价（用于价格归一化）
             orderbook: 订单簿（用于查询订单详情）
         """
-        for i in range(5):
+        for i in range(10):
             if i < len(order_ids):
                 order = orderbook.order_map.get(order_ids[i])
                 if order is not None:
@@ -184,10 +187,10 @@ class MarketMakerAgent(Agent):
     def _get_pending_order_inputs(
         self, mid_price: float, orderbook: OrderBook
     ) -> np.ndarray:
-        """获取做市商挂单信息（30 个值）
+        """获取做市商挂单信息（60 个值）
 
-        买单 5 个位置 x 3 = 15
-        卖单 5 个位置 x 3 = 15
+        买单 10 个位置 x 3 = 30
+        卖单 10 个位置 x 3 = 30
         每个位置：[价格归一化, 数量, 有效标志(1.0/0.0)]
 
         Args:
@@ -195,11 +198,11 @@ class MarketMakerAgent(Agent):
             orderbook: 订单簿（用于查询订单详情）
 
         Returns:
-            30 个浮点数的 NumPy 数组
+            60 个浮点数的 NumPy 数组
         """
-        inputs = np.zeros(30, dtype=np.float64)
+        inputs = np.zeros(60, dtype=np.float64)
         self._fill_order_inputs(inputs, self.bid_order_ids, 0, mid_price, orderbook)
-        self._fill_order_inputs(inputs, self.ask_order_ids, 15, mid_price, orderbook)
+        self._fill_order_inputs(inputs, self.ask_order_ids, 30, mid_price, orderbook)
         return inputs
 
     def _calculate_skew_factor(self, mid_price: float) -> float:
@@ -270,7 +273,7 @@ class MarketMakerAgent(Agent):
         total = total_bid + total_ask
 
         if total <= 0:
-            return np.full(5, 0.1), np.full(5, 0.1)
+            return np.full(10, 0.1), np.full(10, 0.1)
 
         # 计算双边比例
         bid_side_ratio = total_bid / total
@@ -291,12 +294,12 @@ class MarketMakerAgent(Agent):
         if total_bid > 0:
             bid_ratios = bid_adjusted / total_bid * target_bid_total
         else:
-            bid_ratios = np.full(5, target_bid_total / 5)
+            bid_ratios = np.full(10, target_bid_total / 10)
 
         if total_ask > 0:
             ask_ratios = ask_adjusted / total_ask * target_ask_total
         else:
-            ask_ratios = np.full(5, target_ask_total / 5)
+            ask_ratios = np.full(10, target_ask_total / 10)
 
         return bid_ratios, ask_ratios
 
@@ -306,12 +309,12 @@ class MarketMakerAgent(Agent):
         """决策下一步动作
 
         做市商默认每 tick 双边挂单，神经网络直接输出价格和数量参数。
-        神经网络输出结构（共 21 个值）：
-        - 输出[0-4]: 买单1-5的价格偏移（-1到1，相对于mid_price）
-        - 输出[5-9]: 买单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
-        - 输出[10-14]: 卖单1-5的价格偏移（-1到1，相对于mid_price）
-        - 输出[15-19]: 卖单1-5的数量权重（-1到1，映射到0-1，10单归一化后总和为1.0）
-        - 输出[20]: 总下单比例基准（-1到1，映射到0-1，控制使用多少可用资金下单）
+        神经网络输出结构（共 41 个值）：
+        - 输出[0-9]: 买单1-10的价格偏移（-1到1，相对于mid_price）
+        - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1，20单归一化后总和为1.0）
+        - 输出[20-29]: 卖单1-10的价格偏移（-1到1，相对于mid_price）
+        - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1，20单归一化后总和为1.0）
+        - 输出[40]: 总下单比例基准（-1到1，映射到0-1，控制使用多少可用资金下单）
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -332,9 +335,9 @@ class MarketMakerAgent(Agent):
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
 
-        # 3. 验证输出维度（需要 21 个值）
-        if len(outputs) < 21:
-            raise ValueError(f"神经网络输出维度不足，期望 21，实际 {len(outputs)}")
+        # 3. 验证输出维度（需要 41 个值）
+        if len(outputs) < 41:
+            raise ValueError(f"神经网络输出维度不足，期望 41，实际 {len(outputs)}")
 
         # 4. 获取参考价格并计算仓位信息
         mid_price = market_state.mid_price
@@ -349,17 +352,17 @@ class MarketMakerAgent(Agent):
 
         # 向量化收集数量比例
         outputs_arr = np.array(outputs)
-        bid_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[5:10], -1, 1) + 1) / 2)
-        ask_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[15:20], -1, 1) + 1) / 2)
+        bid_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[10:20], -1, 1) + 1) / 2)
+        ask_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[30:40], -1, 1) + 1) / 2)
 
-        # 计算总和并归一化（确保 10 个订单的总比例 = 1.0）
+        # 计算总和并归一化（确保 20 个订单的总比例 = 1.0）
         total_raw_ratio = bid_raw_ratios.sum() + ask_raw_ratios.sum()
         if total_raw_ratio > 0:
             bid_ratios = bid_raw_ratios / total_raw_ratio
             ask_ratios = ask_raw_ratios / total_raw_ratio
         else:
-            bid_ratios = np.zeros(5)
-            ask_ratios = np.zeros(5)
+            bid_ratios = np.zeros(10)
+            ask_ratios = np.zeros(10)
 
         # 应用仓位倾斜
         bid_ratios, ask_ratios = self._apply_position_skew(
@@ -367,9 +370,9 @@ class MarketMakerAgent(Agent):
         )
 
         # 解析总下单比例基准
-        # 输出[20]: -1 到 1，映射到 0.01 到 1
+        # 输出[40]: -1 到 1，映射到 0.01 到 1
         total_ratio_base = (
-            0.01 + (np.clip(outputs_arr[20], -1, 1) + 1) / 2 * 0.99
+            0.01 + (np.clip(outputs_arr[40], -1, 1) + 1) / 2 * 0.99
         )  # [0.01, 1]
 
         # 应用总下单比例基准到权重
@@ -380,7 +383,7 @@ class MarketMakerAgent(Agent):
         max_offset_ticks = 100.0
         min_offset_ticks = 1.0
 
-        bid_price_offsets = np.clip(outputs_arr[0:5], -1, 1)
+        bid_price_offsets = np.clip(outputs_arr[0:10], -1, 1)
         # [-1, 1] -> [1, 100]
         bid_price_ticks = min_offset_ticks + (bid_price_offsets + 1) / 2 * (
             max_offset_ticks - min_offset_ticks
@@ -393,7 +396,7 @@ class MarketMakerAgent(Agent):
         )
 
         bid_orders: list[dict[str, float]] = []
-        for i in range(5):
+        for i in range(10):
             quantity = self._calculate_order_quantity(
                 float(bid_prices[i]),
                 float(bid_ratios[i]),
@@ -404,7 +407,7 @@ class MarketMakerAgent(Agent):
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
         # 卖单价格偏移完全由神经网络决定
-        ask_price_offsets = np.clip(outputs_arr[10:15], -1, 1)
+        ask_price_offsets = np.clip(outputs_arr[20:30], -1, 1)
         # [-1, 1] -> [1, 100]
         ask_price_ticks = min_offset_ticks + (ask_price_offsets + 1) / 2 * (
             max_offset_ticks - min_offset_ticks
@@ -415,7 +418,7 @@ class MarketMakerAgent(Agent):
         )
 
         ask_orders: list[dict[str, float]] = []
-        for i in range(5):
+        for i in range(10):
             quantity = self._calculate_order_quantity(
                 float(ask_prices[i]),
                 float(ask_ratios[i]),

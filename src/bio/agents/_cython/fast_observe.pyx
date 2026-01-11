@@ -11,7 +11,7 @@
 - 散户（Retail）: 127 维
 - 高级散户（RetailPro）: 907 维
 - 庄家（Whale）: 907 维
-- 做市商（MarketMaker）: 934 维
+- 做市商（MarketMaker）: 964 维
 """
 
 import numpy as np
@@ -219,7 +219,7 @@ cpdef void fast_observe_market_maker(
     double equity_normalized,
     double[:] pending_order_inputs,
 ) noexcept nogil:
-    """构建做市商的神经网络输入向量（934 维）
+    """构建做市商的神经网络输入向量（964 维）
 
     输入布局：
     - 0-199: 买盘100档（每档2个值：价格归一化 + 数量）
@@ -227,13 +227,13 @@ cpdef void fast_observe_market_maker(
     - 400-499: 最近100笔成交价格
     - 500-599: 最近100笔成交数量
     - 600-603: 持仓信息（4个值）
-    - 604-633: 挂单信息（30个值：5买单+5卖单，每单3个值）
-    - 634-733: tick历史价格（100个）
-    - 734-833: tick历史成交量（100个）
-    - 834-933: tick历史成交额（100个）
+    - 604-663: 挂单信息（60个值：10买单+10卖单，每单3个值）
+    - 664-763: tick历史价格（100个）
+    - 764-863: tick历史成交量（100个）
+    - 864-963: tick历史成交额（100个）
 
     Args:
-        output_buffer: 预分配的输出缓冲区（934维）
+        output_buffer: 预分配的输出缓冲区（964维）
         bid_data: 买盘数据（200维）
         ask_data: 卖盘数据（200维）
         trade_prices: 成交价格（100维）
@@ -245,7 +245,7 @@ cpdef void fast_observe_market_maker(
         position_avg_price_normalized: 持仓均价归一化
         balance_normalized: 余额归一化
         equity_normalized: 净值归一化
-        pending_order_inputs: 做市商挂单信息（30维）
+        pending_order_inputs: 做市商挂单信息（60维）
     """
     cdef int i
 
@@ -271,21 +271,21 @@ cpdef void fast_observe_market_maker(
     output_buffer[602] = balance_normalized
     output_buffer[603] = equity_normalized
 
-    # 挂单信息（30个值）
-    for i in range(30):
+    # 挂单信息（60个值）
+    for i in range(60):
         output_buffer[604 + i] = pending_order_inputs[i]
 
     # tick历史价格（100个）
     for i in range(100):
-        output_buffer[634 + i] = tick_history_prices[i]
+        output_buffer[664 + i] = tick_history_prices[i]
 
     # tick历史成交量（100个）
     for i in range(100):
-        output_buffer[734 + i] = tick_history_volumes[i]
+        output_buffer[764 + i] = tick_history_volumes[i]
 
     # tick历史成交额（100个）
     for i in range(100):
-        output_buffer[834 + i] = tick_history_amounts[i]
+        output_buffer[864 + i] = tick_history_amounts[i]
 
 
 cpdef tuple get_position_inputs(

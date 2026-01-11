@@ -55,9 +55,9 @@ DEF AGENT_MARKET_MAKER = 3
 # 输入/输出维度
 DEF INPUT_DIM_RETAIL = 127
 DEF INPUT_DIM_FULL = 907
-DEF INPUT_DIM_MARKET_MAKER = 934
+DEF INPUT_DIM_MARKET_MAKER = 964
 DEF OUTPUT_DIM_RETAIL = 8
-DEF OUTPUT_DIM_MARKET_MAKER = 21
+DEF OUTPUT_DIM_MARKET_MAKER = 41
 
 # 动作类型（散户/高级散户/庄家共用6种动作）
 DEF ACTION_HOLD = 0
@@ -734,7 +734,7 @@ cdef void _observe_market_maker_single(
     double initial_balance,
     double leverage,
 ) noexcept nogil:
-    """构建做市商的神经网络输入向量（934 维）
+    """构建做市商的神经网络输入向量（964 维）
 
     输入布局：
     - 0-199: 买盘100档（每档2个值：价格归一化 + 数量）
@@ -742,10 +742,10 @@ cdef void _observe_market_maker_single(
     - 400-499: 最近100笔成交价格
     - 500-599: 最近100笔成交数量
     - 600-603: 持仓信息（4个值）
-    - 604-633: 挂单信息（30个值：5买单+5卖单，每单3个值）
-    - 634-733: tick历史价格（100个）
-    - 734-833: tick历史成交量（100个）
-    - 834-933: tick历史成交额（100个）
+    - 604-663: 挂单信息（60个值：10买单+10卖单，每单3个值）
+    - 664-763: tick历史价格（100个）
+    - 764-863: tick历史成交量（100个）
+    - 864-963: tick历史成交额（100个）
     """
     cdef int i
     cdef double mid_price = market.mid_price
@@ -790,21 +790,21 @@ cdef void _observe_market_maker_single(
         output[602] = 0.0
         output[603] = 0.0
 
-    # 挂单信息（30个值）- 简化处理，全部置零
-    for i in range(30):
+    # 挂单信息（60个值）- 简化处理，全部置零
+    for i in range(60):
         output[604 + i] = 0.0
 
     # tick历史价格（100个）
     for i in range(100):
-        output[634 + i] = market.tick_history_prices[i]
+        output[664 + i] = market.tick_history_prices[i]
 
     # tick历史成交量（100个）
     for i in range(100):
-        output[734 + i] = market.tick_history_volumes[i]
+        output[764 + i] = market.tick_history_volumes[i]
 
     # tick历史成交额（100个）
     for i in range(100):
-        output[834 + i] = market.tick_history_amounts[i]
+        output[864 + i] = market.tick_history_amounts[i]
 
 
 cdef void batch_observe_market_maker_nogil(
@@ -813,7 +813,7 @@ cdef void batch_observe_market_maker_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建做市商的神经网络输入向量（934 维）"""
+    """批量构建做市商的神经网络输入向量（964 维）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 10000000.0  # 做市商初始资金
@@ -1000,12 +1000,12 @@ cdef void _parse_market_maker_single(
 ) noexcept nogil:
     """解析做市商的神经网络输出
 
-    输出结构（21个值）：
-    - [0-4]: 买单价格偏移
-    - [5-9]: 买单数量权重
-    - [10-14]: 卖单价格偏移
-    - [15-19]: 卖单数量权重
-    - [20]: 总下单比例基准
+    输出结构（41个值）：
+    - [0-9]: 买单价格偏移（10个买单）
+    - [10-19]: 买单数量权重（10个买单）
+    - [20-29]: 卖单价格偏移（10个卖单）
+    - [30-39]: 卖单数量权重（10个卖单）
+    - [40]: 总下单比例基准
 
     做市商始终执行 QUOTE 动作，价格和数量信息存储在 result 中供后续处理。
     """
@@ -1013,7 +1013,7 @@ cdef void _parse_market_maker_single(
     result.action_type = ACTION_QUOTE
     result.side = 0  # 双边
     result.price = mid_price  # 参考价格
-    result.quantity = (clip(nn_output[20], -1.0, 1.0) + 1.0) * 0.5  # 总下单比例
+    result.quantity = (clip(nn_output[40], -1.0, 1.0) + 1.0) * 0.5  # 总下单比例
 
 
 cdef void batch_parse_market_maker_nogil(
@@ -1254,7 +1254,7 @@ def batch_decide_market_maker(
     market_state,
     int num_threads=0,
 ) -> list:
-    """批量决策入口 - 做市商版本 (934维输入, 21维输出)
+    """批量决策入口 - 做市商版本 (964维输入, 41维输出)
 
     Args:
         networks: FastFeedForwardNetwork 列表
