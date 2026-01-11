@@ -7,7 +7,6 @@ import gc
 import gzip
 import pickle
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -130,6 +129,8 @@ class SingleArenaTrainer:
         config_dir = self.config.training.neat_config_path
         worker_configs: list[WorkerConfig] = []
 
+        # 断言 trainer 已初始化（由 setup() 保证）
+        assert self.trainer is not None, "Trainer must be initialized before creating worker pool"
         populations = self.trainer.populations
 
         # RETAIL Workers
@@ -350,7 +351,7 @@ class SingleArenaTrainer:
         agent_fitnesses = population.evaluate(current_price)
         fitness_arr = np.zeros(len(population.agents), dtype=np.float32)
 
-        for idx, (agent, fitness) in enumerate(agent_fitnesses):
+        for idx, (_agent, fitness) in enumerate(agent_fitnesses):
             fitness_arr[idx] = fitness
 
         if key not in accumulated:
@@ -398,7 +399,7 @@ class SingleArenaTrainer:
             fitness_arr: 适应度数组
         """
         genomes = list(population.neat_pop.population.items())
-        for idx, (genome_id, genome) in enumerate(genomes):
+        for idx, (_genome_id, genome) in enumerate(genomes):
             if idx < len(fitness_arr):
                 genome.fitness = float(fitness_arr[idx])
 
@@ -517,7 +518,7 @@ class SingleArenaTrainer:
         # 解包网络参数并更新 Agent Brain
         params_list = _unpack_network_params_numpy(*network_params_data)
         new_genomes = list(population.neat_pop.population.items())
-        for idx, (gid, genome) in enumerate(new_genomes):
+        for idx, (_gid, genome) in enumerate(new_genomes):
             if idx < len(population.agents) and idx < len(params_list):
                 population.agents[idx].brain.update_from_network_params(
                     genome, params_list[idx]
@@ -546,7 +547,7 @@ class SingleArenaTrainer:
         arena_fitnesses: list[dict[tuple[AgentType, int], np.ndarray]] = []
         episode_counts: list[int] = []
 
-        for arena_id in range(self.multi_config.num_arenas):
+        for _arena_id in range(self.multi_config.num_arenas):
             # 重置市场状态（不重置种群）
             self._reset_for_arena()
 
@@ -824,9 +825,9 @@ class SingleArenaTrainer:
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: Any,
+        _exc_type: type[BaseException] | None,
+        _exc_val: BaseException | None,
+        _exc_tb: Any,
     ) -> None:
         """上下文管理器出口"""
         self.stop()
