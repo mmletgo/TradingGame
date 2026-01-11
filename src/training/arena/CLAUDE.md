@@ -193,8 +193,13 @@ for arena in arena_states:
 **批量推理合并（_batch_inference_all_arenas）：**
 - 使用 `AgentStateAdapter` 将 `AgentAccountState` 适配为 Agent-like 接口
 - 按 AgentType 分组（跨所有竞技场）
-- 对每种类型调用对应的 `BatchNetworkCache.decide()`
+- 使用 `_network_index_map` 获取每个 Agent 在其种群中的网络索引
+- 调用 `BatchNetworkCache.decide_multi_arena()` 一次性处理所有竞技场的推理
 - 将结果重组为 `dict[arena_id, list[decision]]`
+
+**辅助方法：**
+- `_build_network_index_map()` - 构建 Agent ID 到网络索引的映射表
+- `_get_network_index(agent_type, agent_id)` - 获取 Agent 在其种群中的网络索引
 
 **使用示例：**
 ```python

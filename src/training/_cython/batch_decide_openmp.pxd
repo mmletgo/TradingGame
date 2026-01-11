@@ -105,6 +105,10 @@ cdef void free_thread_buffers(ThreadLocalBuffer* buffers, int num_threads) noexc
 cdef MarketStateData* alloc_market_state_data() noexcept
 cdef void free_market_state_data(MarketStateData* data) noexcept
 
+# 多市场状态内存管理
+cdef MarketStateData** alloc_multi_market_state_data(int num_arenas) noexcept
+cdef void free_multi_market_state_data(MarketStateData** data, int num_arenas) noexcept
+
 
 # ============================================================================
 # 核心计算函数 (nogil)
@@ -132,6 +136,31 @@ cdef void batch_observe_market_maker_nogil(
     int num_threads
 ) noexcept nogil
 
+# 多市场状态版本的批量 observe
+cdef void batch_observe_retail_multi_market_nogil(
+    BatchAgentState* agents,
+    MarketStateData** markets,
+    int* market_indices,
+    double[:, :] outputs,
+    int num_threads
+) noexcept nogil
+
+cdef void batch_observe_full_multi_market_nogil(
+    BatchAgentState* agents,
+    MarketStateData** markets,
+    int* market_indices,
+    double[:, :] outputs,
+    int num_threads
+) noexcept nogil
+
+cdef void batch_observe_market_maker_multi_market_nogil(
+    BatchAgentState* agents,
+    MarketStateData** markets,
+    int* market_indices,
+    double[:, :] outputs,
+    int num_threads
+) noexcept nogil
+
 
 # 批量 forward
 cdef void batch_forward_nogil(
@@ -139,6 +168,17 @@ cdef void batch_forward_nogil(
     double[:, :] inputs,
     double[:, :] outputs,
     ThreadLocalBuffer* buffers,
+    int num_threads
+) noexcept nogil
+
+# 带网络索引的批量 forward
+cdef void batch_forward_with_indices_nogil(
+    BatchNetworkData* networks,
+    int* network_indices,
+    double[:, :] inputs,
+    double[:, :] outputs,
+    ThreadLocalBuffer* buffers,
+    int num_tasks,
     int num_threads
 ) noexcept nogil
 
@@ -158,6 +198,25 @@ cdef void batch_parse_market_maker_nogil(
     DecisionResult* results,
     double mid_price,
     double tick_size,
+    int num_agents,
+    int num_threads
+) noexcept nogil
+
+# 多市场状态版本的批量 parse
+cdef void batch_parse_retail_multi_market_nogil(
+    double[:, :] nn_outputs,
+    DecisionResult* results,
+    MarketStateData** markets,
+    int* market_indices,
+    int num_agents,
+    int num_threads
+) noexcept nogil
+
+cdef void batch_parse_market_maker_multi_market_nogil(
+    double[:, :] nn_outputs,
+    DecisionResult* results,
+    MarketStateData** markets,
+    int* market_indices,
     int num_agents,
     int num_threads
 ) noexcept nogil

@@ -126,6 +126,13 @@ class ParallelArenaTrainer:
         self._is_running = False
         self._worker_pool_synced = False
 
+        # Agent ID 到 Agent 对象的映射表（O(1) 查找）
+        self.agent_map: dict[int, Any] = {}
+
+        # Agent ID 到网络索引的映射表（用于 decide_multi_arena）
+        # 格式: {agent_type: {agent_id: network_index}}
+        self._network_index_map: dict[AgentType, dict[int, int]] = {}
+
         # EMA 参数
         self._ema_alpha: float = 0.1
 
@@ -157,7 +164,10 @@ class ParallelArenaTrainer:
         # 3. 初始化网络缓存（共享）
         self._init_network_caches()
 
-        # 4. 创建进化 Worker 池
+        # 4. 构建 Agent 映射表
+        self._build_agent_map()
+
+        # 5. 创建进化 Worker 池
         self._create_evolution_worker_pool()
 
         # 读取 EMA 配置
@@ -276,6 +286,44 @@ class ParallelArenaTrainer:
             self.arena_states.append(arena_state)
 
         self.logger.info(f"竞技场状态创建完成: {len(self.arena_states)} 个竞技场")
+
+    def _build_agent_map(self) -> None:
+        """构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）"""
+        self.agent_map.clear()
+        for population in self.populations.values():
+            for agent in population.agents:
+                self.agent_map[agent.agent_id] = agent
+
+        # 同时构建网络索引映射表
+        self._build_network_index_map()
+
+    def _build_network_index_map(self) -> None:
+        """构建 Agent ID 到网络索引的映射表
+
+        网络索引是 Agent 在其种群 agents 列表中的位置，
+        与 BatchNetworkCache 中的网络顺序一致。
+        """
+        self._network_index_map.clear()
+        for agent_type, population in self.populations.items():
+            type_map: dict[int, int] = {}
+            for idx, agent in enumerate(population.agents):
+                type_map[agent.agent_id] = idx
+            self._network_index_map[agent_type] = type_map
+
+    def _get_network_index(self, agent_type: AgentType, agent_id: int) -> int:
+        """获取 Agent 在其种群中的网络索引
+
+        Args:
+            agent_type: Agent 类型
+            agent_id: Agent ID
+
+        Returns:
+            网络索引，如果未找到返回 -1
+        """
+        type_map = self._network_index_map.get(agent_type)
+        if type_map is None:
+            return -1
+        return type_map.get(agent_id, -1)
 
     def _calculate_catfish_initial_balance(self) -> float:
         """计算每条鲶鱼的初始资金"""
@@ -830,9 +878,9 @@ class ParallelArenaTrainer:
         arena_market_states: list[NormalizedMarketState],
         arena_active_agents: list[list[AgentStateAdapter]],
     ) -> dict[int, list[tuple[AgentStateAdapter, ActionType, dict[str, Any]]]]:
-        """批量推理所有竞技场的所有 Agent
+        """批量推理所有竞技场的所有 Agent（使用 decide_multi_arena 合并推理）
 
-        核心优化：将 N x M 个推理合并成一个大批量
+        核心优化：将 N 个竞技场 x M 个 Agent 的推理合并成单次 OpenMP 并行操作
 
         Args:
             arena_market_states: 各竞技场的市场状态
@@ -845,6 +893,10 @@ class ParallelArenaTrainer:
             int, list[tuple[AgentStateAdapter, ActionType, dict[str, Any]]]
         ] = {}
 
+        # 初始化结果
+        for arena_idx in range(len(arena_active_agents)):
+            results[arena_idx] = []
+
         if self.network_caches is None:
             # 回退到串行推理
             for arena_idx, (market_state, adapters) in enumerate(
@@ -855,76 +907,112 @@ class ParallelArenaTrainer:
                 )
             return results
 
-        # 按 AgentType 分组（跨所有竞技场）
-        type_groups: dict[
-            AgentType, list[tuple[int, int, AgentStateAdapter]]
-        ] = {}  # {type: [(arena_idx, local_idx, adapter), ...]}
+        # 按 AgentType 分组收集数据（跨所有竞技场）
+        # 格式: {agent_type: {arena_idx: [(adapter, agent, network_idx), ...]}}
+        type_arena_data: dict[
+            AgentType, dict[int, list[tuple[AgentStateAdapter, Any, int]]]
+        ] = {}
 
         for arena_idx, adapters in enumerate(arena_active_agents):
-            for local_idx, adapter in enumerate(adapters):
+            for adapter in adapters:
                 agent_type = adapter.agent_type
-                if agent_type not in type_groups:
-                    type_groups[agent_type] = []
-                type_groups[agent_type].append((arena_idx, local_idx, adapter))
+                agent = self.agent_map.get(adapter.agent_id)
+                if agent is None:
+                    continue
 
-        # 初始化结果
-        for arena_idx in range(len(arena_active_agents)):
-            results[arena_idx] = []
+                network_idx = self._get_network_index(agent_type, adapter.agent_id)
+                if network_idx < 0:
+                    continue
 
-        # 对每种类型调用对应的 BatchNetworkCache.decide()
-        for agent_type, group in type_groups.items():
+                if agent_type not in type_arena_data:
+                    type_arena_data[agent_type] = {}
+                if arena_idx not in type_arena_data[agent_type]:
+                    type_arena_data[agent_type][arena_idx] = []
+
+                type_arena_data[agent_type][arena_idx].append(
+                    (adapter, agent, network_idx)
+                )
+
+        # 对每种类型使用 decide_multi_arena 进行批量推理
+        for agent_type, arena_data in type_arena_data.items():
             cache = self.network_caches.get(agent_type)
             if cache is None or not cache.is_valid():
                 continue
 
-            # 需要为每个竞技场单独调用 decide（因为市场状态不同）
-            # 按 arena_idx 分组
-            arena_groups: dict[int, list[tuple[int, AgentStateAdapter]]] = {}
-            for arena_idx, local_idx, adapter in group:
-                if arena_idx not in arena_groups:
-                    arena_groups[arena_idx] = []
-                arena_groups[arena_idx].append((local_idx, adapter))
+            # 准备 decide_multi_arena 的参数
+            # 按 arena_idx 排序以确保结果映射正确
+            sorted_arena_indices = sorted(arena_data.keys())
 
-            for arena_idx, arena_adapters in arena_groups.items():
+            agents_per_arena: list[list[Any]] = []
+            market_states: list[NormalizedMarketState] = []
+            network_indices_per_arena: list[list[int]] = []
+            adapter_mapping: list[list[AgentStateAdapter]] = []  # 记录每个竞技场的 adapter 顺序
+
+            for arena_idx in sorted_arena_indices:
+                arena_entries = arena_data[arena_idx]
+
+                arena_agents: list[Any] = []
+                arena_network_indices: list[int] = []
+                arena_adapters: list[AgentStateAdapter] = []
+
+                for adapter, agent, network_idx in arena_entries:
+                    arena_agents.append(agent)
+                    arena_network_indices.append(network_idx)
+                    arena_adapters.append(adapter)
+
+                agents_per_arena.append(arena_agents)
+                market_states.append(arena_market_states[arena_idx])
+                network_indices_per_arena.append(arena_network_indices)
+                adapter_mapping.append(arena_adapters)
+
+            # 调用 decide_multi_arena 进行批量推理
+            try:
+                raw_results = cache.decide_multi_arena(
+                    agents_per_arena,
+                    market_states,
+                    network_indices_per_arena,
+                )
+            except Exception as e:
+                self.logger.warning(f"批量决策失败 {agent_type.value}: {e}")
+                continue
+
+            # 解析结果并填充到 results
+            is_market_maker = agent_type == AgentType.MARKET_MAKER
+
+            for result_idx, arena_idx in enumerate(sorted_arena_indices):
+                arena_results = raw_results.get(result_idx, [])
+                arena_adapters = adapter_mapping[result_idx]
                 market_state = arena_market_states[arena_idx]
-                adapters_list = [adapter for _, adapter in arena_adapters]
-
-                try:
-                    raw_results = cache.decide(adapters_list, market_state)
-                except Exception as e:
-                    self.logger.warning(f"缓存决策失败 {agent_type.value}: {e}")
-                    continue
-
-                # 解析结果
-                is_market_maker = agent_type == AgentType.MARKET_MAKER
                 mid_price = market_state.mid_price
-                tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+                tick_size = (
+                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                )
 
-                for i, (local_idx, adapter) in enumerate(arena_adapters):
+                for i, raw_result in enumerate(arena_results):
+                    if i >= len(arena_adapters):
+                        break
+
+                    adapter = arena_adapters[i]
+                    agent = self.agent_map.get(adapter.agent_id)
+                    if agent is None:
+                        continue
+
                     try:
                         if is_market_maker:
-                            nn_output, _, _ = raw_results[i]
-                            agent = self._get_agent_by_id(adapter.agent_id)
-                            if agent:
-                                action, params = self._parse_market_maker_output(
-                                    agent, nn_output, mid_price, tick_size
-                                )
-                            else:
-                                action, params = ActionType.HOLD, {}
+                            nn_output, _, _ = raw_result
+                            action, params = self._parse_market_maker_output(
+                                agent, nn_output, mid_price, tick_size
+                            )
                         else:
-                            action_type_int, side_int, price, quantity = raw_results[i]
-                            agent = self._get_agent_by_id(adapter.agent_id)
-                            if agent:
-                                action, params = self._convert_retail_result(
-                                    agent,
-                                    action_type_int,
-                                    side_int,
-                                    price,
-                                    quantity,
-                                    mid_price,
-                                )
-                            else:
-                                action, params = ActionType.HOLD, {}
+                            action_type_int, side_int, price, quantity = raw_result
+                            action, params = self._convert_retail_result(
+                                agent,
+                                action_type_int,
+                                side_int,
+                                price,
+                                quantity,
+                                mid_price,
+                            )
 
                         results[arena_idx].append((adapter, action, params))
                     except Exception:
@@ -957,12 +1045,8 @@ class ParallelArenaTrainer:
         return results
 
     def _get_agent_by_id(self, agent_id: int) -> Any:
-        """根据 ID 获取 Agent 对象"""
-        for population in self.populations.values():
-            for agent in population.agents:
-                if agent.agent_id == agent_id:
-                    return agent
-        return None
+        """根据 ID 获取 Agent 对象（O(1) 查找）"""
+        return self.agent_map.get(agent_id)
 
     def _parse_market_maker_output(
         self,
@@ -1562,6 +1646,9 @@ class ParallelArenaTrainer:
                 for agent in population.agents:
                     state = AgentAccountState.from_agent(agent)
                     arena.agent_states[agent.agent_id] = state
+
+        # 重建 Agent 映射表
+        self._build_agent_map()
 
     def train(
         self,
