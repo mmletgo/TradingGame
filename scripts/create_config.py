@@ -57,7 +57,7 @@ def create_default_config(
             count=10000,
             initial_balance=20000.0,  # 2万
             leverage=1.0,
-            maintenance_margin_rate=0.05,  # 5%
+            maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
@@ -65,7 +65,7 @@ def create_default_config(
             count=100,
             initial_balance=20000.0,  # 2万
             leverage=1.0,
-            maintenance_margin_rate=0.05,  # 5%
+            maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
@@ -73,7 +73,7 @@ def create_default_config(
             count=100,  # 庄家（合并多空）
             initial_balance=3_000_000.0,  # 300万
             leverage=1.0,
-            maintenance_margin_rate=0.05,  # 5%
+            maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),
@@ -81,7 +81,7 @@ def create_default_config(
             count=400,
             initial_balance=maker_initial_balance,
             leverage=maker_leverage,
-            maintenance_margin_rate=0.05 / maker_leverage,
+            maintenance_margin_rate=0.5 / maker_leverage,
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
             taker_fee_rate=0.0001,  # 万1
         ),
