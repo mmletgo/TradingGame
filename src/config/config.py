@@ -106,7 +106,7 @@ class TrainingConfig:
     enable_parallel_evolution: bool = True
     enable_parallel_decision: bool = True
     enable_parallel_creation: bool = True
-    openmp_threads: int = 32
+    openmp_threads: int = 12
     random_seed: int | None = None
     # 散户子种群配置
     retail_sub_population_count: int = 10
