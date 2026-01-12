@@ -101,19 +101,19 @@ def main() -> None:
     parser.add_argument(
         "--num-arenas",
         type=int,
-        default=2,
-        help="竞技场数量（默认: 2）",
+        default=25,
+        help="竞技场数量（默认: 25）",
     )
     parser.add_argument(
         "--episodes-per-arena",
         type=int,
-        default=50,
-        help="每个竞技场运行的 episode 数（默认: 50）",
+        default=2,
+        help="每个竞技场运行的 episode 数（默认: 2）",
     )
     parser.add_argument(
         "--episode-length",
         type=int,
-        default=1000,
+        default=100,
         help="每个 episode 的 tick 数量（默认: 1000）",
     )
     parser.add_argument(

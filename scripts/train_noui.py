@@ -78,14 +78,14 @@ def main() -> None:
     parser.add_argument(
         "--episode-length",
         type=int,
-        default=1000,
-        help="每个 episode 的 tick 数量（默认: 1000）",
+        default=100,
+        help="每个 episode 的 tick 数量（默认: 100）",
     )
     parser.add_argument(
         "--checkpoint-interval",
         type=int,
-        default=100,
-        help="检查点保存间隔（episode 数，默认: 100，0 表示不保存）",
+        default=500,
+        help="检查点保存间隔（episode 数，默认: 500，0 表示不保存）",
     )
     parser.add_argument(
         "--resume",
@@ -121,8 +121,8 @@ def main() -> None:
     parser.add_argument(
         "--evolution-interval",
         type=int,
-        default=10,
-        help="每多少个 episode 进化一次（默认: 10）",
+        default=50,
+        help="每多少个 episode 进化一次（默认: 50）",
     )
 
     args = parser.parse_args()
