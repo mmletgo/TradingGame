@@ -458,8 +458,14 @@ class ParallelArenaTrainer:
         self.evolution_worker_pool = MultiPopulationWorkerPool(config_dir, worker_configs)
         self.logger.info(f"进化 Worker 池创建完成: {len(worker_configs)} 个 Worker")
 
-    def run_round(self) -> dict[str, Any]:
+    def run_round(
+        self,
+        episode_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """运行一轮训练（所有竞技场的所有 episode + 进化）
+
+        Args:
+            episode_callback: 每个 episode 完成后的回调函数
 
         Returns:
             本轮统计信息
@@ -478,7 +484,7 @@ class ParallelArenaTrainer:
         arena_fitnesses: list[dict[tuple[AgentType, int], np.ndarray]] = []
         episode_counts: list[int] = []
 
-        for _ep_idx in range(self.multi_config.episodes_per_arena):
+        for ep_idx in range(self.multi_config.episodes_per_arena):
             # 重置所有竞技场
             self._reset_all_arenas()
 
@@ -491,6 +497,11 @@ class ParallelArenaTrainer:
             # 累积适应度
             arena_fitnesses.append(episode_fitness)
             episode_counts.append(self.multi_config.num_arenas)
+
+            # Episode 回调
+            if episode_callback is not None:
+                episode_stats = self._get_episode_stats(ep_idx)
+                episode_callback(episode_stats)
 
         stats["arena_run_time"] = time.perf_counter() - arena_start
 
@@ -554,6 +565,43 @@ class ParallelArenaTrainer:
         )
 
         return stats
+
+    def _get_episode_stats(self, ep_idx: int) -> dict[str, Any]:
+        """收集当前 episode 的统计信息
+
+        Args:
+            ep_idx: 当前轮次内的 episode 索引（0-based）
+
+        Returns:
+            Episode 统计信息字典
+        """
+        # 收集所有竞技场的最高价和最低价
+        high_prices: list[float] = []
+        low_prices: list[float] = []
+
+        for arena in self.arena_states:
+            high_prices.append(arena.episode_high_price)
+            low_prices.append(arena.episode_low_price)
+
+        # 计算全局最高/最低价（取各竞技场的极值）
+        global_high = max(high_prices) if high_prices else 0.0
+        global_low = min(low_prices) if low_prices else 0.0
+
+        # 计算全局 episode 编号
+        global_episode = (
+            self.generation * self.multi_config.episodes_per_arena + ep_idx + 1
+        )
+
+        return {
+            "episode": global_episode,
+            "episode_in_round": ep_idx + 1,
+            "generation": self.generation,
+            "num_arenas": self.multi_config.num_arenas,
+            "high_price": global_high,
+            "low_price": global_low,
+            "arena_high_prices": high_prices,
+            "arena_low_prices": low_prices,
+        }
 
     def _reset_all_arenas(self) -> None:
         """重置所有竞技场状态"""
@@ -1820,6 +1868,7 @@ class ParallelArenaTrainer:
         num_rounds: int | None = None,
         checkpoint_callback: Callable[[int], None] | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        episode_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """主训练循环
 
@@ -1827,6 +1876,7 @@ class ParallelArenaTrainer:
             num_rounds: 训练轮数，None 表示无限循环
             checkpoint_callback: 检查点回调函数，参数为当前代数
             progress_callback: 进度回调函数，参数为本轮统计信息
+            episode_callback: Episode 回调函数，每个 episode 完成后调用
         """
         if not self._is_setup:
             self.setup()
@@ -1839,7 +1889,7 @@ class ParallelArenaTrainer:
                 if num_rounds is not None and round_count >= num_rounds:
                     break
 
-                stats = self.run_round()
+                stats = self.run_round(episode_callback=episode_callback)
                 round_count += 1
 
                 if progress_callback is not None:

@@ -69,6 +69,23 @@ def progress_callback(stats: dict[str, Any]) -> None:
     )
 
 
+def episode_callback(stats: dict[str, Any]) -> None:
+    """Episode 完成回调函数"""
+    from datetime import datetime
+
+    episode = stats.get("episode", 0)
+    high_price = stats.get("high_price", 0.0)
+    low_price = stats.get("low_price", 0.0)
+    num_arenas = stats.get("num_arenas", 1)
+
+    current_time = datetime.now().strftime("%H:%M:%S")
+    print(
+        f"  Episode {episode:4d} | {current_time} | "
+        f"Arenas={num_arenas} | "
+        f"high={high_price:.2f}, low={low_price:.2f}"
+    )
+
+
 def main() -> None:
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -221,6 +238,7 @@ def main() -> None:
             num_rounds=args.rounds,
             checkpoint_callback=checkpoint_callback,
             progress_callback=progress_callback,
+            episode_callback=episode_callback,
         )
     except KeyboardInterrupt:
         print("\n\n训练被用户中断")
