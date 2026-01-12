@@ -7,9 +7,13 @@
 ## 文件结构
 
 - `position.pyx` - 持仓类（Cython 加速实现）
+- `position.pxd` - Position 类的 Cython 声明文件
 - `account.py` - 账户类（Python 实现）
-- `position.c` - Cython 编译生成的 C 代码（自动生成，无需手动编辑）
-- `position.cpython-313-x86_64-linux-gnu.so` - 编译后的二进制扩展模块（自动生成）
+- `fast_account.pyx` - 快速账户类（Cython 加速实现）
+- `fast_account.pyi` - FastAccount 类型存根文件
+- `__init__.py` - 模块导出（Position, Account, FastAccount）
+- `*.c` - Cython 编译生成的 C 代码（自动生成，无需手动编辑）
+- `*.so` - 编译后的二进制扩展模块（自动生成）
 
 ## 核心类
 
@@ -142,6 +146,68 @@
   4. 更新余额（不扣手续费）
   5. 仓位清零时重置均价
 
+### FastAccount (fast_account.pyx)
+
+快速账户类，使用 Cython 加速以提高性能。与 Account 类接口兼容，但使用纯 C 类型以获得更高的性能。
+
+#### C 级别属性（cdef public）
+
+- `agent_id: int` - Agent ID
+- `agent_type: int` - Agent 类型整数（0=RETAIL, 1=RETAIL_PRO, 2=WHALE, 3=MARKET_MAKER）
+- `initial_balance: double` - 初始余额
+- `balance: double` - 当前余额
+- `position: Position` - 持仓对象（Cython Position 类型）
+- `leverage: double` - 杠杆倍数
+- `maintenance_margin_rate: double` - 维持保证金率
+- `maker_fee_rate: double` - 挂单手续费率
+- `taker_fee_rate: double` - 吃单手续费率
+- `pending_order_id: int` - 当前挂单 ID（-1 表示无挂单）
+- `maker_volume: int` - 作为 maker 的累计成交量
+- `volatility_contribution: double` - 作为 taker 的价格冲击累计
+
+#### 核心方法（cpdef）
+
+**get_equity(current_price: double) -> double**
+- 计算账户净值，与 Account.get_equity() 相同逻辑
+
+**get_margin_ratio(current_price: double) -> double**
+- 计算保证金率
+- 无持仓时返回 INFINITY（C 语言的无穷大）
+
+**check_liquidation(current_price: double) -> bint**
+- 检查是否需要强制平仓
+
+**on_trade(trade: FastTrade, is_buyer: bint) -> void**
+- 处理 FastTrade 成交回报
+- 注意：接受 FastTrade 而非 Trade 对象
+
+**on_adl_trade(quantity: int, price: double, is_taker: bint) -> double**
+- 处理 ADL 成交，返回已实现盈亏
+
+**reset() -> void**
+- 重置账户到初始状态
+- 将余额恢复到初始值
+- 创建新的空 Position 对象
+- 重置 pending_order_id、maker_volume、volatility_contribution
+
+#### 与 Account 类的区别
+
+| 特性 | Account | FastAccount |
+|------|---------|-------------|
+| 实现语言 | Python | Cython |
+| agent_type | AgentType 枚举 | int（0-3） |
+| pending_order_id | int \| None | int（-1 表示 None） |
+| on_trade 参数 | Trade | FastTrade |
+| 无持仓时保证金率 | float("inf") | INFINITY |
+| reset 方法 | 无 | 有 |
+
+#### 使用场景
+
+FastAccount 适用于：
+- 高频交易场景，需要最大化性能
+- 与 FastMatchingEngine 配合使用
+- 批量处理大量账户状态更新
+
 ## 数据流
 
 ### 交易流程
@@ -176,33 +242,42 @@ get_margin_ratio() < maintenance_margin_rate?
 
 ### 为什么使用 Cython
 
-`Position` 类使用 Cython 实现的原因：
+`Position` 和 `FastAccount` 类使用 Cython 实现的原因：
 
-1. **高频调用**：每次成交都会调用 `Position.update()`，在高并发场景下调用频率极高
-2. **性能关键**：持仓更新是交易路径上的性能瓶颈
+1. **高频调用**：每次成交都会调用持仓和账户更新方法，在高并发场景下调用频率极高
+2. **性能关键**：持仓更新和账户状态计算是交易路径上的性能瓶颈
 3. **类型安全**：Cython 的静态类型检查可以提前发现类型错误
 4. **减少开销**：C 级别的属性访问和方法调用比 Python 快得多
 
 ### Cython 特性使用
 
-- `cdef class Position` - 定义 C 级别的类
-- `cdef public int quantity` - 定义可以从 Python 访问的 C 级别属性
-- `cpdef double update(...)` - 定义可以从 Python 和 C 调用的方法
+- `cdef class` - 定义 C 级别的类
+- `cdef public` - 定义可以从 Python 访问的 C 级别属性
+- `cpdef` - 定义可以从 Python 和 C 调用的方法
 - `cdef` - 声明局部变量为 C 类型，避免 Python 对象开销
+- `.pxd` 文件 - 声明文件，用于跨模块导入 cdef class
+- `.pyi` 文件 - 类型存根文件，提供 IDE 类型提示支持
+
+### pxd 声明文件
+
+当一个 Cython 模块需要被其他 Cython 模块导入时，需要创建 `.pxd` 声明文件：
+
+- `position.pxd` - 声明 Position 类的 cdef 属性和方法
+- 其他模块可以通过 `from ... cimport` 导入 cdef class
 
 ### 编译说明
 
-修改 `position.pyx` 后需要重新编译：
+修改 `.pyx` 文件后需要重新编译：
 
 ```bash
-cd /home/rongheng/python_project/TradingGame_docs-update
-python setup.py build_ext --inplace
+cd /home/rongheng/python_project/TradingGame_cython_opt
+./rebuild.sh
 ```
 
-或者使用项目的一键重建脚本：
+或手动编译：
 
 ```bash
-./rebuild.sh
+python setup.py build_ext --inplace
 ```
 
 ## 保证金和强平机制
@@ -271,6 +346,8 @@ ADL 是在强平订单无法完全成交时的风险控制机制。
 
 ## 使用示例
 
+### 使用 Python Account 类
+
 ```python
 from src.market.account import Account, Position
 from src.config.config import AgentConfig, AgentType
@@ -292,4 +369,48 @@ if account.check_liquidation(current_price):
 # 获取账户状态
 equity = account.get_equity(current_price)
 margin_ratio = account.get_margin_ratio(current_price)
+```
+
+### 使用 Cython FastAccount 类
+
+```python
+from src.market.account import FastAccount
+from src.market.matching.fast_matching import FastTrade
+
+# 创建快速账户（直接传入参数，不使用配置对象）
+account = FastAccount(
+    agent_id=1,
+    agent_type=0,  # RETAIL = 0
+    initial_balance=100000.0,
+    leverage=100.0,
+    maintenance_margin_rate=0.5,
+    maker_fee_rate=0.0002,
+    taker_fee_rate=0.0005
+)
+
+# 处理 FastTrade 成交
+trade = FastTrade(
+    trade_id=1,
+    price=100.0,
+    quantity=10,
+    buyer_id=1,
+    seller_id=2,
+    buyer_fee=0.5,
+    seller_fee=0.1,
+    is_buyer_taker=True
+)
+account.on_trade(trade, is_buyer=True)
+
+# 检查强平风险
+current_price = 100.0
+if account.check_liquidation(current_price):
+    # 触发强平流程
+    pass
+
+# 获取账户状态
+equity = account.get_equity(current_price)
+margin_ratio = account.get_margin_ratio(current_price)
+
+# 重置账户
+account.reset()
 ```

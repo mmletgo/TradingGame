@@ -82,11 +82,13 @@ except ImportError:
 try:
     from src.training._cython.fast_execution import (
         execute_non_mm_batch_with_maker_update,
+        execute_mm_batch,
     )
     HAS_FAST_EXECUTION = True
 except ImportError:
     HAS_FAST_EXECUTION = False
     execute_non_mm_batch_with_maker_update = None  # type: ignore
+    execute_mm_batch = None  # type: ignore
 
 
 class Trainer:
@@ -2113,8 +2115,18 @@ class Trainer:
                 non_mm_decisions, orderbook, tick_trades
             )
 
-        # === 做市商执行（保持原有逻辑）===
-        if mm_decisions:
+        # === 做市商执行（使用 Cython 加速，如果可用）===
+        if HAS_FAST_EXECUTION and mm_decisions:
+            execute_mm_batch(
+                mm_decisions,
+                matching_engine,
+                orderbook,
+                self.recent_trades,
+                self.agent_map,
+                tick_trades,
+            )
+        elif mm_decisions:
+            # 回退到 Python 实现
             agent_map_get = self.agent_map.get
             recent_trades_append = self.recent_trades.append
             tick_trades_append = tick_trades.append

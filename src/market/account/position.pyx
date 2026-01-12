@@ -10,9 +10,7 @@ cdef class Position:
     用于记录 Agent 当前持有的资产数量、平均买入价格以及已实现的盈亏。
     """
 
-    cdef public int quantity
-    cdef public double avg_price
-    cdef public double realized_pnl
+    # 属性声明已移至 position.pxd
 
     def __init__(self):
         """创建持仓对象"""

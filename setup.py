@@ -20,6 +20,11 @@ extensions = [
         define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
     ),
     Extension(
+        "src.market.account.fast_account",
+        ["src/market/account/fast_account.pyx"],
+        extra_compile_args=["-O3"],
+    ),
+    Extension(
         "src.market.matching.fast_matching",
         ["src/market/matching/fast_matching.pyx"],
         extra_compile_args=["-O3"],

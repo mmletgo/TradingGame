@@ -704,3 +704,188 @@ cpdef list execute_non_mm_batch_raw(
                 maker_agent.account.on_trade(trade, not trade.is_buyer_taker)
 
     return all_trades
+
+
+cpdef list execute_mm_batch(
+    list mm_decisions,
+    object matching_engine,
+    object orderbook,
+    object recent_trades,
+    dict agent_map,
+    list tick_trades,
+):
+    """
+    批量执行做市商的订单决策
+
+    使用 Cython 优化的循环处理做市商的订单执行。
+    做市商每 tick 先撤所有旧单，然后双边各挂多单。
+
+    Args:
+        mm_decisions: 决策列表，每个元素为 (agent, action, params)
+            - agent: MarketMaker 实例
+            - action: ActionType 枚举值（忽略，做市商始终执行双边挂单）
+            - params: 参数字典 {"bid_orders": [...], "ask_orders": [...]}
+        matching_engine: MatchingEngine 或 FastMatchingEngine 实例
+        orderbook: OrderBook 实例
+        recent_trades: deque，用于记录成交
+        agent_map: dict[int, Agent]，Agent ID 到 Agent 对象的映射
+        tick_trades: list，用于记录本 tick 的成交
+
+    Returns:
+        所有成交记录列表
+    """
+    # 返回的所有成交记录
+    cdef list all_trades = []
+
+    # 决策数量
+    cdef int n_decisions = len(mm_decisions)
+    if n_decisions == 0:
+        return all_trades
+
+    # 缓存常用对象和方法引用
+    cdef object process_order = matching_engine.process_order
+    cdef object cancel_order = matching_engine.cancel_order
+    cdef object recent_trades_append = recent_trades.append
+    cdef object tick_trades_append = tick_trades.append
+    cdef object agent_map_get = agent_map.get
+
+    # 循环变量
+    cdef int i, j
+    cdef object agent
+    cdef object action
+    cdef object params
+    cdef object account
+    cdef bint is_liquidated
+    cdef list bid_order_ids
+    cdef list ask_order_ids
+    cdef list bid_orders
+    cdef list ask_orders
+    cdef object order_spec
+    cdef object order_id
+    cdef int order_counter
+    cdef long long agent_id
+    cdef double price
+    cdef int quantity
+    cdef object order
+    cdef list trades
+    cdef object trade
+    cdef int maker_id
+    cdef object maker_agent
+
+    # 主循环：处理每个做市商决策
+    for i in range(n_decisions):
+        agent, action, params = mm_decisions[i]
+
+        # 跳过已被强平的做市商
+        is_liquidated = agent.is_liquidated
+        if is_liquidated:
+            continue
+
+        account = agent.account
+        agent_id = <long long>agent.agent_id
+        bid_order_ids = agent.bid_order_ids
+        ask_order_ids = agent.ask_order_ids
+
+        # === 1. 撤销所有旧订单 ===
+        for order_id in bid_order_ids:
+            cancel_order(order_id)
+        for order_id in ask_order_ids:
+            cancel_order(order_id)
+        bid_order_ids.clear()
+        ask_order_ids.clear()
+
+        # === 2. 挂买单 ===
+        bid_orders = params.get("bid_orders", [])
+        for order_spec in bid_orders:
+            price = order_spec["price"]
+            quantity = <int>order_spec["quantity"]
+            if quantity <= 0:
+                continue
+
+            # 生成订单 ID
+            order_counter = agent._order_counter + 1
+            agent._order_counter = order_counter
+            order_id = (agent_id << 32) | order_counter
+
+            # 创建买单
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_id,
+                side=OrderSide(1),  # BUY
+                order_type=OrderType.LIMIT,
+                price=price,
+                quantity=quantity,
+            )
+
+            # 处理订单
+            trades = process_order(order)
+
+            # 更新 taker (做市商) 账户
+            for trade in trades:
+                account.on_trade(trade, trade.is_buyer_taker)
+
+                # 记录成交
+                recent_trades_append(trade)
+                tick_trades_append(trade)
+                all_trades.append(trade)
+
+                # 更新 maker 账户
+                if trade.is_buyer_taker:
+                    maker_id = trade.seller_id
+                else:
+                    maker_id = trade.buyer_id
+                maker_agent = agent_map_get(maker_id)
+                if maker_agent is not None:
+                    maker_agent.account.on_trade(trade, not trade.is_buyer_taker)
+
+            # 记录订单 ID
+            bid_order_ids.append(order_id)
+
+        # === 3. 挂卖单 ===
+        ask_orders = params.get("ask_orders", [])
+        for order_spec in ask_orders:
+            price = order_spec["price"]
+            quantity = <int>order_spec["quantity"]
+            if quantity <= 0:
+                continue
+
+            # 生成订单 ID
+            order_counter = agent._order_counter + 1
+            agent._order_counter = order_counter
+            order_id = (agent_id << 32) | order_counter
+
+            # 创建卖单
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_id,
+                side=OrderSide(-1),  # SELL
+                order_type=OrderType.LIMIT,
+                price=price,
+                quantity=quantity,
+            )
+
+            # 处理订单
+            trades = process_order(order)
+
+            # 更新 taker (做市商) 账户
+            for trade in trades:
+                account.on_trade(trade, trade.is_buyer_taker)
+
+                # 记录成交
+                recent_trades_append(trade)
+                tick_trades_append(trade)
+                all_trades.append(trade)
+
+                # 更新 maker 账户
+                if trade.is_buyer_taker:
+                    maker_id = trade.seller_id
+                else:
+                    maker_id = trade.buyer_id
+                maker_agent = agent_map_get(maker_id)
+                if maker_agent is not None:
+                    maker_agent.account.on_trade(trade, not trade.is_buyer_taker)
+
+            # 记录订单 ID
+            ask_order_ids.append(order_id)
+
+    return all_trades
