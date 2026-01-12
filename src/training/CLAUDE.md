@@ -15,8 +15,99 @@
   - `__init__.py` - 模块导出
   - `arena_worker.py` - 竞技场工作进程
   - `fitness_aggregator.py` - 适应度汇总器
+- `_cython/` - Cython 加速模块
+  - `__init__.py` - 模块导出
+  - `batch_decide_openmp.pyx` - OpenMP 并行批量决策
+  - `batch_decide_openmp.pxd` - 头文件
+  - `fast_execution.pyx` - 非做市商批量订单执行
 
 ## 核心类
+
+### fast_execution 模块 (_cython/fast_execution.pyx)
+
+Cython 加速的非做市商批量订单执行模块，优化散户/高级散户/庄家的订单处理性能。
+
+**设计目标：**
+- 减少串行执行阶段的 Python 对象开销
+- 内联订单 ID 生成和账户更新逻辑
+- 缓存常用方法引用减少属性查找
+
+**核心函数：**
+
+#### `execute_non_mm_batch(decisions, matching_engine, orderbook, recent_trades) -> list`
+
+批量执行非做市商的订单决策。
+
+**参数：**
+- `decisions: list[(agent, action, params)]` - 决策列表
+  - `agent`: Agent 实例（非做市商）
+  - `action`: ActionType 枚举值（HOLD=0, PLACE_BID=1, PLACE_ASK=2, CANCEL=3, MARKET_BUY=4, MARKET_SELL=5）
+  - `params`: 参数字典 `{"price": float, "quantity": int}`
+- `matching_engine`: MatchingEngine 实例
+- `orderbook`: OrderBook 实例
+- `recent_trades`: deque，用于记录成交
+
+**返回值：**
+- `list[Trade]` - 所有成交记录列表
+
+**优化点：**
+- 使用 `cdef` 声明 C 类型变量
+- 缓存 `process_order`、`cancel_order`、`order_map.get` 等方法引用
+- 内联订单 ID 生成：`(agent_id << 32) | order_counter`
+- 使用 64 位整数避免位移溢出
+
+#### `execute_non_mm_batch_with_maker_update(decisions, matching_engine, orderbook, recent_trades, agent_map, tick_trades) -> list`
+
+批量执行非做市商的订单决策（包含 maker 账户更新）。
+
+在 `execute_non_mm_batch` 基础上额外处理：
+- 更新 maker 账户
+- 记录到 tick_trades 列表
+- 计算庄家波动性贡献
+
+**额外参数：**
+- `agent_map: dict[int, Agent]` - Agent ID 到 Agent 对象的映射
+- `tick_trades: list` - 用于记录本 tick 的成交
+
+**注意事项：**
+- 不使用 OpenMP 并行，因为订单执行有顺序依赖
+- 做市商不在此函数中处理（逻辑复杂，内联收益低）
+
+#### `execute_non_mm_batch_raw(raw_decisions, matching_engine, orderbook, recent_trades, agent_map, tick_trades, mid_price) -> list`
+
+批量执行非做市商的原始决策数据（内联数量计算逻辑）。
+
+此函数直接接受原始决策数据，避免创建 Python dict 和调用 Python 方法的开销。数量计算逻辑内联到此函数中，避免调用 `agent._calculate_order_quantity()`。
+
+**参数：**
+- `raw_decisions: list[(agent, action_type_int, side_int, price, quantity_ratio)]` - 原始决策列表
+  - `agent`: Agent 实例（非做市商）
+  - `action_type_int`: 动作类型整数（0=HOLD, 1=PLACE_BID, 2=PLACE_ASK, 3=CANCEL, 4=MARKET_BUY, 5=MARKET_SELL）
+  - `side_int`: 方向整数（1=买, 2=卖），用于限价单
+  - `price`: 订单价格
+  - `quantity_ratio`: 数量比例（0.0-1.0）
+- `matching_engine`: MatchingEngine 实例
+- `orderbook`: OrderBook 实例
+- `recent_trades`: deque，用于记录成交
+- `agent_map: dict[int, Agent]` - Agent ID 到 Agent 对象的映射
+- `tick_trades: list` - 用于记录本 tick 的成交
+- `mid_price: float` - 中间价（用于市价单的数量计算）
+
+**返回值：**
+- `list[Trade]` - 所有成交记录列表
+
+**内联的数量计算逻辑：**
+来自 `Agent._calculate_order_quantity`，根据账户净值、杠杆倍数、当前持仓和数量比例计算订单数量。
+
+**MARKET_SELL 特殊逻辑：**
+- 如果持有多仓（position.quantity > 0）：卖出持仓的比例（quantity_ratio）
+- 否则（空仓或空头）：开空仓，使用内联数量计算逻辑
+
+**优化点：**
+- 避免创建 Python dict（params）
+- 避免调用 Python 方法（`_calculate_order_quantity`）
+- 所有数量计算内联到 Cython 中
+- 保持与 `execute_non_mm_batch_with_maker_update` 相同的成交记录和账户更新逻辑
 
 ### fast_math 模块 (fast_math.py)
 
@@ -494,6 +585,83 @@ pool.shutdown()
 - 经测试：10300 Agent 决策，并行耗时 ~200ms，串行耗时 ~110ms
 - 现已改为 `_batch_decide_serial()` 串行处理，性能提升约 30%
 - 神经网络前向传播（`FastFeedForwardNetwork._forward_pass`）虽已释放 GIL，但 Python 层调用开销仍受 GIL 限制
+
+**串行执行阶段优化（P0）：**
+
+串行执行阶段占单个 tick 耗时的 56.8%（约 94ms），是最大的性能瓶颈。已实施以下优化：
+
+1. **跳过 HOLD 动作**（`_batch_decide_with_cache`/`_batch_decide_openmp`）：
+   - 在决策结果转换时直接过滤掉 HOLD 动作（`action_type_int == 0`）
+   - 减少串行执行阶段需要处理的 agent 数量
+   - 预期减少 20-40% 的迭代次数（取决于 HOLD 占比）
+
+2. **跳过无效 CANCEL 动作**：
+   - 如果 agent 没有挂单（`pending_order_id is None`），直接跳过
+   - 避免无效的订单簿操作
+
+3. **本地变量缓存**：
+   - 缓存 `agent_map.get`、`recent_trades.append`、`tick_trades.append` 方法引用
+   - 减少属性查找开销（Python 中每次 `.` 操作都是字典查找）
+
+4. **内联优化**：
+   - 将 `maker_id` 计算和 `is_buyer` 判断内联
+   - 减少函数调用开销
+
+**优化效果**（基准测试）：
+- P0 优化前：166.31ms/tick（并行决策 53.79ms，串行执行 94.52ms）
+- P0 优化后：162.93ms/tick（并行决策 51.24ms，串行执行 94.59ms）
+- P0 提升约 2%（主要来自减少决策结果数量）
+
+**串行执行内联优化（P1）：**
+
+对散户/高级散户/庄家的 `execute_action` 进行内联优化，跳过函数调用包装：
+
+1. **直接调用撮合引擎**：
+   - 跳过 `execute_action` → `_place_limit_order` → `process_order` 的调用链
+   - 直接在循环中调用 `matching_engine.process_order`
+
+2. **内联订单 ID 生成**：
+   - 跳过 `_generate_order_id()` 函数调用
+   - 直接计算：`(agent_id << 32) | order_counter`
+
+3. **内联成交处理**：
+   - 跳过 `_process_trades()` 函数调用
+   - 直接调用 `account.on_trade()`
+
+4. **做市商保持原逻辑**：
+   - 做市商逻辑复杂（需撤销多单、挂多单）
+   - 做市商数量少（400个），内联收益有限
+
+**P1 优化效果**（基准测试）：
+- P1 优化前：162.93ms/tick（串行执行 94.59ms）
+- P1 优化后：151.82ms/tick（串行执行 86.78ms）
+- **总体提升约 6.8%，串行执行提升 8.3%**
+
+**累计优化效果**：
+- 原始基准：166.31ms/tick
+- P0+P1 优化后：151.82ms/tick
+- **累计提升约 8.7%**
+
+**Cython 撮合引擎优化（P2）**：
+
+核心撮合逻辑已迁移到 Cython 实现（`src/market/matching/fast_matching.pyx`）：
+
+1. **实现内容**：
+   - `FastTrade` cdef class：Cython 版成交记录，使用 C 类型属性
+   - `fast_match_orders()` cpdef 函数：核心撮合逻辑，内联价格检查
+
+2. **优化点**：
+   - 使用 C 类型变量减少 Python 对象开销
+   - 内联限价单/市价单价格检查逻辑（避免 callable 调用）
+   - 预计算 taker 费率到循环外
+
+3. **性能提升**：
+   - 串行执行时间从 ~99ms 降到 ~91ms，减少约 **8ms (8%)**
+   - 总 tick 时间从 ~165ms 降到 ~161ms
+
+**进一步优化方向**：
+- 批量订单簿操作
+- 减少 Order 对象创建（对象池）
 
 **BatchNetworkCache 缓存优化（OpenMP）：**
 

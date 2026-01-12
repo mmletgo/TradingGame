@@ -6,7 +6,9 @@
 
 ## 文件结构
 
-- `matching_engine.py` - 撮合引擎类（核心撮合逻辑）
+- `matching_engine.py` - 撮合引擎类（调用 Cython 实现的核心撮合逻辑）
+- `fast_matching.pyx` - Cython 加速的撮合核心逻辑
+- `fast_matching.pyi` - 类型存根文件
 - `trade.py` - 成交记录数据类
 
 ## 核心类
@@ -89,6 +91,51 @@
 - `is_buyer_taker: bool` - 买方是否为taker
 - `timestamp: float` - 成交时间戳（训练模式使用固定值 `0.0`）
 
+### FastTrade (fast_matching.pyx)
+
+Cython 实现的快速成交记录类，与 `Trade` 类保持相同的属性接口。
+
+**cdef 属性：**
+- `trade_id: int` - 成交ID
+- `price: double` - 成交价格
+- `quantity: int` - 成交数量
+- `buyer_id: int` - 买方Agent ID
+- `seller_id: int` - 卖方Agent ID
+- `buyer_fee: double` - 买方手续费
+- `seller_fee: double` - 卖方手续费
+- `is_buyer_taker: bint` - 买方是否为taker
+- `timestamp: double` - 成交时间戳（固定为 0.0）
+
+### fast_match_orders (fast_matching.pyx)
+
+Cython 实现的快速撮合核心函数。
+
+**签名：**
+```python
+cpdef tuple fast_match_orders(
+    object orderbook,
+    object order,
+    dict fee_rates,
+    int next_trade_id,
+    bint is_limit_order
+) -> tuple[list[FastTrade], int, int]
+```
+
+**参数：**
+- `orderbook`: OrderBook 实例
+- `order`: 待撮合订单
+- `fee_rates`: dict[int, tuple[float, float]] - agent_id -> (maker_rate, taker_rate)
+- `next_trade_id`: 下一个成交 ID
+- `is_limit_order`: 是否为限价单（True=需要价格检查，False=市价单不检查）
+
+**返回值：**
+- `(trades, remaining, next_trade_id)`: 成交列表、剩余数量、更新后的 trade_id
+
+**优化点：**
+- 使用 C 类型变量减少 Python 对象开销
+- 内联价格检查逻辑（避免 callable 调用）
+- 预计算 taker 费率到循环外
+
 ## 费率配置
 
 | Agent类型 | 挂单费率 | 吃单费率 |
@@ -108,6 +155,19 @@
 - 卖单时：taker = 卖方，maker = 买方
 
 ## 性能优化
+
+### Cython 撮合引擎
+
+核心撮合逻辑已迁移到 Cython 实现（`fast_matching.pyx`），主要优化：
+
+1. **C 类型变量**：使用 `cdef` 声明 C 级别变量，减少 Python 对象开销
+2. **内联价格检查**：将限价单/市价单的价格检查逻辑内联，避免 callable 调用
+3. **FastTrade cdef class**：使用 Cython cdef class 替代 Python Trade 类
+4. **预计算费率**：taker 费率在循环外预计算
+
+**性能提升**：
+- 串行执行时间从 ~99ms 降到 ~91ms，减少约 **8ms (8%)**
+- 总 tick 时间从 ~165ms 降到 ~161ms
 
 ### `_match_orders` 优化
 - 预计算 taker 费率到循环外，避免重复查找

@@ -78,6 +78,16 @@ except ImportError:
     HAS_OPENMP_DECIDE = False
     BatchNetworkCache = None  # type: ignore
 
+# 尝试导入 Cython 加速的批量执行模块
+try:
+    from src.training._cython.fast_execution import (
+        execute_non_mm_batch_with_maker_update,
+    )
+    HAS_FAST_EXECUTION = True
+except ImportError:
+    HAS_FAST_EXECUTION = False
+    execute_non_mm_batch_with_maker_update = None  # type: ignore
+
 
 class Trainer:
     """训练器
@@ -1380,6 +1390,9 @@ class Trainer:
                     action, params = self._parse_agent_output(
                         agent, output, market_state, orderbook
                     )
+                    # P0 优化：跳过 HOLD 动作，减少串行执行开销
+                    if action == ActionType.HOLD:
+                        continue
                     all_results.append((idx, agent, action, params))
                 except Exception:
                     pass
@@ -1644,6 +1657,9 @@ class Trainer:
                     else:
                         # 散户/高级散户/庄家：解析 Cython 返回的结果
                         action_type_int, side_int, price, quantity = raw_results[i]
+                        # P0 优化：跳过 HOLD 动作（action_type_int == 0），减少串行执行开销
+                        if action_type_int == 0:
+                            continue
                         action, params = self._convert_retail_result(
                             agent, action_type_int, side_int, price, quantity,
                             mid_price
@@ -2068,30 +2084,56 @@ class Trainer:
         )
 
         # === 串行执行阶段 ===
-        for agent, action, params in decisions:
-            # 庄家下单前记录价格（用于计算波动性贡献）
-            pre_trade_price = (
-                orderbook.last_price
-                if agent.agent_type == AgentType.WHALE else 0.0
+        matching_engine = self.matching_engine
+
+        # 分离做市商和非做市商决策
+        mm_decisions = []
+        non_mm_decisions = []
+        for decision in decisions:
+            agent = decision[0]
+            if agent.agent_type == AgentType.MARKET_MAKER:
+                mm_decisions.append(decision)
+            else:
+                non_mm_decisions.append(decision)
+
+        # === 非做市商执行（使用 Cython 加速，如果可用）===
+        if HAS_FAST_EXECUTION and non_mm_decisions:
+            # 使用 Cython 加速模块批量执行
+            execute_non_mm_batch_with_maker_update(
+                non_mm_decisions,
+                matching_engine,
+                orderbook,
+                self.recent_trades,
+                self.agent_map,
+                tick_trades,
+            )
+        elif non_mm_decisions:
+            # 回退到 Python 实现
+            self._execute_non_mm_decisions_python(
+                non_mm_decisions, orderbook, tick_trades
             )
 
-            trades = agent.execute_action(action, params, self.matching_engine)
+        # === 做市商执行（保持原有逻辑）===
+        if mm_decisions:
+            agent_map_get = self.agent_map.get
+            recent_trades_append = self.recent_trades.append
+            tick_trades_append = tick_trades.append
 
-            # 庄家成交后计算波动性贡献
-            if agent.agent_type == AgentType.WHALE and trades:
-                post_trade_price = orderbook.last_price
-                if pre_trade_price > 0 and post_trade_price > 0:
-                    price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
-                    agent.account.volatility_contribution += price_impact
+            for agent, action, params in mm_decisions:
+                trades = agent.execute_action(action, params, matching_engine)
 
-            for trade in trades:
-                self.recent_trades.append(trade)
-                tick_trades.append(trade)  # 收集到本 tick 成交
-                maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-                maker_agent = self.agent_map.get(maker_id)
-                if maker_agent is not None:
-                    is_buyer = not trade.is_buyer_taker
-                    maker_agent.account.on_trade(trade, is_buyer)
+                # 记录成交和更新 maker 账户
+                for trade in trades:
+                    recent_trades_append(trade)
+                    tick_trades_append(trade)
+                    # 内联 maker 查找和更新
+                    if trade.is_buyer_taker:
+                        maker_id = trade.seller_id
+                    else:
+                        maker_id = trade.buyer_id
+                    maker_agent = agent_map_get(maker_id)
+                    if maker_agent is not None:
+                        maker_agent.account.on_trade(trade, not trade.is_buyer_taker)
 
         # 记录价格历史（tick 结束时）
         # 使用 last_price 而非 mid_price，确保价格符合 tick_size
@@ -2120,6 +2162,128 @@ class Trainer:
 
         # === 鲶鱼强平检查（放在所有 Agent 之后）===
         self._check_catfish_liquidation(current_price)
+
+    def _execute_non_mm_decisions_python(
+        self,
+        decisions: list[tuple["Agent", "ActionType", dict]],
+        orderbook: "OrderBook",
+        tick_trades: list,
+    ) -> None:
+        """执行非做市商决策（Python 实现，作为回退）
+
+        Args:
+            decisions: 非做市商决策列表
+            orderbook: 订单簿
+            tick_trades: 本 tick 的成交列表
+        """
+        from src.bio.agents.base import ActionType
+
+        agent_map_get = self.agent_map.get
+        recent_trades_append = self.recent_trades.append
+        tick_trades_append = tick_trades.append
+        matching_engine = self.matching_engine
+        order_map_get = orderbook.order_map.get
+        process_order = matching_engine.process_order
+        cancel_order = matching_engine.cancel_order
+
+        for agent, action, params in decisions:
+            agent_type = agent.agent_type
+            account = agent.account
+
+            # 庄家下单前记录价格（用于计算波动性贡献）
+            pre_trade_price = orderbook.last_price if agent_type == AgentType.WHALE else 0.0
+
+            # 跳过已强平的 agent
+            if agent.is_liquidated:
+                continue
+
+            trades = []
+
+            if action == ActionType.CANCEL:
+                # 撤单
+                order_id = account.pending_order_id
+                if order_id is not None:
+                    cancel_order(order_id)
+                    account.pending_order_id = None
+            elif action == ActionType.PLACE_BID or action == ActionType.PLACE_ASK:
+                # 限价单：先撤旧单再挂新单
+                old_order_id = account.pending_order_id
+                if old_order_id is not None:
+                    cancel_order(old_order_id)
+                    account.pending_order_id = None
+
+                quantity = params.get("quantity", 0)
+                if quantity > 0:
+                    price = params["price"]
+                    side = OrderSide.BUY if action == ActionType.PLACE_BID else OrderSide.SELL
+
+                    # 内联 _generate_order_id
+                    agent._order_counter += 1
+                    order_id = (agent.agent_id << 32) | agent._order_counter
+
+                    order = Order(
+                        order_id=order_id,
+                        agent_id=agent.agent_id,
+                        side=side,
+                        order_type=OrderType.LIMIT,
+                        price=price,
+                        quantity=quantity,
+                    )
+                    trades = process_order(order)
+
+                    # 更新 taker 账户
+                    for trade in trades:
+                        account.on_trade(trade, trade.is_buyer_taker)
+
+                    # 更新挂单 ID
+                    if order_map_get(order_id) is not None:
+                        account.pending_order_id = order_id
+                    else:
+                        account.pending_order_id = None
+
+            elif action == ActionType.MARKET_BUY or action == ActionType.MARKET_SELL:
+                # 市价单
+                quantity = params.get("quantity", 0)
+                if quantity > 0:
+                    side = OrderSide.BUY if action == ActionType.MARKET_BUY else OrderSide.SELL
+
+                    # 内联 _generate_order_id
+                    agent._order_counter += 1
+                    order_id = (agent.agent_id << 32) | agent._order_counter
+
+                    order = Order(
+                        order_id=order_id,
+                        agent_id=agent.agent_id,
+                        side=side,
+                        order_type=OrderType.MARKET,
+                        price=0.0,
+                        quantity=quantity,
+                    )
+                    trades = process_order(order)
+
+                    # 更新 taker 账户
+                    for trade in trades:
+                        account.on_trade(trade, trade.is_buyer_taker)
+
+            # 庄家波动性贡献计算
+            if agent_type == AgentType.WHALE and trades:
+                post_trade_price = orderbook.last_price
+                if pre_trade_price > 0 and post_trade_price > 0:
+                    price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
+                    account.volatility_contribution += price_impact
+
+            # 记录成交和更新 maker 账户
+            for trade in trades:
+                recent_trades_append(trade)
+                tick_trades_append(trade)
+                # 内联 maker 查找和更新
+                if trade.is_buyer_taker:
+                    maker_id = trade.seller_id
+                else:
+                    maker_id = trade.buyer_id
+                maker_agent = agent_map_get(maker_id)
+                if maker_agent is not None:
+                    maker_agent.account.on_trade(trade, not trade.is_buyer_taker)
 
     def _check_catfish_liquidation(self, current_price: float) -> None:
         """检查鲶鱼强平

@@ -9,6 +9,7 @@ from typing import Callable
 from src.config.config import MarketConfig
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.matching.trade import Trade
+from src.market.matching.fast_matching import fast_match_orders, FastTrade
 
 from src.core.log_engine.logger import get_logger
 from src.market.orderbook.orderbook import OrderBook
@@ -93,9 +94,9 @@ class MatchingEngine:
         self,
         order: Order,
         price_check: Callable[[float, float, OrderSide], bool] | None = None,
-    ) -> tuple[list[Trade], float]:
+    ) -> tuple[list[FastTrade], int]:
         """
-        通用撮合逻辑
+        通用撮合逻辑（委托给 Cython 实现）
 
         根据价格优先、时间优先的原则，将订单与对手盘进行撮合。
 
@@ -107,136 +108,15 @@ class MatchingEngine:
         Returns:
             (trades, remaining): 成交列表和剩余数量
         """
-        trades: list[Trade] = []
-        remaining = order.quantity - order.filled_quantity
+        is_limit_order = price_check is not None
 
-        # 预计算 taker（新订单）的费率信息，避免循环内重复查找
-        taker_agent_id = order.agent_id
-        taker_rates = self._fee_rates.get(taker_agent_id, (0.0002, 0.0005))
-        taker_rate = taker_rates[1]  # taker费率
-
-        while remaining > 0:
-            if order.side == OrderSide.BUY:
-                # 买单与卖盘撮合
-                best_price = self._orderbook.get_best_ask()
-                if best_price is None:
-                    break  # 对手盘为空
-                # 价格检查（限价单需要检查，市价单不检查）
-                if price_check is not None and not price_check(
-                    order.price, best_price, order.side
-                ):
-                    break
-                side_book = self._orderbook.asks
-            else:  # OrderSide.SELL
-                # 卖单与买盘撮合
-                best_price = self._orderbook.get_best_bid()
-                if best_price is None:
-                    break  # 对手盘为空
-                # 价格检查（限价单需要检查，市价单不检查）
-                if price_check is not None and not price_check(
-                    order.price, best_price, order.side
-                ):
-                    break
-                side_book = self._orderbook.bids
-
-            # 获取该价格档位
-            if best_price not in side_book:
-                # 数据不一致：get_best_ask/bid 返回的价格不在 side_book 中
-                # 这是一个异常情况，应该修复订单簿状态
-                # 为避免无限循环，强制重新获取最佳价格或终止
-                self._logger.warning(
-                    f"价格档位不一致: best_price={best_price} 不在 side_book 中，终止撮合"
-                )
-                break
-
-            price_level = side_book[best_price]
-
-            # 遍历该价格档位的订单（按时间优先顺序）
-            for maker_order in list(price_level.orders.values()):
-                if remaining <= 0:
-                    break
-
-                # 【核心修复】僵尸订单检测与清理
-                # 订单在 price_level.orders 中但不在 order_map 中，这是数据不一致
-                if maker_order.order_id not in self._orderbook.order_map:
-                    # 直接从 price_level.orders 中移除
-                    del price_level.orders[maker_order.order_id]
-                    # 更新 total_quantity（使用未成交数量）
-                    zombie_remaining = maker_order.quantity - maker_order.filled_quantity
-                    price_level.total_quantity = max(
-                        0, price_level.total_quantity - zombie_remaining
-                    )
-                    continue
-
-                # 实际撮合
-                maker_remaining = maker_order.quantity - maker_order.filled_quantity
-                trade_qty = min(remaining, maker_remaining)
-
-                # 成交价格 = maker订单价格（对手盘价格）
-                trade_price = maker_order.price
-                trade_amount = trade_price * trade_qty
-
-                # 计算 taker 手续费（使用预计算的费率）
-                taker_fee_amount = trade_amount * taker_rate
-
-                # 确定买卖方和手续费（内联计算以减少函数调用开销）
-                # 新订单是 taker，对手盘是 maker
-                maker_agent_id = maker_order.agent_id
-                maker_rates = self._fee_rates.get(maker_agent_id, (0.0002, 0.0005))
-                maker_fee = trade_amount * maker_rates[0]  # maker费率
-
-                if order.side == OrderSide.BUY:
-                    buyer_id = taker_agent_id
-                    seller_id = maker_agent_id
-                    buyer_fee = taker_fee_amount
-                    seller_fee = maker_fee
-                else:  # OrderSide.SELL
-                    buyer_id = maker_agent_id
-                    seller_id = taker_agent_id
-                    buyer_fee = maker_fee
-                    seller_fee = taker_fee_amount
-
-                # 创建成交记录
-                trade = Trade(
-                    trade_id=self._next_trade_id,
-                    price=trade_price,
-                    quantity=trade_qty,
-                    buyer_id=buyer_id,
-                    seller_id=seller_id,
-                    buyer_fee=buyer_fee,
-                    seller_fee=seller_fee,
-                    is_buyer_taker=(order.side == OrderSide.BUY),
-                )
-                self._next_trade_id += 1
-                trades.append(trade)
-
-                # 更新订单簿最新价
-                self._orderbook.last_price = trade_price
-
-                # 更新已成交数量
-                order.filled_quantity += trade_qty
-                maker_order.filled_quantity += trade_qty
-                remaining -= trade_qty
-
-                # 更新价格档位的 total_quantity（无论部分成交还是完全成交都要更新）
-                price_level.total_quantity -= trade_qty
-
-                # 如果 maker 订单完全成交，从订单簿移除
-                maker_remaining_after = maker_order.quantity - maker_order.filled_quantity
-                if maker_remaining_after == 0:
-                    self._orderbook.cancel_order(maker_order.order_id)
-
-            # 【修复】空档位清理：确保空档位被正确删除
-            if best_price in side_book:
-                current_level = side_book[best_price]
-                if len(current_level.orders) == 0:
-                    del side_book[best_price]
-                    self._orderbook._depth_dirty = True
-                    continue  # 档位已清理，继续下一个价格
-
-            # 检查该价格档位是否已空（被 cancel_order 删除），继续下一个价格
-            if best_price not in side_book:
-                continue
+        trades, remaining, self._next_trade_id = fast_match_orders(
+            self._orderbook,
+            order,
+            self._fee_rates,
+            self._next_trade_id,
+            is_limit_order
+        )
 
         return trades, remaining
 

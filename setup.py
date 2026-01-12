@@ -20,6 +20,11 @@ extensions = [
         define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
     ),
     Extension(
+        "src.market.matching.fast_matching",
+        ["src/market/matching/fast_matching.pyx"],
+        extra_compile_args=["-O3"],
+    ),
+    Extension(
         "src.bio.agents._cython.fast_decide",
         ["src/bio/agents/_cython/fast_decide.pyx"],
         include_dirs=[numpy.get_include()],
@@ -38,6 +43,11 @@ extensions = [
         define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
         extra_compile_args=["-fopenmp", "-O3", "-ffast-math"],
         extra_link_args=["-fopenmp"],
+    ),
+    Extension(
+        "src.training._cython.fast_execution",
+        ["src/training/_cython/fast_execution.pyx"],
+        extra_compile_args=["-O3"],
     ),
 ]
 
