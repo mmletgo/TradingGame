@@ -173,7 +173,8 @@ class RetailProAgent(Agent):
                 sell_qty = max(1, int(position_qty * quantity_ratio))
                 # 但不能超过持仓量
                 params["quantity"] = min(sell_qty, int(position_qty))
-                # 空仓或无持仓，开空仓（卖出方向，限制总持仓）
+            else:
+                # 空仓或空头持仓，开空仓（卖出方向，限制总持仓）
                 params["quantity"] = self._calculate_order_quantity(
                     mid_price, quantity_ratio, is_buy=False
                 )

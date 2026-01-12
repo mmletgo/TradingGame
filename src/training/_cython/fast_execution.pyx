@@ -82,6 +82,7 @@ cpdef list execute_non_mm_batch(
     cdef object trade
     cdef long long agent_id  # 使用 64 位整数以支持 << 32 操作
     cdef int order_counter
+    cdef int action_int_1  # ActionType 枚举转换后的整数值
 
     # 主循环：处理每个决策
     for i in range(n_decisions):
@@ -96,15 +97,21 @@ cpdef list execute_non_mm_batch(
         agent_id = <long long>agent.agent_id  # 强制转换为 64 位整数
         trades = []
 
+        # 将 ActionType 枚举转换为整数值（兼容枚举对象和整数）
+        if hasattr(action, 'value'):
+            action_int_1 = action.value
+        else:
+            action_int_1 = <int>action
+
         # 根据动作类型执行
-        if action == ACTION_CANCEL:
+        if action_int_1 == ACTION_CANCEL:
             # === 撤单 ===
             order_id = account.pending_order_id
             if order_id is not None:
                 cancel_order(order_id)
                 account.pending_order_id = None
 
-        elif action == ACTION_PLACE_BID or action == ACTION_PLACE_ASK:
+        elif action_int_1 == ACTION_PLACE_BID or action_int_1 == ACTION_PLACE_ASK:
             # === 限价单：先撤旧单再挂新单 ===
             old_order_id = account.pending_order_id
             if old_order_id is not None:
@@ -114,7 +121,7 @@ cpdef list execute_non_mm_batch(
             quantity = params.get("quantity", 0)
             if quantity > 0:
                 price = params["price"]
-                side_value = 1 if action == ACTION_PLACE_BID else -1  # OrderSide.BUY=1, SELL=-1
+                side_value = 1 if action_int_1 == ACTION_PLACE_BID else -1  # OrderSide.BUY=1, SELL=-1
 
                 # 内联订单 ID 生成
                 order_counter = agent._order_counter + 1
@@ -144,11 +151,11 @@ cpdef list execute_non_mm_batch(
                 else:
                     account.pending_order_id = None
 
-        elif action == ACTION_MARKET_BUY or action == ACTION_MARKET_SELL:
+        elif action_int_1 == ACTION_MARKET_BUY or action_int_1 == ACTION_MARKET_SELL:
             # === 市价单 ===
             quantity = params.get("quantity", 0)
             if quantity > 0:
-                side_value = 1 if action == ACTION_MARKET_BUY else -1  # OrderSide.BUY=1, SELL=-1
+                side_value = 1 if action_int_1 == ACTION_MARKET_BUY else -1  # OrderSide.BUY=1, SELL=-1
 
                 # 内联订单 ID 生成
                 order_counter = agent._order_counter + 1
@@ -249,6 +256,7 @@ cpdef list execute_non_mm_batch_with_maker_update(
     cdef double price_impact
     cdef int maker_id
     cdef object maker_agent
+    cdef int action_int  # ActionType 枚举转换后的整数值
 
     # 主循环：处理每个决策
     for i in range(n_decisions):
@@ -264,20 +272,26 @@ cpdef list execute_non_mm_batch_with_maker_update(
         agent_type_obj = agent.agent_type  # 保持枚举对象
         trades = []
 
+        # 将 ActionType 枚举转换为整数值（兼容枚举对象和整数）
+        if hasattr(action, 'value'):
+            action_int = action.value
+        else:
+            action_int = <int>action
+
         # 庄家：记录交易前价格
         pre_trade_price = 0.0
         if agent_type_obj is WHALE_TYPE:
             pre_trade_price = orderbook.last_price
 
         # 根据动作类型执行
-        if action == ACTION_CANCEL:
+        if action_int == ACTION_CANCEL:
             # === 撤单 ===
             order_id = account.pending_order_id
             if order_id is not None:
                 cancel_order(order_id)
                 account.pending_order_id = None
 
-        elif action == ACTION_PLACE_BID or action == ACTION_PLACE_ASK:
+        elif action_int == ACTION_PLACE_BID or action_int == ACTION_PLACE_ASK:
             # === 限价单：先撤旧单再挂新单 ===
             old_order_id = account.pending_order_id
             if old_order_id is not None:
@@ -287,7 +301,7 @@ cpdef list execute_non_mm_batch_with_maker_update(
             quantity = params.get("quantity", 0)
             if quantity > 0:
                 price = params["price"]
-                side_value = 1 if action == ACTION_PLACE_BID else -1
+                side_value = 1 if action_int == ACTION_PLACE_BID else -1
 
                 # 内联订单 ID 生成
                 order_counter = agent._order_counter + 1
@@ -313,11 +327,11 @@ cpdef list execute_non_mm_batch_with_maker_update(
                 else:
                     account.pending_order_id = None
 
-        elif action == ACTION_MARKET_BUY or action == ACTION_MARKET_SELL:
+        elif action_int == ACTION_MARKET_BUY or action_int == ACTION_MARKET_SELL:
             # === 市价单 ===
             quantity = params.get("quantity", 0)
             if quantity > 0:
-                side_value = 1 if action == ACTION_MARKET_BUY else -1
+                side_value = 1 if action_int == ACTION_MARKET_BUY else -1
 
                 order_counter = agent._order_counter + 1
                 agent._order_counter = order_counter
