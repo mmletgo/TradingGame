@@ -45,6 +45,7 @@ from create_config import create_default_config
 def progress_callback(stats: dict[str, Any]) -> None:
     """训练进度回调函数"""
     from datetime import datetime
+    from collections import defaultdict
 
     generation = stats.get("generation", 0)
     total_episodes = stats.get("total_episodes", 0)
@@ -53,13 +54,23 @@ def progress_callback(stats: dict[str, Any]) -> None:
 
     current_time = datetime.now().strftime("%H:%M:%S")
 
-    # 格式化适应度信息
-    fitness_info: list[str] = []
+    # 按 AgentType 聚合适应度（子种群取平均值）
+    type_fitness: dict[str, list[float]] = defaultdict(list)
     for (agent_type, _), fitness in avg_fitnesses.items():
         avg = float(fitness.mean()) if hasattr(fitness, "mean") else float(fitness)
-        fitness_info.append(f"{agent_type.value}={avg:.4f}")
+        type_fitness[agent_type.value].append(avg)
 
-    fitness_str = ", ".join(fitness_info[:4])  # 只显示前4个
+    # 格式化适应度信息（每种类型只显示一个聚合值）
+    fitness_info: list[str] = []
+    # 固定顺序：RETAIL, RETAIL_PRO, WHALE, MARKET_MAKER
+    for type_name in ["RETAIL", "RETAIL_PRO", "WHALE", "MARKET_MAKER"]:
+        if type_name in type_fitness:
+            values = type_fitness[type_name]
+            # 多个子种群取平均值
+            aggregated = sum(values) / len(values) if values else 0.0
+            fitness_info.append(f"{type_name}={aggregated:.4f}")
+
+    fitness_str = ", ".join(fitness_info)
 
     print(
         f"Gen {generation:4d} | {current_time} | "
