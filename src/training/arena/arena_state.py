@@ -700,9 +700,9 @@ class ArenaState:
         catfish_states: 鲶鱼账户状态字典（catfish_id -> CatfishAccountState）
         recent_trades: 最近成交记录队列
         price_history: 价格历史列表
-        tick_history_prices: Tick 历史价格列表（归一化）
-        tick_history_volumes: Tick 历史成交量列表（归一化）
-        tick_history_amounts: Tick 历史成交额列表（归一化）
+        tick_history_prices: Tick 历史价格队列（maxlen=100，自动截断）
+        tick_history_volumes: Tick 历史成交量队列（maxlen=100，自动截断）
+        tick_history_amounts: Tick 历史成交额队列（maxlen=100，自动截断）
         smooth_mid_price: 平滑中间价（EMA）
         tick: 当前 tick 数
         pop_liquidated_counts: 各种群已强平 Agent 数量
@@ -717,11 +717,11 @@ class ArenaState:
     adl_manager: "ADLManager"
     agent_states: dict[int, AgentAccountState]
     catfish_states: dict[int, CatfishAccountState]
-    recent_trades: deque = field(default_factory=lambda: deque(maxlen=100))
+    recent_trades: deque[object] = field(default_factory=lambda: deque(maxlen=100))
     price_history: list[float] = field(default_factory=list)
-    tick_history_prices: list[float] = field(default_factory=list)
-    tick_history_volumes: list[float] = field(default_factory=list)
-    tick_history_amounts: list[float] = field(default_factory=list)
+    tick_history_prices: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+    tick_history_volumes: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+    tick_history_amounts: deque[float] = field(default_factory=lambda: deque(maxlen=100))
     smooth_mid_price: float = 0.0
     tick: int = 0
     pop_liquidated_counts: dict[AgentType, int] = field(default_factory=dict)

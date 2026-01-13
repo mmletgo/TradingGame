@@ -273,9 +273,9 @@ class ParallelArenaTrainer:
                 catfish_states=catfish_states,
                 recent_trades=deque(maxlen=100),
                 price_history=[initial_price],
-                tick_history_prices=[initial_price],
-                tick_history_volumes=[0.0],
-                tick_history_amounts=[0.0],
+                tick_history_prices=deque([initial_price], maxlen=100),
+                tick_history_volumes=deque([0.0], maxlen=100),
+                tick_history_amounts=deque([0.0], maxlen=100),
                 smooth_mid_price=initial_price,
                 tick=0,
                 pop_liquidated_counts={agent_type: 0 for agent_type in AgentType},
@@ -812,11 +812,11 @@ class ParallelArenaTrainer:
                 ) / smooth_mid_price
             trade_quantities[:n_trades] = log_normalize_signed(qtys_arr)
 
-        # Tick 历史价格归一化
+        # Tick 历史价格归一化（使用 deque，maxlen=100，无需切片）
         if arena.tick_history_prices:
-            hist_prices = np.array(arena.tick_history_prices[-100:], dtype=np.float32)
-            volumes = np.array(arena.tick_history_volumes[-100:], dtype=np.float32)
-            amounts = np.array(arena.tick_history_amounts[-100:], dtype=np.float32)
+            hist_prices = np.array(arena.tick_history_prices, dtype=np.float32)
+            volumes = np.array(arena.tick_history_volumes, dtype=np.float32)
+            amounts = np.array(arena.tick_history_amounts, dtype=np.float32)
             n = len(hist_prices)
 
             base_price = hist_prices[0]
@@ -920,17 +920,11 @@ class ParallelArenaTrainer:
             arena.price_history.append(current_price)
             arena.update_price_stats(current_price)
 
-            # 记录 tick 历史数据
+            # 记录 tick 历史数据（deque maxlen=100 自动管理长度）
             arena.tick_history_prices.append(current_price)
             volume, amount = self._aggregate_tick_trades(tick_trades)
             arena.tick_history_volumes.append(volume)
             arena.tick_history_amounts.append(amount)
-
-            # 限制历史长度
-            if len(arena.tick_history_prices) > 100:
-                arena.tick_history_prices = arena.tick_history_prices[-100:]
-                arena.tick_history_volumes = arena.tick_history_volumes[-100:]
-                arena.tick_history_amounts = arena.tick_history_amounts[-100:]
 
             # 鲶鱼强平检查
             self._check_catfish_liquidation_for_arena(arena, current_price)
