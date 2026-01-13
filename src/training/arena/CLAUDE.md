@@ -37,6 +37,8 @@ class AgentAccountState:
     order_counter: int
     maker_fee_rate: float
     taker_fee_rate: float
+    bid_order_ids: list[int]   # 做市商买单挂单 ID 列表
+    ask_order_ids: list[int]   # 做市商卖单挂单 ID 列表
 ```
 
 **主要方法：**
@@ -198,10 +200,23 @@ class ParallelArenaTrainer:
 | `_batch_inference_all_arenas()` | 批量推理所有竞技场的所有 Agent |
 | `_run_episode_all_arenas()` | 运行所有竞技场的一个 episode |
 | `_collect_fitness_all_arenas()` | 收集并汇总所有竞技场的适应度 |
+| `_refresh_agent_states()` | 进化后刷新所有竞技场的 Agent 账户状态副本 |
 | `train(num_rounds, checkpoint_callback, progress_callback)` | 主训练循环 |
 | `save_checkpoint(path)` | 保存检查点 |
 | `load_checkpoint(path)` | 加载检查点 |
 | `stop()` | 停止训练并清理资源 |
+
+**账户完全独立设计：**
+
+各竞技场之间只共享 Agent 的基因（神经网络），账户状态完全独立：
+- **资金/余额**：每个竞技场维护独立的 `balance`
+- **持仓**：每个竞技场维护独立的 `position_quantity` 和 `position_avg_price`
+- **挂单 ID**：做市商的 `bid_order_ids` 和 `ask_order_ids` 各竞技场独立
+- **行情**：每个竞技场有独立的订单簿和价格走势
+
+订单数量和倾斜因子计算使用独立的辅助函数，直接基于 `AgentAccountState` 计算，不依赖 `Agent.account`：
+- `calculate_order_quantity_from_state(state, price, ratio, is_buy, ref_price)` - 基于 AgentAccountState 计算订单数量
+- `calculate_skew_factor_from_state(state, mid_price)` - 基于 AgentAccountState 计算做市商仓位倾斜因子
 
 **tick 执行流程（run_tick_all_arenas）：**
 ```python
@@ -240,7 +255,15 @@ for arena in arena_states:
 **辅助方法：**
 - `_build_network_index_map()` - 构建 Agent ID 到网络索引的映射表
 - `_get_network_index(agent_type, agent_id)` - 获取 Agent 在其种群中的网络索引
-- `_parse_market_maker_output(agent, output, mid_price, tick_size)` - 解析做市商神经网络输出（41个值）为订单列表
+- `_parse_market_maker_output(agent_state, output, mid_price, tick_size)` - 解析做市商神经网络输出（41个值）为订单列表，使用 AgentAccountState
+- `_parse_non_mm_output(agent_state, outputs, mid_price, tick_size)` - 解析非做市商神经网络输出（8个值），使用 AgentAccountState
+- `_convert_retail_result(agent_state, action_type_int, side_int, price, quantity, mid_price)` - 转换散户/高级散户/庄家的决策结果，使用 AgentAccountState
+- `_execute_mm_action_in_arena(arena, agent_state, params)` - 在竞技场中执行做市商动作（不依赖 Agent 对象）
+- `_execute_non_mm_action_in_arena(arena, agent_state, action, params)` - 在竞技场中执行非做市商动作（不依赖 Agent 对象）
+- `_update_trade_accounts(arena, agent_state, trades)` - 更新成交相关的账户状态（taker 和 maker）
+- `_cancel_agent_orders_in_arena(arena, agent_state)` - 撤销 Agent 在竞技场中的挂单
+- `_serial_inference_for_arena(arena_idx, market_state, adapters)` - 串行推理回退方案，同步 AgentAccountState 到 Agent.account 后推理
+- `_sync_state_to_agent(agent, state)` - 临时同步 AgentAccountState 到 Agent.account（用于回退推理路径）
 - `_catfish_action_for_arena(arena)` - 鲶鱼在竞技场中的行动，实现三种鲶鱼的决策和执行逻辑
 - `_calculate_catfish_quantity(orderbook, direction)` - 计算鲶鱼下单数量（吃掉前3档）
 

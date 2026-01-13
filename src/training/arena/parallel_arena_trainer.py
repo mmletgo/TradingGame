@@ -57,6 +57,8 @@ from .arena_state import (
     AgentStateAdapter,
     ArenaState,
     CatfishAccountState,
+    calculate_order_quantity_from_state,
+    calculate_skew_factor_from_state,
 )
 from .fitness_aggregator import FitnessAggregator
 
@@ -648,13 +650,19 @@ class ParallelArenaTrainer:
                 # 计算市场状态
                 market_state = self._compute_market_state_for_arena(arena)
 
-                # 使用 Agent 的决策方法
-                action, params = agent.decide(market_state, orderbook)  # type: ignore[attr-defined]
+                # 使用 Agent 进行推理，获取神经网络输出
+                inputs = agent.observe(market_state, orderbook)  # type: ignore[attr-defined]
+                outputs = agent.brain.forward(inputs)  # type: ignore[attr-defined]
+                mid_price = market_state.mid_price
+                tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
-                # 执行交易
-                self._execute_action_in_arena(
-                    arena, agent, agent_state, action, params
+                # 使用 agent_state 解析输出
+                _, params = self._parse_market_maker_output(
+                    agent_state, np.array(outputs), mid_price, tick_size
                 )
+
+                # 使用新方法执行交易
+                self._execute_mm_action_in_arena(arena, agent_state, params)
 
     def _compute_market_state_for_arena(
         self, arena: ArenaState
@@ -769,54 +777,6 @@ class ParallelArenaTrainer:
             tick_history_amounts=tick_amounts_normalized.copy(),
         )
 
-    def _execute_action_in_arena(
-        self,
-        arena: ArenaState,
-        agent: Any,
-        agent_state: AgentAccountState,
-        action: ActionType,
-        params: dict[str, Any],
-    ) -> list[Trade]:
-        """在竞技场中执行 Agent 动作
-
-        Args:
-            arena: 竞技场状态
-            agent: Agent 对象
-            agent_state: Agent 账户状态
-            action: 动作类型
-            params: 动作参数
-
-        Returns:
-            成交列表
-        """
-        trades = agent.execute_action(action, params, arena.matching_engine)
-
-        # 更新账户状态
-        for trade in trades:
-            is_buyer = trade.is_buyer_taker
-            # Trade 类有 buyer_fee 和 seller_fee，不是 taker_fee/maker_fee
-            # is_buyer_taker=True 时：buyer=taker(fee=buyer_fee), seller=maker(fee=seller_fee)
-            # is_buyer_taker=False 时：seller=taker(fee=seller_fee), buyer=maker(fee=buyer_fee)
-            fee = trade.buyer_fee if is_buyer else trade.seller_fee
-            agent_state.on_trade(
-                trade.price, trade.quantity, is_buyer, fee, is_maker=False
-            )
-            arena.recent_trades.append(trade)
-
-            # 更新 maker 的账户状态
-            maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-            maker_state = arena.agent_states.get(maker_id)
-            if maker_state is not None:
-                maker_is_buyer = not trade.is_buyer_taker
-                # maker 的手续费：is_buyer_taker=True 时 maker 是卖方，用 seller_fee
-                #                is_buyer_taker=False 时 maker 是买方，用 buyer_fee
-                maker_fee = trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
-                maker_state.on_trade(
-                    trade.price, trade.quantity, maker_is_buyer, maker_fee, is_maker=True
-                )
-
-        return trades
-
     def run_tick_all_arenas(self) -> bool:
         """并行执行所有竞技场的一个 tick
 
@@ -886,13 +846,12 @@ class ParallelArenaTrainer:
             tick_trades: list[Trade] = []
 
             for state, action, params in decisions:
-                agent = self._get_agent_by_id(state.agent_id)
-                if agent is None:
-                    continue
-
-                trades = self._execute_action_in_arena(
-                    arena, agent, state, action, params
-                )
+                if state.agent_type == AgentType.MARKET_MAKER:
+                    trades = self._execute_mm_action_in_arena(arena, state, params)
+                else:
+                    trades = self._execute_non_mm_action_in_arena(
+                        arena, state, action, params
+                    )
                 tick_trades.extend(trades)
 
             # 记录价格历史
@@ -953,7 +912,7 @@ class ParallelArenaTrainer:
                 zip(arena_market_states, arena_active_agents)
             ):
                 results[arena_idx] = self._serial_inference_for_arena(
-                    market_state, adapters
+                    arena_idx, market_state, adapters
                 )
             return results
 
@@ -1177,20 +1136,17 @@ class ParallelArenaTrainer:
                         break
 
                     state = arena_states_list[i]
-                    agent = self.agent_map.get(state.agent_id)
-                    if agent is None:
-                        continue
 
                     try:
                         if is_market_maker:
                             nn_output, _, _ = raw_result
                             action, params = self._parse_market_maker_output(
-                                agent, nn_output, mid_price, tick_size
+                                state, nn_output, mid_price, tick_size
                             )
                         else:
                             action_type_int, side_int, price, quantity = raw_result
                             action, params = self._convert_retail_result(
-                                agent,
+                                state,
                                 action_type_int,
                                 side_int,
                                 price,
@@ -1206,27 +1162,103 @@ class ParallelArenaTrainer:
 
     def _serial_inference_for_arena(
         self,
+        arena_idx: int,
         market_state: NormalizedMarketState,
         adapters: list[AgentStateAdapter],
     ) -> list[tuple[AgentStateAdapter, ActionType, dict[str, Any]]]:
-        """串行推理（回退方案）"""
+        """串行推理（回退方案）
+
+        使用 AgentAccountState 进行推理，确保账户独立性。
+        """
         results: list[tuple[AgentStateAdapter, ActionType, dict[str, Any]]] = []
+        arena = self.arena_states[arena_idx]
+        orderbook = arena.matching_engine._orderbook
+        mid_price = market_state.mid_price
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
 
         for adapter in adapters:
             agent = self._get_agent_by_id(adapter.agent_id)
-            if agent is None:
+            agent_state = arena.agent_states.get(adapter.agent_id)
+            if agent is None or agent_state is None:
                 continue
 
             try:
-                # 需要一个临时的 orderbook 引用
-                # 这里使用第一个竞技场的订单簿（仅用于获取结构信息）
-                orderbook = self.arena_states[0].matching_engine._orderbook
-                action, params = agent.decide(market_state, orderbook)
+                # 临时同步 agent_state 到 agent.account，以便 observe() 使用正确的状态
+                self._sync_state_to_agent(agent, agent_state)
+
+                # 使用 agent.observe() 获取神经网络输入
+                inputs = agent.observe(market_state, orderbook)
+                # 使用 agent.brain.forward() 获取输出
+                outputs = agent.brain.forward(inputs)
+
+                # 使用独立的解析方法（基于 agent_state 计算订单数量）
+                if agent_state.agent_type == AgentType.MARKET_MAKER:
+                    action, params = self._parse_market_maker_output(
+                        agent_state, np.array(outputs), mid_price, tick_size
+                    )
+                else:
+                    # 解析非做市商输出
+                    action, params = self._parse_non_mm_output(
+                        agent_state, outputs, mid_price, tick_size
+                    )
+
                 results.append((adapter, action, params))
             except Exception:
                 pass
 
         return results
+
+    def _sync_state_to_agent(self, agent: Any, state: AgentAccountState) -> None:
+        """临时同步 AgentAccountState 到 Agent.account
+
+        用于回退推理路径，确保 observe() 使用正确的竞技场状态。
+        """
+        account = agent.account
+        account.balance = state.balance
+        account.position.quantity = state.position_quantity
+        account.position.avg_price = state.position_avg_price
+        account.pending_order_id = state.pending_order_id
+
+    def _parse_non_mm_output(
+        self,
+        agent_state: AgentAccountState,
+        outputs: Any,
+        mid_price: float,
+        tick_size: float,
+    ) -> tuple[ActionType, dict[str, Any]]:
+        """解析非做市商的神经网络输出
+
+        输出结构（8个值）：
+        - [0-5]: 动作得分
+        - [6]: 价格偏移 (-1 到 1)
+        - [7]: 数量比例 (-1 到 1)
+        """
+        from src.bio.agents._cython.fast_decide import (
+            fast_argmax,
+            fast_round_price,
+            fast_clip,
+        )
+
+        # 解析动作类型
+        action_type_int = fast_argmax(outputs, 0, 6)
+
+        # 解析价格和数量
+        price_offset_raw = outputs[6] if len(outputs) > 6 else 0.0
+        quantity_ratio_raw = outputs[7] if len(outputs) > 7 else 0.5
+
+        # 价格偏移映射到 [-100, 100] ticks
+        price_offset = fast_clip(price_offset_raw, -1.0, 1.0) * 100 * tick_size
+        price = fast_round_price(mid_price + price_offset, tick_size)
+
+        # 数量比例映射到 [0.1, 1.0]
+        quantity_ratio = 0.1 + (fast_clip(quantity_ratio_raw, -1.0, 1.0) + 1) * 0.45
+
+        # 方向：买单=1，卖单=2
+        side_int = 1 if action_type_int in (1, 4) else 2
+
+        return self._convert_retail_result(
+            agent_state, action_type_int, side_int, price, quantity_ratio, mid_price
+        )
 
     def _get_agent_by_id(self, agent_id: int) -> Any:
         """根据 ID 获取 Agent 对象（O(1) 查找）"""
@@ -1234,7 +1266,7 @@ class ParallelArenaTrainer:
 
     def _parse_market_maker_output(
         self,
-        agent: Any,
+        agent_state: AgentAccountState,
         output: np.ndarray,
         mid_price: float,
         tick_size: float,
@@ -1259,7 +1291,7 @@ class ParallelArenaTrainer:
 
         # 总下单比例：映射到 [0.01, 1]，与 MarketMakerAgent.decide() 一致
         total_ratio = 0.01 + (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5 * 0.99
-        skew_factor = agent._calculate_skew_factor(mid_price)
+        skew_factor = calculate_skew_factor_from_state(agent_state, mid_price)
 
         bid_weights_sum = sum(max(0, (w + 1) * 0.5) for w in bid_qty_weights)
         ask_weights_sum = sum(max(0, (w + 1) * 0.5) for w in ask_qty_weights)
@@ -1285,8 +1317,8 @@ class ParallelArenaTrainer:
             weight = max(0, (bid_qty_weights[i] + 1) * 0.5)
             if total_weights > 0 and weight > 0:
                 ratio = (weight / total_weights) * total_ratio
-                qty = agent._calculate_order_quantity(
-                    price, ratio, is_buy=True, ref_price=mid_price
+                qty = calculate_order_quantity_from_state(
+                    agent_state, price, ratio, is_buy=True, ref_price=mid_price
                 )
                 if qty > 0:
                     bid_orders.append({"price": price, "quantity": float(qty)})
@@ -1299,8 +1331,8 @@ class ParallelArenaTrainer:
             weight = max(0, (ask_qty_weights[i] + 1) * 0.5)
             if total_weights > 0 and weight > 0:
                 ratio = (weight / total_weights) * total_ratio
-                qty = agent._calculate_order_quantity(
-                    price, ratio, is_buy=False, ref_price=mid_price
+                qty = calculate_order_quantity_from_state(
+                    agent_state, price, ratio, is_buy=False, ref_price=mid_price
                 )
                 if qty > 0:
                     ask_orders.append({"price": price, "quantity": float(qty)})
@@ -1309,7 +1341,7 @@ class ParallelArenaTrainer:
 
     def _convert_retail_result(
         self,
-        agent: Any,
+        agent_state: AgentAccountState,
         action_type_int: int,
         side_int: int,
         price: float,
@@ -1324,30 +1356,34 @@ class ParallelArenaTrainer:
         elif action_type_int == 1:
             action = ActionType.PLACE_BID
             params["price"] = price
-            actual_qty = agent._calculate_order_quantity(price, quantity, is_buy=True)
+            actual_qty = calculate_order_quantity_from_state(
+                agent_state, price, quantity, is_buy=True
+            )
             params["quantity"] = actual_qty
         elif action_type_int == 2:
             action = ActionType.PLACE_ASK
             params["price"] = price
-            actual_qty = agent._calculate_order_quantity(price, quantity, is_buy=False)
+            actual_qty = calculate_order_quantity_from_state(
+                agent_state, price, quantity, is_buy=False
+            )
             params["quantity"] = actual_qty
         elif action_type_int == 3:
             action = ActionType.CANCEL
         elif action_type_int == 4:
             action = ActionType.MARKET_BUY
-            actual_qty = agent._calculate_order_quantity(
-                mid_price, quantity, is_buy=True
+            actual_qty = calculate_order_quantity_from_state(
+                agent_state, mid_price, quantity, is_buy=True
             )
             params["quantity"] = actual_qty
         elif action_type_int == 5:
             action = ActionType.MARKET_SELL
-            position_qty = agent.account.position.quantity
+            position_qty = agent_state.position_quantity
             if position_qty > 0:
                 sell_qty = max(1, int(position_qty * quantity))
                 params["quantity"] = min(sell_qty, int(position_qty))
             else:
-                actual_qty = agent._calculate_order_quantity(
-                    mid_price, quantity, is_buy=False
+                actual_qty = calculate_order_quantity_from_state(
+                    agent_state, mid_price, quantity, is_buy=False
                 )
                 params["quantity"] = actual_qty
         else:
@@ -1372,9 +1408,7 @@ class ParallelArenaTrainer:
 
         # 阶段1: 撤销挂单
         for agent_state in agents_to_liquidate:
-            agent = self._get_agent_by_id(agent_state.agent_id)
-            if agent:
-                self._cancel_agent_orders_in_arena(arena, agent)
+            self._cancel_agent_orders_in_arena(arena, agent_state)
 
         # 阶段2: 市价平仓
         agents_need_adl: list[tuple[AgentAccountState, int, bool]] = []
@@ -1396,18 +1430,181 @@ class ParallelArenaTrainer:
             latest_price = arena.matching_engine._orderbook.last_price
             self._execute_adl_in_arena(arena, agents_need_adl, latest_price)
 
-    def _cancel_agent_orders_in_arena(self, arena: ArenaState, agent: Any) -> None:
+    def _cancel_agent_orders_in_arena(
+        self, arena: ArenaState, agent_state: AgentAccountState
+    ) -> None:
         """撤销 Agent 在竞技场中的挂单"""
-        if agent.agent_type == AgentType.MARKET_MAKER:
-            from src.bio.agents.market_maker import MarketMakerAgent
-
-            if isinstance(agent, MarketMakerAgent):
-                agent._cancel_all_orders(arena.matching_engine)
+        if agent_state.agent_type == AgentType.MARKET_MAKER:
+            for order_id in agent_state.bid_order_ids + agent_state.ask_order_ids:
+                arena.matching_engine.cancel_order(order_id)
+            agent_state.bid_order_ids.clear()
+            agent_state.ask_order_ids.clear()
         else:
-            agent_state = arena.agent_states.get(agent.agent_id)
-            if agent_state and agent_state.pending_order_id is not None:
+            if agent_state.pending_order_id is not None:
                 arena.matching_engine.cancel_order(agent_state.pending_order_id)
                 agent_state.pending_order_id = None
+
+    def _update_trade_accounts(
+        self,
+        arena: ArenaState,
+        agent_state: AgentAccountState,
+        trades: list[Trade],
+    ) -> None:
+        """更新成交相关的账户状态"""
+        for trade in trades:
+            is_buyer = trade.is_buyer_taker
+            fee = trade.buyer_fee if is_buyer else trade.seller_fee
+            agent_state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+            arena.recent_trades.append(trade)
+
+            # 更新 maker 账户
+            maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+            maker_state = arena.agent_states.get(maker_id)
+            if maker_state is not None:
+                maker_is_buyer = not trade.is_buyer_taker
+                maker_fee = trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
+                maker_state.on_trade(
+                    trade.price, trade.quantity, maker_is_buyer, maker_fee, is_maker=True
+                )
+
+    def _execute_mm_action_in_arena(
+        self,
+        arena: ArenaState,
+        agent_state: AgentAccountState,
+        params: dict[str, Any],
+    ) -> list[Trade]:
+        """在竞技场中执行做市商动作（不依赖 Agent 对象）"""
+        matching_engine = arena.matching_engine
+        all_trades: list[Trade] = []
+
+        # 1. 撤销所有旧挂单
+        for order_id in agent_state.bid_order_ids + agent_state.ask_order_ids:
+            matching_engine.cancel_order(order_id)
+        agent_state.bid_order_ids.clear()
+        agent_state.ask_order_ids.clear()
+
+        # 2. 挂买单
+        for order_spec in params.get("bid_orders", []):
+            order_id = agent_state.generate_order_id(arena.arena_id)
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_state.agent_id,
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                price=order_spec["price"],
+                quantity=int(order_spec["quantity"]),
+            )
+            trades = matching_engine.process_order(order)
+            self._update_trade_accounts(arena, agent_state, trades)
+            all_trades.extend(trades)
+            # 检查订单是否在订单簿中（未完全成交）
+            if matching_engine._orderbook.order_map.get(order_id):
+                agent_state.bid_order_ids.append(order_id)
+
+        # 3. 挂卖单
+        for order_spec in params.get("ask_orders", []):
+            order_id = agent_state.generate_order_id(arena.arena_id)
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_state.agent_id,
+                side=OrderSide.SELL,
+                order_type=OrderType.LIMIT,
+                price=order_spec["price"],
+                quantity=int(order_spec["quantity"]),
+            )
+            trades = matching_engine.process_order(order)
+            self._update_trade_accounts(arena, agent_state, trades)
+            all_trades.extend(trades)
+            if matching_engine._orderbook.order_map.get(order_id):
+                agent_state.ask_order_ids.append(order_id)
+
+        return all_trades
+
+    def _execute_non_mm_action_in_arena(
+        self,
+        arena: ArenaState,
+        agent_state: AgentAccountState,
+        action: ActionType,
+        params: dict[str, Any],
+    ) -> list[Trade]:
+        """在竞技场中执行非做市商动作（不依赖 Agent 对象）"""
+        if agent_state.is_liquidated:
+            return []
+
+        matching_engine = arena.matching_engine
+        trades: list[Trade] = []
+
+        if action == ActionType.HOLD:
+            return []
+
+        elif action == ActionType.PLACE_BID:
+            if agent_state.pending_order_id is not None:
+                matching_engine.cancel_order(agent_state.pending_order_id)
+                agent_state.pending_order_id = None
+
+            order_id = agent_state.generate_order_id(arena.arena_id)
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_state.agent_id,
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                price=params["price"],
+                quantity=int(params["quantity"]),
+            )
+            trades = matching_engine.process_order(order)
+            # 如果订单未完全成交，记录挂单ID
+            if matching_engine._orderbook.order_map.get(order_id):
+                agent_state.pending_order_id = order_id
+
+        elif action == ActionType.PLACE_ASK:
+            if agent_state.pending_order_id is not None:
+                matching_engine.cancel_order(agent_state.pending_order_id)
+                agent_state.pending_order_id = None
+
+            order_id = agent_state.generate_order_id(arena.arena_id)
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_state.agent_id,
+                side=OrderSide.SELL,
+                order_type=OrderType.LIMIT,
+                price=params["price"],
+                quantity=int(params["quantity"]),
+            )
+            trades = matching_engine.process_order(order)
+            if matching_engine._orderbook.order_map.get(order_id):
+                agent_state.pending_order_id = order_id
+
+        elif action == ActionType.CANCEL:
+            if agent_state.pending_order_id is not None:
+                matching_engine.cancel_order(agent_state.pending_order_id)
+                agent_state.pending_order_id = None
+
+        elif action == ActionType.MARKET_BUY:
+            order_id = agent_state.generate_order_id(arena.arena_id)
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_state.agent_id,
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                price=0.0,
+                quantity=int(params["quantity"]),
+            )
+            trades = matching_engine.process_order(order)
+
+        elif action == ActionType.MARKET_SELL:
+            order_id = agent_state.generate_order_id(arena.arena_id)
+            order = Order(
+                order_id=order_id,
+                agent_id=agent_state.agent_id,
+                side=OrderSide.SELL,
+                order_type=OrderType.MARKET,
+                price=0.0,
+                quantity=int(params["quantity"]),
+            )
+            trades = matching_engine.process_order(order)
+
+        self._update_trade_accounts(arena, agent_state, trades)
+        return trades
 
     def _execute_liquidation_in_arena(
         self,
@@ -1948,7 +2145,12 @@ class ParallelArenaTrainer:
             population._genomes_dirty = True
 
     def _refresh_agent_states(self) -> None:
-        """刷新所有竞技场的 Agent 账户状态"""
+        """刷新所有竞技场的 Agent 账户状态
+
+        现在使用 calculate_order_quantity_from_state 和 calculate_skew_factor_from_state
+        从 AgentAccountState 计算订单数量，不再依赖 Agent 的原始 account，
+        因此不需要重置 Agent 的原始账户。
+        """
         for arena in self.arena_states:
             arena.agent_states.clear()
             for population in self.populations.values():

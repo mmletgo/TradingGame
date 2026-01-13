@@ -60,6 +60,8 @@ class AgentAccountState:
     order_counter: int
     maker_fee_rate: float
     taker_fee_rate: float
+    bid_order_ids: list[int] = field(default_factory=list)
+    ask_order_ids: list[int] = field(default_factory=list)
 
     @classmethod
     def from_agent(cls, agent: "Agent") -> "AgentAccountState":
@@ -74,6 +76,15 @@ class AgentAccountState:
             新创建的 AgentAccountState 实例
         """
         account = agent.account
+
+        # 获取做市商挂单 ID（如果是做市商）
+        bid_order_ids: list[int] = []
+        ask_order_ids: list[int] = []
+        if hasattr(agent, 'bid_order_ids'):
+            bid_order_ids = list(agent.bid_order_ids)
+        if hasattr(agent, 'ask_order_ids'):
+            ask_order_ids = list(agent.ask_order_ids)
+
         return cls(
             agent_id=agent.agent_id,
             agent_type=agent.agent_type,
@@ -91,6 +102,8 @@ class AgentAccountState:
             order_counter=agent._order_counter,
             maker_fee_rate=account.maker_fee_rate,
             taker_fee_rate=account.taker_fee_rate,
+            bid_order_ids=bid_order_ids,
+            ask_order_ids=ask_order_ids,
         )
 
     def reset(self, config: AgentConfig) -> None:
@@ -115,6 +128,8 @@ class AgentAccountState:
         self.order_counter = 0
         self.maker_fee_rate = config.maker_fee_rate
         self.taker_fee_rate = config.taker_fee_rate
+        self.bid_order_ids = []
+        self.ask_order_ids = []
 
     def get_equity(self, current_price: float) -> float:
         """计算净值
@@ -782,6 +797,101 @@ class ArenaState:
         self.pop_liquidated_counts[agent_type] = (
             self.pop_liquidated_counts.get(agent_type, 0) + 1
         )
+
+
+# ============================================================================
+# 辅助函数：基于 AgentAccountState 计算订单数量和倾斜因子
+# ============================================================================
+
+
+def calculate_order_quantity_from_state(
+    state: AgentAccountState,
+    price: float,
+    ratio: float,
+    is_buy: bool = True,
+    ref_price: float = 0.0,
+) -> int:
+    """根据 AgentAccountState 计算订单数量
+
+    与 Agent._calculate_order_quantity() 逻辑完全一致，
+    但使用 AgentAccountState 而非 agent.account。
+
+    Args:
+        state: Agent 账户状态
+        price: 订单价格
+        ratio: 数量比例（0.0 到 1.0）
+        is_buy: 是否为买入方向
+        ref_price: 参考价格（用于计算 equity 和仓位价值，默认 0 使用 price）
+
+    Returns:
+        订单数量（整数）
+    """
+    MAX_ORDER_QUANTITY = 100_000_000
+
+    calc_price = ref_price if ref_price > 0 else price
+    equity = state.get_equity(calc_price)
+
+    if equity <= 0:
+        return 0
+
+    max_pos_value = equity * state.leverage
+    current_pos = state.position_quantity
+    current_pos_value = abs(current_pos) * calc_price
+
+    if is_buy:
+        if current_pos >= 0:
+            available_pos_value = max(0, max_pos_value - current_pos_value)
+        else:
+            available_pos_value = current_pos_value + max_pos_value
+    else:
+        if current_pos <= 0:
+            available_pos_value = max(0, max_pos_value - current_pos_value)
+        else:
+            available_pos_value = current_pos_value + max_pos_value
+
+    ratio = min(1.0, ratio)
+    quantity = (available_pos_value * ratio) / price if price > 0 else 0.0
+
+    if quantity < 1:
+        return 0
+    return min(MAX_ORDER_QUANTITY, int(quantity))
+
+
+def calculate_skew_factor_from_state(
+    state: AgentAccountState,
+    mid_price: float,
+) -> float:
+    """根据 AgentAccountState 计算做市商仓位倾斜因子
+
+    与 MarketMakerAgent._calculate_skew_factor() 逻辑完全一致。
+
+    Args:
+        state: Agent 账户状态
+        mid_price: 中间价
+
+    Returns:
+        倾斜因子，范围 [-1, 1]
+    """
+    equity = state.get_equity(mid_price)
+    if equity <= 0:
+        return 0.0
+
+    position_qty = state.position_quantity
+    if position_qty == 0:
+        return 0.0
+
+    position_value = abs(position_qty) * mid_price
+    max_position_value = equity * state.leverage
+    pos_ratio = (
+        min(1.0, position_value / max_position_value)
+        if max_position_value > 0
+        else 0.0
+    )
+
+    if position_qty > 0:
+        return -pos_ratio
+    else:
+        return pos_ratio
 
 
 # ============================================================================
