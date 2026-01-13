@@ -486,24 +486,34 @@ class ParallelArenaTrainer:
         arena_fitnesses: list[dict[tuple[AgentType, int], np.ndarray]] = []
         episode_counts: list[int] = []
 
-        for ep_idx in range(self.multi_config.episodes_per_arena):
-            # 重置所有竞技场
-            self._reset_all_arenas()
+        # 禁用GC，避免tick期间的GC停顿导致性能抖动
+        gc.disable()
 
-            # 做市商初始化（每个竞技场）
-            self._init_market_all_arenas()
+        try:
+            for ep_idx in range(self.multi_config.episodes_per_arena):
+                # 重置所有竞技场
+                self._reset_all_arenas()
 
-            # 运行一个 episode（所有竞技场同步推进）
-            episode_fitness = self._run_episode_all_arenas()
+                # 做市商初始化（每个竞技场）
+                self._init_market_all_arenas()
 
-            # 累积适应度
-            arena_fitnesses.append(episode_fitness)
-            episode_counts.append(self.multi_config.num_arenas)
+                # 运行一个 episode（所有竞技场同步推进）
+                episode_fitness = self._run_episode_all_arenas()
 
-            # Episode 回调
-            if episode_callback is not None:
-                episode_stats = self._get_episode_stats(ep_idx)
-                episode_callback(episode_stats)
+                # 累积适应度
+                arena_fitnesses.append(episode_fitness)
+                episode_counts.append(self.multi_config.num_arenas)
+
+                # Episode 回调
+                if episode_callback is not None:
+                    episode_stats = self._get_episode_stats(ep_idx)
+                    episode_callback(episode_stats)
+
+                # 每个episode结束后执行轻量GC（只回收年轻代）
+                gc.collect(0)
+        finally:
+            # 确保GC重新启用
+            gc.enable()
 
         stats["arena_run_time"] = time.perf_counter() - arena_start
 
