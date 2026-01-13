@@ -28,6 +28,7 @@ class MultiArenaConfig:
 
     num_arenas: int = 2
     episodes_per_arena: int = 50
+    use_shared_memory_ipc: bool = False  # 是否使用共享内存 IPC（大规模场景可能更优）
 
 if TYPE_CHECKING:
     from src.training._cython.batch_decide_openmp import BatchNetworkCache
@@ -472,21 +473,38 @@ class ParallelArenaTrainer:
         self.logger.info(f"进化 Worker 池创建完成: {len(worker_configs)} 个 Worker")
 
     def _create_execute_worker_pool(self) -> None:
-        """创建 Execute Worker 池"""
-        from .execute_worker import ArenaExecuteWorkerPool
+        """创建 Execute Worker 池
 
+        根据 multi_config.use_shared_memory_ipc 选择使用：
+        - ArenaExecuteWorkerPoolShm（共享内存版，性能更优）
+        - ArenaExecuteWorkerPool（Queue 版，兼容性更好）
+        """
         arena_ids = [arena.arena_id for arena in self.arena_states]
         num_workers = min(4, len(arena_ids))  # 最多 4 个 Worker
 
-        self._execute_worker_pool = ArenaExecuteWorkerPool(
-            num_workers=num_workers,
-            arena_ids=arena_ids,
-            config=self.config,
-        )
+        if self.multi_config.use_shared_memory_ipc:
+            from .execute_worker import ArenaExecuteWorkerPoolShm
+
+            self._execute_worker_pool = ArenaExecuteWorkerPoolShm(
+                num_workers=num_workers,
+                arena_ids=arena_ids,
+                config=self.config,
+            )
+            ipc_mode = "共享内存"
+        else:
+            from .execute_worker import ArenaExecuteWorkerPool
+
+            self._execute_worker_pool = ArenaExecuteWorkerPool(
+                num_workers=num_workers,
+                arena_ids=arena_ids,
+                config=self.config,
+            )
+            ipc_mode = "Queue"
+
         self._execute_worker_pool.start()
         self.logger.info(
             f"Execute Worker 池创建完成: {num_workers} 个 Worker, "
-            f"{len(arena_ids)} 个竞技场"
+            f"{len(arena_ids)} 个竞技场, IPC 模式: {ipc_mode}"
         )
 
     def _collect_fee_rates(self) -> dict[int, tuple[float, float]]:

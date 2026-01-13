@@ -7,8 +7,10 @@
 - ExecuteCommand: 主进程 -> Worker 的命令数据类
 - ArenaExecuteData: execute 命令的数据
 - ArenaExecuteResult: Worker -> 主进程的结果数据类
-- ArenaExecuteWorkerPool: 管理多个 Worker 进程的池
-- arena_execute_worker: Worker 进程主函数
+- ArenaExecuteWorkerPool: 管理多个 Worker 进程的池（Queue 版）
+- arena_execute_worker: Worker 进程主函数（Queue 版）
+- ArenaExecuteWorkerPoolShm: 共享内存版 Worker 池
+- arena_execute_worker_shm: 共享内存版 Worker 进程主函数
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from src.market.orderbook.order import Order, OrderSide, OrderType
 
 if TYPE_CHECKING:
     from multiprocessing import Queue as QueueType
+    from multiprocessing.synchronize import Event
 
 
 # ============================================================================
@@ -943,3 +946,502 @@ class ArenaExecuteWorkerPool:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """上下文管理器退出"""
         self.shutdown()
+
+
+# ============================================================================
+# 共享内存版 Worker 实现
+# ============================================================================
+
+
+def arena_execute_worker_shm(
+    worker_id: int,
+    arena_ids: list[int],
+    config: Config,
+    shm_name: str,
+    total_arenas: int,
+    ready_event: "Event",
+) -> None:
+    """共享内存版 Worker 进程主函数
+
+    使用 SharedMemoryIPC 进行通信，轮询检查命令状态。
+
+    Args:
+        worker_id: Worker ID（用于日志）
+        arena_ids: 本 Worker 负责的竞技场 ID 列表
+        config: 全局配置
+        shm_name: 共享内存名称
+        total_arenas: 共享内存中的总竞技场数量
+        ready_event: 就绪事件，通知主进程 Worker 已初始化完成
+    """
+    from src.training.arena.shared_memory_ipc import (
+        SharedMemoryIPC,
+        CommandStatus,
+        CommandType,
+    )
+    import time
+
+    logger = logging.getLogger(f"ExecuteWorkerShm-{worker_id}")
+    logger.info(f"Worker {worker_id} 启动（共享内存模式），负责竞技场: {arena_ids}")
+
+    # 连接共享内存
+    ipc = SharedMemoryIPC(num_arenas=total_arenas, shm_name=shm_name, create=False)
+    logger.info(f"Worker {worker_id} 已连接共享内存: {shm_name}")
+
+    # 初始化各竞技场状态
+    arena_states: dict[int, WorkerArenaState] = {}
+    for arena_id in arena_ids:
+        matching_engine = MatchingEngine(config.market)
+        arena_states[arena_id] = WorkerArenaState(
+            arena_id=arena_id,
+            matching_engine=matching_engine,
+        )
+
+    # 通知主进程已就绪
+    ready_event.set()
+    logger.info(f"Worker {worker_id} 已就绪")
+
+    # 主循环
+    running = True
+    poll_interval = 0.0001  # 100us 轮询间隔
+
+    try:
+        while running:
+            for arena_id in arena_ids:
+                cmd_view = ipc.get_command_view(arena_id)
+                result_view = ipc.get_result_view(arena_id)
+
+                # 检查是否有待处理的命令
+                if cmd_view.status != CommandStatus.PENDING:
+                    continue
+
+                # 标记为处理中
+                cmd_view.status = CommandStatus.PROCESSING
+                cmd_type = cmd_view.cmd_type
+
+                try:
+                    if cmd_type == CommandType.SHUTDOWN:
+                        logger.info(f"Worker {worker_id} 收到关闭命令")
+                        result_view.status = CommandStatus.DONE
+                        running = False
+                        break
+
+                    arena = arena_states[arena_id]
+
+                    if cmd_type == CommandType.RESET:
+                        # 处理 reset 命令
+                        # 注意：reset 数据需要通过额外机制传递，这里使用默认配置
+                        _handle_reset(arena, config, None)
+                        result_view.status = CommandStatus.DONE
+
+                    elif cmd_type == CommandType.INIT_MM:
+                        # 处理做市商初始化
+                        # 从共享内存读取做市商决策数据
+                        mm_decisions = cmd_view.get_mm_decisions()
+                        # 转换格式：需要添加 agent_id
+                        # 这里假设 mm_decisions 已经包含正确的 agent_id 信息
+                        # 实际使用时需要确保数据格式正确
+                        result = _handle_init_mm(arena, mm_decisions)
+                        _write_result_to_shm(result_view, result)
+
+                    elif cmd_type == CommandType.EXECUTE:
+                        # 处理执行命令
+                        # 从共享内存读取数据
+                        liquidated_agents = cmd_view.get_liquidated()
+                        decisions = cmd_view.get_decisions()
+                        mm_decisions = cmd_view.get_mm_decisions()
+
+                        # 构建执行数据
+                        execute_data = ArenaExecuteData(
+                            liquidated_agents=liquidated_agents,
+                            decisions=decisions,
+                            mm_decisions=mm_decisions,
+                        )
+
+                        # 执行
+                        result = _handle_execute(arena, execute_data)
+                        _write_result_to_shm(result_view, result)
+
+                    elif cmd_type == CommandType.GET_DEPTH:
+                        # 处理获取深度命令
+                        result = _handle_get_depth(arena)
+                        _write_result_to_shm(result_view, result)
+
+                except Exception as e:
+                    error_msg = f"Worker {worker_id} 处理命令 {cmd_type} 失败: {e}\n{traceback.format_exc()}"
+                    logger.error(error_msg)
+                    # 设置完成状态，让主进程知道出错了
+                    result_view.status = CommandStatus.DONE
+
+            # 短暂休眠，避免空转消耗 CPU
+            if running:
+                time.sleep(poll_interval)
+
+    except KeyboardInterrupt:
+        logger.info(f"Worker {worker_id} 被中断")
+    except Exception as e:
+        logger.error(f"Worker {worker_id} 发生异常: {e}\n{traceback.format_exc()}")
+    finally:
+        # 关闭共享内存连接
+        ipc.close()
+        logger.info(f"Worker {worker_id} 退出")
+
+
+def _write_result_to_shm(
+    result_view: Any,  # ArenaResultView
+    result: ArenaExecuteResult,
+) -> None:
+    """将执行结果写入共享内存
+
+    Args:
+        result_view: 共享内存结果视图
+        result: 执行结果
+    """
+    # 写入深度数据
+    result_view.set_depth(result.bid_depth, result.ask_depth)
+
+    # 写入价格
+    result_view.set_prices(result.last_price, result.mid_price)
+
+    # 写入成交数据
+    result_view.set_trades(result.trades)
+
+    # 写入挂单更新
+    result_view.set_pending_updates(result.pending_updates)
+
+    # 写入做市商订单更新
+    result_view.set_mm_order_updates(result.mm_order_updates)
+
+    # 标记完成
+    result_view.status = 3  # CommandStatus.DONE
+
+
+class ArenaExecuteWorkerPoolShm:
+    """共享内存版竞技场执行 Worker 池
+
+    使用 SharedMemoryIPC 进行通信，避免 Queue 的序列化开销。
+
+    Attributes:
+        num_workers: Worker 进程数量
+        arena_ids: 所有竞技场 ID 列表
+        config: 全局配置
+        _ipc: 共享内存 IPC 管理器
+        _sync: 共享内存同步器
+        _workers: Worker 进程列表
+        _ready_events: Worker 就绪事件列表
+        _arena_to_worker: 竞技场 ID 到 Worker 索引的映射
+        _started: 是否已启动
+    """
+
+    def __init__(
+        self,
+        num_workers: int,
+        arena_ids: list[int],
+        config: Config,
+    ) -> None:
+        """初始化共享内存版 Worker 池
+
+        Args:
+            num_workers: Worker 进程数量
+            arena_ids: 所有竞技场 ID 列表
+            config: 全局配置
+        """
+        from multiprocessing import Event
+        from src.training.arena.shared_memory_ipc import (
+            SharedMemoryIPC,
+            ShmSynchronizer,
+        )
+
+        self.num_workers = num_workers
+        self.arena_ids = arena_ids
+        self.config = config
+        self.logger = logging.getLogger("ArenaExecuteWorkerPoolShm")
+
+        # 创建共享内存
+        self._ipc = SharedMemoryIPC(num_arenas=len(arena_ids), create=True)
+        self._sync = ShmSynchronizer(self._ipc)
+
+        self._workers: list[Process] = []
+        self._ready_events: list["Event"] = []
+        self._arena_to_worker: dict[int, int] = {}
+        self._started = False
+
+    def start(self) -> None:
+        """启动所有 Worker 进程"""
+        from multiprocessing import Event
+
+        if self._started:
+            return
+
+        # 将竞技场分配给各 Worker
+        arenas_per_worker = len(self.arena_ids) // self.num_workers
+        remainder = len(self.arena_ids) % self.num_workers
+
+        idx = 0
+        for worker_id in range(self.num_workers):
+            # 分配竞技场
+            count = arenas_per_worker + (1 if worker_id < remainder else 0)
+            worker_arena_ids = self.arena_ids[idx : idx + count]
+            idx += count
+
+            # 记录映射
+            for arena_id in worker_arena_ids:
+                self._arena_to_worker[arena_id] = worker_id
+
+            # 创建就绪事件
+            ready_event: "Event" = Event()
+            self._ready_events.append(ready_event)
+
+            # 创建并启动 Worker
+            worker = Process(
+                target=arena_execute_worker_shm,
+                args=(
+                    worker_id,
+                    worker_arena_ids,
+                    self.config,
+                    self._ipc.shm_name,
+                    len(self.arena_ids),  # total_arenas
+                    ready_event,
+                ),
+                daemon=True,
+            )
+            worker.start()
+            self._workers.append(worker)
+
+        # 等待所有 Worker 就绪
+        for i, ready_event in enumerate(self._ready_events):
+            if not ready_event.wait(timeout=30.0):
+                self.logger.error(f"Worker {i} 启动超时")
+                raise RuntimeError(f"Worker {i} 启动超时")
+
+        self._started = True
+        self.logger.info(
+            f"共享内存版 Worker 池已启动：{self.num_workers} 个 Worker，"
+            f"{len(self.arena_ids)} 个竞技场，共享内存: {self._ipc.shm_name}"
+        )
+
+    def reset_all(
+        self,
+        initial_price: float | None = None,
+        fee_rates: dict[int, tuple[float, float]] | None = None,
+    ) -> None:
+        """重置所有竞技场的订单簿
+
+        Args:
+            initial_price: 初始价格（可选）
+            fee_rates: Agent 费率映射（可选）
+        """
+        from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
+
+        if not self._started:
+            self.start()
+
+        # 发送 reset 命令到所有竞技场
+        for arena_id in self.arena_ids:
+            cmd_view = self._ipc.get_command_view(arena_id)
+            cmd_view.cmd_type = CommandType.RESET
+            cmd_view.status = CommandStatus.PENDING
+
+        # 等待所有完成
+        if not self._sync.wait_all_done(self.arena_ids, timeout_ms=30000):
+            self.logger.error("reset_all 超时")
+            raise RuntimeError("reset_all 超时")
+
+        # 重置状态
+        self._sync.reset_all_status(self.arena_ids)
+
+        self.logger.debug(f"所有 {len(self.arena_ids)} 个竞技场已重置（共享内存模式）")
+
+    def init_market_makers(
+        self,
+        mm_init_orders: dict[int, list[tuple[int, list[dict[str, float]], list[dict[str, float]]]]],
+    ) -> dict[int, ArenaExecuteResult]:
+        """初始化做市商挂单
+
+        Args:
+            mm_init_orders: 各竞技场的做市商初始化数据
+
+        Returns:
+            各竞技场的执行结果
+        """
+        from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
+
+        if not self._started:
+            self.start()
+
+        # 发送 init_mm 命令
+        for arena_id, init_data in mm_init_orders.items():
+            cmd_view = self._ipc.get_command_view(arena_id)
+            cmd_view.set_mm_decisions(init_data)
+            cmd_view.cmd_type = CommandType.INIT_MM
+            cmd_view.status = CommandStatus.PENDING
+
+        # 等待所有完成
+        arena_ids_list = list(mm_init_orders.keys())
+        if not self._sync.wait_all_done(arena_ids_list, timeout_ms=30000):
+            self.logger.error("init_market_makers 超时")
+            raise RuntimeError("init_market_makers 超时")
+
+        # 读取结果
+        results: dict[int, ArenaExecuteResult] = {}
+        for arena_id in arena_ids_list:
+            result_view = self._ipc.get_result_view(arena_id)
+            results[arena_id] = _read_result_from_shm(arena_id, result_view)
+
+        # 重置状态
+        self._sync.reset_all_status(arena_ids_list)
+
+        return results
+
+    def execute_all(
+        self,
+        arena_commands: dict[int, ArenaExecuteData],
+    ) -> dict[int, ArenaExecuteResult]:
+        """执行所有竞技场的决策
+
+        Args:
+            arena_commands: 各竞技场的执行数据
+
+        Returns:
+            各竞技场的执行结果
+        """
+        from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
+
+        if not self._started:
+            self.start()
+
+        # 1. 写入命令到共享内存
+        for arena_id, execute_data in arena_commands.items():
+            cmd_view = self._ipc.get_command_view(arena_id)
+            cmd_view.set_liquidated(execute_data.liquidated_agents)
+            cmd_view.set_decisions(execute_data.decisions)
+            cmd_view.set_mm_decisions(execute_data.mm_decisions)
+            cmd_view.cmd_type = CommandType.EXECUTE
+            cmd_view.status = CommandStatus.PENDING
+
+        # 2. 等待所有完成
+        arena_ids_list = list(arena_commands.keys())
+        if not self._sync.wait_all_done(arena_ids_list, timeout_ms=30000):
+            self.logger.error("execute_all 超时")
+            raise RuntimeError("execute_all 超时")
+
+        # 3. 读取结果
+        results: dict[int, ArenaExecuteResult] = {}
+        for arena_id in arena_ids_list:
+            result_view = self._ipc.get_result_view(arena_id)
+            results[arena_id] = _read_result_from_shm(arena_id, result_view)
+
+        # 4. 重置状态
+        self._sync.reset_all_status(arena_ids_list)
+
+        return results
+
+    def get_all_depths(
+        self,
+    ) -> dict[int, tuple[NDArray[np.float64], NDArray[np.float64], float, float]]:
+        """获取所有竞技场的订单簿深度
+
+        Returns:
+            各竞技场的深度数据
+        """
+        from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
+
+        if not self._started:
+            self.start()
+
+        # 发送 get_depth 命令
+        for arena_id in self.arena_ids:
+            cmd_view = self._ipc.get_command_view(arena_id)
+            cmd_view.cmd_type = CommandType.GET_DEPTH
+            cmd_view.status = CommandStatus.PENDING
+
+        # 等待所有完成
+        if not self._sync.wait_all_done(self.arena_ids, timeout_ms=30000):
+            self.logger.error("get_all_depths 超时")
+            raise RuntimeError("get_all_depths 超时")
+
+        # 读取结果
+        results: dict[int, tuple[NDArray[np.float64], NDArray[np.float64], float, float]] = {}
+        for arena_id in self.arena_ids:
+            result_view = self._ipc.get_result_view(arena_id)
+            results[arena_id] = (
+                result_view.bid_depth.copy(),
+                result_view.ask_depth.copy(),
+                result_view.last_price,
+                result_view.mid_price,
+            )
+
+        # 重置状态
+        self._sync.reset_all_status(self.arena_ids)
+
+        return results
+
+    def shutdown(self) -> None:
+        """关闭所有 Worker 并清理共享内存"""
+        from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
+
+        if not self._started:
+            return
+
+        self.logger.info("正在关闭共享内存版 Worker 池...")
+
+        # 发送 shutdown 命令到所有竞技场（只需要发送给每个 Worker 的第一个竞技场）
+        shutdown_arena_ids: list[int] = []
+        for worker_id in range(self.num_workers):
+            # 找到该 Worker 负责的第一个竞技场
+            for arena_id, worker_idx in self._arena_to_worker.items():
+                if worker_idx == worker_id:
+                    cmd_view = self._ipc.get_command_view(arena_id)
+                    cmd_view.cmd_type = CommandType.SHUTDOWN
+                    cmd_view.status = CommandStatus.PENDING
+                    shutdown_arena_ids.append(arena_id)
+                    break
+
+        # 等待 Worker 退出（不需要等待 DONE，因为 Worker 会退出）
+        for worker in self._workers:
+            worker.join(timeout=5.0)
+            if worker.is_alive():
+                self.logger.warning(f"Worker {worker.pid} 未能正常退出，强制终止")
+                worker.terminate()
+
+        # 清理共享内存
+        self._ipc.close()
+        self._ipc.unlink()
+
+        self._workers.clear()
+        self._ready_events.clear()
+        self._started = False
+        self.logger.info("共享内存版 Worker 池已关闭")
+
+    def __enter__(self) -> "ArenaExecuteWorkerPoolShm":
+        """上下文管理器入口"""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """上下文管理器退出"""
+        self.shutdown()
+
+
+def _read_result_from_shm(
+    arena_id: int,
+    result_view: Any,  # ArenaResultView
+) -> ArenaExecuteResult:
+    """从共享内存读取执行结果
+
+    Args:
+        arena_id: 竞技场 ID
+        result_view: 共享内存结果视图
+
+    Returns:
+        执行结果
+    """
+    return ArenaExecuteResult(
+        arena_id=arena_id,
+        bid_depth=result_view.bid_depth.copy(),
+        ask_depth=result_view.ask_depth.copy(),
+        last_price=result_view.last_price,
+        mid_price=result_view.mid_price,
+        trades=result_view.get_trades(),
+        pending_updates=result_view.get_pending_updates(),
+        mm_order_updates=result_view.get_mm_order_updates(),
+    )

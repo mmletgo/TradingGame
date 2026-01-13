@@ -13,7 +13,9 @@ from .execute_worker import (
     ArenaExecuteData,
     ArenaExecuteResult,
     ArenaExecuteWorkerPool,
+    ArenaExecuteWorkerPoolShm,
     ExecuteCommand,
+    arena_execute_worker_shm,
 )
 from .fitness_aggregator import FitnessAggregator
 from .parallel_arena_trainer import MultiArenaConfig, ParallelArenaTrainer
@@ -24,10 +26,12 @@ __all__ = [
     "ArenaExecuteData",
     "ArenaExecuteResult",
     "ArenaExecuteWorkerPool",
+    "ArenaExecuteWorkerPoolShm",
     "ArenaState",
     "CatfishAccountState",
     "ExecuteCommand",
     "FitnessAggregator",
     "MultiArenaConfig",
     "ParallelArenaTrainer",
+    "arena_execute_worker_shm",
 ]

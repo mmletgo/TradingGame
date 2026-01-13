@@ -268,6 +268,109 @@ with pool:
 
 ---
 
+### ArenaExecuteWorkerPoolShm (execute_worker.py)
+
+共享内存版竞技场执行 Worker 池，使用 `SharedMemoryIPC` 替代 Queue 通信，减少序列化开销。
+
+**设计目标：**
+- 通过共享内存避免 Queue 的 pickle 序列化开销
+- 使用无锁轮询实现低延迟通信
+- 保持与 `ArenaExecuteWorkerPool` 相同的接口
+
+**与 Queue 版的对比：**
+
+| 特性 | ArenaExecuteWorkerPool (Queue) | ArenaExecuteWorkerPoolShm (Shm) |
+|------|-------------------------------|--------------------------------|
+| 通信方式 | Queue + pickle | SharedMemory + 轮询 |
+| 序列化开销 | 高（每次通信都需要序列化） | 零（直接内存访问） |
+| 同步机制 | Queue.put/get 阻塞 | 无锁轮询 + 状态标志 |
+| 内存拷贝 | 每次通信需要拷贝 | 读取结果时需要 copy() |
+| 适用场景 | 数据量小、通信不频繁 | 高频通信、大数据量 |
+
+**架构：**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        主进程                                    │
+│  SharedMemoryIPC (create=True) + ShmSynchronizer                │
+│                                                                 │
+│  每个 tick:                                                      │
+│  1. 写入命令到 ArenaCommandView (set_decisions 等)              │
+│  2. 设置 status = PENDING                                       │
+│  3. 调用 wait_all_done() 轮询等待                               │
+│  4. 从 ArenaResultView 读取结果                                 │
+│  5. 调用 reset_all_status() 重置状态                            │
+└─────────────────────────────────────────────────────────────────┘
+                         ↕ SharedMemory
+┌─────────────────────────────────────────────────────────────────┐
+│                        Worker 池                                 │
+│  SharedMemoryIPC (create=False) + 轮询循环                       │
+│                                                                 │
+│  每个 Worker 循环:                                               │
+│  1. 轮询检查 status == PENDING                                  │
+│  2. 设置 status = PROCESSING                                    │
+│  3. 从 ArenaCommandView 读取数据执行                            │
+│  4. 写入结果到 ArenaResultView                                  │
+│  5. 设置 status = DONE                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**主要组件：**
+- `arena_execute_worker_shm()`: Worker 进程主函数，使用共享内存通信
+- `ArenaExecuteWorkerPoolShm`: Worker 池管理类
+- `_write_result_to_shm()`: 将执行结果写入共享内存
+- `_read_result_from_shm()`: 从共享内存读取执行结果
+
+**主要方法（与 ArenaExecuteWorkerPool 接口兼容）：**
+
+| 方法 | 描述 |
+|------|------|
+| `start()` | 启动所有 Worker 进程，等待 ready_event |
+| `reset_all(initial_price, fee_rates)` | 重置所有竞技场的订单簿 |
+| `init_market_makers(mm_init_orders)` | 初始化做市商挂单 |
+| `execute_all(arena_commands)` | 执行所有竞技场的决策 |
+| `get_all_depths()` | 获取所有竞技场的订单簿深度 |
+| `shutdown()` | 关闭所有 Worker 并清理共享内存 |
+
+**使用示例：**
+```python
+from src.training.arena import ArenaExecuteWorkerPoolShm, ArenaExecuteData
+
+# 创建共享内存版 Worker 池
+pool = ArenaExecuteWorkerPoolShm(
+    num_workers=4,
+    arena_ids=[0, 1, 2, 3, 4, 5, 6, 7],
+    config=config,
+)
+
+# 使用上下文管理器（自动清理共享内存）
+with pool:
+    # 重置所有竞技场
+    pool.reset_all(initial_price=100.0, fee_rates={...})
+
+    # 初始化做市商
+    results = pool.init_market_makers({
+        0: [(mm_id, bid_orders, ask_orders), ...],
+        ...
+    })
+
+    # 每个 tick 执行
+    results = pool.execute_all({
+        0: ArenaExecuteData(
+            liquidated_agents=[...],
+            decisions=[...],
+            mm_decisions=[...],
+        ),
+        ...
+    })
+```
+
+**注意事项：**
+- Worker 进程使用 `ready_event` 通知主进程就绪
+- shutdown 时会自动 unlink 共享内存
+- 使用上下文管理器可确保资源正确清理
+
+---
+
 ### ParallelArenaTrainer (parallel_arena_trainer.py)
 
 多竞技场并行推理训练器，核心特性是将多个竞技场的神经网络推理合并成一个批量操作。
