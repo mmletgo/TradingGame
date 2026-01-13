@@ -200,6 +200,15 @@ for arena in arena_states:
 **辅助方法：**
 - `_build_network_index_map()` - 构建 Agent ID 到网络索引的映射表
 - `_get_network_index(agent_type, agent_id)` - 获取 Agent 在其种群中的网络索引
+- `_parse_market_maker_output(agent, output, mid_price, tick_size)` - 解析做市商神经网络输出（41个值）为订单列表
+
+**做市商输出解析（_parse_market_maker_output）：**
+神经网络输出结构（共 41 个值），与 `MarketMakerAgent.decide()` 保持一致：
+- 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到1-100 ticks）
+- 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1）
+- 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到1-100 ticks）
+- 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
+- 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
 
 **使用示例：**
 ```python

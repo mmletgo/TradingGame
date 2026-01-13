@@ -1239,16 +1239,26 @@ class ParallelArenaTrainer:
         mid_price: float,
         tick_size: float,
     ) -> tuple[ActionType, dict[str, Any]]:
-        """解析做市商的神经网络输出"""
+        """解析做市商的神经网络输出
+
+        神经网络输出结构（共 41 个值）：
+        - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到1-100 ticks）
+        - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1）
+        - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到1-100 ticks）
+        - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
+        - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
+        """
         from src.bio.agents.base import fast_clip, fast_round_price
 
-        bid_price_offsets = output[0:5]
-        bid_qty_weights = output[5:10]
-        ask_price_offsets = output[10:15]
-        ask_qty_weights = output[15:20]
-        total_ratio_raw = output[20] if len(output) > 20 else 0.0
+        # 正确的索引：与 MarketMakerAgent.decide() 保持一致
+        bid_price_offsets = output[0:10]
+        bid_qty_weights = output[10:20]
+        ask_price_offsets = output[20:30]
+        ask_qty_weights = output[30:40]
+        total_ratio_raw = output[40] if len(output) > 40 else 0.0
 
-        total_ratio = (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5
+        # 总下单比例：映射到 [0.01, 1]，与 MarketMakerAgent.decide() 一致
+        total_ratio = 0.01 + (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5 * 0.99
         skew_factor = agent._calculate_skew_factor(mid_price)
 
         bid_weights_sum = sum(max(0, (w + 1) * 0.5) for w in bid_qty_weights)
@@ -1265,7 +1275,8 @@ class ParallelArenaTrainer:
         bid_orders: list[dict[str, float]] = []
         ask_orders: list[dict[str, float]] = []
 
-        for i in range(5):
+        # 循环10次，处理10个买单和10个卖单
+        for i in range(10):
             offset = fast_clip(bid_price_offsets[i], -1.0, 1.0)
             ticks = 1 + (offset + 1) * 49.5
             price = mid_price - ticks * tick_size

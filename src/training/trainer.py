@@ -281,7 +281,8 @@ class Trainer:
 
         Args:
             populations_data: 检查点中的种群数据
-                格式: {agent_type: {"generation": int, "neat_pop": neat.Population}}
+                格式1（单 Population）: {agent_type: {"generation": int, "neat_pop": neat.Population}}
+                格式2（SubPopulationManager）: {agent_type: {"is_sub_population_manager": True, "sub_population_count": int, "sub_populations": [...]}}
         """
         for agent_type in AgentType:
             if agent_type not in populations_data:
@@ -291,12 +292,22 @@ class Trainer:
 
             pop_data = populations_data[agent_type]
 
+            # 检测是否为 SubPopulationManager 格式
+            if pop_data.get("is_sub_population_manager", False):
+                # 使用 SubPopulationManager 格式
+                self.populations[agent_type] = self._load_sub_population_manager(
+                    agent_type, pop_data
+                )
+                continue
+
+            # 单 Population 格式
             # 创建 Population 对象但不初始化 NEAT 种群（使用检查点数据）
             pop = Population.__new__(Population)
             pop.agent_type = agent_type
             pop.agent_config = self.config.agents[agent_type]
             pop.generation = pop_data["generation"]
             pop.logger = get_logger("population")
+            pop.sub_population_id = None  # 单 Population 没有子种群 ID
             pop._executor = None
             pop._num_workers = 8
 
@@ -336,6 +347,91 @@ class Trainer:
                 f"从检查点恢复 {agent_type.value} 种群，"
                 f"代数: {pop.generation}，Agent 数量: {len(pop.agents)}"
             )
+
+    def _load_sub_population_manager(
+        self, agent_type: AgentType, pop_data: dict
+    ) -> SubPopulationManager:
+        """从检查点数据加载 SubPopulationManager
+
+        Args:
+            agent_type: Agent 类型
+            pop_data: 检查点中的子种群数据
+
+        Returns:
+            SubPopulationManager 实例
+        """
+        from pathlib import Path
+        import neat
+
+        sub_pop_count = pop_data["sub_population_count"]
+        sub_populations_data = pop_data["sub_populations"]
+
+        # 获取 NEAT 配置路径
+        config_dir = Path(self.config.training.neat_config_path)
+        if agent_type == AgentType.MARKET_MAKER:
+            neat_config_path = config_dir / "neat_market_maker.cfg"
+        elif agent_type == AgentType.WHALE:
+            neat_config_path = config_dir / "neat_whale.cfg"
+        elif agent_type == AgentType.RETAIL_PRO:
+            neat_config_path = config_dir / "neat_retail_pro.cfg"
+        else:
+            neat_config_path = config_dir / "neat_retail.cfg"
+
+        # 计算每个子种群的 Agent 数量
+        agents_per_sub = self.config.agents[agent_type].count // sub_pop_count
+
+        # 创建 SubPopulationManager（不初始化，手动加载）
+        manager = SubPopulationManager.__new__(SubPopulationManager)
+        manager.agent_type = agent_type
+        # 注意：agent_config 是只读 property，从 sub_populations[0] 获取，不手动设置
+        manager.sub_population_count = sub_pop_count
+        manager.agents_per_sub = agents_per_sub
+        manager.logger = get_logger("population")
+        manager.sub_populations = []
+
+        # 延迟反序列化相关
+        manager._pending_genome_data = None
+        manager._genomes_dirty = False
+
+        # 加载每个子种群
+        for sub_idx, sub_pop_data in enumerate(sub_populations_data):
+            # 创建 Population 对象但不初始化 NEAT 种群
+            sub_pop = Population.__new__(Population)
+            sub_pop.agent_type = agent_type
+            sub_pop.agent_config = self.config.agents[agent_type]
+            sub_pop.generation = sub_pop_data["generation"]
+            sub_pop.logger = get_logger("population")
+            sub_pop.sub_population_id = sub_idx
+            sub_pop._executor = None
+            sub_pop._num_workers = 8
+
+            # 加载 NEAT 配置
+            sub_pop.neat_config = neat.Config(
+                neat.DefaultGenome,
+                neat.DefaultReproduction,
+                neat.DefaultSpeciesSet,
+                neat.DefaultStagnation,
+                str(neat_config_path),
+            )
+            sub_pop.neat_config.pop_size = agents_per_sub
+
+            # 直接使用检查点中的 NEAT 种群
+            sub_pop.neat_pop = sub_pop_data["neat_pop"]
+
+            # 从 NEAT 种群创建 Agent
+            genomes = list(sub_pop.neat_pop.population.items())
+            sub_pop.agents = sub_pop.create_agents(genomes)
+
+            manager.sub_populations.append(sub_pop)
+
+        self.logger.info(
+            f"从检查点恢复 {agent_type.value} SubPopulationManager，"
+            f"代数: {manager.sub_populations[0].generation if manager.sub_populations else 0}，"
+            f"子种群数: {sub_pop_count}，"
+            f"Agent 数量: {len(manager.agents)}"
+        )
+
+        return manager
 
     def _calculate_catfish_initial_balance(self) -> float:
         """计算每条鲶鱼的初始资金

@@ -3,6 +3,7 @@
 
 提供统一的 checkpoint 加载接口：
 - 单训练场：checkpoints/ep_*.pkl 格式（支持 gzip 压缩）
+- 多竞技场：checkpoints/parallel_arena_gen_*.pkl 格式（支持 gzip 压缩）
 """
 
 import gzip
@@ -19,6 +20,7 @@ class CheckpointType(Enum):
     """Checkpoint 类型枚举"""
 
     SINGLE_ARENA = "single"  # 单训练场
+    PARALLEL_ARENA = "parallel"  # 多竞技场并行训练
 
 
 class CheckpointLoader:
@@ -34,6 +36,7 @@ class CheckpointLoader:
         """检测 checkpoint 类型
 
         检测逻辑:
+        - 如果文件名包含 "parallel_arena" 或 "arena_gen" → PARALLEL_ARENA
         - 如果是 .pkl 文件 → SINGLE_ARENA
 
         Args:
@@ -52,6 +55,10 @@ class CheckpointLoader:
         # 如果是文件，检查是否是 .pkl 或 .pkl.gz 文件
         if os.path.isfile(path):
             if path.endswith(".pkl") or path.endswith(".pkl.gz"):
+                # 检测是否为多竞技场格式
+                filename = os.path.basename(path).lower()
+                if "parallel_arena" in filename or "arena_gen" in filename:
+                    return CheckpointType.PARALLEL_ARENA
                 return CheckpointType.SINGLE_ARENA
             raise ValueError(f"无法识别的 checkpoint 文件格式: {path}")
 
@@ -68,8 +75,8 @@ class CheckpointLoader:
             统一格式的 checkpoint 数据:
             {
                 "type": CheckpointType,
-                "tick": int,
-                "episode": int,
+                "tick": int,  # PARALLEL_ARENA 时为 0
+                "episode": int,  # PARALLEL_ARENA 时为 generation
                 "populations": {AgentType: {"generation": int, "neat_pop": ...}},
                 "source_arena_id": int | None,
             }
@@ -78,7 +85,9 @@ class CheckpointLoader:
             FileNotFoundError: 路径不存在
             ValueError: 无法识别的 checkpoint 格式或数据格式错误
         """
-        CheckpointLoader.detect_type(path)
+        checkpoint_type = CheckpointLoader.detect_type(path)
+        if checkpoint_type == CheckpointType.PARALLEL_ARENA:
+            return CheckpointLoader._load_parallel_arena(path)
         return CheckpointLoader._load_single_arena(path)
 
     @staticmethod
@@ -128,6 +137,57 @@ class CheckpointLoader:
             "type": CheckpointType.SINGLE_ARENA,
             "tick": checkpoint["tick"],
             "episode": checkpoint["episode"],
+            "populations": populations,
+            "source_arena_id": None,
+        }
+
+    @staticmethod
+    def _load_parallel_arena(path: str) -> dict[str, Any]:
+        """加载多竞技场并行训练 checkpoint
+
+        多竞技场格式使用 generation 而不是 tick/episode。
+
+        Args:
+            path: .pkl 或 .pkl.gz 文件路径
+
+        Returns:
+            统一格式的 checkpoint 数据
+        """
+        try:
+            # 自动检测文件格式
+            with open(path, "rb") as f:
+                magic = f.read(2)
+
+            # gzip 文件的魔数是 0x1f 0x8b
+            if magic == b"\x1f\x8b":
+                with gzip.open(path, "rb") as f:
+                    checkpoint = pickle.load(f)
+            else:
+                with open(path, "rb") as f:
+                    checkpoint = pickle.load(f)
+        except (pickle.PickleError, EOFError, OSError) as e:
+            raise ValueError(f"加载 checkpoint 文件失败: {e}") from e
+
+        # 验证数据格式
+        if not isinstance(checkpoint, dict):
+            raise ValueError(f"无效的 checkpoint 数据格式: 期望 dict，得到 {type(checkpoint)}")
+
+        required_keys = ["generation", "populations"]
+        for key in required_keys:
+            if key not in checkpoint:
+                raise ValueError(f"checkpoint 缺少必要字段: {key}")
+
+        # populations 的 key 已经是 AgentType，直接使用
+        populations = checkpoint["populations"]
+
+        # 验证 populations 格式
+        if not isinstance(populations, dict):
+            raise ValueError("populations 字段格式错误")
+
+        return {
+            "type": CheckpointType.PARALLEL_ARENA,
+            "tick": 0,  # 多竞技场没有 tick 概念
+            "episode": checkpoint["generation"],  # 用 generation 作为 episode
             "populations": populations,
             "source_arena_id": None,
         }
