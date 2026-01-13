@@ -1599,22 +1599,26 @@ class Trainer:
         mid_price: float,
         tick_size: float,
     ) -> tuple["ActionType", dict[str, Any]]:
-        """解析做市商的神经网络输出"""
+        """解析做市商的神经网络输出
+
+        神经网络输出结构（共 41 个值）：
+        - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到1-100 ticks）
+        - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1）
+        - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到1-100 ticks）
+        - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
+        - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
+        """
         from src.bio.agents.base import ActionType, fast_round_price, fast_clip
 
-        # 做市商输出：21 个值
-        # [0-4] 买单价格偏移, [5-9] 买单数量权重
-        # [10-14] 卖单价格偏移, [15-19] 卖单数量权重
-        # [20] 总下单比例基准
+        # 正确的索引：与 MarketMakerAgent.decide() 和 ParallelArenaTrainer 保持一致
+        bid_price_offsets = output[0:10]
+        bid_qty_weights = output[10:20]
+        ask_price_offsets = output[20:30]
+        ask_qty_weights = output[30:40]
+        total_ratio_raw = output[40] if len(output) > 40 else 0.0
 
-        bid_price_offsets = output[0:5]
-        bid_qty_weights = output[5:10]
-        ask_price_offsets = output[10:15]
-        ask_qty_weights = output[15:20]
-        total_ratio_raw = output[20] if len(output) > 20 else 0.0
-
-        # 映射总下单比例
-        total_ratio = (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5
+        # 总下单比例：映射到 [0.01, 1]，与 MarketMakerAgent.decide() 一致
+        total_ratio = 0.01 + (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5 * 0.99
 
         # 计算倾斜因子
         skew_factor = agent._calculate_skew_factor(mid_price)
@@ -1635,7 +1639,8 @@ class Trainer:
         bid_orders: list[dict[str, float]] = []
         ask_orders: list[dict[str, float]] = []
 
-        for i in range(5):
+        # 循环10次，处理10个买单和10个卖单
+        for i in range(10):
             # 买单
             offset = fast_clip(bid_price_offsets[i], -1.0, 1.0)
             ticks = 1 + (offset + 1) * 49.5  # 1-100 ticks
@@ -2917,6 +2922,10 @@ class Trainer:
         - gzip 压缩格式（新）
         - 普通 pickle 格式（旧，向后兼容）
 
+        同时支持单训练场和多训练场检查点：
+        - 单训练场：使用 tick 和 episode 字段
+        - 多训练场：使用 generation 字段（映射到 episode）
+
         Args:
             path: 检查点文件路径
         """
@@ -2932,8 +2941,9 @@ class Trainer:
             with open(path, "rb") as f:
                 checkpoint = pickle.load(f)
 
-        self.tick = checkpoint["tick"]
-        self.episode = checkpoint["episode"]
+        # 兼容单训练场和多训练场检查点格式
+        self.tick = checkpoint.get("tick", 0)
+        self.episode = checkpoint.get("episode", checkpoint.get("generation", 0))
 
         for agent_type, pop_data in checkpoint["populations"].items():
             if agent_type in self.populations:

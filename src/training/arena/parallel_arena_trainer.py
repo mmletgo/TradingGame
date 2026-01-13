@@ -1975,7 +1975,9 @@ class ParallelArenaTrainer:
     def load_checkpoint(self, path: str) -> None:
         """加载检查点
 
-        支持 MultiArenaTrainer 和 SingleArenaTrainer 的检查点格式。
+        支持多训练场和单训练场的检查点格式。
+        - 多训练场：使用 generation 字段
+        - 单训练场：使用 episode 字段（映射到 generation）
 
         Args:
             path: 检查点文件路径
@@ -1990,7 +1992,10 @@ class ParallelArenaTrainer:
             with open(path, "rb") as f:
                 checkpoint_data = pickle.load(f)
 
-        self.generation = checkpoint_data.get("generation", 0)
+        # 兼容多训练场和单训练场检查点格式
+        self.generation = checkpoint_data.get(
+            "generation", checkpoint_data.get("episode", 0)
+        )
         populations_data = checkpoint_data.get("populations", {})
 
         for agent_type, pop_data in populations_data.items():
