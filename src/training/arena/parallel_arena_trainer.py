@@ -1550,20 +1550,105 @@ class ParallelArenaTrainer:
                 agent_state.position_avg_price = 0.0
 
     def _catfish_action_for_arena(self, arena: ArenaState) -> None:
-        """鲶鱼在竞技场中的行动"""
+        """鲶鱼在竞技场中的行动
+
+        实现三种鲶鱼的决策和执行逻辑：
+        - TREND_CREATOR: 保持当前方向持续操作
+        - MEAN_REVERSION: 价格偏离 EMA 时反向操作
+        - RANDOM: 随机概率触发，方向也随机
+        """
         if not arena.catfish_states:
             return
 
         orderbook = arena.matching_engine._orderbook
+        matching_engine = arena.matching_engine
+        tick = arena.tick
+        price_history = arena.price_history
 
         for catfish_state in arena.catfish_states.values():
             if catfish_state.is_liquidated:
                 continue
 
-            # 简化的鲶鱼决策逻辑
-            # 这里需要根据实际的鲶鱼类型实现具体逻辑
-            # 暂时跳过鲶鱼行动
-            pass
+            # 调用鲶鱼决策方法
+            should_act, direction = catfish_state.decide(tick, price_history)
+
+            if not should_act or direction == 0:
+                continue
+
+            # 计算下单数量（吃掉前3档）
+            quantity = self._calculate_catfish_quantity(orderbook, direction)
+            if quantity <= 0:
+                continue
+
+            # 创建市价单
+            side = OrderSide.BUY if direction > 0 else OrderSide.SELL
+            order_id = catfish_state.generate_order_id(arena.arena_id)
+            order = Order(
+                order_id=order_id,
+                agent_id=catfish_state.catfish_id,
+                side=side,
+                order_type=OrderType.MARKET,
+                price=0.0,
+                quantity=quantity,
+            )
+
+            # 确保鲶鱼已注册（费率为0）
+            matching_engine.register_agent(catfish_state.catfish_id, 0.0, 0.0)
+
+            # 执行市价单
+            trades = matching_engine.match_market_order(order)
+
+            # 更新鲶鱼账户和 maker 账户
+            for trade in trades:
+                is_buyer = trade.is_buyer_taker
+                catfish_state.on_trade(trade.price, trade.quantity, is_buyer)
+                arena.recent_trades.append(trade)
+
+                # 更新 maker 的账户状态
+                maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+                maker_state = arena.agent_states.get(maker_id)
+                if maker_state is not None:
+                    maker_is_buyer = not trade.is_buyer_taker
+                    maker_fee = (
+                        trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
+                    )
+                    maker_state.on_trade(
+                        trade.price, trade.quantity, maker_is_buyer, maker_fee, True
+                    )
+
+            # 记录行动时间
+            catfish_state.record_action(tick)
+
+    def _calculate_catfish_quantity(self, orderbook: Any, direction: int) -> int:
+        """计算鲶鱼下单数量（吃掉前3档）
+
+        Args:
+            orderbook: 订单簿
+            direction: 方向（1=买，-1=卖）
+
+        Returns:
+            下单数量
+        """
+        target_ticks = 3
+
+        # 获取盘口深度
+        depth = orderbook.get_depth(levels=target_ticks)
+
+        if direction > 0:  # 买入，吃卖盘
+            levels = depth["asks"]
+        else:  # 卖出，吃买盘
+            levels = depth["bids"]
+
+        if len(levels) < target_ticks:
+            return 0
+
+        # 累加前 target_ticks 档的数量
+        total_qty = 0
+        for i in range(min(target_ticks, len(levels))):
+            price, qty = levels[i]
+            total_qty += int(qty)
+
+        return total_qty
 
     def _check_catfish_liquidation_for_arena(
         self, arena: ArenaState, current_price: float

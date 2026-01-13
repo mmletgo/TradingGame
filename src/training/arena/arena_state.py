@@ -4,11 +4,12 @@
 将 Agent 账户状态与 Agent 对象解耦，每个竞技场维护独立的状态副本。
 """
 
+import random
 from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from src.config.config import AgentConfig, AgentType
+from src.config.config import AgentConfig, AgentType, CatfishConfig, CatfishMode
 
 if TYPE_CHECKING:
     from src.bio.agents.base import Agent
@@ -303,6 +304,7 @@ class CatfishAccountState:
 
     Attributes:
         catfish_id: 鲶鱼 ID（负数）
+        catfish_mode: 鲶鱼类型（趋势创造者/均值回归/随机）
         balance: 当前余额
         position_quantity: 持仓数量
         position_avg_price: 持仓均价
@@ -316,9 +318,15 @@ class CatfishAccountState:
         ema: 均值回归 EMA 值
         ema_initialized: EMA 是否已初始化
         last_action_tick: 上次行动的 tick
+        phase_offset: 相位偏移（用于错开多个鲶鱼的触发时间）
+        action_cooldown: 行动冷却时间
+        ma_period: 均线周期
+        deviation_threshold: 偏离阈值
+        action_probability: 随机交易触发概率
     """
 
     catfish_id: int
+    catfish_mode: CatfishMode
     balance: float
     position_quantity: int
     position_avg_price: float
@@ -332,6 +340,11 @@ class CatfishAccountState:
     ema: float
     ema_initialized: bool
     last_action_tick: int
+    phase_offset: int
+    action_cooldown: int
+    ma_period: int
+    deviation_threshold: float
+    action_probability: float
 
     @classmethod
     def from_catfish(cls, catfish: "CatfishBase") -> "CatfishAccountState":
@@ -346,14 +359,28 @@ class CatfishAccountState:
             新创建的 CatfishAccountState 实例
         """
         account = catfish.account
+        config = catfish.config
 
         # 获取特有状态（根据鲶鱼类型）
         current_direction = getattr(catfish, "_current_direction", 0)
         ema = getattr(catfish, "_ema", 0.0)
         ema_initialized = getattr(catfish, "_ema_initialized", False)
+        action_probability = getattr(catfish, "_action_probability", 0.5)
+
+        # 根据类名推断鲶鱼模式
+        class_name = catfish.__class__.__name__
+        if "TrendCreator" in class_name or "TrendFollowing" in class_name:
+            catfish_mode = CatfishMode.TREND_CREATOR
+        elif "MeanReversion" in class_name:
+            catfish_mode = CatfishMode.MEAN_REVERSION
+        elif "RandomTrading" in class_name:
+            catfish_mode = CatfishMode.RANDOM
+        else:
+            catfish_mode = config.mode
 
         return cls(
             catfish_id=catfish.catfish_id,
+            catfish_mode=catfish_mode,
             balance=account.balance,
             position_quantity=account.position.quantity,
             position_avg_price=account.position.avg_price,
@@ -367,12 +394,18 @@ class CatfishAccountState:
             ema=ema,
             ema_initialized=ema_initialized,
             last_action_tick=catfish._last_action_tick,
+            phase_offset=catfish.phase_offset,
+            action_cooldown=config.action_cooldown,
+            ma_period=config.ma_period,
+            deviation_threshold=config.deviation_threshold,
+            action_probability=action_probability,
         )
 
     def reset(self, initial_balance: float) -> None:
         """重置到初始状态
 
         用于 Episode 开始时重置鲶鱼状态。
+        趋势创造者会重新随机选择方向，确保每个竞技场独立随机。
 
         Args:
             initial_balance: 初始余额
@@ -384,7 +417,11 @@ class CatfishAccountState:
         self.realized_pnl = 0.0
         self.is_liquidated = False
         self.order_counter = 0
-        self.current_direction = 0  # 需要重新随机选择
+        # 趋势创造者重新随机选择方向（每个竞技场独立）
+        if self.catfish_mode == CatfishMode.TREND_CREATOR:
+            self.current_direction = random.choice([1, -1])
+        else:
+            self.current_direction = 0
         self.ema = 0.0
         self.ema_initialized = False
         self.last_action_tick = -1000
@@ -549,6 +586,89 @@ class CatfishAccountState:
         else:
             alpha = 2.0 / (ma_period + 1)
             self.ema = alpha * price + (1 - alpha) * self.ema
+
+    def can_act(self, tick: int) -> bool:
+        """检查是否可以行动（冷却时间检查 + 相位偏移）
+
+        Args:
+            tick: 当前 tick
+
+        Returns:
+            是否可以行动
+        """
+        effective_tick = tick - self.phase_offset
+        if effective_tick < 0:
+            return False
+        return tick - self.last_action_tick >= self.action_cooldown
+
+    def record_action(self, tick: int) -> None:
+        """记录行动时间
+
+        Args:
+            tick: 当前 tick
+        """
+        self.last_action_tick = tick
+
+    def decide(self, tick: int, price_history: list[float]) -> tuple[bool, int]:
+        """决策是否行动以及行动方向
+
+        根据鲶鱼类型执行不同的决策逻辑：
+        - TREND_CREATOR: 保持当前方向持续操作
+        - MEAN_REVERSION: 价格偏离 EMA 时反向操作
+        - RANDOM: 随机概率触发，方向也随机
+
+        Args:
+            tick: 当前 tick
+            price_history: 历史价格列表
+
+        Returns:
+            (should_act, direction): 是否行动和方向（1=买，-1=卖）
+        """
+        # 检查冷却时间
+        if not self.can_act(tick):
+            return False, 0
+
+        if self.catfish_mode == CatfishMode.TREND_CREATOR:
+            # 趋势创造者：返回当前方向
+            return True, self.current_direction
+
+        elif self.catfish_mode == CatfishMode.MEAN_REVERSION:
+            # 均值回归：检查价格偏离
+            if len(price_history) == 0:
+                return False, 0
+
+            current_price = price_history[-1]
+
+            # 更新 EMA
+            self.update_ema(current_price, self.ma_period)
+
+            # 需要至少 ma_period 个数据点
+            if len(price_history) < self.ma_period:
+                return False, 0
+
+            if self.ema <= 0:
+                return False, 0
+
+            # 计算价格偏离率
+            deviation = (current_price - self.ema) / self.ema
+
+            # 检查是否超过阈值
+            if abs(deviation) < self.deviation_threshold:
+                return False, 0
+
+            # 逆势操作：价格高于均线则卖出，价格低于均线则买入
+            direction = -1 if deviation > 0 else 1
+            return True, direction
+
+        elif self.catfish_mode == CatfishMode.RANDOM:
+            # 随机交易：随机决定是否触发和方向
+            if random.random() > self.action_probability:
+                return False, 0
+
+            direction = 1 if random.random() < 0.5 else -1
+            return True, direction
+
+        return False, 0
 
 
 @dataclass

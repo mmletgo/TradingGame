@@ -60,6 +60,7 @@ class AgentAccountState:
 class CatfishAccountState:
     """鲶鱼账户状态"""
     catfish_id: int
+    catfish_mode: CatfishMode      # 鲶鱼类型
     balance: float
     position_quantity: int
     position_avg_price: float
@@ -69,11 +70,39 @@ class CatfishAccountState:
     initial_balance: float
     is_liquidated: bool
     order_counter: int
-    current_direction: int  # 趋势创造者方向
-    ema: float              # 均值回归 EMA
+    current_direction: int         # 趋势创造者方向
+    ema: float                     # 均值回归 EMA
     ema_initialized: bool
     last_action_tick: int
+    phase_offset: int              # 相位偏移
+    action_cooldown: int           # 行动冷却时间
+    ma_period: int                 # 均线周期
+    deviation_threshold: float     # 偏离阈值
+    action_probability: float      # 随机交易触发概率
 ```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `from_catfish(catfish)` | 类方法，从 CatfishBase 对象创建状态副本 |
+| `reset(initial_balance)` | 重置到初始状态，趋势创造者会重新随机选择方向 |
+| `decide(tick, price_history)` | 决策是否行动和方向，根据鲶鱼类型执行不同逻辑 |
+| `can_act(tick)` | 检查冷却时间和相位偏移 |
+| `record_action(tick)` | 记录行动时间 |
+| `update_ema(price, ma_period)` | 更新 EMA 值（均值回归用） |
+
+**鲶鱼类型决策逻辑：**
+
+| 类型 | 决策逻辑 |
+|------|---------|
+| TREND_CREATOR | 每个 Episode 开始时随机选择方向，整个 Episode 保持该方向 |
+| MEAN_REVERSION | 当价格偏离 EMA 超过阈值时反向操作 |
+| RANDOM | 随机概率触发，方向也随机 |
+
+**独立随机性保证：**
+- 每个竞技场在 `reset()` 时独立随机选择趋势创造者方向
+- 确保不同竞技场的行情有差异
 
 ### ArenaState (arena_state.py)
 
@@ -179,6 +208,7 @@ class ParallelArenaTrainer:
 # 阶段1: 准备（串行）
 for arena in arena_states:
     handle_liquidations(arena)  # 强平检查
+    catfish_action(arena)       # 鲶鱼行动（在 Agent 之前）
     market_state = compute_market_state(arena)
     active_agents = get_active_agents(arena)
 
@@ -189,6 +219,16 @@ all_decisions = _batch_inference_all_arenas(market_states, active_agents)
 for arena in arena_states:
     execute_trades(arena, all_decisions[arena.arena_id])
 ```
+
+**鲶鱼行动流程（_catfish_action_for_arena）：**
+1. 调用 `CatfishAccountState.decide(tick, price_history)` 获取决策
+2. 计算下单数量（吃掉前3档）
+3. 创建市价单并执行
+4. 更新鲶鱼账户和 maker 账户状态
+5. 记录行动时间
+
+**独立随机性：**
+每个竞技场的趋势创造者鲶鱼在 `reset()` 时独立随机选择方向，确保不同竞技场产生不同的行情走势。
 
 **批量推理合并（_batch_inference_all_arenas）：**
 - 使用 `AgentStateAdapter` 将 `AgentAccountState` 适配为 Agent-like 接口
@@ -201,6 +241,8 @@ for arena in arena_states:
 - `_build_network_index_map()` - 构建 Agent ID 到网络索引的映射表
 - `_get_network_index(agent_type, agent_id)` - 获取 Agent 在其种群中的网络索引
 - `_parse_market_maker_output(agent, output, mid_price, tick_size)` - 解析做市商神经网络输出（41个值）为订单列表
+- `_catfish_action_for_arena(arena)` - 鲶鱼在竞技场中的行动，实现三种鲶鱼的决策和执行逻辑
+- `_calculate_catfish_quantity(orderbook, direction)` - 计算鲶鱼下单数量（吃掉前3档）
 
 **做市商输出解析（_parse_market_maker_output）：**
 神经网络输出结构（共 41 个值），与 `MarketMakerAgent.decide()` 保持一致：
