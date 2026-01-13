@@ -2021,6 +2021,7 @@ cdef class BatchNetworkCache:
         list agent_states_per_arena,
         list market_states,
         list network_indices_per_arena,
+        bint return_array=False,
     ) -> dict:
         """跨竞技场批量推理（直接使用 AgentAccountState，无需 adapter）
 
@@ -2033,10 +2034,16 @@ cdef class BatchNetworkCache:
             agent_states_per_arena: 每个竞技场的 AgentAccountState 列表，list[list[AgentAccountState]]
             market_states: 每个竞技场的市场状态，list[MarketState]
             network_indices_per_arena: 每个竞技场每个 agent 对应的网络索引，list[list[int]]
+            return_array: 是否返回 NumPy 数组格式（用于共享内存优化）
 
         Returns:
-            dict[arena_idx, list[(action_type, side, price, quantity)]]
-            对于做市商类型，返回 dict[arena_idx, list[(nn_output, mid_price, tick_size)]]
+            如果 return_array=False:
+                dict[arena_idx, list[(action_type, side, price, quantity)]]
+                对于做市商类型，返回 dict[arena_idx, list[(nn_output, mid_price, tick_size)]]
+            如果 return_array=True:
+                dict[arena_idx, np.ndarray] 其中数组 shape=(num_agents, 4)
+                列顺序: [action_type, side, price, quantity]
+                做市商类型仍返回 list 格式
         """
         cdef int num_arenas = len(agent_states_per_arena)
         if num_arenas == 0 or self.network_data == NULL:
@@ -2191,13 +2198,15 @@ cdef class BatchNetworkCache:
         cdef int offset, num_agents_in_arena
         cdef list result_list
         cdef double tick_size
+        cdef np.ndarray result_array
+        cdef double[:, :] result_array_view
 
         for arena_idx in range(num_arenas):
-            result_list = []
             offset = arena_offsets[arena_idx]
             num_agents_in_arena = arena_offsets[arena_idx + 1] - offset
 
-            if self.cache_type == 2:  # market_maker
+            if self.cache_type == 2:  # market_maker - 始终返回 list 格式
+                result_list = []
                 mid_price = market_states[arena_idx].mid_price
                 tick_size = market_states[arena_idx].tick_size
                 for i in range(num_agents_in_arena):
@@ -2206,7 +2215,18 @@ cdef class BatchNetworkCache:
                         mid_price,
                         tick_size,
                     ))
-            else:  # retail/full
+                result_dict[arena_idx] = result_list
+            elif return_array:  # retail/full - 返回 NumPy 数组
+                result_array = np.zeros((num_agents_in_arena, 4), dtype=np.float64)
+                result_array_view = result_array
+                for i in range(num_agents_in_arena):
+                    result_array_view[i, 0] = <double>results[offset + i].action_type
+                    result_array_view[i, 1] = <double>results[offset + i].side
+                    result_array_view[i, 2] = results[offset + i].price
+                    result_array_view[i, 3] = results[offset + i].quantity
+                result_dict[arena_idx] = result_array
+            else:  # retail/full - 返回 list 格式
+                result_list = []
                 for i in range(num_agents_in_arena):
                     result_list.append((
                         results[offset + i].action_type,
@@ -2214,8 +2234,7 @@ cdef class BatchNetworkCache:
                         results[offset + i].price,
                         results[offset + i].quantity,
                     ))
-
-            result_dict[arena_idx] = result_list
+                result_dict[arena_idx] = result_list
 
         # 只清理动态分配的内存
         if not use_preallocated:

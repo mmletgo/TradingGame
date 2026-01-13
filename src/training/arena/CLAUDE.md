@@ -397,6 +397,7 @@ class MultiArenaConfig:
     """多竞技场配置"""
     num_arenas: int = 2
     episodes_per_arena: int = 50
+    use_shared_memory_ipc: bool = True  # 默认启用共享内存 IPC（性能提升约 21%）
 
 
 class ParallelArenaTrainer:
@@ -520,6 +521,24 @@ else:
 - `_sync_state_to_agent(agent, state)` - 临时同步 AgentAccountState 到 Agent.account（用于回退推理路径）
 - `_catfish_action_for_arena(arena)` - 鲶鱼在竞技场中的行动，实现三种鲶鱼的决策和执行逻辑
 - `_calculate_catfish_quantity(orderbook, direction)` - 计算鲶鱼下单数量（吃掉前3档）
+- `_build_decisions_array_from_cache(arena_idx)` - 从缓存的推理结果构建 decisions_array（NumPy 数组格式）
+
+**NumPy 数组格式决策数据传输优化：**
+
+`_batch_inference_all_arenas_direct` 方法现在支持 NumPy 数组格式的决策数据传输，用于优化 Worker 池执行阶段的数据传输：
+
+1. **推理阶段**：对于非做市商类型（RETAIL, RETAIL_PRO, WHALE），调用 `BatchNetworkCache.decide_multi_arena_direct(return_array=True)` 获取 NumPy 数组格式的决策结果
+2. **缓存结构**：`_last_inference_arrays: dict[AgentType, dict[arena_idx, (agent_ids, decisions_array)]]`
+   - `agent_ids`: shape `(num_agents,)`，与 decisions_array 行对应的 agent_id
+   - `decisions_array`: shape `(num_agents, 4)`，列顺序 `[action_type, side, price, quantity]`
+3. **执行阶段**：`_build_decisions_array_from_cache(arena_idx)` 将各 AgentType 的缓存数组合并，添加 agent_id 列，构建 `ArenaExecuteData.decisions_array`
+   - 输出 shape `(N, 5)`，列顺序 `[agent_id, action_type, side, price, quantity]`
+   - 自动过滤掉 HOLD 动作（action_type == 0）
+
+**优化效果**：
+- 避免在执行阶段从 list 重新构建 NumPy 数组
+- 减少 Python 对象创建开销
+- 为后续共享内存优化做准备
 
 **做市商输出解析（_parse_market_maker_output）：**
 神经网络输出结构（共 41 个值），与 `MarketMakerAgent.decide()` 保持一致：
@@ -528,6 +547,16 @@ else:
 - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到1-100 ticks）
 - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
 - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
+
+**重要实现细节：**
+
+Cython 批量推理 (`BatchNetworkCache.decide_multi_arena_direct`) 返回的数组格式为：
+- 列 0: action_type (int)
+- 列 1: side (int)
+- 列 2: price (float)
+- 列 3: **quantity_ratio** (float 0-1)，不是实际订单数量！
+
+调用方需要将 `quantity_ratio` 传给 `calculate_order_quantity_from_state()` 函数来计算实际订单数量。
 
 **使用示例：**
 ```python

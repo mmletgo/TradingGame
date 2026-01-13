@@ -67,6 +67,9 @@ class ArenaExecuteData:
         mm_decisions: 做市商决策列表，
             格式: [(agent_id, bid_orders, ask_orders), ...]
             其中 bid_orders/ask_orders 格式: [{"price": float, "quantity": float}, ...]
+        decisions_array: 非做市商决策 NumPy 数组（用于共享内存优化），
+            shape (N, 5)，列顺序: [agent_id, action_int, side_int, price, quantity]
+            如果提供此字段，则优先使用此字段而非 decisions 列表
     """
 
     liquidated_agents: list[tuple[int, int, bool]] = field(default_factory=list)
@@ -74,6 +77,7 @@ class ArenaExecuteData:
     mm_decisions: list[tuple[int, list[dict[str, float]], list[dict[str, float]]]] = (
         field(default_factory=list)
     )
+    decisions_array: NDArray[np.float64] | None = None
 
 
 @dataclass
@@ -1002,10 +1006,12 @@ def arena_execute_worker_shm(
 
     # 主循环
     running = True
-    poll_interval = 0.0001  # 100us 轮询间隔
+    idle_count = 0  # 空闲计数器
+    MAX_IDLE_BEFORE_SLEEP = 100  # 空闲多少次后开始 sleep
 
     try:
         while running:
+            found_work = False
             for arena_id in arena_ids:
                 cmd_view = ipc.get_command_view(arena_id)
                 result_view = ipc.get_result_view(arena_id)
@@ -1013,6 +1019,9 @@ def arena_execute_worker_shm(
                 # 检查是否有待处理的命令
                 if cmd_view.status != CommandStatus.PENDING:
                     continue
+
+                found_work = True
+                idle_count = 0  # 重置空闲计数
 
                 # 标记为处理中
                 cmd_view.status = CommandStatus.PROCESSING
@@ -1072,9 +1081,11 @@ def arena_execute_worker_shm(
                     # 设置完成状态，让主进程知道出错了
                     result_view.status = CommandStatus.DONE
 
-            # 短暂休眠，避免空转消耗 CPU
-            if running:
-                time.sleep(poll_interval)
+            # 自适应等待：有工作时不等待，空闲时逐渐增加等待时间
+            if running and not found_work:
+                idle_count += 1
+                if idle_count >= MAX_IDLE_BEFORE_SLEEP:
+                    time.sleep(0.0001)  # 100us，只在确认空闲后才 sleep
 
     except KeyboardInterrupt:
         logger.info(f"Worker {worker_id} 被中断")
@@ -1313,7 +1324,13 @@ class ArenaExecuteWorkerPoolShm:
         for arena_id, execute_data in arena_commands.items():
             cmd_view = self._ipc.get_command_view(arena_id)
             cmd_view.set_liquidated(execute_data.liquidated_agents)
-            cmd_view.set_decisions(execute_data.decisions)
+
+            # 优先使用数组格式（零拷贝优化）
+            if execute_data.decisions_array is not None:
+                cmd_view.set_decisions_array(execute_data.decisions_array)
+            else:
+                cmd_view.set_decisions(execute_data.decisions)
+
             cmd_view.set_mm_decisions(execute_data.mm_decisions)
             cmd_view.cmd_type = CommandType.EXECUTE
             cmd_view.status = CommandStatus.PENDING

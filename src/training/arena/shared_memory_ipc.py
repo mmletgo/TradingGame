@@ -213,36 +213,46 @@ class ArenaCommandView:
     def set_liquidated(
         self, agents: list[tuple[int, int, bool]]
     ) -> None:
-        """设置强平数据
+        """设置强平数据（向量化优化版）
 
         Args:
             agents: 强平 Agent 列表，格式: [(agent_id, position_qty, is_mm), ...]
         """
         count = min(len(agents), MAX_LIQUIDATED)
         self._header[2] = count
-        for i in range(count):
-            agent_id, position_qty, is_mm = agents[i]
-            self._liquidated[i, 0] = agent_id
-            self._liquidated[i, 1] = position_qty
-            self._liquidated[i, 2] = 1 if is_mm else 0
+        if count > 0:
+            # 将 bool 转换为 int，然后一次性写入
+            data = [(a[0], a[1], 1 if a[2] else 0) for a in agents[:count]]
+            arr = np.array(data, dtype=np.int64)
+            self._liquidated[:count] = arr
 
     def set_decisions(
         self, decisions: list[tuple[int, int, int, float, int]]
     ) -> None:
-        """设置决策数据
+        """设置决策数据（向量化优化版）
 
         Args:
             decisions: 决策列表，格式: [(agent_id, action_int, side_int, price, quantity), ...]
         """
         count = min(len(decisions), MAX_DECISIONS)
         self._header[3] = count
-        for i in range(count):
-            agent_id, action_int, side_int, price, quantity = decisions[i]
-            self._decisions[i, 0] = float(agent_id)
-            self._decisions[i, 1] = float(action_int)
-            self._decisions[i, 2] = float(side_int)
-            self._decisions[i, 3] = price
-            self._decisions[i, 4] = float(quantity)
+        if count > 0:
+            # 使用 NumPy 向量化操作，一次性写入所有决策
+            arr = np.array(decisions, dtype=np.float64)
+            self._decisions[:count] = arr
+
+    def set_decisions_array(self, arr: np.ndarray) -> None:
+        """直接设置决策数组（零拷贝优化版）
+
+        用于共享内存优化，直接接受 NumPy 数组，避免 Python 列表转换开销。
+
+        Args:
+            arr: 决策数组，shape (N, 5)，列顺序: [agent_id, action_int, side_int, price, quantity]
+        """
+        count = min(arr.shape[0], MAX_DECISIONS)
+        self._header[3] = count
+        if count > 0:
+            self._decisions[:count] = arr[:count]
 
     def set_mm_decisions(
         self, mm_decisions: list[tuple[int, list[dict[str, float]], list[dict[str, float]]]]
@@ -278,36 +288,33 @@ class ArenaCommandView:
                 self._mm_decisions[i, MAX_ORDERS_PER_MM + j, 1] = order.get("quantity", 0.0)
 
     def get_liquidated(self) -> list[tuple[int, int, bool]]:
-        """获取强平数据
+        """获取强平数据（向量化优化版）
 
         Returns:
             强平 Agent 列表，格式: [(agent_id, position_qty, is_mm), ...]
         """
         count = self.liquidated_count
-        result: list[tuple[int, int, bool]] = []
-        for i in range(count):
-            agent_id = int(self._liquidated[i, 0])
-            position_qty = int(self._liquidated[i, 1])
-            is_mm = bool(self._liquidated[i, 2])
-            result.append((agent_id, position_qty, is_mm))
-        return result
+        if count == 0:
+            return []
+        # 使用 NumPy 切片一次性读取
+        data = self._liquidated[:count]
+        return [(int(row[0]), int(row[1]), bool(row[2])) for row in data]
 
     def get_decisions(self) -> list[tuple[int, int, int, float, int]]:
-        """获取决策数据
+        """获取决策数据（向量化优化版）
 
         Returns:
             决策列表，格式: [(agent_id, action_int, side_int, price, quantity), ...]
         """
         count = self.decisions_count
-        result: list[tuple[int, int, int, float, int]] = []
-        for i in range(count):
-            agent_id = int(self._decisions[i, 0])
-            action_int = int(self._decisions[i, 1])
-            side_int = int(self._decisions[i, 2])
-            price = self._decisions[i, 3]
-            quantity = int(self._decisions[i, 4])
-            result.append((agent_id, action_int, side_int, price, quantity))
-        return result
+        if count == 0:
+            return []
+        # 使用 NumPy 切片一次性读取，然后转换为元组列表
+        data = self._decisions[:count]
+        return [
+            (int(row[0]), int(row[1]), int(row[2]), row[3], int(row[4]))
+            for row in data
+        ]
 
     def get_mm_decisions(
         self,
@@ -541,7 +548,7 @@ class ArenaResultView:
         self,
         trades: list[tuple[int, float, int, int, int, float, float, bool]],
     ) -> None:
-        """设置成交数据
+        """设置成交数据（向量化优化版）
 
         Args:
             trades: 成交列表，每个元素格式:
@@ -550,16 +557,17 @@ class ArenaResultView:
         """
         count = min(len(trades), MAX_TRADES)
         self._counts_view[0] = count
-        for i in range(count):
-            trade = trades[i]
-            self._trades[i, 0] = float(trade[0])  # trade_id
-            self._trades[i, 1] = trade[1]  # price
-            self._trades[i, 2] = float(trade[2])  # quantity
-            self._trades[i, 3] = float(trade[3])  # buyer_id
-            self._trades[i, 4] = float(trade[4])  # seller_id
-            self._trades[i, 5] = trade[5]  # buyer_fee
-            self._trades[i, 6] = trade[6]  # seller_fee
-            self._trades[i, 7] = 1.0 if trade[7] else 0.0  # is_buyer_taker
+        if count > 0:
+            # 预处理数据，将 bool 转换为 float
+            data = [
+                (
+                    float(t[0]), t[1], float(t[2]), float(t[3]),
+                    float(t[4]), t[5], t[6], 1.0 if t[7] else 0.0
+                )
+                for t in trades[:count]
+            ]
+            arr = np.array(data, dtype=np.float64)
+            self._trades[:count] = arr
 
     def set_pending_updates(self, updates: dict[int, int | None]) -> None:
         """设置挂单更新
@@ -607,7 +615,7 @@ class ArenaResultView:
     def get_trades(
         self,
     ) -> list[tuple[int, float, int, int, int, float, float, bool]]:
-        """获取成交数据
+        """获取成交数据（向量化优化版）
 
         Returns:
             成交列表，每个元素格式:
@@ -615,21 +623,17 @@ class ArenaResultView:
                  buyer_fee, seller_fee, is_buyer_taker)
         """
         count = self.trades_count
-        result: list[tuple[int, float, int, int, int, float, float, bool]] = []
-        for i in range(count):
-            trade_id = int(self._trades[i, 0])
-            price = self._trades[i, 1]
-            quantity = int(self._trades[i, 2])
-            buyer_id = int(self._trades[i, 3])
-            seller_id = int(self._trades[i, 4])
-            buyer_fee = self._trades[i, 5]
-            seller_fee = self._trades[i, 6]
-            is_buyer_taker = self._trades[i, 7] > 0.5
-            result.append((
-                trade_id, price, quantity, buyer_id, seller_id,
-                buyer_fee, seller_fee, is_buyer_taker
-            ))
-        return result
+        if count == 0:
+            return []
+        # 使用 NumPy 切片一次性读取
+        data = self._trades[:count]
+        return [
+            (
+                int(row[0]), row[1], int(row[2]), int(row[3]),
+                int(row[4]), row[5], row[6], row[7] > 0.5
+            )
+            for row in data
+        ]
 
     def get_pending_updates(self) -> dict[int, int | None]:
         """获取挂单更新
@@ -884,11 +888,12 @@ class ShmSynchronizer:
         """等待所有竞技场完成
 
         使用无锁轮询方式等待所有指定竞技场的结果状态变为 DONE。
+        采用自适应等待策略：先 busy-wait，多次未完成后才 sleep。
 
         Args:
             arena_ids: 需要等待的竞技场 ID 列表
             timeout_ms: 超时时间（毫秒）
-            poll_interval_us: 轮询间隔（微秒）
+            poll_interval_us: 轮询间隔（微秒）- 仅在长时间等待时使用
 
         Returns:
             True 如果所有竞技场都完成，False 如果超时
@@ -897,23 +902,39 @@ class ShmSynchronizer:
         timeout_s = timeout_ms / 1000.0
         poll_interval_s = poll_interval_us / 1_000_000.0
 
-        pending = set(arena_ids)
+        # 使用列表追踪未完成的竞技场，避免 set 的哈希开销
+        pending_list = list(arena_ids)
+        idle_loops = 0
+        BUSY_WAIT_LOOPS = 1000  # busy-wait 循环次数
 
-        while pending:
+        while pending_list:
             # 检查是否超时
             if time.perf_counter() - start_time > timeout_s:
-                logger.warning(f"等待超时，未完成的竞技场: {pending}")
+                logger.warning(f"等待超时，未完成的竞技场: {pending_list}")
                 return False
 
-            # 检查各竞技场状态
-            for arena_id in list(pending):
+            # 检查各竞技场状态，直接修改列表
+            i = 0
+            progress = False
+            while i < len(pending_list):
+                arena_id = pending_list[i]
                 result_view = self._ipc.get_result_view(arena_id)
                 if result_view.status == CommandStatus.DONE:
-                    pending.remove(arena_id)
+                    # 用最后一个元素替换当前位置，然后 pop
+                    pending_list[i] = pending_list[-1]
+                    pending_list.pop()
+                    progress = True
+                else:
+                    i += 1
 
-            if pending:
-                # 短暂休眠
-                time.sleep(poll_interval_s)
+            if pending_list:
+                if progress:
+                    idle_loops = 0  # 有进展，重置计数
+                else:
+                    idle_loops += 1
+                    if idle_loops >= BUSY_WAIT_LOOPS:
+                        # 长时间无进展，开始 sleep
+                        time.sleep(poll_interval_s)
 
         return True
 
