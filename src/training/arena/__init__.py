@@ -9,14 +9,24 @@ from .arena_state import (
     ArenaState,
     CatfishAccountState,
 )
+from .execute_worker import (
+    ArenaExecuteData,
+    ArenaExecuteResult,
+    ArenaExecuteWorkerPool,
+    ExecuteCommand,
+)
 from .fitness_aggregator import FitnessAggregator
 from .parallel_arena_trainer import MultiArenaConfig, ParallelArenaTrainer
 
 __all__ = [
     "AgentAccountState",
     "AgentStateAdapter",
+    "ArenaExecuteData",
+    "ArenaExecuteResult",
+    "ArenaExecuteWorkerPool",
     "ArenaState",
     "CatfishAccountState",
+    "ExecuteCommand",
     "FitnessAggregator",
     "MultiArenaConfig",
     "ParallelArenaTrainer",

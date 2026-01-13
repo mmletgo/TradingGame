@@ -8,6 +8,7 @@
 
 - `__init__.py` - 模块导出
 - `arena_state.py` - 竞技场状态类（AgentAccountState、CatfishAccountState、ArenaState）
+- `execute_worker.py` - Execute Worker 池（并行化 Execute 阶段）
 - `fitness_aggregator.py` - 适应度汇总器
 - `parallel_arena_trainer.py` - 多竞技场并行推理训练器
 
@@ -147,6 +148,126 @@ avg_fitness = sum(arena_fitness) / total_episodes
 
 ---
 
+### ArenaExecuteWorkerPool (execute_worker.py)
+
+竞技场执行 Worker 池，将 Execute 阶段并行化。每个 Worker 维护若干个竞技场的 OrderBook 和 MatchingEngine。
+
+**设计目标：**
+- 将 Execute 阶段（约 2800ms/tick，占总时间 56%）并行化
+- 通过持久 Worker 池实现竞技场级别的并行执行
+- 预期延迟：~250ms（vs 原来 2800ms，快约 10x）
+
+**架构：**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        主进程                                    │
+│  BatchNetworkCache + AgentAccountState + 协调                    │
+│                                                                 │
+│  每个 tick:                                                      │
+│  1. 从 Worker 接收：订单簿深度 + 上一 tick 成交结果              │
+│  2. 更新 AgentAccountState                                      │
+│  3. 强平检测 + 推理 + 生成决策                                  │
+│  4. 发送给 Worker：决策 + 强平 Agent 列表                       │
+└─────────────────────────────────────────────────────────────────┘
+                              ↕ Queue
+┌─────────────────────────────────────────────────────────────────┐
+│                        Worker 池                                 │
+│  每个 Worker 维护若干个竞技场的 OrderBook                        │
+│                                                                 │
+│  每个 tick:                                                      │
+│  1. 接收：决策 + 强平 Agent 列表                                │
+│  2. 执行强平（撤单 + 市价单）                                   │
+│  3. 执行 Agent 决策                                             │
+│  4. 返回：订单簿深度 + 成交列表                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**数据类定义：**
+
+```python
+@dataclass
+class ExecuteCommand:
+    """主进程 -> Worker 的命令"""
+    cmd_type: str  # "reset", "init_mm", "execute", "get_depth", "shutdown"
+    arena_id: int
+    data: Any
+
+@dataclass
+class ArenaExecuteData:
+    """execute 命令的数据"""
+    liquidated_agents: list[tuple[int, int, bool]]  # (agent_id, position_qty, is_mm)
+    decisions: list[tuple[int, int, int, float, int]]  # (agent_id, action_int, side_int, price, quantity)
+    mm_decisions: list[tuple[int, list, list]]  # (agent_id, bid_orders, ask_orders)
+
+@dataclass
+class ArenaExecuteResult:
+    """Worker -> 主进程的结果"""
+    arena_id: int
+    bid_depth: np.ndarray  # shape (100, 2) - (price, quantity)
+    ask_depth: np.ndarray  # shape (100, 2)
+    last_price: float
+    mid_price: float
+    trades: list[tuple]  # (trade_id, price, qty, buyer_id, seller_id, buyer_fee, seller_fee, is_buyer_taker)
+    pending_updates: dict[int, int | None]  # agent_id -> pending_order_id
+    mm_order_updates: dict[int, tuple[list, list]]  # agent_id -> (bid_ids, ask_ids)
+    error: str | None
+```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `start()` | 启动所有 Worker 进程 |
+| `reset_all(initial_price, fee_rates)` | 重置所有竞技场的订单簿 |
+| `init_market_makers(mm_init_orders)` | 初始化做市商挂单（Episode 开始时调用） |
+| `execute_all(arena_commands)` | 执行所有竞技场的决策（每个 tick 调用） |
+| `get_all_depths()` | 获取所有竞技场的订单簿深度 |
+| `shutdown()` | 关闭所有 Worker |
+
+**Worker 维护的状态：**
+- `MatchingEngine` / `OrderBook`: 订单簿和撮合引擎
+- `pending_order_ids`: 非做市商的挂单 ID（agent_id -> order_id）
+- `mm_bid_order_ids`, `mm_ask_order_ids`: 做市商的挂单 ID 列表
+- `order_counters`: 各 Agent 的订单计数器
+
+**订单 ID 生成：**
+使用全局唯一的订单 ID 格式：`(arena_id << 40) | (agent_id << 16) | order_counter`
+
+**使用示例：**
+```python
+from src.training.arena import ArenaExecuteWorkerPool, ArenaExecuteData
+
+# 创建 Worker 池
+pool = ArenaExecuteWorkerPool(
+    num_workers=4,
+    arena_ids=[0, 1, 2, 3, 4, 5, 6, 7],
+    config=config,
+)
+
+# 使用上下文管理器
+with pool:
+    # 重置所有竞技场
+    pool.reset_all(initial_price=100.0, fee_rates={...})
+
+    # 初始化做市商
+    results = pool.init_market_makers({
+        0: [(mm_id, bid_orders, ask_orders), ...],
+        ...
+    })
+
+    # 每个 tick 执行
+    results = pool.execute_all({
+        0: ArenaExecuteData(
+            liquidated_agents=[...],
+            decisions=[...],
+            mm_decisions=[...],
+        ),
+        ...
+    })
+```
+
+---
+
 ### ParallelArenaTrainer (parallel_arena_trainer.py)
 
 多竞技场并行推理训练器，核心特性是将多个竞技场的神经网络推理合并成一个批量操作。
@@ -158,10 +279,10 @@ avg_fitness = sum(arena_fitness) / total_episodes
 4. **订单簿独立**：每个竞技场有独立的 `MatchingEngine` 和 `OrderBook`
 
 **核心流程：**
-1. 初始化：创建共享种群、N 个独立竞技场状态、共享网络缓存、进化 Worker 池
+1. 初始化：创建共享种群、N 个独立竞技场状态、共享网络缓存、进化 Worker 池、Execute Worker 池（可选）
 2. 训练循环：
-   a. 重置所有竞技场
-   b. 同步推进所有竞技场的 tick（批量推理）
+   a. 重置所有竞技场（及 Execute Worker 池的订单簿）
+   b. 同步推进所有竞技场的 tick（批量推理 + 并行/串行执行）
    c. 汇总适应度
    d. 执行 NEAT 进化
    e. 更新网络缓存和 Agent 状态
@@ -185,6 +306,8 @@ class ParallelArenaTrainer:
         arena_states: N 个独立的竞技场状态
         network_caches: 共享的网络缓存
         evolution_worker_pool: 进化 Worker 池
+        _execute_worker_pool: Execute Worker 池（可选，禁用鲶鱼时启用）
+        _use_execute_workers: 是否使用 Execute Worker 池
         generation: 当前代数
         total_episodes: 总 episode 数
     """
@@ -194,17 +317,22 @@ class ParallelArenaTrainer:
 
 | 方法 | 描述 |
 |------|------|
-| `setup()` | 初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池 |
+| `setup()` | 初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池、Execute Worker 池 |
 | `run_round()` | 运行一轮训练（所有竞技场的所有 episode + 进化） |
-| `run_tick_all_arenas()` | 并行执行所有竞技场的一个 tick |
+| `run_tick_all_arenas()` | 并行执行所有竞技场的一个 tick（支持 Worker 池并行执行） |
 | `_batch_inference_all_arenas()` | 批量推理所有竞技场的所有 Agent |
 | `_run_episode_all_arenas()` | 运行所有竞技场的一个 episode |
 | `_collect_fitness_all_arenas()` | 收集并汇总所有竞技场的适应度 |
 | `_refresh_agent_states()` | 进化后刷新所有竞技场的 Agent 账户状态副本 |
+| `_create_execute_worker_pool()` | 创建 Execute Worker 池 |
+| `_collect_fee_rates()` | 收集所有 Agent 的费率 |
+| `_prepare_mm_init_orders()` | 准备做市商初始化订单 |
+| `_execute_with_worker_pool()` | 使用 Worker 池执行决策 |
+| `_process_worker_results()` | 处理 Worker 返回的执行结果 |
 | `train(num_rounds, checkpoint_callback, progress_callback)` | 主训练循环 |
 | `save_checkpoint(path)` | 保存检查点 |
 | `load_checkpoint(path)` | 加载检查点 |
-| `stop()` | 停止训练并清理资源 |
+| `stop()` | 停止训练并清理资源（包括关闭 Execute Worker 池） |
 
 **账户完全独立设计：**
 
@@ -230,10 +358,33 @@ for arena in arena_states:
 # 阶段2: 批量推理（并行）- 一次性推理所有竞技场的所有 Agent
 all_decisions = _batch_inference_all_arenas(market_states, active_agents)
 
-# 阶段3: 执行（串行）
-for arena in arena_states:
-    execute_trades(arena, all_decisions[arena.arena_id])
+# 阶段3: 执行
+if _execute_worker_pool is not None:
+    # 使用 Worker 池并行执行
+    results = _execute_with_worker_pool(all_decisions)
+    _process_worker_results(results)
+else:
+    # 串行执行
+    for arena in arena_states:
+        execute_trades(arena, all_decisions[arena.arena_id])
 ```
+
+**Execute Worker 池集成：**
+
+当 `_use_execute_workers=True` 且鲶鱼禁用时，Execute 阶段会使用 `ArenaExecuteWorkerPool` 并行化：
+
+1. **setup() 阶段**：如果条件满足，创建 Execute Worker 池
+2. **_reset_all_arenas() 阶段**：重置 Worker 池中各竞技场的订单簿
+3. **_init_market_all_arenas() 阶段**：使用 Worker 池执行做市商初始化挂单
+4. **run_tick_all_arenas() 阶段3**：
+   - 将决策数据转换为 `ArenaExecuteData` 格式
+   - 调用 `_execute_worker_pool.execute_all()` 并行执行
+   - 处理返回结果，更新主进程中的 `AgentAccountState`
+5. **stop() 阶段**：关闭 Worker 池
+
+**开关控制：**
+- `_use_execute_workers: bool = True`：默认启用
+- 当鲶鱼启用时自动回退到串行执行（鲶鱼需要在 Agent 之前行动，与 Worker 池不兼容）
 
 **鲶鱼行动流程（_catfish_action_for_arena）：**
 1. 调用 `CatfishAccountState.decide(tick, price_history)` 获取决策

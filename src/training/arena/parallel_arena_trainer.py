@@ -128,6 +128,10 @@ class ParallelArenaTrainer:
         self._is_running = False
         self._worker_pool_synced = False
 
+        # Execute Worker 池相关
+        self._execute_worker_pool: Any = None  # ArenaExecuteWorkerPool | None
+        self._use_execute_workers: bool = True  # 是否使用 Execute Worker 池
+
         # Agent ID 到 Agent 对象的映射表（O(1) 查找）
         self.agent_map: dict[int, Any] = {}
 
@@ -174,6 +178,13 @@ class ParallelArenaTrainer:
 
         # 读取 EMA 配置
         self._ema_alpha = self.config.market.ema_alpha
+
+        # 6. 创建 Execute Worker 池（仅在禁用鲶鱼时使用）
+        catfish_enabled = (
+            self.config.catfish is not None and self.config.catfish.enabled
+        )
+        if self._use_execute_workers and not catfish_enabled:
+            self._create_execute_worker_pool()
 
         self._is_setup = True
         self.logger.info(
@@ -460,6 +471,42 @@ class ParallelArenaTrainer:
         self.evolution_worker_pool = MultiPopulationWorkerPool(config_dir, worker_configs)
         self.logger.info(f"进化 Worker 池创建完成: {len(worker_configs)} 个 Worker")
 
+    def _create_execute_worker_pool(self) -> None:
+        """创建 Execute Worker 池"""
+        from .execute_worker import ArenaExecuteWorkerPool
+
+        arena_ids = [arena.arena_id for arena in self.arena_states]
+        num_workers = min(4, len(arena_ids))  # 最多 4 个 Worker
+
+        self._execute_worker_pool = ArenaExecuteWorkerPool(
+            num_workers=num_workers,
+            arena_ids=arena_ids,
+            config=self.config,
+        )
+        self._execute_worker_pool.start()
+        self.logger.info(
+            f"Execute Worker 池创建完成: {num_workers} 个 Worker, "
+            f"{len(arena_ids)} 个竞技场"
+        )
+
+    def _collect_fee_rates(self) -> dict[int, tuple[float, float]]:
+        """收集所有 Agent 的费率
+
+        Returns:
+            费率映射字典，agent_id -> (maker_rate, taker_rate)
+        """
+        fee_rates: dict[int, tuple[float, float]] = {}
+
+        for agent_type, population in self.populations.items():
+            agent_config = population.agent_config
+            maker_rate = agent_config.maker_fee_rate
+            taker_rate = agent_config.taker_fee_rate
+
+            for agent in population.agents:
+                fee_rates[agent.agent_id] = (maker_rate, taker_rate)
+
+        return fee_rates
+
     def run_round(
         self,
         episode_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -702,13 +749,124 @@ class ParallelArenaTrainer:
                 for catfish_state in arena.catfish_states.values():
                     catfish_state.reset(catfish_balance)
 
+        # 重置 Execute Worker 池的订单簿
+        if self._execute_worker_pool is not None:
+            fee_rates = self._collect_fee_rates()
+            self._execute_worker_pool.reset_all(
+                initial_price=initial_price,
+                fee_rates=fee_rates,
+            )
+
+    def _prepare_mm_init_orders(
+        self,
+    ) -> dict[int, list[tuple[int, list[dict[str, float]], list[dict[str, float]]]]]:
+        """准备所有竞技场的做市商初始化订单
+
+        为每个竞技场的每个做市商准备初始挂单数据。
+
+        Returns:
+            各竞技场的做市商初始化数据，格式:
+            {arena_id: [(agent_id, bid_orders, ask_orders), ...], ...}
+        """
+        mm_init_orders: dict[
+            int, list[tuple[int, list[dict[str, float]], list[dict[str, float]]]]
+        ] = {}
+
+        mm_population = self.populations.get(AgentType.MARKET_MAKER)
+        if not mm_population:
+            return mm_init_orders
+
+        mm_agents = list(mm_population.agents)
+
+        for arena in self.arena_states:
+            arena_orders: list[
+                tuple[int, list[dict[str, float]], list[dict[str, float]]]
+            ] = []
+            orderbook = arena.matching_engine._orderbook
+
+            for agent in mm_agents:
+                agent_state = arena.agent_states.get(agent.agent_id)
+                if agent_state is None:
+                    continue
+
+                # 计算市场状态
+                market_state = self._compute_market_state_for_arena(arena)
+
+                # 使用 Agent 进行推理，获取神经网络输出
+                inputs = agent.observe(market_state, orderbook)  # type: ignore[attr-defined]
+                outputs = agent.brain.forward(inputs)  # type: ignore[attr-defined]
+                mid_price = market_state.mid_price
+                tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+
+                # 使用 agent_state 解析输出
+                _, params = self._parse_market_maker_output(
+                    agent_state, np.array(outputs), mid_price, tick_size
+                )
+
+                bid_orders = params.get("bid_orders", [])
+                ask_orders = params.get("ask_orders", [])
+                arena_orders.append((agent.agent_id, bid_orders, ask_orders))
+
+            mm_init_orders[arena.arena_id] = arena_orders
+
+        return mm_init_orders
+
     def _init_market_all_arenas(self) -> None:
         """所有竞技场做市商初始化（使用批量推理）"""
         mm_population = self.populations.get(AgentType.MARKET_MAKER)
         if not mm_population:
             return
 
-        # 获取所有做市商 Agent
+        # 使用 Worker 池初始化
+        if self._execute_worker_pool is not None:
+            mm_init_orders = self._prepare_mm_init_orders()
+            results = self._execute_worker_pool.init_market_makers(mm_init_orders)
+
+            # 处理返回结果，更新主进程中的状态
+            for arena_id, result in results.items():
+                arena = self.arena_states[arena_id]
+
+                # 更新 Agent 账户状态（从成交结果）
+                for trade_tuple in result.trades:
+                    (
+                        trade_id,
+                        price,
+                        qty,
+                        buyer_id,
+                        seller_id,
+                        buyer_fee,
+                        seller_fee,
+                        is_buyer_taker,
+                    ) = trade_tuple
+                    # 更新 taker
+                    taker_id = buyer_id if is_buyer_taker else seller_id
+                    taker_state = arena.agent_states.get(taker_id)
+                    if taker_state is not None:
+                        fee = buyer_fee if is_buyer_taker else seller_fee
+                        taker_state.on_trade(price, qty, is_buyer_taker, fee, is_maker=False)
+
+                    # 更新 maker
+                    maker_id = seller_id if is_buyer_taker else buyer_id
+                    maker_state = arena.agent_states.get(maker_id)
+                    if maker_state is not None:
+                        maker_fee = seller_fee if is_buyer_taker else buyer_fee
+                        maker_state.on_trade(
+                            price, qty, not is_buyer_taker, maker_fee, is_maker=True
+                        )
+
+                # 更新做市商挂单 ID
+                for agent_id, (bid_ids, ask_ids) in result.mm_order_updates.items():
+                    agent_state = arena.agent_states.get(agent_id)
+                    if agent_state is not None:
+                        agent_state.bid_order_ids = list(bid_ids)
+                        agent_state.ask_order_ids = list(ask_ids)
+
+                # 同步订单簿价格到主进程（用于计算市场状态）
+                arena.smooth_mid_price = result.mid_price
+
+            return
+
+        # 原来的串行初始化逻辑
         mm_agents = list(mm_population.agents)
 
         for arena in self.arena_states:
@@ -848,6 +1006,170 @@ class ParallelArenaTrainer:
             tick_history_amounts=tick_amounts_normalized.copy(),
         )
 
+    def _execute_with_worker_pool(
+        self,
+        all_decisions: dict[int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]],
+    ) -> dict[int, Any]:
+        """使用 Worker 池执行所有竞技场的决策
+
+        Args:
+            all_decisions: 各竞技场的决策数据，格式:
+                {arena_idx: [(state, action, params), ...]}
+
+        Returns:
+            各竞技场的执行结果
+        """
+        from .execute_worker import ArenaExecuteData
+
+        arena_commands: dict[int, ArenaExecuteData] = {}
+
+        for arena_idx, decisions in all_decisions.items():
+            arena = self.arena_states[arena_idx]
+
+            # 收集需要强平的 Agent
+            liquidated_agents: list[tuple[int, int, bool]] = []
+            for state in arena.agent_states.values():
+                if state.is_liquidated and state.agent_id in arena.eliminating_agents:
+                    is_mm = state.agent_type == AgentType.MARKET_MAKER
+                    liquidated_agents.append(
+                        (state.agent_id, state.position_quantity, is_mm)
+                    )
+
+            # 转换决策数据
+            mm_decisions: list[
+                tuple[int, list[dict[str, float]], list[dict[str, float]]]
+            ] = []
+            non_mm_decisions: list[tuple[int, int, int, float, int]] = []
+
+            for state, action, params in decisions:
+                if state.agent_type == AgentType.MARKET_MAKER:
+                    bid_orders = params.get("bid_orders", [])
+                    ask_orders = params.get("ask_orders", [])
+                    mm_decisions.append((state.agent_id, bid_orders, ask_orders))
+                else:
+                    # 转换 action 到 int
+                    action_int = 0  # HOLD
+                    if action == ActionType.PLACE_BID:
+                        action_int = 1
+                    elif action == ActionType.PLACE_ASK:
+                        action_int = 2
+                    elif action == ActionType.CANCEL:
+                        action_int = 3
+                    elif action == ActionType.MARKET_BUY:
+                        action_int = 4
+                    elif action == ActionType.MARKET_SELL:
+                        action_int = 5
+
+                    if action_int == 0:  # HOLD
+                        continue
+
+                    # 方向
+                    side_int = 1 if action in (
+                        ActionType.PLACE_BID, ActionType.MARKET_BUY
+                    ) else 2
+
+                    price = params.get("price", 0.0)
+                    quantity = int(params.get("quantity", 0))
+
+                    non_mm_decisions.append(
+                        (state.agent_id, action_int, side_int, price, quantity)
+                    )
+
+            arena_commands[arena_idx] = ArenaExecuteData(
+                liquidated_agents=liquidated_agents,
+                decisions=non_mm_decisions,
+                mm_decisions=mm_decisions,
+            )
+
+        # 调用 Worker 池执行
+        assert self._execute_worker_pool is not None
+        return self._execute_worker_pool.execute_all(arena_commands)
+
+    def _process_worker_results(
+        self,
+        results: dict[int, Any],
+    ) -> dict[int, list[Trade]]:
+        """处理 Worker 返回的执行结果
+
+        更新各竞技场的 AgentAccountState，包括：
+        - 根据成交更新账户余额和持仓
+        - 更新挂单 ID
+
+        Args:
+            results: 各竞技场的执行结果
+
+        Returns:
+            各竞技场的成交列表（用于后续统计）
+        """
+        arena_tick_trades: dict[int, list[Trade]] = {}
+
+        for arena_id, result in results.items():
+            arena = self.arena_states[arena_id]
+            tick_trades: list[Trade] = []
+
+            # 处理成交
+            for trade_tuple in result.trades:
+                (
+                    trade_id,
+                    price,
+                    qty,
+                    buyer_id,
+                    seller_id,
+                    buyer_fee,
+                    seller_fee,
+                    is_buyer_taker,
+                ) = trade_tuple
+
+                # 创建 Trade 对象用于统计
+                trade = Trade(
+                    trade_id=trade_id,
+                    price=price,
+                    quantity=qty,
+                    buyer_id=buyer_id,
+                    seller_id=seller_id,
+                    buyer_fee=buyer_fee,
+                    seller_fee=seller_fee,
+                    is_buyer_taker=is_buyer_taker,
+                )
+                tick_trades.append(trade)
+                arena.recent_trades.append(trade)
+
+                # 更新 taker 账户
+                taker_id = buyer_id if is_buyer_taker else seller_id
+                taker_state = arena.agent_states.get(taker_id)
+                if taker_state is not None and not taker_state.is_liquidated:
+                    fee = buyer_fee if is_buyer_taker else seller_fee
+                    taker_state.on_trade(price, qty, is_buyer_taker, fee, is_maker=False)
+
+                # 更新 maker 账户
+                maker_id = seller_id if is_buyer_taker else buyer_id
+                maker_state = arena.agent_states.get(maker_id)
+                if maker_state is not None and not maker_state.is_liquidated:
+                    maker_fee = seller_fee if is_buyer_taker else buyer_fee
+                    maker_state.on_trade(
+                        price, qty, not is_buyer_taker, maker_fee, is_maker=True
+                    )
+
+            # 更新非做市商挂单 ID
+            for agent_id, pending_id in result.pending_updates.items():
+                agent_state = arena.agent_states.get(agent_id)
+                if agent_state is not None:
+                    agent_state.pending_order_id = pending_id
+
+            # 更新做市商挂单 ID
+            for agent_id, (bid_ids, ask_ids) in result.mm_order_updates.items():
+                agent_state = arena.agent_states.get(agent_id)
+                if agent_state is not None:
+                    agent_state.bid_order_ids = list(bid_ids)
+                    agent_state.ask_order_ids = list(ask_ids)
+
+            # 同步价格
+            arena.smooth_mid_price = result.mid_price
+
+            arena_tick_trades[arena_id] = tick_trades
+
+        return arena_tick_trades
+
     def run_tick_all_arenas(self) -> bool:
         """并行执行所有竞技场的一个 tick
 
@@ -907,8 +1229,51 @@ class ParallelArenaTrainer:
             arena_market_states, arena_active_agents
         )
 
-        # 阶段3: 执行（串行）- 每个竞技场的交易执行（优化版）
+        # 阶段3: 执行
         all_continue = True
+
+        # 使用 Worker 池执行（如果可用）
+        if self._execute_worker_pool is not None:
+            # 过滤掉 tick=1 的竞技场
+            filtered_decisions: dict[int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]] = {
+                arena_idx: decisions
+                for arena_idx, decisions in all_decisions.items()
+                if self.arena_states[arena_idx].tick > 1
+            }
+
+            if filtered_decisions:
+                # 使用 Worker 池执行
+                results = self._execute_with_worker_pool(filtered_decisions)
+                arena_tick_trades = self._process_worker_results(results)
+
+                # 后处理：记录价格历史、检查提前结束条件
+                for arena_idx in filtered_decisions.keys():
+                    arena = self.arena_states[arena_idx]
+                    tick_trades = arena_tick_trades.get(arena_idx, [])
+
+                    # 记录价格历史
+                    current_price = arena.smooth_mid_price
+                    arena.price_history.append(current_price)
+                    arena.update_price_stats(current_price)
+
+                    # 记录 tick 历史数据
+                    arena.tick_history_prices.append(current_price)
+                    volume, amount = self._aggregate_tick_trades(tick_trades)
+                    arena.tick_history_volumes.append(volume)
+                    arena.tick_history_amounts.append(amount)
+
+                    # 鲶鱼强平检查（Worker 池模式不支持鲶鱼，但保持接口一致）
+                    self._check_catfish_liquidation_for_arena(arena, current_price)
+
+                    # 检查提前结束条件
+                    if self._should_end_episode_early_for_arena(arena) is not None:
+                        all_continue = False
+                    if arena.catfish_liquidated:
+                        all_continue = False
+
+            return all_continue
+
+        # 原来的串行执行逻辑
         for arena_idx, arena in enumerate(self.arena_states):
             if arena.tick == 1:
                 continue
@@ -2518,6 +2883,11 @@ class ParallelArenaTrainer:
     def stop(self) -> None:
         """停止训练并清理资源"""
         self._is_running = False
+
+        # 关闭 Execute Worker 池
+        if self._execute_worker_pool is not None:
+            self._execute_worker_pool.shutdown()
+            self._execute_worker_pool = None
 
         # 关闭进化 Worker 池
         if self.evolution_worker_pool is not None:
