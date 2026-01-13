@@ -262,3 +262,19 @@ cdef class BatchNetworkCache:
 
     # 类型标识 (0=retail, 1=full, 2=market_maker)
     cdef int cache_type
+
+    # ========== 多竞技场预分配缓冲区 ==========
+    # 预分配容量
+    cdef int multi_arena_max_tasks
+    cdef int multi_arena_max_arenas
+
+    # 预分配的 C 结构体
+    cdef BatchAgentState* multi_arena_agents
+    cdef MarketStateData** multi_arena_markets
+    cdef int* multi_arena_network_indices
+    cdef int* multi_arena_market_indices
+    cdef DecisionResult* multi_arena_results
+
+    # 预分配的 NumPy 数组（多竞技场用）
+    cdef object multi_arena_inputs   # np.ndarray
+    cdef object multi_arena_outputs  # np.ndarray

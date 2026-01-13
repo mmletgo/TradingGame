@@ -897,7 +897,7 @@ class ParallelArenaTrainer:
             arena_market_states, arena_active_agents
         )
 
-        # 阶段3: 执行（串行）- 每个竞技场的交易执行
+        # 阶段3: 执行（串行）- 每个竞技场的交易执行（优化版）
         all_continue = True
         for arena_idx, arena in enumerate(self.arena_states):
             if arena.tick == 1:
@@ -906,17 +906,140 @@ class ParallelArenaTrainer:
             decisions = all_decisions.get(arena_idx, [])
             tick_trades: list[Trade] = []
 
+            # 缓存常用引用（减少属性查找开销）
+            matching_engine = arena.matching_engine
+            orderbook = matching_engine._orderbook
+            process_order = matching_engine.process_order
+            cancel_order = matching_engine.cancel_order
+            order_map_get = orderbook.order_map.get
+            agent_states_get = arena.agent_states.get
+            recent_trades = arena.recent_trades
+            recent_trades_append = recent_trades.append
+
             for state, action, params in decisions:
                 if state.agent_type == AgentType.MARKET_MAKER:
-                    trades = self._execute_mm_action_in_arena(arena, state, params)
+                    # ========== 做市商执行（内联） ==========
+                    # 1. 撤销所有旧挂单
+                    for order_id in state.bid_order_ids:
+                        cancel_order(order_id)
+                    for order_id in state.ask_order_ids:
+                        cancel_order(order_id)
+                    state.bid_order_ids.clear()
+                    state.ask_order_ids.clear()
+
+                    # 2. 挂买单
+                    for order_spec in params.get("bid_orders", []):
+                        order_id = state.generate_order_id(arena.arena_id)
+                        order = Order(
+                            order_id=order_id,
+                            agent_id=state.agent_id,
+                            side=OrderSide.BUY,
+                            order_type=OrderType.LIMIT,
+                            price=order_spec["price"],
+                            quantity=int(order_spec["quantity"]),
+                        )
+                        trades = process_order(order)
+                        # 内联账户更新
+                        for trade in trades:
+                            is_buyer = trade.is_buyer_taker
+                            fee = trade.buyer_fee if is_buyer else trade.seller_fee
+                            state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+                            recent_trades_append(trade)
+                            tick_trades.append(trade)
+                            # 更新 maker 账户
+                            maker_id = trade.seller_id if is_buyer else trade.buyer_id
+                            maker_state = agent_states_get(maker_id)
+                            if maker_state is not None:
+                                maker_fee = trade.seller_fee if is_buyer else trade.buyer_fee
+                                maker_state.on_trade(trade.price, trade.quantity, not is_buyer, maker_fee, is_maker=True)
+                        if order_map_get(order_id):
+                            state.bid_order_ids.append(order_id)
+
+                    # 3. 挂卖单
+                    for order_spec in params.get("ask_orders", []):
+                        order_id = state.generate_order_id(arena.arena_id)
+                        order = Order(
+                            order_id=order_id,
+                            agent_id=state.agent_id,
+                            side=OrderSide.SELL,
+                            order_type=OrderType.LIMIT,
+                            price=order_spec["price"],
+                            quantity=int(order_spec["quantity"]),
+                        )
+                        trades = process_order(order)
+                        for trade in trades:
+                            is_buyer = trade.is_buyer_taker
+                            fee = trade.buyer_fee if is_buyer else trade.seller_fee
+                            state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+                            recent_trades_append(trade)
+                            tick_trades.append(trade)
+                            maker_id = trade.seller_id if is_buyer else trade.buyer_id
+                            maker_state = agent_states_get(maker_id)
+                            if maker_state is not None:
+                                maker_fee = trade.seller_fee if is_buyer else trade.buyer_fee
+                                maker_state.on_trade(trade.price, trade.quantity, not is_buyer, maker_fee, is_maker=True)
+                        if order_map_get(order_id):
+                            state.ask_order_ids.append(order_id)
                 else:
-                    trades = self._execute_non_mm_action_in_arena(
-                        arena, state, action, params
-                    )
-                tick_trades.extend(trades)
+                    # ========== 非做市商执行（内联） ==========
+                    if state.is_liquidated or action == ActionType.HOLD:
+                        continue
+
+                    trades = []
+
+                    if action == ActionType.PLACE_BID or action == ActionType.PLACE_ASK:
+                        # 先撤旧单
+                        if state.pending_order_id is not None:
+                            cancel_order(state.pending_order_id)
+                            state.pending_order_id = None
+
+                        order_id = state.generate_order_id(arena.arena_id)
+                        side = OrderSide.BUY if action == ActionType.PLACE_BID else OrderSide.SELL
+                        order = Order(
+                            order_id=order_id,
+                            agent_id=state.agent_id,
+                            side=side,
+                            order_type=OrderType.LIMIT,
+                            price=params["price"],
+                            quantity=int(params["quantity"]),
+                        )
+                        trades = process_order(order)
+                        if order_map_get(order_id):
+                            state.pending_order_id = order_id
+
+                    elif action == ActionType.CANCEL:
+                        if state.pending_order_id is not None:
+                            cancel_order(state.pending_order_id)
+                            state.pending_order_id = None
+
+                    elif action == ActionType.MARKET_BUY or action == ActionType.MARKET_SELL:
+                        order_id = state.generate_order_id(arena.arena_id)
+                        side = OrderSide.BUY if action == ActionType.MARKET_BUY else OrderSide.SELL
+                        order = Order(
+                            order_id=order_id,
+                            agent_id=state.agent_id,
+                            side=side,
+                            order_type=OrderType.MARKET,
+                            price=0.0,
+                            quantity=int(params["quantity"]),
+                        )
+                        trades = process_order(order)
+
+                    # 内联账户更新
+                    for trade in trades:
+                        is_buyer = trade.is_buyer_taker
+                        fee = trade.buyer_fee if is_buyer else trade.seller_fee
+                        state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+                        recent_trades_append(trade)
+                        tick_trades.append(trade)
+                        maker_id = trade.seller_id if is_buyer else trade.buyer_id
+                        maker_state = agent_states_get(maker_id)
+                        if maker_state is not None:
+                            maker_fee = trade.seller_fee if is_buyer else trade.buyer_fee
+                            maker_state.on_trade(trade.price, trade.quantity, not is_buyer, maker_fee, is_maker=True)
 
             # 记录价格历史
-            current_price = arena.matching_engine._orderbook.last_price
+            current_price = orderbook.last_price
             arena.price_history.append(current_price)
             arena.update_price_stats(current_price)
 

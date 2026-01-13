@@ -1563,13 +1563,16 @@ cdef class BatchNetworkCache:
     - 预分配所有内存，避免 malloc/free 开销
     """
 
-    def __cinit__(self, int num_networks, int cache_type, int num_threads=0):
+    def __cinit__(self, int num_networks, int cache_type, int num_threads=0,
+                  int max_arenas=8, int max_tasks_per_arena=0):
         """初始化缓存
 
         Args:
             num_networks: 网络数量
             cache_type: 类型 (0=retail 127维, 1=full 907维, 2=market_maker 934维)
             num_threads: OpenMP 线程数，0 表示自动检测
+            max_arenas: 最大竞技场数量（用于预分配多竞技场缓冲区）
+            max_tasks_per_arena: 每竞技场最大任务数，0 表示使用 num_networks
         """
         # 自动检测线程数
         if num_threads <= 0:
@@ -1608,6 +1611,25 @@ cdef class BatchNetworkCache:
         self.inputs_array = np.zeros((num_networks, self.input_dim), dtype=np.float64)
         self.outputs_array = np.zeros((num_networks, self.output_dim), dtype=np.float64)
 
+        # ========== 多竞技场缓冲区预分配 ==========
+        if max_tasks_per_arena <= 0:
+            max_tasks_per_arena = num_networks
+
+        cdef int max_total_tasks = max_arenas * max_tasks_per_arena
+        self.multi_arena_max_tasks = max_total_tasks
+        self.multi_arena_max_arenas = max_arenas
+
+        # 预分配 C 结构体
+        self.multi_arena_agents = alloc_batch_agent_state(max_total_tasks)
+        self.multi_arena_markets = alloc_multi_market_state_data(max_arenas)
+        self.multi_arena_network_indices = <int*>calloc(max_total_tasks, sizeof(int))
+        self.multi_arena_market_indices = <int*>calloc(max_total_tasks, sizeof(int))
+        self.multi_arena_results = <DecisionResult*>calloc(max_total_tasks, sizeof(DecisionResult))
+
+        # 预分配 NumPy 数组
+        self.multi_arena_inputs = np.zeros((max_total_tasks, self.input_dim), dtype=np.float64)
+        self.multi_arena_outputs = np.zeros((max_total_tasks, self.output_dim), dtype=np.float64)
+
     def __dealloc__(self):
         """释放所有分配的内存"""
         if self.network_data != NULL:
@@ -1620,6 +1642,18 @@ cdef class BatchNetworkCache:
             free(self.results)
         if self.thread_buffers != NULL:
             free_thread_buffers(self.thread_buffers, self.num_threads)
+
+        # 释放多竞技场缓冲区
+        if self.multi_arena_agents != NULL:
+            free_batch_agent_state(self.multi_arena_agents)
+        if self.multi_arena_markets != NULL:
+            free_multi_market_state_data(self.multi_arena_markets, self.multi_arena_max_arenas)
+        if self.multi_arena_network_indices != NULL:
+            free(self.multi_arena_network_indices)
+        if self.multi_arena_market_indices != NULL:
+            free(self.multi_arena_market_indices)
+        if self.multi_arena_results != NULL:
+            free(self.multi_arena_results)
 
     def update_networks(self, list networks):
         """更新缓存的网络数据
@@ -1993,6 +2027,8 @@ cdef class BatchNetworkCache:
         将多个竞技场的推理任务合并成一个批量，使用 OpenMP 并行执行。
         直接从 AgentAccountState 对象提取数据，避免创建 adapter 对象的开销。
 
+        使用预分配的缓冲区，避免每次调用都分配内存。
+
         Args:
             agent_states_per_arena: 每个竞技场的 AgentAccountState 列表，list[list[AgentAccountState]]
             market_states: 每个竞技场的市场状态，list[MarketState]
@@ -2018,29 +2054,49 @@ cdef class BatchNetworkCache:
         if total_tasks == 0:
             return {}
 
-        # 分配扩展的 Agent 状态数组
-        cdef BatchAgentState* all_agents = alloc_batch_agent_state(total_tasks)
+        # ========== 使用预分配缓冲区 ==========
+        cdef BatchAgentState* all_agents
+        cdef MarketStateData** multi_markets
+        cdef int* network_indices
+        cdef int* market_indices
+        cdef DecisionResult* results
+        cdef np.ndarray inputs
+        cdef np.ndarray outputs
+        cdef bint use_preallocated = (total_tasks <= self.multi_arena_max_tasks and
+                                       num_arenas <= self.multi_arena_max_arenas)
 
-        # 分配多个市场状态
-        cdef MarketStateData** multi_markets = alloc_multi_market_state_data(num_arenas)
+        if use_preallocated:
+            # 使用预分配的缓冲区
+            all_agents = self.multi_arena_agents
+            multi_markets = self.multi_arena_markets
+            network_indices = self.multi_arena_network_indices
+            market_indices = self.multi_arena_market_indices
+            results = self.multi_arena_results
+            inputs = self.multi_arena_inputs
+            outputs = self.multi_arena_outputs
+        else:
+            # 超出预分配容量，动态分配
+            all_agents = alloc_batch_agent_state(total_tasks)
+            multi_markets = alloc_multi_market_state_data(num_arenas)
+            network_indices = <int*>calloc(total_tasks, sizeof(int))
+            market_indices = <int*>calloc(total_tasks, sizeof(int))
+            results = <DecisionResult*>calloc(total_tasks, sizeof(DecisionResult))
+            inputs = np.zeros((total_tasks, self.input_dim), dtype=np.float64)
+            outputs = np.zeros((total_tasks, self.output_dim), dtype=np.float64)
 
-        # 分配网络索引数组
-        cdef int* network_indices = <int*>calloc(total_tasks, sizeof(int))
-
-        # 分配市场索引数组
-        cdef int* market_indices = <int*>calloc(total_tasks, sizeof(int))
-
-        # 检查分配
-        if all_agents == NULL or multi_markets == NULL or network_indices == NULL or market_indices == NULL:
-            if all_agents != NULL:
-                free_batch_agent_state(all_agents)
-            if multi_markets != NULL:
-                free_multi_market_state_data(multi_markets, num_arenas)
-            if network_indices != NULL:
-                free(network_indices)
-            if market_indices != NULL:
-                free(market_indices)
-            return {}
+            # 检查分配
+            if all_agents == NULL or multi_markets == NULL or network_indices == NULL or market_indices == NULL or results == NULL:
+                if all_agents != NULL:
+                    free_batch_agent_state(all_agents)
+                if multi_markets != NULL:
+                    free_multi_market_state_data(multi_markets, num_arenas)
+                if network_indices != NULL:
+                    free(network_indices)
+                if market_indices != NULL:
+                    free(market_indices)
+                if results != NULL:
+                    free(results)
+                return {}
 
         # 提取所有市场状态
         for arena_idx in range(num_arenas):
@@ -2089,22 +2145,8 @@ cdef class BatchNetworkCache:
 
         all_agents.num_agents = total_tasks
 
-        # 分配输入输出数组
-        cdef np.ndarray[DTYPE_t, ndim=2] inputs = np.zeros((total_tasks, self.input_dim), dtype=np.float64)
-        cdef np.ndarray[DTYPE_t, ndim=2] outputs = np.zeros((total_tasks, self.output_dim), dtype=np.float64)
-
-        # 分配结果数组
-        cdef DecisionResult* results = <DecisionResult*>calloc(total_tasks, sizeof(DecisionResult))
-
-        if results == NULL:
-            free_batch_agent_state(all_agents)
-            free_multi_market_state_data(multi_markets, num_arenas)
-            free(network_indices)
-            free(market_indices)
-            return {}
-
-        cdef double[:, :] inputs_view = inputs
-        cdef double[:, :] outputs_view = outputs
+        cdef double[:, :] inputs_view = inputs[:total_tasks]
+        cdef double[:, :] outputs_view = outputs[:total_tasks]
 
         # 执行批量计算
         with nogil:
@@ -2175,12 +2217,13 @@ cdef class BatchNetworkCache:
 
             result_dict[arena_idx] = result_list
 
-        # 清理
-        free_batch_agent_state(all_agents)
-        free_multi_market_state_data(multi_markets, num_arenas)
-        free(network_indices)
-        free(market_indices)
-        free(results)
+        # 只清理动态分配的内存
+        if not use_preallocated:
+            free_batch_agent_state(all_agents)
+            free_multi_market_state_data(multi_markets, num_arenas)
+            free(network_indices)
+            free(market_indices)
+            free(results)
 
         return result_dict
 
