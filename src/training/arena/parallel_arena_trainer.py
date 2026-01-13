@@ -797,13 +797,12 @@ class ParallelArenaTrainer:
             ) / smooth_mid_price
             ask_data[1 : n_asks * 2 : 2] = log_normalize_unsigned(ask_qtys[:n_asks])
 
-        # 向量化成交
-        trades = list(arena.recent_trades)
-        if trades:
-            n_trades = len(trades)
+        # 向量化成交（直接迭代 deque，避免 list() 转换开销）
+        n_trades = len(arena.recent_trades)
+        if n_trades > 0:
             prices_arr = np.empty(n_trades, dtype=np.float32)
             qtys_arr = np.empty(n_trades, dtype=np.float32)
-            for i, t in enumerate(trades):
+            for i, t in enumerate(arena.recent_trades):
                 prices_arr[i] = t.price
                 qtys_arr[i] = t.quantity if t.is_buyer_taker else -t.quantity
 
@@ -1539,9 +1538,12 @@ class ParallelArenaTrainer:
         matching_engine = arena.matching_engine
         all_trades: list[Trade] = []
 
-        # 1. 撤销所有旧挂单
-        for order_id in agent_state.bid_order_ids + agent_state.ask_order_ids:
-            matching_engine.cancel_order(order_id)
+        # 1. 撤销所有旧挂单（分别遍历，避免列表合并创建新列表）
+        cancel_order = matching_engine.cancel_order  # 缓存方法引用
+        for order_id in agent_state.bid_order_ids:
+            cancel_order(order_id)
+        for order_id in agent_state.ask_order_ids:
+            cancel_order(order_id)
         agent_state.bid_order_ids.clear()
         agent_state.ask_order_ids.clear()
 

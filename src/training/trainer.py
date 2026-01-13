@@ -1131,13 +1131,13 @@ class Trainer:
             ask_data[1 : n_asks * 2 : 2] = log_normalize_unsigned(ask_qtys[:n_asks])
 
         # 向量化成交：100笔（数量带方向：正=taker买入，负=taker卖出）
-        trades = list(self.recent_trades)  # deque 转换为 list
-        if trades:
-            n_trades = len(trades)
+        # 直接迭代 deque，避免 list() 转换开销
+        n_trades = len(self.recent_trades)
+        if n_trades > 0:
             # 直接构建数组，避免列表推导
             prices_arr = np.empty(n_trades, dtype=np.float32)
             qtys_arr = np.empty(n_trades, dtype=np.float32)
-            for i, t in enumerate(trades):
+            for i, t in enumerate(self.recent_trades):
                 prices_arr[i] = t.price
                 qtys_arr[i] = t.quantity if t.is_buyer_taker else -t.quantity
 
