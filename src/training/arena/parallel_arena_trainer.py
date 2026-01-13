@@ -548,6 +548,7 @@ class ParallelArenaTrainer:
         stats["episodes_this_round"] = episodes_this_round
         stats["total_episodes"] = self.total_episodes
         stats["avg_fitnesses"] = avg_fitness
+        stats["species_fitness_stats"] = self._collect_species_fitness_stats()
 
         # 垃圾回收
         gc.collect(0)
@@ -604,6 +605,67 @@ class ParallelArenaTrainer:
             "arena_high_prices": high_prices,
             "arena_low_prices": low_prices,
         }
+
+    def _collect_species_fitness_stats(self) -> dict[AgentType, dict[str, Any]]:
+        """收集各物种的 NEAT species 适应度统计
+
+        遍历各种群的 NEAT population，收集每个 species 的平均适应度。
+
+        Returns:
+            {AgentType: {"species_count": int, "species_avg_fitnesses": list[float]}}
+        """
+        result: dict[AgentType, dict[str, Any]] = {}
+
+        for agent_type, population in self.populations.items():
+            species_avg_fitnesses: list[float] = []
+
+            # SubPopulationManager 需要遍历所有子种群
+            if isinstance(population, SubPopulationManager):
+                for sub_pop in population.sub_populations:
+                    species_avg_fitnesses.extend(
+                        self._get_species_fitnesses_from_neat_pop(sub_pop.neat_pop)
+                    )
+            else:
+                # Population 直接访问 neat_pop
+                species_avg_fitnesses.extend(
+                    self._get_species_fitnesses_from_neat_pop(population.neat_pop)
+                )
+
+            result[agent_type] = {
+                "species_count": len(species_avg_fitnesses),
+                "species_avg_fitnesses": species_avg_fitnesses,
+            }
+
+        return result
+
+    def _get_species_fitnesses_from_neat_pop(
+        self, neat_pop: Any
+    ) -> list[float]:
+        """从 NEAT population 获取各 species 的平均适应度
+
+        Args:
+            neat_pop: NEAT Population 对象
+
+        Returns:
+            各 species 的平均适应度列表
+        """
+        species_avg_fitnesses: list[float] = []
+
+        if not hasattr(neat_pop, "species") or neat_pop.species is None:
+            return species_avg_fitnesses
+
+        species_set = neat_pop.species
+        if not hasattr(species_set, "species") or not species_set.species:
+            return species_avg_fitnesses
+
+        for species in species_set.species.values():
+            member_fitnesses = species.get_fitnesses()
+            valid_fitnesses = [f for f in member_fitnesses if f is not None]
+            if valid_fitnesses:
+                avg = sum(valid_fitnesses) / len(valid_fitnesses)
+                species_avg_fitnesses.append(avg)
+
+        return species_avg_fitnesses
 
     def _reset_all_arenas(self) -> None:
         """重置所有竞技场状态"""

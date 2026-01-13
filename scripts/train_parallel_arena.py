@@ -45,39 +45,40 @@ from create_config import create_default_config
 def progress_callback(stats: dict[str, Any]) -> None:
     """训练进度回调函数"""
     from datetime import datetime
-    from collections import defaultdict
+
+    import numpy as np
 
     generation = stats.get("generation", 0)
     total_episodes = stats.get("total_episodes", 0)
     round_time = stats.get("total_time", 0.0)
-    avg_fitnesses = stats.get("avg_fitnesses", {})
+    species_fitness_stats = stats.get("species_fitness_stats", {})
 
     current_time = datetime.now().strftime("%H:%M:%S")
 
-    # 按 AgentType 聚合适应度（子种群取平均值）
-    type_fitness: dict[str, list[float]] = defaultdict(list)
-    for (agent_type, _), fitness in avg_fitnesses.items():
-        avg = float(fitness.mean()) if hasattr(fitness, "mean") else float(fitness)
-        type_fitness[agent_type.value].append(avg)
-
-    # 格式化适应度信息（每种类型只显示一个聚合值）
-    fitness_info: list[str] = []
-    # 固定顺序：RETAIL, RETAIL_PRO, WHALE, MARKET_MAKER
-    for type_name in ["RETAIL", "RETAIL_PRO", "WHALE", "MARKET_MAKER"]:
-        if type_name in type_fitness:
-            values = type_fitness[type_name]
-            # 多个子种群取平均值
-            aggregated = sum(values) / len(values) if values else 0.0
-            fitness_info.append(f"{type_name}={aggregated:.4f}")
-
-    fitness_str = ", ".join(fitness_info)
-
+    # 第一行：基础信息
     print(
         f"Gen {generation:4d} | {current_time} | "
         f"Episodes={total_episodes:6d} | "
-        f"Time={round_time:.1f}s | "
-        f"{fitness_str}"
+        f"Time={round_time:.1f}s"
     )
+
+    # 后续行：各物种的 species 适应度分布（固定顺序）
+    from src.bio.agents.base import AgentType
+
+    type_order = [AgentType.RETAIL, AgentType.RETAIL_PRO, AgentType.WHALE, AgentType.MARKET_MAKER]
+    for agent_type in type_order:
+        type_stats = species_fitness_stats.get(agent_type, {})
+        type_name = agent_type.value
+        species_count = type_stats.get("species_count", 0)
+        species_fitnesses = type_stats.get("species_avg_fitnesses", [])
+
+        if species_fitnesses:
+            arr = np.array(species_fitnesses)
+            mean_val = float(arr.mean())
+            std_val = float(arr.std())
+            print(f"  {type_name}: species={species_count}, fitness={mean_val:.4f}\u00b1{std_val:.4f}")
+        else:
+            print(f"  {type_name}: species={species_count}, fitness=N/A")
 
 
 def episode_callback(stats: dict[str, Any]) -> None:
@@ -85,16 +86,18 @@ def episode_callback(stats: dict[str, Any]) -> None:
     from datetime import datetime
 
     episode = stats.get("episode", 0)
-    high_price = stats.get("high_price", 0.0)
-    low_price = stats.get("low_price", 0.0)
-    num_arenas = stats.get("num_arenas", 1)
+    arena_high_prices = stats.get("arena_high_prices", [])
+    arena_low_prices = stats.get("arena_low_prices", [])
 
     current_time = datetime.now().strftime("%H:%M:%S")
-    print(
-        f"  Episode {episode:4d} | {current_time} | "
-        f"Arenas={num_arenas} | "
-        f"high={high_price:.2f}, low={low_price:.2f}"
-    )
+
+    # 格式化各竞技场的 High/Low 成组显示
+    arena_price_strs: list[str] = []
+    for i, (high, low) in enumerate(zip(arena_high_prices, arena_low_prices)):
+        arena_price_strs.append(f"A{i}:({int(high)},{int(low)})")
+
+    prices_str = " ".join(arena_price_strs)
+    print(f"  Episode {episode:4d} | {current_time} | {prices_str}")
 
 
 def main() -> None:
