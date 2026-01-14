@@ -48,7 +48,7 @@ class MarketConfig:
     tick_size: float
     lot_size: float
     depth: int
-    ema_alpha: float = 0.1
+    ema_alpha: float = 0.5
 
 
 @dataclass
