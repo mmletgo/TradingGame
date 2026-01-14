@@ -532,8 +532,10 @@ else:
    - `agent_ids`: shape `(num_agents,)`，与 decisions_array 行对应的 agent_id
    - `decisions_array`: shape `(num_agents, 4)`，列顺序 `[action_type, side, price, quantity]`
 3. **执行阶段**：`_build_decisions_array_from_cache(arena_idx)` 将各 AgentType 的缓存数组合并，添加 agent_id 列，构建 `ArenaExecuteData.decisions_array`
+   - **重要**：Cython 返回的第 4 列是 `quantity_ratio` (0-1 浮点数)，此方法会将其转换为实际 `quantity`
    - 输出 shape `(N, 5)`，列顺序 `[agent_id, action_type, side, price, quantity]`
    - 自动过滤掉 HOLD 动作（action_type == 0）
+   - 使用 `calculate_order_quantity_from_state()` 函数将 `quantity_ratio` 转换为实际订单数量
 
 **优化效果**：
 - 避免在执行阶段从 list 重新构建 NumPy 数组

@@ -1123,6 +1123,8 @@ class ParallelArenaTrainer:
         将各 AgentType 的缓存数组合并，添加 agent_id 列，
         并过滤掉 HOLD 动作（action_type == 0）。
 
+        注意：Cython 返回的第 4 列是 quantity_ratio (0-1)，需要转换为实际 quantity。
+
         Args:
             arena_idx: 竞技场索引
 
@@ -1132,6 +1134,13 @@ class ParallelArenaTrainer:
         """
         if not self._last_inference_arrays:
             return None
+
+        # 获取竞技场状态和 mid_price
+        arena = self.arena_states[arena_idx]
+        mid_price = arena.matching_engine.orderbook.get_mid_price()
+        if mid_price is None:
+            mid_price = arena.matching_engine.orderbook.last_price
+        agent_states = arena.agent_states
 
         # 收集所有非做市商类型的数组
         arrays_to_concat: list[np.ndarray] = []
@@ -1145,13 +1154,40 @@ class ParallelArenaTrainer:
                 continue
 
             # 过滤掉 HOLD 动作（action_type == 0）
-            # decisions 的列顺序是 [action_type, side, price, quantity]
+            # decisions 的列顺序是 [action_type, side, price, quantity_ratio]
             non_hold_mask = decisions[:, 0] != 0
             if not np.any(non_hold_mask):
                 continue
 
             filtered_agent_ids = agent_ids[non_hold_mask]
-            filtered_decisions = decisions[non_hold_mask]
+            filtered_decisions = decisions[non_hold_mask].copy()  # 复制以避免修改原数组
+
+            # 将 quantity_ratio (第 4 列，索引 3) 转换为实际 quantity
+            for i in range(len(filtered_agent_ids)):
+                agent_id = int(filtered_agent_ids[i])
+                action_type_int = int(filtered_decisions[i, 0])
+                price = float(filtered_decisions[i, 2])
+                quantity_ratio = float(filtered_decisions[i, 3])
+
+                state = agent_states.get(agent_id)
+                if state is None:
+                    filtered_decisions[i, 3] = 0
+                    continue
+
+                # 根据 action_type 判断是买还是卖
+                # PLACE_BID=1, MARKET_BUY=4 -> is_buy=True
+                # PLACE_ASK=2, MARKET_SELL=5 -> is_buy=False
+                is_buy = action_type_int in (1, 4)
+
+                # MARKET_SELL 特殊处理：如果有多仓，卖出仓位的比例
+                if action_type_int == 5 and state.position_quantity > 0:
+                    quantity = max(1, int(state.position_quantity * quantity_ratio))
+                else:
+                    quantity = calculate_order_quantity_from_state(
+                        state, price, quantity_ratio, is_buy=is_buy, ref_price=mid_price
+                    )
+
+                filtered_decisions[i, 3] = quantity
 
             # 构建带 agent_id 的数组: [agent_id, action_type, side, price, quantity]
             full_array = np.column_stack([
