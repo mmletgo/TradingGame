@@ -437,6 +437,34 @@ class ParallelArenaTrainer:
 | `save_checkpoint(path)` | 保存检查点 |
 | `load_checkpoint(path)` | 加载检查点 |
 | `stop()` | 停止训练并清理资源（包括关闭 Execute Worker 池） |
+| `_calculate_market_avg_return()` | 计算单个竞技场的市场平均收益率 |
+| `_balance_catfish_directions()` | 强制平衡趋势创造者鲶鱼的方向 |
+
+**相对收益适应度：**
+
+为避免市场整体方向偏移导致的正反馈循环，适应度计算使用相对收益而非绝对收益：
+
+```python
+# 计算每个竞技场的市场平均收益率
+market_avg_return = mean([(equity - initial) / initial for all agents])
+
+# Agent 适应度 = Agent 收益率 - 市场平均收益率
+fitness = agent_return - market_avg_return
+```
+
+这样可以：
+- 消除市场整体方向（上涨/下跌）的影响
+- 鼓励 Agent 做出相对于市场的超额收益
+- 即使市场整体下跌，表现好于平均的 Agent 仍能获得正向适应度
+
+**鲶鱼方向平衡：**
+
+趋势创造者鲶鱼的方向在所有竞技场间严格平衡：
+- 每个 Episode 开始时，收集所有竞技场的趋势创造者鲶鱼
+- 随机打乱后，前一半设为买方向（1），后一半设为卖方向（-1）
+- 确保不同竞技场的行情有双向差异
+
+配合 60% 的行动概率（`CatfishConfig.action_probability = 0.6`），鲶鱼能有效增加市场双向波动。
 
 **账户完全独立设计：**
 

@@ -127,7 +127,7 @@ Agent 配置，定义特定类型 Agent 的交易参数。
 | mode | CatfishMode | TREND_CREATOR | 单模式时的鲶鱼行为模式 |
 | ma_period | int | 20 | 逆势操作均线周期 |
 | deviation_threshold | float | 0.003 | 逆势操作偏离阈值 |
-| action_probability | float | 0.3 | 每个 tick 行动的概率（0-1） |
+| action_probability | float | 0.6 | 每个 tick 行动的概率（0-1） |
 
 **鲶鱼行为模式说明：**
 
@@ -361,13 +361,17 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode trend_creat
 ### 鲶鱼参数
 
 - `action_probability`：
-  - 0.3：30% 概率行动（默认，增强市场扰动）
+  - 0.6：60% 概率行动（默认，强市场扰动，配合方向平衡防止单边趋势）
+  - 0.3：30% 概率行动（中等扰动）
   - 0.1：10% 概率行动（轻微扰动）
-  - 0.5+：50%+ 概率行动（强烈扰动）
 
 - 模式特定参数：
   - `ma_period`：20-200，均线周期（逆势操作鲶鱼使用）
   - `deviation_threshold`：0.001-0.01，偏离阈值（逆势操作鲶鱼使用）
+
+**多竞技场模式下的方向平衡**：
+- 趋势创造者鲶鱼方向在所有竞技场间严格平衡（一半买、一半卖）
+- 确保不同竞技场产生双向行情差异
 
 ## 依赖关系
 

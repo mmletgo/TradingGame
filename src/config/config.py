@@ -165,7 +165,7 @@ class CatfishConfig:
     deviation_threshold: float = 0.003
 
     # 通用参数
-    action_probability: float = 0.3  # 每个 tick 有 30% 概率行动
+    action_probability: float = 0.6  # 每个 tick 有 60% 概率行动（增强扰动效果）
 
 
 @dataclass

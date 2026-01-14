@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from src.training._cython.batch_decide_openmp import BatchNetworkCache
 
 from src.bio.agents.base import ActionType, AgentType
-from src.config.config import Config
+from src.config.config import CatfishMode, Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
 from src.market.catfish import create_all_catfish, create_catfish
@@ -162,6 +162,9 @@ class ParallelArenaTrainer:
         self._last_inference_arrays: dict[
             AgentType, dict[int, tuple[np.ndarray, np.ndarray]]
         ] = {}
+        # Worker 池返回的订单簿快照（用于构建真实市场状态）
+        # {arena_id: (bid_depth, ask_depth, last_price, mid_price)}
+        self._worker_depth_cache: dict[int, tuple[np.ndarray, np.ndarray, float, float]] = {}
 
     def setup(self) -> None:
         """初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池"""
@@ -368,6 +371,36 @@ class ParallelArenaTrainer:
 
         catfish_count = 3
         return (mm_fund - other_fund) / catfish_count
+
+    def _balance_catfish_directions(self) -> None:
+        """强制平衡趋势创造者鲶鱼的方向（跨所有竞技场）
+
+        收集所有竞技场的趋势创造者鲶鱼，随机分配一半为买方向，一半为卖方向。
+        这样可以确保无论有多少个竞技场，鲶鱼的买卖方向总是严格平衡的。
+        """
+        # 收集所有趋势创造者鲶鱼
+        trend_creators: list[CatfishAccountState] = []
+        for arena in self.arena_states:
+            for catfish_state in arena.catfish_states.values():
+                if catfish_state.catfish_mode == CatfishMode.TREND_CREATOR:
+                    trend_creators.append(catfish_state)
+
+        if not trend_creators:
+            return
+
+        # 随机打乱后分配方向
+        random.shuffle(trend_creators)
+        half = len(trend_creators) // 2
+
+        for i, catfish in enumerate(trend_creators):
+            if i < half:
+                catfish.current_direction = 1  # 买方向
+            else:
+                catfish.current_direction = -1  # 卖方向
+
+        self.logger.debug(
+            f"鲶鱼方向已平衡: 买方向={half}, 卖方向={len(trend_creators) - half}"
+        )
 
     def _init_network_caches(self) -> None:
         """初始化共享的网络数据缓存"""
@@ -754,6 +787,7 @@ class ParallelArenaTrainer:
     def _reset_all_arenas(self) -> None:
         """重置所有竞技场状态"""
         initial_price = self.config.market.initial_price
+        self._worker_depth_cache.clear()
 
         for arena in self.arena_states:
             # 重置订单簿
@@ -775,6 +809,10 @@ class ParallelArenaTrainer:
                 catfish_balance = self._calculate_catfish_initial_balance()
                 for catfish_state in arena.catfish_states.values():
                     catfish_state.reset(catfish_balance)
+
+        # 强制平衡趋势创造者鲶鱼的方向（跨所有竞技场）
+        if self.config.catfish and self.config.catfish.enabled:
+            self._balance_catfish_directions()
 
         # 重置 Execute Worker 池的订单簿
         if self._execute_worker_pool is not None:
@@ -852,6 +890,12 @@ class ParallelArenaTrainer:
             # 处理返回结果，更新主进程中的状态
             for arena_id, result in results.items():
                 arena = self.arena_states[arena_id]
+                self._worker_depth_cache[arena_id] = (
+                    result.bid_depth,
+                    result.ask_depth,
+                    result.last_price,
+                    result.mid_price,
+                )
 
                 # 更新 Agent 账户状态（从成交结果）
                 for trade_tuple in result.trades:
@@ -933,11 +977,21 @@ class ParallelArenaTrainer:
             归一化后的市场状态
         """
         orderbook = arena.matching_engine._orderbook
+        cached_depth = None
+        if (
+            self._execute_worker_pool is not None
+            and arena.arena_id in self._worker_depth_cache
+        ):
+            cached_depth = self._worker_depth_cache[arena.arena_id]
 
         # 获取实时参考价格
-        current_mid_price = orderbook.get_mid_price()
-        if current_mid_price is None:
-            current_mid_price = orderbook.last_price
+        if cached_depth is not None:
+            _bid_depth, _ask_depth, last_price, mid_price = cached_depth
+            current_mid_price = mid_price if mid_price > 0 else last_price
+        else:
+            current_mid_price = orderbook.get_mid_price()
+            if current_mid_price is None:
+                current_mid_price = orderbook.last_price
         if current_mid_price == 0:
             current_mid_price = 100.0
 
@@ -950,8 +1004,11 @@ class ParallelArenaTrainer:
 
         tick_size = orderbook.tick_size
 
-        # 使用 get_depth_numpy 直接获取 NumPy 数组
-        bid_depth, ask_depth = orderbook.get_depth_numpy(levels=100)
+        # 使用 get_depth_numpy 直接获取 NumPy 数组（Worker 池优先使用快照）
+        if cached_depth is not None:
+            bid_depth, ask_depth = _bid_depth, _ask_depth
+        else:
+            bid_depth, ask_depth = orderbook.get_depth_numpy(levels=100)
 
         # 获取并清零缓冲区
         bid_data = self._market_state_buffers["bid_data"]
@@ -1136,11 +1193,15 @@ class ParallelArenaTrainer:
         if not self._last_inference_arrays:
             return None
 
-        # 获取竞技场状态和 mid_price
+        # 获取竞技场状态和 mid_price（优先使用平滑价，避免主进程 orderbook 不同步）
         arena = self.arena_states[arena_idx]
-        mid_price = arena.matching_engine.orderbook.get_mid_price()
-        if mid_price is None:
-            mid_price = arena.matching_engine.orderbook.last_price
+        mid_price = arena.smooth_mid_price
+        if mid_price <= 0:
+            mid_price = arena.matching_engine.orderbook.get_mid_price()
+            if mid_price is None:
+                mid_price = arena.matching_engine.orderbook.last_price
+        if mid_price <= 0:
+            mid_price = 100.0
         agent_states = arena.agent_states
 
         # 收集所有非做市商类型的数组
@@ -1184,8 +1245,15 @@ class ParallelArenaTrainer:
                 if action_type_int == 5 and state.position_quantity > 0:
                     quantity = max(1, int(state.position_quantity * quantity_ratio))
                 else:
+                    price_for_qty = price
+                    if action_type_int in (4, 5) or price_for_qty <= 0:
+                        price_for_qty = mid_price
                     quantity = calculate_order_quantity_from_state(
-                        state, price, quantity_ratio, is_buy=is_buy, ref_price=mid_price
+                        state,
+                        price_for_qty,
+                        quantity_ratio,
+                        is_buy=is_buy,
+                        ref_price=mid_price,
                     )
 
                 filtered_decisions[i, 3] = quantity
@@ -1225,6 +1293,12 @@ class ParallelArenaTrainer:
         for arena_id, result in results.items():
             arena = self.arena_states[arena_id]
             tick_trades: list[Trade] = []
+            self._worker_depth_cache[arena_id] = (
+                result.bid_depth,
+                result.ask_depth,
+                result.last_price,
+                result.mid_price,
+            )
 
             # 处理成交
             for trade_tuple in result.trades:
@@ -1284,6 +1358,16 @@ class ParallelArenaTrainer:
 
             # 同步价格
             arena.smooth_mid_price = result.mid_price
+
+            if arena.eliminating_agents:
+                cleared_ids = [
+                    agent_id
+                    for agent_id in arena.eliminating_agents
+                    if arena.agent_states.get(agent_id)
+                    and arena.agent_states[agent_id].position_quantity == 0
+                ]
+                for agent_id in cleared_ids:
+                    arena.eliminating_agents.discard(agent_id)
 
             arena_tick_trades[arena_id] = tick_trades
 
@@ -2131,6 +2215,17 @@ class ParallelArenaTrainer:
         if not agents_to_liquidate:
             return
 
+        # Worker 池模式：仅标记强平，实际撤单/平仓交给 Worker 执行
+        if self._execute_worker_pool is not None:
+            for agent_state in agents_to_liquidate:
+                arena.eliminating_agents.add(agent_state.agent_id)
+                agent_state.is_liquidated = True
+                arena.mark_agent_liquidated(
+                    agent_state.agent_id,
+                    agent_state.agent_type,
+                )
+            return
+
         # 阶段1: 撤销挂单
         for agent_state in agents_to_liquidate:
             self._cancel_agent_orders_in_arena(arena, agent_state)
@@ -2602,9 +2697,16 @@ class ParallelArenaTrainer:
                     return ("population_depleted", agent_type)
 
         # 检查订单簿单边挂单
-        orderbook = arena.matching_engine._orderbook
-        has_bids = orderbook.get_best_bid() is not None
-        has_asks = orderbook.get_best_ask() is not None
+        if arena.arena_id in self._worker_depth_cache:
+            bid_depth, ask_depth, _last_price, _mid_price = self._worker_depth_cache[
+                arena.arena_id
+            ]
+            has_bids = bool(np.any(bid_depth[:, 0] > 0))
+            has_asks = bool(np.any(ask_depth[:, 0] > 0))
+        else:
+            orderbook = arena.matching_engine._orderbook
+            has_bids = orderbook.get_best_bid() is not None
+            has_asks = orderbook.get_best_ask() is not None
         if has_bids != has_asks:
             return ("one_sided_orderbook", None)
 
@@ -2653,18 +2755,37 @@ class ParallelArenaTrainer:
         return self._collect_episode_fitness()
 
     def _collect_episode_fitness(self) -> dict[tuple[AgentType, int], np.ndarray]:
-        """收集单个 episode 的适应度（跨所有竞技场求和）"""
+        """收集单个 episode 的适应度（跨所有竞技场求和）
+
+        使用相对收益适应度：Agent 收益率 - 市场平均收益率
+        这样可以消除市场整体方向的影响，鼓励 Agent 做出相对于市场的超额收益
+        """
         accumulated: dict[tuple[AgentType, int], np.ndarray] = {}
 
         for arena in self.arena_states:
-            current_price = arena.matching_engine._orderbook.last_price
+            if arena.arena_id in self._worker_depth_cache:
+                _bid_depth, _ask_depth, last_price, mid_price = self._worker_depth_cache[
+                    arena.arena_id
+                ]
+                current_price = (
+                    mid_price
+                    if mid_price > 0
+                    else last_price
+                    if last_price > 0
+                    else arena.smooth_mid_price
+                )
+            else:
+                current_price = arena.matching_engine._orderbook.last_price
+
+            # 计算该竞技场的市场平均收益率（用于相对适应度）
+            market_avg_return = self._calculate_market_avg_return(arena, current_price)
 
             for agent_type, population in self.populations.items():
                 if isinstance(population, SubPopulationManager):
                     for sub_pop in population.sub_populations:
                         key = (agent_type, sub_pop.sub_population_id or 0)
                         fitness_arr = self._calculate_fitness_for_population(
-                            sub_pop, arena, current_price
+                            sub_pop, arena, current_price, market_avg_return
                         )
                         if key not in accumulated:
                             accumulated[key] = fitness_arr.copy()
@@ -2673,7 +2794,7 @@ class ParallelArenaTrainer:
                 else:
                     key = (agent_type, 0)
                     fitness_arr = self._calculate_fitness_for_population(
-                        population, arena, current_price
+                        population, arena, current_price, market_avg_return
                     )
                     if key not in accumulated:
                         accumulated[key] = fitness_arr.copy()
@@ -2682,31 +2803,114 @@ class ParallelArenaTrainer:
 
         return accumulated
 
+    def _calculate_market_avg_return(
+        self, arena: ArenaState, current_price: float
+    ) -> float:
+        """计算单个竞技场的市场平均收益率
+
+        遍历所有未被强平的 Agent，计算平均收益率。
+
+        Args:
+            arena: 竞技场状态
+            current_price: 当前价格
+
+        Returns:
+            市场平均收益率
+        """
+        total_return = 0.0
+        count = 0
+
+        for agent_state in arena.agent_states.values():
+            if agent_state.is_liquidated:
+                continue
+            equity = agent_state.get_equity(current_price)
+            initial = agent_state.initial_balance
+            if initial > 0:
+                total_return += (equity - initial) / initial
+                count += 1
+
+        return total_return / count if count > 0 else 0.0
+
     def _calculate_fitness_for_population(
         self,
         population: Population,
         arena: ArenaState,
         current_price: float,
+        market_avg_return: float = 0.0,
     ) -> np.ndarray:
-        """计算单个种群在单个竞技场中的适应度"""
-        fitness_arr = np.zeros(len(population.agents), dtype=np.float32)
+        """计算单个种群在单个竞技场中的适应度
 
+        使用相对收益适应度：Agent 收益率 - 市场平均收益率
+        做市商：0.5 * 相对收益率 + 0.5 * maker_volume 排名归一化
+        庄家：0.5 * 相对收益率 + 0.5 * volatility_contribution 排名归一化
+
+        Args:
+            population: 种群
+            arena: 竞技场状态
+            current_price: 当前价格
+            market_avg_return: 市场平均收益率
+
+        Returns:
+            适应度数组
+        """
+        n = len(population.agents)
+        if n == 0:
+            return np.zeros(0, dtype=np.float32)
+
+        # 1. 计算所有 Agent 的相对收益率
+        relative_returns = np.zeros(n, dtype=np.float32)
         for idx, agent in enumerate(population.agents):
             agent_state = arena.agent_states.get(agent.agent_id)
             if agent_state is None:
                 continue
 
-            # 计算净值
             equity = agent_state.get_equity(current_price)
             initial = agent_state.initial_balance
 
-            # 计算适应度（收益率）
             if initial > 0:
-                fitness = (equity - initial) / initial
+                agent_return = (equity - initial) / initial
+                relative_returns[idx] = agent_return - market_avg_return
             else:
-                fitness = 0.0
+                relative_returns[idx] = 0.0
 
-            fitness_arr[idx] = fitness
+        # 2. 根据种群类型计算最终适应度
+        if population.agent_type == AgentType.MARKET_MAKER:
+            # 做市商：0.5 * 相对收益率 + 0.5 * maker_volume 排名归一化
+            maker_volumes = np.array([
+                arena.agent_states[agent.agent_id].maker_volume
+                if agent.agent_id in arena.agent_states else 0
+                for agent in population.agents
+            ], dtype=np.float32)
+
+            # 排名归一化到 [0, 1]
+            volume_ranks = np.argsort(np.argsort(maker_volumes))
+            if n > 1:
+                volume_rank_normalized = volume_ranks / (n - 1)
+            else:
+                volume_rank_normalized = np.zeros(n, dtype=np.float32)
+
+            fitness_arr = 0.5 * relative_returns + 0.5 * volume_rank_normalized
+
+        elif population.agent_type == AgentType.WHALE:
+            # 庄家：0.5 * 相对收益率 + 0.5 * volatility_contribution 排名归一化
+            volatility_contributions = np.array([
+                arena.agent_states[agent.agent_id].volatility_contribution
+                if agent.agent_id in arena.agent_states else 0.0
+                for agent in population.agents
+            ], dtype=np.float32)
+
+            # 排名归一化到 [0, 1]
+            volatility_ranks = np.argsort(np.argsort(volatility_contributions))
+            if n > 1:
+                volatility_rank_normalized = volatility_ranks / (n - 1)
+            else:
+                volatility_rank_normalized = np.zeros(n, dtype=np.float32)
+
+            fitness_arr = 0.5 * relative_returns + 0.5 * volatility_rank_normalized
+
+        else:
+            # 散户、高级散户：纯相对收益率
+            fitness_arr = relative_returns
 
         return fitness_arr
 

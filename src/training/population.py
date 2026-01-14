@@ -1548,16 +1548,21 @@ class Population:
         results.sort(key=lambda x: x[0])
         return [agent for _, agent in results]
 
-    def evaluate(self, current_price: float) -> list[tuple[Agent, float]]:
+    def evaluate(
+        self, current_price: float, market_avg_return: float = 0.0
+    ) -> list[tuple[Agent, float]]:
         """评估种群适应度
 
         使用向量化运算计算所有 Agent 的适应度，并按适应度从高到低排序。
 
-        做市商使用复合适应度：0.5 * 收益率 + 0.5 * 流动性排名归一化
-        其他种群使用纯收益率适应度。
+        使用相对收益率（Agent 收益率 - 市场平均收益率）来消除市场整体方向的影响。
+        做市商使用复合适应度：0.5 * 相对收益率 + 0.5 * 流动性排名归一化
+        庄家使用复合适应度：0.5 * 相对收益率 + 0.5 * 波动性贡献排名归一化
+        其他种群使用纯相对收益率适应度。
 
         Args:
             current_price: 当前市场价格，用于计算未实现盈亏
+            market_avg_return: 市场平均收益率，用于计算相对收益
 
         Returns:
             按适应度从高到低排序的 (Agent, 适应度) 元组列表
@@ -1578,12 +1583,15 @@ class Population:
         # 3. 向量化计算净值: balance + unrealized_pnl
         equities = balances + unrealized_pnl
 
-        # 4. 向量化计算收益率: equity / initial_balance
-        return_rates = equities / initial_balances
+        # 4. 向量化计算收益率: (equity - initial) / initial
+        return_rates = (equities - initial_balances) / initial_balances
 
-        # 5. 根据种群类型计算适应度
+        # 5. 计算相对收益率: 收益率 - 市场平均收益率
+        relative_returns = return_rates - market_avg_return
+
+        # 6. 根据种群类型计算适应度
         if self.agent_type == AgentType.MARKET_MAKER:
-            # 做市商：复合适应度 = 0.5 * 收益率 + 0.5 * 流动性排名归一化
+            # 做市商：复合适应度 = 0.5 * 相对收益率 + 0.5 * 流动性排名归一化
             maker_volumes = np.array([a.account.maker_volume for a in self.agents])
 
             # 排名归一化到 [0, 1]
@@ -1595,10 +1603,10 @@ class Population:
                 volume_rank_normalized = np.zeros(n)  # 只有一个 agent 时，排名为 0
 
             # 复合适应度
-            fitnesses = 0.5 * return_rates + 0.5 * volume_rank_normalized
+            fitnesses = 0.5 * relative_returns + 0.5 * volume_rank_normalized
 
         elif self.agent_type == AgentType.WHALE:
-            # 庄家：复合适应度 = 0.5 * 收益率 + 0.5 * 波动性贡献排名归一化
+            # 庄家：复合适应度 = 0.5 * 相对收益率 + 0.5 * 波动性贡献排名归一化
             volatility_contributions = np.array(
                 [a.account.volatility_contribution for a in self.agents]
             )
@@ -1611,16 +1619,16 @@ class Population:
                 volatility_rank_normalized = np.zeros(n)
 
             # 复合适应度
-            fitnesses = 0.5 * return_rates + 0.5 * volatility_rank_normalized
+            fitnesses = 0.5 * relative_returns + 0.5 * volatility_rank_normalized
 
         else:
-            # 其他种群（散户、高级散户）：纯收益率适应度
-            fitnesses = return_rates
+            # 其他种群（散户、高级散户）：纯相对收益率适应度
+            fitnesses = relative_returns
 
-        # 6. 获取从高到低的排序索引
+        # 7. 获取从高到低的排序索引
         sorted_indices = np.argsort(fitnesses)[::-1]
 
-        # 7. 按排序索引构建结果
+        # 8. 按排序索引构建结果
         return [(self.agents[i], float(fitnesses[i])) for i in sorted_indices]
 
     def evolve(self, current_price: float) -> None:
@@ -2284,15 +2292,18 @@ class Population:
         self._pending_genome_data = None
         self._genomes_dirty = False
 
-    def accumulate_fitness(self, current_price: float) -> None:
+    def accumulate_fitness(
+        self, current_price: float, market_avg_return: float = 0.0
+    ) -> None:
         """累积当前 episode 的适应度
 
         计算当前 episode 的适应度并累加到内部存储。
 
         Args:
             current_price: 当前市场价格，用于计算未实现盈亏
+            market_avg_return: 市场平均收益率，用于计算相对收益
         """
-        agent_fitnesses = self.evaluate(current_price)
+        agent_fitnesses = self.evaluate(current_price, market_avg_return)
         for agent, fitness in agent_fitnesses:
             genome = agent.brain.get_genome()
             gid = genome.key
@@ -2445,18 +2456,21 @@ class SubPopulationManager:
         for pop in self.sub_populations:
             pop.reset_agents()
 
-    def evaluate(self, current_price: float) -> list[tuple[Agent, float]]:
+    def evaluate(
+        self, current_price: float, market_avg_return: float = 0.0
+    ) -> list[tuple[Agent, float]]:
         """评估所有Agent适应度
 
         Args:
             current_price: 当前价格
+            market_avg_return: 市场平均收益率，用于计算相对收益
 
         Returns:
             (Agent, fitness) 元组列表
         """
         all_results: list[tuple[Agent, float]] = []
         for pop in self.sub_populations:
-            results = pop.evaluate(current_price)
+            results = pop.evaluate(current_price, market_avg_return)
             all_results.extend(results)
         return all_results
 
@@ -2912,10 +2926,17 @@ class SubPopulationManager:
             all_genomes.extend(pop.neat_pop.population.values())
         return all_genomes
 
-    def accumulate_fitness(self, current_price: float) -> None:
-        """累积所有子种群的适应度"""
+    def accumulate_fitness(
+        self, current_price: float, market_avg_return: float = 0.0
+    ) -> None:
+        """累积所有子种群的适应度
+
+        Args:
+            current_price: 当前市场价格
+            market_avg_return: 市场平均收益率，用于计算相对收益
+        """
         for sub_pop in self.sub_populations:
-            sub_pop.accumulate_fitness(current_price)
+            sub_pop.accumulate_fitness(current_price, market_avg_return)
 
     def apply_accumulated_fitness(self) -> None:
         """应用所有子种群的累积适应度"""

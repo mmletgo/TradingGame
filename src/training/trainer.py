@@ -469,6 +469,46 @@ class Trainer:
         per_catfish = (mm_fund - other_fund) / catfish_count
         return per_catfish
 
+    def _calculate_market_avg_return(self, current_price: float) -> float:
+        """计算整个市场的平均收益率
+
+        遍历所有种群的所有 Agent，计算平均收益率。
+        用于相对收益适应度计算，消除市场整体方向的影响。
+
+        Args:
+            current_price: 当前市场价格
+
+        Returns:
+            市场平均收益率 = mean((equity - initial) / initial)
+        """
+        total_return = 0.0
+        count = 0
+
+        for population in self.populations.values():
+            if isinstance(population, SubPopulationManager):
+                # 子种群管理器：遍历所有子种群
+                for sub_pop in population.sub_populations:
+                    for agent in sub_pop.agents:
+                        if agent.is_liquidated:
+                            continue
+                        equity = agent.account.get_equity(current_price)
+                        initial = agent.account.initial_balance
+                        if initial > 0:
+                            total_return += (equity - initial) / initial
+                            count += 1
+            else:
+                # 普通种群
+                for agent in population.agents:
+                    if agent.is_liquidated:
+                        continue
+                    equity = agent.account.get_equity(current_price)
+                    initial = agent.account.initial_balance
+                    if initial > 0:
+                        total_return += (equity - initial) / initial
+                        count += 1
+
+        return total_return / count if count > 0 else 0.0
+
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取或创建线程池（惰性初始化）"""
         if self._executor is None:
@@ -2545,9 +2585,12 @@ class Trainer:
             current_price = self.matching_engine._orderbook.last_price
             evolution_interval = self.config.training.evolution_interval
 
-            # 累积当前 episode 的适应度
+            # 计算市场平均收益率（用于相对收益适应度）
+            market_avg_return = self._calculate_market_avg_return(current_price)
+
+            # 累积当前 episode 的适应度（使用相对收益）
             for agent_type, population in self.populations.items():
-                population.accumulate_fitness(current_price)
+                population.accumulate_fitness(current_price, market_avg_return)
 
             self._episodes_since_evolution += 1
 
@@ -2670,8 +2713,11 @@ class Trainer:
 
         current_price = self.matching_engine._orderbook.last_price
 
+        # 计算市场平均收益率（用于相对收益适应度）
+        market_avg_return = self._calculate_market_avg_return(current_price)
+
         for agent_type, pop in self.populations.items():
-            agent_fitnesses = pop.evaluate(current_price)
+            agent_fitnesses = pop.evaluate(current_price, market_avg_return)
             if agent_fitnesses:
                 stats["avg_fitness"][agent_type] = sum(
                     f for _, f in agent_fitnesses

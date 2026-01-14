@@ -215,14 +215,23 @@ result = FitnessAggregator.aggregate_simple_average(arena_fitnesses, episode_cou
 - 执行 NEAT 进化算法
 - 重置 Agent 账户状态
 
-**适应度计算公式：**
+**适应度计算公式（相对收益）：**
+
+为消除市场整体方向的影响，使用相对收益率而非绝对收益率：
+- 市场平均收益率 = mean((equity - initial) / initial) for all agents
+- Agent 相对收益率 = Agent 收益率 - 市场平均收益率
 
 | 种群类型 | 适应度公式 |
 |---------|-----------|
-| 散户 | 收益率 = equity / initial_balance |
-| 高级散户 | 收益率 = equity / initial_balance |
-| 庄家 | 0.5 × 收益率 + 0.5 × 波动性贡献排名归一化 |
-| 做市商 | 0.5 × 收益率 + 0.5 × maker_volume 排名归一化 |
+| 散户 | 相对收益率 |
+| 高级散户 | 相对收益率 |
+| 庄家 | 0.5 × 相对收益率 + 0.5 × 波动性贡献排名归一化 |
+| 做市商 | 0.5 × 相对收益率 + 0.5 × maker_volume 排名归一化 |
+
+**相对收益的优势：**
+- 消除市场整体涨跌的影响
+- 即使市场整体下跌，表现优于平均的 Agent 仍获得正向适应度
+- 避免正反馈循环导致的单边行情
 
 **庄家波动性贡献说明：**
 - 每次作为 taker 成交时，累加价格冲击
