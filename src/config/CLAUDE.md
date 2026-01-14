@@ -125,28 +125,25 @@ Agent 配置，定义特定类型 Agent 的交易参数。
 | enabled | bool | False | 是否启用鲶鱼 |
 | multi_mode | bool | True | 是否同时启用三种模式 |
 | mode | CatfishMode | TREND_CREATOR | 单模式时的鲶鱼行为模式 |
-| fund_multiplier | float | 3.0 | 资金乘数（相对于做市商基础资金） |
-| market_maker_base_fund | float | 20,000,000 | 做市商基础资金 |
 | ma_period | int | 20 | 逆势操作均线周期 |
 | deviation_threshold | float | 0.003 | 逆势操作偏离阈值 |
-| action_cooldown | int | 10 | 行动冷却时间（tick数） |
+| action_probability | float | 0.3 | 每个 tick 行动的概率（0-1） |
 
 **鲶鱼行为模式说明：**
 
 1. **趋势创造者 (TREND_CREATOR)**
    - Episode 开始时随机选择方向（买或卖）
    - 整个 Episode 保持该方向持续操作
-   - 有冷却时间 `action_cooldown`
+   - 行动概率由 `action_probability` 控制
 
 2. **逆势操作 (MEAN_REVERSION)**
    - 维护 EMA 均值（周期 `ma_period`）
    - 当当前价格偏离 EMA 超过 `deviation_threshold`，反向操作
-   - 有冷却时间 `action_cooldown`
+   - 行动概率由 `action_probability` 控制
 
 3. **随机买卖 (RANDOM)**
-   - 以 50% 概率决定是否触发交易
+   - 以 `action_probability` 概率触发交易
    - 若触发，随机选择买或卖
-   - 有冷却时间 `action_cooldown`
 
 **鲶鱼资金计算（当前默认）：**
 ```
@@ -154,11 +151,11 @@ Agent 配置，定义特定类型 Agent 的交易参数。
 每条鲶鱼资金 = 总资金 / 3
 ```
 
-默认配置下（fund_multiplier=3.0）：
-- 做市商：100 × 2,000万 × 10 = 200亿
-- 其他物种：100亿 + 2亿 + 100亿 = 202亿
-- 鲶鱼总资金：200亿 × 3 - 202亿 = 398亿
-- 每条鲶鱼：约 133亿
+默认配置下：
+- 做市商：400 × 2M × 1.0 = 800M
+- 其他物种：200M + 2M + 300M = 502M
+- 鲶鱼总资金：800M - 502M = 298M
+- 每条鲶鱼：约 99.3M
 
 ### Config
 
@@ -363,15 +360,14 @@ python scripts/train_noui.py --episodes 100 --catfish --catfish-mode trend_creat
 
 ### 鲶鱼参数
 
-- `fund_multiplier`：
-  - 3.0：中等扰动（默认）
-  - 1.0-2.0：轻微扰动
-  - 5.0+：强烈扰动
+- `action_probability`：
+  - 0.3：30% 概率行动（默认，增强市场扰动）
+  - 0.1：10% 概率行动（轻微扰动）
+  - 0.5+：50%+ 概率行动（强烈扰动）
 
 - 模式特定参数：
   - `ma_period`：20-200，均线周期（逆势操作鲶鱼使用）
   - `deviation_threshold`：0.001-0.01，偏离阈值（逆势操作鲶鱼使用）
-  - `action_cooldown`：10-50，行动冷却时间
 
 ## 依赖关系
 

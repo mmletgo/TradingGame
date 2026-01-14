@@ -201,16 +201,14 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 | enabled | bool | False | 是否启用鲶鱼 |
 | multi_mode | bool | True | 是否同时启用三种模式 |
 | mode | CatfishMode | TREND_CREATOR | 单模式时的鲶鱼行为模式 |
-| fund_multiplier | float | 3.0 | 资金乘数（相对于做市商基础资金） |
-| market_maker_base_fund | float | 20,000,000 | 做市商基础资金 |
 | ma_period | int | 20 | 均线周期（EMA计算周期） |
 | deviation_threshold | float | 0.003 | 偏离阈值（价格与EMA的偏离率） |
-| action_probability | float | 0.1 | 每个 tick 行动的概率（0-1） |
+| action_probability | float | 0.3 | 每个 tick 行动的概率（0-1） |
 
 **参数说明：**
 - `ma_period`: EMA均线周期，用于逆势操作鲶鱼
 - `deviation_threshold`: 价格偏离EMA的阈值（0.003 = 0.3%）
-- `action_probability`: 每个 tick 所有鲶鱼独立随机决定是否行动的概率（0.1 = 10%）
+- `action_probability`: 每个 tick 所有鲶鱼独立随机决定是否行动的概率（0.3 = 30%）
 
 ## 鲶鱼资金模式
 
@@ -224,11 +222,11 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 每条鲶鱼资金 = 总资金 / 3
 ```
 
-默认配置下：
-- 做市商：100 × 5000万 × 10 = 500亿
-- 其他物种：200亿 + 2亿 + 100亿 = 302亿
-- 鲶鱼总资金：500亿 - 302亿 = 198亿
-- 每条鲶鱼：66亿
+默认配置下（create_config.py）：
+- 做市商：400 × 2M × 1.0 = 800M
+- 其他物种：200M + 2M + 300M = 502M
+- 鲶鱼总资金：800M - 502M = 298M
+- 每条鲶鱼：约 99.3M
 
 **下单量计算：**
 - 不按自身资金计算，而是按盘口深度计算

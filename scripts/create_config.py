@@ -26,7 +26,6 @@ def create_default_config(
     checkpoint_interval: int = 10,
     config_dir: str = "config",
     catfish_enabled: bool = False,
-    catfish_fund_multiplier: float = 3.0,
     evolution_interval: int = 10,
 ) -> Config:
     """创建默认配置
@@ -36,7 +35,6 @@ def create_default_config(
         checkpoint_interval: 检查点间隔（episode 数）
         config_dir: 配置文件目录（Population 会在此目录下查找对应的 NEAT 配置）
         catfish_enabled: 是否启用鲶鱼（启用后三种行为模式同时运行）
-        catfish_fund_multiplier: 鲶鱼资金倍数
         evolution_interval: 每多少个 episode 进化一次
 
     Returns:
@@ -49,7 +47,7 @@ def create_default_config(
         depth=100,
         ema_alpha=0.9,
     )
-    maker_initial_balance = 1_000_000.0  # 做市商初始资金 1M
+    maker_initial_balance = 2_000_000.0  # 做市商初始资金 2M
     maker_leverage = 1.0
 
     agents = {
@@ -106,8 +104,6 @@ def create_default_config(
         catfish = CatfishConfig(
             enabled=True,
             multi_mode=True,  # 三种行为模式同时运行
-            fund_multiplier=catfish_fund_multiplier,
-            market_maker_base_fund=maker_initial_balance * maker_leverage,
         )
 
     return Config(

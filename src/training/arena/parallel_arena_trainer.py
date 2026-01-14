@@ -48,6 +48,7 @@ from src.training.population import (
     Population,
     SubPopulationManager,
     WorkerConfig,
+    _apply_species_data_to_population,
     _deserialize_genomes_numpy,
     _unpack_network_params_numpy,
     malloc_trim,
@@ -2780,19 +2781,20 @@ class ParallelArenaTrainer:
         self,
         evolution_results: dict[
             tuple[AgentType, int],
-            tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]],
+            tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]],
         ],
         deserialize_genomes: bool = False,
     ) -> None:
         """从进化结果更新种群
 
         Args:
-            evolution_results: 进化结果字典
+            evolution_results: 进化结果字典，包含 (genome_data, network_params_data, species_data)
             deserialize_genomes: 是否反序列化基因组（默认 False，延迟反序列化）
         """
         for (agent_type, sub_pop_id), (
             genome_data,
             network_params_data,
+            species_data,
         ) in evolution_results.items():
             population = self.populations.get(agent_type)
             if population is None:
@@ -2802,12 +2804,12 @@ class ParallelArenaTrainer:
                 if sub_pop_id < len(population.sub_populations):
                     sub_pop = population.sub_populations[sub_pop_id]
                     self._update_single_population(
-                        sub_pop, genome_data, network_params_data, deserialize_genomes
+                        sub_pop, genome_data, network_params_data, species_data, deserialize_genomes
                     )
             else:
                 if sub_pop_id == 0:
                     self._update_single_population(
-                        population, genome_data, network_params_data, deserialize_genomes
+                        population, genome_data, network_params_data, species_data, deserialize_genomes
                     )
 
     def _update_single_population(
@@ -2815,6 +2817,7 @@ class ParallelArenaTrainer:
         population: Population,
         genome_data: tuple[np.ndarray, ...],
         network_params_data: tuple[np.ndarray, ...],
+        species_data: tuple[np.ndarray, np.ndarray],
         deserialize_genomes: bool = False,
     ) -> None:
         """更新单个种群
@@ -2823,6 +2826,7 @@ class ParallelArenaTrainer:
             population: 种群对象
             genome_data: 基因组数据元组
             network_params_data: 网络参数数据元组
+            species_data: species 数据元组 (genome_ids, species_ids)
             deserialize_genomes: 是否反序列化基因组（默认 False，延迟反序列化）
         """
         # 增加代数
@@ -2849,6 +2853,15 @@ class ParallelArenaTrainer:
             old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
             population._cleanup_genome_internals(old_to_clean)
 
+            # 应用 species 数据（在 cleanup 之前）
+            species_genome_ids, species_species_ids = species_data
+            _apply_species_data_to_population(
+                population.neat_pop,
+                species_genome_ids,
+                species_species_ids,
+                population.generation,
+            )
+
             population._cleanup_neat_history()
 
             # 更新 Agent Brain（使用完整的 genome + params）
@@ -2867,6 +2880,44 @@ class ParallelArenaTrainer:
             # 存储待反序列化数据（用于保存检查点时）
             population._pending_genome_data = genome_data
             population._genomes_dirty = True
+
+            # 同步 species 数据到主进程（关键修复！）
+            # 即使延迟反序列化 genome，也需要先反序列化并同步 species
+            # 否则 _collect_species_fitness_stats 会返回空数据
+            old_genomes = list(population.neat_pop.population.values())
+            keys, fitnesses, metadata, nodes, conns = genome_data
+            population.neat_pop.population = _deserialize_genomes_numpy(
+                keys,
+                fitnesses,
+                metadata,
+                nodes,
+                conns,
+                population.neat_config.genome_config,
+            )
+
+            # 清理旧的 genome 对象
+            new_genome_ids = set(population.neat_pop.population.keys())
+            old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
+            population._cleanup_genome_internals(old_to_clean)
+
+            # 应用 species 数据
+            species_genome_ids, species_species_ids = species_data
+            _apply_species_data_to_population(
+                population.neat_pop,
+                species_genome_ids,
+                species_species_ids,
+                population.generation,
+            )
+
+            # 更新 Agent 的 genome 引用
+            new_genomes = list(population.neat_pop.population.items())
+            for idx, (_gid, genome) in enumerate(new_genomes):
+                if idx < len(population.agents):
+                    population.agents[idx].brain.genome = genome
+
+            # 标记数据已同步，不需要再延迟反序列化
+            population._pending_genome_data = None
+            population._genomes_dirty = False
 
     def _refresh_agent_states(self) -> None:
         """刷新所有竞技场的 Agent 账户状态

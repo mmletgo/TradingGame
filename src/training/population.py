@@ -198,6 +198,97 @@ def _deserialize_genomes_numpy(
     return population
 
 
+def _serialize_species_data(species_set: Any) -> tuple[np.ndarray, np.ndarray]:
+    """序列化 species 数据为 NumPy 格式
+
+    Args:
+        species_set: NEAT DefaultSpeciesSet 对象
+
+    Returns:
+        (genome_ids, species_ids) 元组
+        - genome_ids: shape=(N,), 所有 genome 的 ID
+        - species_ids: shape=(N,), 对应的 species ID
+    """
+    if species_set is None or not hasattr(species_set, 'genome_to_species'):
+        return np.array([], dtype=np.int32), np.array([], dtype=np.int32)
+
+    genome_to_species = species_set.genome_to_species
+    if not genome_to_species:
+        return np.array([], dtype=np.int32), np.array([], dtype=np.int32)
+
+    genome_ids = np.array(list(genome_to_species.keys()), dtype=np.int32)
+    species_ids = np.array(list(genome_to_species.values()), dtype=np.int32)
+
+    return genome_ids, species_ids
+
+
+def _apply_species_data_to_population(
+    neat_pop: Any,
+    species_genome_ids: np.ndarray,
+    species_species_ids: np.ndarray,
+    generation: int,
+) -> None:
+    """将 species 数据应用到 NEAT 种群
+
+    根据从 Worker 返回的 genome_id -> species_id 映射，
+    重建主进程中 neat_pop.species 的结构。
+
+    Args:
+        neat_pop: NEAT Population 对象
+        species_genome_ids: genome ID 数组
+        species_species_ids: 对应的 species ID 数组
+        generation: 当前代数
+    """
+    if len(species_genome_ids) == 0:
+        return
+
+    species_set = neat_pop.species
+    if species_set is None:
+        return
+
+    # 1. 重建 genome_to_species 映射
+    genome_to_species: dict[int, int] = {}
+    for gid, sid in zip(species_genome_ids, species_species_ids):
+        genome_to_species[int(gid)] = int(sid)
+    species_set.genome_to_species = genome_to_species
+
+    # 2. 重建 species.species 字典
+    # 首先收集每个 species 的成员
+    species_members: dict[int, dict[int, Any]] = {}
+    for gid, sid in genome_to_species.items():
+        if sid not in species_members:
+            species_members[sid] = {}
+        genome = neat_pop.population.get(gid)
+        if genome is not None:
+            species_members[sid][gid] = genome
+
+    # 3. 更新或创建 species
+    current_species_ids = set(species_members.keys())
+    existing_species_ids = set(species_set.species.keys())
+
+    # 删除不再存在的 species
+    for sid in existing_species_ids - current_species_ids:
+        del species_set.species[sid]
+
+    # 更新或创建 species
+    for sid, members in species_members.items():
+        if sid in species_set.species:
+            # 更新现有 species 的 members
+            species = species_set.species[sid]
+            species.members = members
+            # 更新 representative（使用第一个成员）
+            if members:
+                species.representative = next(iter(members.values()))
+        else:
+            # 创建新的 species
+            from neat.species import Species
+            species = Species(sid, generation)
+            species.members = members
+            if members:
+                species.representative = next(iter(members.values()))
+            species_set.species[sid] = species
+
+
 # 保留旧接口用于兼容
 def _serialize_genomes(genomes: dict[int, neat.DefaultGenome]) -> list[tuple[Any, ...]]:
     """将基因组字典序列化为轻量级格式（紧凑版）
@@ -680,7 +771,7 @@ def _worker_process_main(
 
         elif cmd == "evolve_return_params":
             # args: np.ndarray of fitnesses (shape: pop_size,)
-            # 返回 genome 数据 + 网络参数，减少主进程重建网络的开销
+            # 返回 genome 数据 + 网络参数 + species 数据，减少主进程重建网络的开销
             fitnesses = args
 
             # 更新适应度
@@ -711,8 +802,11 @@ def _worker_process_main(
             # 3. 打包网络参数（NumPy 格式）
             network_params_data = _pack_network_params_numpy(params_list)
 
-            # 4. 返回两者
-            result_queue.put((worker_id, ("success_params", genome_data, network_params_data)))
+            # 4. 序列化 species 数据（genome_id -> species_id 映射）
+            species_data = _serialize_species_data(neat_pop.species)
+
+            # 5. 返回三者
+            result_queue.put((worker_id, ("success_params", genome_data, network_params_data, species_data)))
 
 
 import multiprocessing
@@ -964,7 +1058,7 @@ class MultiPopulationWorkerPool:
         sync_genomes: bool = False,
     ) -> dict[
         tuple["AgentType", int],
-        tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]
+        tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]
     ]:
         """同时进化所有 Worker 的种群
 
@@ -977,7 +1071,8 @@ class MultiPopulationWorkerPool:
 
         Returns:
             字典，key 为 (agent_type, sub_pop_id)，
-            value 为 (genome_data, network_params_data) 元组
+            value 为 (genome_data, network_params_data, species_data) 元组
+            其中 species_data = (genome_ids, species_ids)
         """
         # 1. 同时向所有 Worker 发送进化命令（非阻塞）
         cmd = "evolve_return_params" if not sync_genomes else "evolve_return_params"
@@ -988,15 +1083,17 @@ class MultiPopulationWorkerPool:
         # 2. 收集所有结果
         results: dict[
             tuple["AgentType", int],
-            tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]
+            tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]
         ] = {}
         expected_count = len(fitness_map)
 
         for _ in range(expected_count):
             worker_id, result = self.result_queue.get()
             if result[0] == "success_params":
-                # result = ("success_params", genome_data, network_params_data)
-                results[worker_id] = (result[1], result[2])
+                # result = ("success_params", genome_data, network_params_data, species_data)
+                # species_data = (genome_ids, species_ids)
+                species_data = result[3] if len(result) > 3 else (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+                results[worker_id] = (result[1], result[2], species_data)
             elif result[0] == "error":
                 raise RuntimeError(f"Worker {worker_id} evolve failed: {result[1]}")
             else:
@@ -1122,7 +1219,7 @@ def _multi_worker_process_main(
 
         elif cmd == "evolve_return_params":
             # args: np.ndarray of fitnesses (shape: pop_size,)
-            # 返回 genome 数据 + 网络参数，减少主进程重建网络的开销
+            # 返回 genome 数据 + 网络参数 + species 数据，减少主进程重建网络的开销
             fitnesses = args
 
             # 更新适应度
@@ -1153,8 +1250,11 @@ def _multi_worker_process_main(
             # 3. 打包网络参数（NumPy 格式）
             network_params_data = _pack_network_params_numpy(params_list)
 
-            # 4. 返回两者
-            result_queue.put((worker_id, ("success_params", genome_data, network_params_data)))
+            # 4. 序列化 species 数据（genome_id -> species_id 映射）
+            species_data = _serialize_species_data(neat_pop.species)
+
+            # 5. 返回三者
+            result_queue.put((worker_id, ("success_params", genome_data, network_params_data, species_data)))
 
 
 def malloc_trim() -> None:

@@ -148,10 +148,6 @@ class CatfishConfig:
         multi_mode: 是否同时启用三种模式（默认True）
         mode: 单模式时的鲶鱼行为模式
 
-        # 资金参数
-        fund_multiplier: 资金乘数（相对于做市商基础资金）
-        market_maker_base_fund: 做市商基础资金
-
         # 逆势操作参数（MEAN_REVERSION 模式）
         ma_period: 均线周期
         deviation_threshold: 偏离阈值
@@ -164,16 +160,12 @@ class CatfishConfig:
     multi_mode: bool = True  # 默认同时启用三种模式
     mode: CatfishMode = CatfishMode.TREND_CREATOR  # 单模式时使用
 
-    # 资金参数
-    fund_multiplier: float = 3.0
-    market_maker_base_fund: float = 20_000_000.0
-
     # 逆势操作参数（MEAN_REVERSION 模式）
     ma_period: int = 20
     deviation_threshold: float = 0.003
 
     # 通用参数
-    action_probability: float = 0.1  # 每个 tick 有 10% 概率行动
+    action_probability: float = 0.3  # 每个 tick 有 30% 概率行动
 
 
 @dataclass

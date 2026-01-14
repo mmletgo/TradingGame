@@ -93,12 +93,6 @@ def main() -> None:
         help="启用鲶鱼机制（三种行为模式同时运行）。不指定时使用 create_config.py 中的默认值。",
     )
     parser.add_argument(
-        "--catfish-fund-multiplier",
-        type=float,
-        default=3.0,
-        help="鲶鱼资金倍数（相对于做市商，默认: 3.0）",
-    )
-    parser.add_argument(
         "--evolution-interval",
         type=int,
         default=10,
@@ -124,7 +118,6 @@ def main() -> None:
         "episode_length": args.episode_length,
         "checkpoint_interval": args.checkpoint_interval,
         "config_dir": args.config_dir,
-        "catfish_fund_multiplier": args.catfish_fund_multiplier,
     }
     # 只有在用户明确指定 --catfish 时才覆盖默认值
     if args.catfish is not None:
@@ -135,7 +128,7 @@ def main() -> None:
     # 打印 Catfish 状态（使用最终配置值）
     if config.catfish is not None and config.catfish.enabled:
         print(
-            f"Catfish: enabled (三种模式同时运行), multiplier={config.catfish.fund_multiplier}x",
+            f"Catfish: enabled (三种模式同时运行), action_probability={config.catfish.action_probability:.1%}",
             flush=True,
         )
     else:
