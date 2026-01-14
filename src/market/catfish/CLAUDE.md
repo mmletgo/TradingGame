@@ -49,11 +49,9 @@
 **属性：**
 - `catfish_id: int` - 鲶鱼ID（使用负数避免与Agent冲突）
 - `config: CatfishConfig` - 鲶鱼配置
-- `phase_offset: int` - 相位偏移（用于错开多个鲶鱼的触发时间）
 - `account: CatfishAccount` - 鲶鱼账户
 - `is_liquidated: bool` - 是否已被强平
 - `_next_order_id: int` - 下一个订单ID（负数空间，初始值为 catfish_id * 1,000,000）
-- `_last_action_tick: int` - 上次行动的tick（初始值为 -1000，确保首次可以行动）
 
 **核心方法：**
 - `decide(orderbook, tick, price_history) -> tuple[bool, int]` - 抽象方法，决策是否行动和方向
@@ -68,10 +66,9 @@
   - 获取盘口深度，累加对手盘前3档的订单数量
   - 如果对手盘档位不足3档，返回0（不行动）
 - `_generate_order_id() -> int` - 生成订单ID（负数空间，每次递减1）
-- `can_act(tick) -> bool` - 检查冷却时间
-  - 返回 `tick - _last_action_tick >= action_cooldown`
-- `record_action(tick)` - 记录行动时间
-- `reset()` - 重置鲶鱼状态（账户、强平标志、_last_action_tick）
+- `can_act() -> bool` - 随机概率判断是否行动
+  - 返回 `random.random() < config.action_probability`
+- `reset()` - 重置鲶鱼状态（账户、强平标志）
 
 ### TrendCreatorCatfish (trend_following.py)
 
@@ -80,7 +77,7 @@
 **策略逻辑：**
 1. Episode 开始时随机选择方向（买或卖）
 2. 整个 Episode 保持该方向持续操作
-3. 按冷却时间 `action_cooldown` 间隔操作
+3. 每个 tick 随机概率 `action_probability` 决定是否行动
 
 **额外属性：**
 - `_current_direction: int` - 当前方向（1=买，-1=卖）
@@ -94,14 +91,13 @@
 逆势操作型鲶鱼，当价格偏离均线时反向操作。
 
 **策略逻辑：**
-1. 检查冷却时间 `action_cooldown`
-2. 检查历史数据是否存在
-3. 使用当前价格更新 EMA：`EMA = alpha * price + (1 - alpha) * prev_EMA`
+1. 检查历史数据是否存在
+2. 使用当前价格更新 EMA：`EMA = alpha * price + (1 - alpha) * prev_EMA`
    - 其中 `alpha = 2 / (ma_period + 1)`
    - 首次调用时直接初始化为当前价格
-4. 检查是否有足够数据（至少 `ma_period` 个数据点）
-5. 计算价格偏离率：`(current_price - EMA) / EMA`
-6. 若偏离率绝对值超过 `deviation_threshold`，反向操作
+3. 检查是否有足够数据（至少 `ma_period` 个数据点）
+4. 计算价格偏离率：`(current_price - EMA) / EMA`
+5. 若偏离率绝对值超过 `deviation_threshold`，随机概率 `action_probability` 决定是否行动
    - 价格高于均线则卖出（direction = -1）
    - 价格低于均线则买入（direction = 1）
 
@@ -118,28 +114,23 @@
 随机买卖型鲶鱼，以随机概率进行买卖操作。
 
 **策略逻辑：**
-1. 检查冷却时间 `action_cooldown`
-2. 以概率 `action_probability` 决定是否触发交易（默认 0.5）
-3. 若决定交易，随机选择方向：
+1. 每个 tick 随机概率 `action_probability` 决定是否行动
+2. 若决定交易，随机选择方向：
    - 50% 概率买入（direction = 1）
    - 50% 概率卖出（direction = -1）
 
-**额外属性：**
-- `_action_probability: float` - 触发交易的概率（0-1 之间）
-
 **reset 方法：**
-- 调用基类的 reset 方法（重置账户、强平标志、_last_action_tick）
+- 调用基类的 reset 方法（重置账户、强平标志）
 
 ## 工厂函数
 
-### create_catfish(catfish_id, config, phase_offset=0, initial_balance=0.0, leverage=10.0, maintenance_margin_rate=0.05) -> CatfishBase
+### create_catfish(catfish_id, config, initial_balance=0.0, leverage=10.0, maintenance_margin_rate=0.05) -> CatfishBase
 
 根据 `config.mode` 创建对应类型的鲶鱼实例。
 
 **参数：**
 - `catfish_id: int` - 鲶鱼ID（应为负数）
 - `config: CatfishConfig` - 鲶鱼配置
-- `phase_offset: int` - 相位偏移（默认0）
 - `initial_balance: float` - 初始资金
 - `leverage: float` - 杠杆（默认10.0）
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
@@ -148,7 +139,7 @@
 
 ### create_all_catfish(config, initial_balance, leverage=10.0, maintenance_margin_rate=0.05) -> list[CatfishBase]
 
-创建所有三种鲶鱼实例，相位错开以避免同时触发。**这是当前系统的默认行为**。
+创建所有三种鲶鱼实例。**这是当前系统的默认行为**。
 
 **参数：**
 - `config: CatfishConfig` - 鲶鱼配置
@@ -159,7 +150,7 @@
 **返回：**
 - 三种鲶鱼实例的列表：[TrendCreator, MeanReversion, RandomTrading]
 - ID 分配：-1 (TrendCreator), -2 (MeanReversion), -3 (RandomTrading)
-- 相位偏移分别为：0, cooldown//3, cooldown*2//3（整数除法）
+- 三种鲶鱼同时运行，每个 tick 各自独立随机决定是否行动
 
 ## 使用示例
 
@@ -169,13 +160,13 @@
 from src.config.config import CatfishConfig
 from src.market.catfish import create_all_catfish
 
-# 创建三种鲶鱼（相位错开）
+# 创建三种鲶鱼
 config = CatfishConfig(
     enabled=True,
     multi_mode=True,  # 三种模式同时运行
     ma_period=20,            # 默认值
     deviation_threshold=0.003, # 默认值
-    action_cooldown=10,      # 默认值
+    action_probability=0.1,  # 每个 tick 10% 概率行动
 )
 catfish_list = create_all_catfish(config, initial_balance=6_600_000_000.0)
 
@@ -184,7 +175,6 @@ for catfish in catfish_list:
     should_act, direction = catfish.decide(orderbook, tick, price_history)
     if should_act:
         trades = catfish.execute(direction, matching_engine)
-        catfish.record_action(tick)
 ```
 
 **单模式：**
@@ -215,12 +205,12 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 | market_maker_base_fund | float | 20,000,000 | 做市商基础资金 |
 | ma_period | int | 20 | 均线周期（EMA计算周期） |
 | deviation_threshold | float | 0.003 | 偏离阈值（价格与EMA的偏离率） |
-| action_cooldown | int | 10 | 行动冷却时间（tick数） |
+| action_probability | float | 0.1 | 每个 tick 行动的概率（0-1） |
 
 **参数说明：**
 - `ma_period`: EMA均线周期，用于逆势操作鲶鱼
 - `deviation_threshold`: 价格偏离EMA的阈值（0.003 = 0.3%）
-- `action_cooldown`: 所有鲶鱼的冷却时间
+- `action_probability`: 每个 tick 所有鲶鱼独立随机决定是否行动的概率（0.1 = 10%）
 
 ## 鲶鱼资金模式
 

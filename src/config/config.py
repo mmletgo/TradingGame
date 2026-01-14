@@ -157,7 +157,7 @@ class CatfishConfig:
         deviation_threshold: 偏离阈值
 
         # 通用参数
-        action_cooldown: 行动冷却时间（tick数）
+        action_probability: 每个 tick 行动的概率（0-1）
     """
 
     enabled: bool = False
@@ -173,7 +173,7 @@ class CatfishConfig:
     deviation_threshold: float = 0.003
 
     # 通用参数
-    action_cooldown: int = 10
+    action_probability: float = 0.1  # 每个 tick 有 10% 概率行动
 
 
 @dataclass

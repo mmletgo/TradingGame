@@ -19,25 +19,21 @@ class RandomTradingCatfish(CatfishBase):
     随机买卖型鲶鱼
 
     策略逻辑：
-    - 每个决策点有固定概率触发交易
+    - 每个 tick 随机概率决定是否触发交易（使用 config.action_probability）
     - 交易方向随机决定（买入或卖出）
-    - 有冷却时间 action_cooldown
 
     Attributes:
         catfish_id: 鲶鱼ID
         config: 鲶鱼配置
-        _action_probability: 触发交易的概率
     """
 
     def __init__(
         self,
         catfish_id: int,
         config: CatfishConfig,
-        phase_offset: int = 0,
         initial_balance: float = 0.0,
         leverage: float = 10.0,
         maintenance_margin_rate: float = 0.05,
-        action_probability: float = 0.5,
     ) -> None:
         """
         初始化随机买卖型鲶鱼
@@ -45,17 +41,14 @@ class RandomTradingCatfish(CatfishBase):
         Args:
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
-            phase_offset: 相位偏移（用于错开触发时间）
             initial_balance: 初始余额
             leverage: 杠杆倍数
             maintenance_margin_rate: 维持保证金率
-            action_probability: 触发交易的概率（0-1之间，默认0.5）
         """
         super().__init__(
-            catfish_id, config, phase_offset,
+            catfish_id, config,
             initial_balance, leverage, maintenance_margin_rate
         )
-        self._action_probability: float = action_probability
 
     def decide(
         self,
@@ -66,7 +59,7 @@ class RandomTradingCatfish(CatfishBase):
         """
         决策是否行动以及行动方向
 
-        以随机概率决定是否交易，交易方向也随机决定。
+        随机概率决定是否交易，交易方向也随机决定。
 
         Args:
             orderbook: 订单簿
@@ -76,12 +69,8 @@ class RandomTradingCatfish(CatfishBase):
         Returns:
             (should_act, direction): 是否行动和方向（1=买，-1=卖）
         """
-        # 检查冷却时间
-        if not self.can_act(tick):
-            return False, 0
-
-        # 随机决定是否触发交易
-        if random.random() > self._action_probability:
+        # 随机概率判断是否行动
+        if not self.can_act():
             return False, 0
 
         # 随机决定方向：买入或卖出

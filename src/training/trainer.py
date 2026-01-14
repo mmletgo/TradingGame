@@ -2155,7 +2155,6 @@ class Trainer:
             )
             if should_act and direction != 0:
                 catfish_trades = catfish.execute(direction, self.matching_engine)
-                catfish.record_action(self.tick)
 
                 for trade in catfish_trades:
                     self.recent_trades.append(trade)

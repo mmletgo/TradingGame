@@ -332,12 +332,9 @@ class CatfishAccountState:
         current_direction: 趋势创造者方向（1=买，-1=卖）
         ema: 均值回归 EMA 值
         ema_initialized: EMA 是否已初始化
-        last_action_tick: 上次行动的 tick
-        phase_offset: 相位偏移（用于错开多个鲶鱼的触发时间）
-        action_cooldown: 行动冷却时间
         ma_period: 均线周期
         deviation_threshold: 偏离阈值
-        action_probability: 随机交易触发概率
+        action_probability: 每个 tick 行动的概率（0-1）
     """
 
     catfish_id: int
@@ -354,9 +351,6 @@ class CatfishAccountState:
     current_direction: int
     ema: float
     ema_initialized: bool
-    last_action_tick: int
-    phase_offset: int
-    action_cooldown: int
     ma_period: int
     deviation_threshold: float
     action_probability: float
@@ -380,7 +374,6 @@ class CatfishAccountState:
         current_direction = getattr(catfish, "_current_direction", 0)
         ema = getattr(catfish, "_ema", 0.0)
         ema_initialized = getattr(catfish, "_ema_initialized", False)
-        action_probability = getattr(catfish, "_action_probability", 0.5)
 
         # 根据类名推断鲶鱼模式
         class_name = catfish.__class__.__name__
@@ -408,12 +401,9 @@ class CatfishAccountState:
             current_direction=current_direction,
             ema=ema,
             ema_initialized=ema_initialized,
-            last_action_tick=catfish._last_action_tick,
-            phase_offset=catfish.phase_offset,
-            action_cooldown=config.action_cooldown,
             ma_period=config.ma_period,
             deviation_threshold=config.deviation_threshold,
-            action_probability=action_probability,
+            action_probability=config.action_probability,
         )
 
     def reset(self, initial_balance: float) -> None:
@@ -439,7 +429,6 @@ class CatfishAccountState:
             self.current_direction = 0
         self.ema = 0.0
         self.ema_initialized = False
-        self.last_action_tick = -1000
 
     def get_equity(self, current_price: float) -> float:
         """计算净值
@@ -602,35 +591,21 @@ class CatfishAccountState:
             alpha = 2.0 / (ma_period + 1)
             self.ema = alpha * price + (1 - alpha) * self.ema
 
-    def can_act(self, tick: int) -> bool:
-        """检查是否可以行动（冷却时间检查 + 相位偏移）
-
-        Args:
-            tick: 当前 tick
+    def can_act(self) -> bool:
+        """检查是否可以行动（随机概率判断）
 
         Returns:
             是否可以行动
         """
-        effective_tick = tick - self.phase_offset
-        if effective_tick < 0:
-            return False
-        return tick - self.last_action_tick >= self.action_cooldown
-
-    def record_action(self, tick: int) -> None:
-        """记录行动时间
-
-        Args:
-            tick: 当前 tick
-        """
-        self.last_action_tick = tick
+        return random.random() < self.action_probability
 
     def decide(self, tick: int, price_history: list[float]) -> tuple[bool, int]:
         """决策是否行动以及行动方向
 
         根据鲶鱼类型执行不同的决策逻辑：
-        - TREND_CREATOR: 保持当前方向持续操作
-        - MEAN_REVERSION: 价格偏离 EMA 时反向操作
-        - RANDOM: 随机概率触发，方向也随机
+        - TREND_CREATOR: 随机概率决定是否行动，保持当前方向
+        - MEAN_REVERSION: 价格偏离 EMA 时反向操作，随机概率决定是否行动
+        - RANDOM: 随机概率决定是否行动，方向也随机
 
         Args:
             tick: 当前 tick
@@ -639,12 +614,10 @@ class CatfishAccountState:
         Returns:
             (should_act, direction): 是否行动和方向（1=买，-1=卖）
         """
-        # 检查冷却时间
-        if not self.can_act(tick):
-            return False, 0
-
         if self.catfish_mode == CatfishMode.TREND_CREATOR:
-            # 趋势创造者：返回当前方向
+            # 趋势创造者：随机概率判断是否行动
+            if not self.can_act():
+                return False, 0
             return True, self.current_direction
 
         elif self.catfish_mode == CatfishMode.MEAN_REVERSION:
@@ -671,13 +644,17 @@ class CatfishAccountState:
             if abs(deviation) < self.deviation_threshold:
                 return False, 0
 
+            # 随机概率判断是否行动
+            if not self.can_act():
+                return False, 0
+
             # 逆势操作：价格高于均线则卖出，价格低于均线则买入
             direction = -1 if deviation > 0 else 1
             return True, direction
 
         elif self.catfish_mode == CatfishMode.RANDOM:
-            # 随机交易：随机决定是否触发和方向
-            if random.random() > self.action_probability:
+            # 随机交易：随机概率决定是否行动
+            if not self.can_act():
                 return False, 0
 
             direction = 1 if random.random() < 0.5 else -1

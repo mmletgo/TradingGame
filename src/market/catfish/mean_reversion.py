@@ -33,7 +33,6 @@ class MeanReversionCatfish(CatfishBase):
         self,
         catfish_id: int,
         config: CatfishConfig,
-        phase_offset: int = 0,
         initial_balance: float = 0.0,
         leverage: float = 10.0,
         maintenance_margin_rate: float = 0.05,
@@ -44,13 +43,12 @@ class MeanReversionCatfish(CatfishBase):
         Args:
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
-            phase_offset: 相位偏移（用于错开触发时间）
             initial_balance: 初始余额
             leverage: 杠杆倍数
             maintenance_margin_rate: 维持保证金率
         """
         super().__init__(
-            catfish_id, config, phase_offset,
+            catfish_id, config,
             initial_balance, leverage, maintenance_margin_rate
         )
         self._ema: float = 0.0
@@ -82,7 +80,7 @@ class MeanReversionCatfish(CatfishBase):
         """
         决策是否行动以及行动方向
 
-        计算当前价格与EMA的偏离程度，超过阈值时反向操作。
+        计算当前价格与EMA的偏离程度，超过阈值时反向操作，随机概率决定是否行动。
 
         Args:
             orderbook: 订单簿
@@ -92,10 +90,6 @@ class MeanReversionCatfish(CatfishBase):
         Returns:
             (should_act, direction): 是否行动和方向（1=买，-1=卖）
         """
-        # 检查冷却时间
-        if not self.can_act(tick):
-            return False, 0
-
         # 检查历史数据
         if len(price_history) == 0:
             return False, 0
@@ -119,6 +113,10 @@ class MeanReversionCatfish(CatfishBase):
         # 检查是否超过阈值
         threshold = self.config.deviation_threshold
         if abs(deviation) < threshold:
+            return False, 0
+
+        # 随机概率判断是否行动
+        if not self.can_act():
             return False, 0
 
         # 逆势操作：价格高于均线则卖出，价格低于均线则买入

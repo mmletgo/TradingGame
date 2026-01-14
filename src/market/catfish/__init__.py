@@ -25,7 +25,6 @@ from src.market.catfish.random_trading import RandomTradingCatfish
 def create_catfish(
     catfish_id: int,
     config: CatfishConfig,
-    phase_offset: int = 0,
     initial_balance: float = 0.0,
     leverage: float = 10.0,
     maintenance_margin_rate: float = 0.05,
@@ -38,7 +37,6 @@ def create_catfish(
     Args:
         catfish_id: 鲶鱼ID（应为负数）
         config: 鲶鱼配置
-        phase_offset: 相位偏移（用于错开触发时间）
         initial_balance: 初始余额
         leverage: 杠杆倍数
         maintenance_margin_rate: 维持保证金率
@@ -51,17 +49,17 @@ def create_catfish(
     """
     if config.mode in (CatfishMode.TREND_CREATOR, CatfishMode.TREND_FOLLOWING):
         return TrendCreatorCatfish(
-            catfish_id, config, phase_offset,
+            catfish_id, config,
             initial_balance, leverage, maintenance_margin_rate
         )
     elif config.mode == CatfishMode.MEAN_REVERSION:
         return MeanReversionCatfish(
-            catfish_id, config, phase_offset,
+            catfish_id, config,
             initial_balance, leverage, maintenance_margin_rate
         )
     elif config.mode == CatfishMode.RANDOM:
         return RandomTradingCatfish(
-            catfish_id, config, phase_offset,
+            catfish_id, config,
             initial_balance, leverage, maintenance_margin_rate
         )
     else:
@@ -75,9 +73,9 @@ def create_all_catfish(
     maintenance_margin_rate: float = 0.05,
 ) -> list[CatfishBase]:
     """
-    创建所有三种鲶鱼实例（相位错开）
+    创建所有三种鲶鱼实例
 
-    每种鲶鱼使用不同的相位偏移，确保触发时间错开。
+    三种鲶鱼同时运行，每个 tick 各自独立随机决定是否行动。
 
     Args:
         config: 鲶鱼配置
@@ -88,21 +86,17 @@ def create_all_catfish(
     Returns:
         三种鲶鱼实例的列表
     """
-    cooldown = config.action_cooldown
-    # 三种鲶鱼的相位偏移：0, cooldown/3, cooldown*2/3
-    phase_offsets = [0, cooldown // 3, cooldown * 2 // 3]
-
     catfish_list: list[CatfishBase] = [
         TrendCreatorCatfish(
-            -1, config, phase_offsets[0],
+            -1, config,
             initial_balance, leverage, maintenance_margin_rate
         ),
         MeanReversionCatfish(
-            -2, config, phase_offsets[1],
+            -2, config,
             initial_balance, leverage, maintenance_margin_rate
         ),
         RandomTradingCatfish(
-            -3, config, phase_offsets[2],
+            -3, config,
             initial_balance, leverage, maintenance_margin_rate
         ),
     ]

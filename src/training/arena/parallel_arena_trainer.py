@@ -2540,9 +2540,6 @@ class ParallelArenaTrainer:
                         trade.price, trade.quantity, maker_is_buyer, maker_fee, True
                     )
 
-            # 记录行动时间
-            catfish_state.record_action(tick)
-
     def _calculate_catfish_quantity(self, orderbook: Any, direction: int) -> int:
         """计算鲶鱼下单数量（吃掉前3档）
 

@@ -5,6 +5,7 @@
 用于在训练中引入外部扰动，增加市场动态性。
 """
 
+import random
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
@@ -29,7 +30,6 @@ class CatfishBase(ABC):
         catfish_id: 鲶鱼ID（使用负数避免与Agent冲突）
         config: 鲶鱼配置
         _next_order_id: 下一个订单ID（负数空间）
-        _last_action_tick: 上次行动的tick
         account: 鲶鱼账户
         is_liquidated: 是否被强平
     """
@@ -38,7 +38,6 @@ class CatfishBase(ABC):
         self,
         catfish_id: int,
         config: CatfishConfig,
-        phase_offset: int = 0,
         initial_balance: float = 0.0,
         leverage: float = 10.0,
         maintenance_margin_rate: float = 0.05,
@@ -49,7 +48,6 @@ class CatfishBase(ABC):
         Args:
             catfish_id: 鲶鱼ID（应为负数）
             config: 鲶鱼配置
-            phase_offset: 相位偏移（用于错开多个鲶鱼的触发时间）
             initial_balance: 初始余额
             leverage: 杠杆倍数
             maintenance_margin_rate: 维持保证金率
@@ -59,11 +57,9 @@ class CatfishBase(ABC):
 
         self.catfish_id: int = catfish_id
         self.config: CatfishConfig = config
-        self.phase_offset: int = phase_offset
         self._next_order_id: int = catfish_id * 1_000_000  # 负数空间的订单ID
-        self._last_action_tick: int = -1000  # 初始值设为很早，确保首次可以行动
 
-        # 新增：创建鲶鱼账户
+        # 创建鲶鱼账户
         self.account: CatfishAccount = CatfishAccount(
             catfish_id=catfish_id,
             initial_balance=initial_balance,
@@ -71,7 +67,7 @@ class CatfishBase(ABC):
             maintenance_margin_rate=maintenance_margin_rate,
         )
 
-        # 新增：是否被强平
+        # 是否被强平
         self.is_liquidated: bool = False
 
     @abstractmethod
@@ -174,33 +170,16 @@ class CatfishBase(ABC):
         self._next_order_id -= 1
         return order_id
 
-    def can_act(self, tick: int) -> bool:
+    def can_act(self) -> bool:
         """
-        检查是否可以行动（冷却时间检查 + 相位偏移）
-
-        Args:
-            tick: 当前tick
+        检查是否可以行动（随机概率判断）
 
         Returns:
             是否可以行动
         """
-        # 考虑相位偏移：(tick - phase_offset) 必须是冷却周期的整数倍
-        effective_tick = tick - self.phase_offset
-        if effective_tick < 0:
-            return False
-        return tick - self._last_action_tick >= self.config.action_cooldown
-
-    def record_action(self, tick: int) -> None:
-        """
-        记录行动时间
-
-        Args:
-            tick: 当前tick
-        """
-        self._last_action_tick = tick
+        return random.random() < self.config.action_probability
 
     def reset(self) -> None:
         """重置鲶鱼状态（Episode 开始时调用）"""
         self.account.reset()
         self.is_liquidated = False
-        self._last_action_tick = -1000
