@@ -46,10 +46,11 @@ HEADER_SIZE = 64
 # 计算各数据区域大小
 LIQUIDATED_SIZE = MAX_LIQUIDATED * 3 * 8  # int64[MAX_LIQUIDATED × 3]
 DECISIONS_SIZE = MAX_DECISIONS * 5 * 8    # float64[MAX_DECISIONS × 5]
+MM_AGENT_IDS_SIZE = MAX_MM_AGENTS * 8     # int64[MAX_MM_AGENTS] - 存储做市商 agent_id
 MM_DECISIONS_SIZE = MAX_MM_AGENTS * MAX_ORDERS_PER_MM * 2 * 2 * 8  # float64[..., 4]
 
 # Command Region 总大小
-COMMAND_REGION_SIZE = HEADER_SIZE + LIQUIDATED_SIZE + DECISIONS_SIZE + MM_DECISIONS_SIZE
+COMMAND_REGION_SIZE = HEADER_SIZE + LIQUIDATED_SIZE + DECISIONS_SIZE + MM_AGENT_IDS_SIZE + MM_DECISIONS_SIZE
 
 # Result Region 各区域大小
 DEPTH_SIZE = 100 * 2 * 8  # float64[100, 2]
@@ -106,6 +107,7 @@ class ArenaCommandView:
         - padding: 44 bytes
     - liquidated_data: int64[MAX_LIQUIDATED × 3]
     - decisions_data: float64[MAX_DECISIONS × 5]
+    - mm_agent_ids: int64[MAX_MM_AGENTS] - 做市商 agent_id 列表
     - mm_decisions_data: float64[MAX_MM_AGENTS × MAX_ORDERS_PER_MM × 2 × 2]
 
     Attributes:
@@ -114,12 +116,14 @@ class ArenaCommandView:
         _header: Header 区域的 numpy 视图
         _liquidated: 强平数据的 numpy 视图
         _decisions: 决策数据的 numpy 视图
+        _mm_agent_ids: 做市商 agent_id 的 numpy 视图
         _mm_decisions: 做市商决策的 numpy 视图
     """
 
     _header: NDArray[np.uint32]
     _liquidated: NDArray[np.int64]
     _decisions: NDArray[np.float64]
+    _mm_agent_ids: NDArray[np.int64]
     _mm_decisions: NDArray[np.float64]
 
     def __init__(self, buffer: memoryview, offset: int) -> None:
@@ -136,7 +140,8 @@ class ArenaCommandView:
         header_offset = offset
         liquidated_offset = header_offset + HEADER_SIZE
         decisions_offset = liquidated_offset + LIQUIDATED_SIZE
-        mm_decisions_offset = decisions_offset + DECISIONS_SIZE
+        mm_agent_ids_offset = decisions_offset + DECISIONS_SIZE
+        mm_decisions_offset = mm_agent_ids_offset + MM_AGENT_IDS_SIZE
 
         # 创建 numpy 视图（零拷贝）
         self._header = np.ndarray(
@@ -157,6 +162,12 @@ class ArenaCommandView:
             buffer=buffer,
             offset=decisions_offset,
         )
+        self._mm_agent_ids = np.ndarray(
+            shape=(MAX_MM_AGENTS,),
+            dtype=np.int64,
+            buffer=buffer,
+            offset=mm_agent_ids_offset,
+        )
         self._mm_decisions = np.ndarray(
             shape=(MAX_MM_AGENTS, MAX_ORDERS_PER_MM * 2, 2),
             dtype=np.float64,
@@ -173,6 +184,7 @@ class ArenaCommandView:
         self._header = None  # type: ignore[assignment]
         self._liquidated = None  # type: ignore[assignment]
         self._decisions = None  # type: ignore[assignment]
+        self._mm_agent_ids = None  # type: ignore[assignment]
         self._mm_decisions = None  # type: ignore[assignment]
 
     @property
@@ -272,10 +284,9 @@ class ArenaCommandView:
 
         for i in range(count):
             agent_id, bid_orders, ask_orders = mm_decisions[i]
-            # 存储 agent_id 在第一个订单的第一个元素（特殊标记）
-            # 使用额外的 header 存储 agent_id
-            # 这里简化处理：将 agent_id 存储在 _header[5 + i] 位置（假设有足够空间）
-            # 实际上需要单独的 agent_id 数组，这里用 mm_decisions 的第一列第一行存储
+
+            # 存储 agent_id 到专用数组
+            self._mm_agent_ids[i] = agent_id
 
             # 存储买单
             for j, order in enumerate(bid_orders[:MAX_ORDERS_PER_MM]):
@@ -328,9 +339,8 @@ class ArenaCommandView:
         result: list[tuple[int, list[dict[str, float]], list[dict[str, float]]]] = []
 
         for i in range(count):
-            # agent_id 需要从别处获取（这里简化处理，假设调用方知道映射）
-            # 实际使用时需要额外的 agent_id 数组
-            agent_id = i  # 占位符，实际需要额外存储
+            # 从专用数组读取 agent_id
+            agent_id = int(self._mm_agent_ids[i])
 
             bid_orders: list[dict[str, float]] = []
             ask_orders: list[dict[str, float]] = []

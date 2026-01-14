@@ -91,10 +91,10 @@ def episode_callback(stats: dict[str, Any]) -> None:
 
     current_time = datetime.now().strftime("%H:%M:%S")
 
-    # 格式化各竞技场的 High/Low 成组显示
+    # 格式化各竞技场的 High/Low 成组显示（2 位小数）
     arena_price_strs: list[str] = []
     for i, (high, low) in enumerate(zip(arena_high_prices, arena_low_prices)):
-        arena_price_strs.append(f"A{i}:({int(high)},{int(low)})")
+        arena_price_strs.append(f"A{i}:({high:.2f},{low:.2f})")
 
     prices_str = " ".join(arena_price_strs)
     print(f"  Episode {episode:4d} | {current_time} | {prices_str}")
