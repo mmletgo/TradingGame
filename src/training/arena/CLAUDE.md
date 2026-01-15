@@ -197,11 +197,27 @@ class ExecuteCommand:
     data: Any
 
 @dataclass
+class CatfishDecision:
+    """鲶鱼决策数据"""
+    catfish_id: int        # 鲶鱼 ID（负数）
+    direction: int         # 1=买, -1=卖, 0=不行动
+    quantity_ticks: int    # 吃多少档（默认3）
+
+@dataclass
+class CatfishTradeResult:
+    """鲶鱼成交结果"""
+    catfish_id: int
+    trades: list[tuple]    # 成交列表，格式同 ArenaExecuteResult.trades
+    total_quantity: int    # 总成交数量
+    avg_price: float       # 平均成交价格
+
+@dataclass
 class ArenaExecuteData:
     """execute 命令的数据"""
     liquidated_agents: list[tuple[int, int, bool]]  # (agent_id, position_qty, is_mm)
     decisions: list[tuple[int, int, int, float, int]]  # (agent_id, action_int, side_int, price, quantity)
     mm_decisions: list[tuple[int, list, list]]  # (agent_id, bid_orders, ask_orders)
+    catfish_decisions: list[CatfishDecision]  # 鲶鱼决策列表
 
 @dataclass
 class ArenaExecuteResult:
@@ -214,6 +230,7 @@ class ArenaExecuteResult:
     trades: list[tuple]  # (trade_id, price, qty, buyer_id, seller_id, buyer_fee, seller_fee, is_buyer_taker)
     pending_updates: dict[int, int | None]  # agent_id -> pending_order_id
     mm_order_updates: dict[int, tuple[list, list]]  # agent_id -> (bid_ids, ask_ids)
+    catfish_results: list[CatfishTradeResult]  # 鲶鱼成交结果列表
     error: str | None
 ```
 
@@ -222,11 +239,22 @@ class ArenaExecuteResult:
 | 方法 | 描述 |
 |------|------|
 | `start()` | 启动所有 Worker 进程 |
-| `reset_all(initial_price, fee_rates)` | 重置所有竞技场的订单簿 |
+| `reset_all(initial_price, fee_rates, catfish_ids)` | 重置所有竞技场的订单簿，可传入 catfish_ids 注册鲶鱼费率（0, 0） |
 | `init_market_makers(mm_init_orders)` | 初始化做市商挂单（Episode 开始时调用） |
-| `execute_all(arena_commands)` | 执行所有竞技场的决策（每个 tick 调用） |
+| `execute_all(arena_commands)` | 执行所有竞技场的决策（每个 tick 调用），支持鲶鱼决策 |
 | `get_all_depths()` | 获取所有竞技场的订单簿深度 |
 | `shutdown()` | 关闭所有 Worker |
+
+**鲶鱼处理流程：**
+
+Worker 端的 `_handle_execute` 函数按以下顺序处理：
+1. **鲶鱼处理**（`_handle_catfish`）：在所有 Agent 之前执行
+   - 遍历 `catfish_decisions`
+   - 对于 direction != 0 的决策：获取订单簿深度，累加指定档位的数量
+   - 提交市价单，收集成交结果到 `CatfishTradeResult`
+2. **强平处理**：撤单 + 市价平仓
+3. **做市商执行**：撤旧单 → 挂新单
+4. **非做市商执行**：限价单/市价单/撤单
 
 **Worker 维护的状态：**
 - `MatchingEngine` / `OrderBook`: 订单簿和撮合引擎
@@ -520,9 +548,17 @@ else:
 
 **开关控制：**
 - `_use_execute_workers: bool = True`：默认启用
-- 当鲶鱼启用时自动回退到串行执行（鲶鱼需要在 Agent 之前行动，与 Worker 池不兼容）
+- Worker 池模式现已支持鲶鱼决策处理
+
+**鲶鱼决策计算（_compute_catfish_decisions）：**
+主进程端计算鲶鱼决策，转换为 `CatfishDecision` 格式：
+1. 遍历竞技场中的所有鲶鱼状态
+2. 对于未被强平的鲶鱼，调用 `catfish_state.decide(tick, price_history)`
+3. 如果 `should_act=True` 且 `direction != 0`，创建 `CatfishDecision`
+4. `quantity_ticks` 默认为 3（吃掉前3档）
 
 **鲶鱼行动流程（_catfish_action_for_arena）：**
+串行执行模式下直接执行鲶鱼行动：
 1. 调用 `CatfishAccountState.decide(tick, price_history)` 获取决策
 2. 计算下单数量（吃掉前3档）
 3. 创建市价单并执行
@@ -551,7 +587,8 @@ else:
 - `_cancel_agent_orders_in_arena(arena, agent_state)` - 撤销 Agent 在竞技场中的挂单
 - `_serial_inference_for_arena(arena_idx, market_state, adapters)` - 串行推理回退方案，同步 AgentAccountState 到 Agent.account 后推理
 - `_sync_state_to_agent(agent, state)` - 临时同步 AgentAccountState 到 Agent.account（用于回退推理路径）
-- `_catfish_action_for_arena(arena)` - 鲶鱼在竞技场中的行动，实现三种鲶鱼的决策和执行逻辑
+- `_compute_catfish_decisions(arena)` - 计算鲶鱼决策，返回 `list[CatfishDecision]`（用于 Worker 池模式）
+- `_catfish_action_for_arena(arena)` - 鲶鱼在竞技场中的行动，实现三种鲶鱼的决策和执行逻辑（用于串行模式）
 - `_calculate_catfish_quantity(orderbook, direction)` - 计算鲶鱼下单数量（吃掉前3档）
 - `_build_decisions_array_from_cache(arena_idx)` - 从缓存的推理结果构建 decisions_array（NumPy 数组格式）
 

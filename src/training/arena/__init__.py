@@ -14,6 +14,8 @@ from .execute_worker import (
     ArenaExecuteResult,
     ArenaExecuteWorkerPool,
     ArenaExecuteWorkerPoolShm,
+    CatfishDecision,
+    CatfishTradeResult,
     ExecuteCommand,
     arena_execute_worker_shm,
 )
@@ -29,6 +31,8 @@ __all__ = [
     "ArenaExecuteWorkerPoolShm",
     "ArenaState",
     "CatfishAccountState",
+    "CatfishDecision",
+    "CatfishTradeResult",
     "ExecuteCommand",
     "FitnessAggregator",
     "MultiArenaConfig",
