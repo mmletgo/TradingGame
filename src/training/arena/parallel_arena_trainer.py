@@ -2213,7 +2213,7 @@ class ParallelArenaTrainer:
         mid_price: float,
         tick_size: float,
     ) -> tuple[ActionType, dict[str, Any]]:
-        """解析做市商的神经网络输出
+        """解析做市商的神经网络输出（优化版本：内联函数调用）
 
         神经网络输出结构（共 41 个值）：
         - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到1-100 ticks）
@@ -2222,21 +2222,16 @@ class ParallelArenaTrainer:
         - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
         - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
         """
-        from src.bio.agents.base import fast_clip, fast_round_price
-
-        # 正确的索引：与 MarketMakerAgent.decide() 保持一致
+        # 提取输出切片
         bid_price_offsets = output[0:10]
         bid_qty_weights = output[10:20]
         ask_price_offsets = output[20:30]
         ask_qty_weights = output[30:40]
         total_ratio_raw = output[40] if len(output) > 40 else 0.0
 
-        bid_raw_ratios = np.maximum(
-            0.0, (np.clip(bid_qty_weights, -1.0, 1.0) + 1.0) * 0.5
-        )
-        ask_raw_ratios = np.maximum(
-            0.0, (np.clip(ask_qty_weights, -1.0, 1.0) + 1.0) * 0.5
-        )
+        # 计算权重比例
+        bid_raw_ratios = np.maximum(0.0, (np.clip(bid_qty_weights, -1.0, 1.0) + 1.0) * 0.5)
+        ask_raw_ratios = np.maximum(0.0, (np.clip(ask_qty_weights, -1.0, 1.0) + 1.0) * 0.5)
 
         total_raw_ratio = float(bid_raw_ratios.sum() + ask_raw_ratios.sum())
         if total_raw_ratio > 0:
@@ -2246,46 +2241,70 @@ class ParallelArenaTrainer:
             bid_ratios = np.zeros(10, dtype=np.float64)
             ask_ratios = np.zeros(10, dtype=np.float64)
 
+        # 应用仓位倾斜
         skew_factor = calculate_skew_factor_from_state(agent_state, mid_price)
-        bid_ratios, ask_ratios = self._apply_position_skew(
-            bid_ratios, ask_ratios, skew_factor
-        )
+        bid_ratios, ask_ratios = self._apply_position_skew(bid_ratios, ask_ratios, skew_factor)
 
-        # 总下单比例：映射到 [0.01, 1]，与 MarketMakerAgent.decide() 一致
-        total_ratio = 0.01 + (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5 * 0.99
+        # 总下单比例（内联 fast_clip）
+        total_ratio_clipped = max(-1.0, min(1.0, total_ratio_raw))
+        total_ratio = 0.01 + (total_ratio_clipped + 1) * 0.5 * 0.99
         bid_ratios = bid_ratios * total_ratio
         ask_ratios = ask_ratios * total_ratio
+
+        # 预计算常量，减少循环内的计算
+        equity = agent_state.get_equity(mid_price)
+        if equity <= 0:
+            return ActionType.HOLD, {"bid_orders": [], "ask_orders": []}
+
+        max_pos_value = equity * agent_state.leverage
+        current_pos = agent_state.position_quantity
+        current_pos_value = abs(current_pos) * mid_price
+
+        # 预计算买卖方向的可用仓位价值
+        if current_pos >= 0:
+            avail_buy = max(0.0, max_pos_value - current_pos_value)
+        else:
+            avail_buy = current_pos_value + max_pos_value
+
+        if current_pos <= 0:
+            avail_sell = max(0.0, max_pos_value - current_pos_value)
+        else:
+            avail_sell = current_pos_value + max_pos_value
 
         bid_orders: list[dict[str, float]] = []
         ask_orders: list[dict[str, float]] = []
 
-        # 循环10次，处理10个买单和10个卖单
+        # 循环10次，处理10个买单和10个卖单（内联所有函数调用）
         for i in range(10):
-            offset = fast_clip(bid_price_offsets[i], -1.0, 1.0)
-            ticks = 1 + (offset + 1) * 49.5
-            price = mid_price - ticks * tick_size
-            price = fast_round_price(price, tick_size)
+            # 买单处理
+            ratio_bid = float(bid_ratios[i])
+            if ratio_bid > 0:
+                # 内联 fast_clip
+                offset_bid = float(bid_price_offsets[i])
+                offset_bid = max(-1.0, min(1.0, offset_bid))
+                ticks_bid = 1 + (offset_bid + 1) * 49.5
+                price_bid = mid_price - ticks_bid * tick_size
+                # 内联 fast_round_price
+                price_bid = max(tick_size, round(price_bid / tick_size) * tick_size)
+                # 内联数量计算
+                qty_bid = int(avail_buy * ratio_bid / price_bid)
+                if qty_bid > 0:
+                    bid_orders.append({"price": price_bid, "quantity": float(min(qty_bid, 100_000_000))})
 
-            ratio = float(bid_ratios[i])
-            if ratio > 0:
-                qty = calculate_order_quantity_from_state(
-                    agent_state, price, ratio, is_buy=True, ref_price=mid_price
-                )
-                if qty > 0:
-                    bid_orders.append({"price": price, "quantity": float(qty)})
-
-            offset = fast_clip(ask_price_offsets[i], -1.0, 1.0)
-            ticks = 1 + (offset + 1) * 49.5
-            price = mid_price + ticks * tick_size
-            price = fast_round_price(price, tick_size)
-
-            ratio = float(ask_ratios[i])
-            if ratio > 0:
-                qty = calculate_order_quantity_from_state(
-                    agent_state, price, ratio, is_buy=False, ref_price=mid_price
-                )
-                if qty > 0:
-                    ask_orders.append({"price": price, "quantity": float(qty)})
+            # 卖单处理
+            ratio_ask = float(ask_ratios[i])
+            if ratio_ask > 0:
+                # 内联 fast_clip
+                offset_ask = float(ask_price_offsets[i])
+                offset_ask = max(-1.0, min(1.0, offset_ask))
+                ticks_ask = 1 + (offset_ask + 1) * 49.5
+                price_ask = mid_price + ticks_ask * tick_size
+                # 内联 fast_round_price
+                price_ask = max(tick_size, round(price_ask / tick_size) * tick_size)
+                # 内联数量计算
+                qty_ask = int(avail_sell * ratio_ask / price_ask)
+                if qty_ask > 0:
+                    ask_orders.append({"price": price_ask, "quantity": float(min(qty_ask, 100_000_000))})
 
         return ActionType.HOLD, {"bid_orders": bid_orders, "ask_orders": ask_orders}
 
