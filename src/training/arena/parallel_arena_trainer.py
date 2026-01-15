@@ -1475,8 +1475,12 @@ class ParallelArenaTrainer:
                 if not state.is_liquidated
             ]
 
-            # 随机打乱执行顺序
-            random.shuffle(active_states)
+            # 随机打乱执行顺序（使用 NumPy 优化）
+            if active_states:
+                n = len(active_states)
+                indices = np.arange(n, dtype=np.int32)
+                np.random.shuffle(indices)
+                active_states = [active_states[i] for i in indices]
             arena_active_agents.append(active_states)
 
         # 阶段2: 批量推理（并行）- 合并所有竞技场的推理（使用 direct 方法）
