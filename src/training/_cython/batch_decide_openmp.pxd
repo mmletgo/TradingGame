@@ -50,6 +50,7 @@ cdef struct BatchAgentState:
     double* unrealized_pnl
     double* margin_ratio
     double* available_margin
+    double* leverage            # 杠杆倍数（用于计算 quantity）
 
     # 挂单信息 (num_agents,)
     int* has_pending_order
@@ -187,6 +188,7 @@ cdef void batch_forward_with_indices_nogil(
 cdef void batch_parse_retail_nogil(
     double[:, :] nn_outputs,
     DecisionResult* results,
+    BatchAgentState* agents,
     double mid_price,
     double tick_size,
     int num_agents,
@@ -206,6 +208,7 @@ cdef void batch_parse_market_maker_nogil(
 cdef void batch_parse_retail_multi_market_nogil(
     double[:, :] nn_outputs,
     DecisionResult* results,
+    BatchAgentState* agents,
     MarketStateData** markets,
     int* market_indices,
     int num_agents,

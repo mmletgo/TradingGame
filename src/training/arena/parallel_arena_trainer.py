@@ -1209,10 +1209,8 @@ class ParallelArenaTrainer:
     def _build_decisions_array_from_cache(self, arena_idx: int) -> np.ndarray | None:
         """从缓存的推理结果构建 decisions_array
 
-        将各 AgentType 的缓存数组合并，添加 agent_id 列，
-        并过滤掉 HOLD 动作（action_type == 0）。
-
-        注意：Cython 返回的第 4 列是 quantity_ratio (0-1)，需要转换为实际 quantity。
+        将各 AgentType 的缓存数组合并，添加 agent_id 列。
+        Cython 已经返回实际 quantity，无需在此转换。
 
         Args:
             arena_idx: 竞技场索引
@@ -1223,17 +1221,6 @@ class ParallelArenaTrainer:
         """
         if not self._last_inference_arrays:
             return None
-
-        # 获取竞技场状态和 mid_price（优先使用平滑价，避免主进程 orderbook 不同步）
-        arena = self.arena_states[arena_idx]
-        mid_price = arena.smooth_mid_price
-        if mid_price <= 0:
-            mid_price = arena.matching_engine.orderbook.get_mid_price()
-            if mid_price is None:
-                mid_price = arena.matching_engine.orderbook.last_price
-        if mid_price <= 0:
-            mid_price = 100.0
-        agent_states = arena.agent_states
 
         # 收集所有非做市商类型的数组
         arrays_to_concat: list[np.ndarray] = []
@@ -1246,56 +1233,13 @@ class ParallelArenaTrainer:
             if len(decisions) == 0:
                 continue
 
-            # 过滤掉 HOLD 动作（action_type == 0）
-            # decisions 的列顺序是 [action_type, side, price, quantity_ratio]
-            non_hold_mask = decisions[:, 0] != 0
-            if not np.any(non_hold_mask):
-                continue
-
-            filtered_agent_ids = agent_ids[non_hold_mask]
-            filtered_decisions = decisions[non_hold_mask].copy()  # 复制以避免修改原数组
-
-            # 将 quantity_ratio (第 4 列，索引 3) 转换为实际 quantity
-            for i in range(len(filtered_agent_ids)):
-                agent_id = int(filtered_agent_ids[i])
-                action_type_int = int(filtered_decisions[i, 0])
-                price = float(filtered_decisions[i, 2])
-                quantity_ratio = float(filtered_decisions[i, 3])
-
-                state = agent_states.get(agent_id)
-                if state is None:
-                    filtered_decisions[i, 3] = 0
-                    continue
-
-                # 根据 action_type 判断是买还是卖
-                # PLACE_BID=1, MARKET_BUY=4 -> is_buy=True
-                # PLACE_ASK=2, MARKET_SELL=5 -> is_buy=False
-                is_buy = action_type_int in (1, 4)
-
-                # MARKET_SELL 特殊处理：如果有多仓，卖出仓位的比例
-                if action_type_int == 5 and state.position_quantity > 0:
-                    quantity = max(1, int(state.position_quantity * quantity_ratio))
-                else:
-                    price_for_qty = (
-                        mid_price if action_type_int in (1, 2, 4, 5) else price
-                    )
-                    if price_for_qty <= 0:
-                        price_for_qty = mid_price
-                    quantity = calculate_order_quantity_from_state(
-                        state,
-                        price_for_qty,
-                        quantity_ratio,
-                        is_buy=is_buy,
-                        ref_price=mid_price,
-                    )
-
-                filtered_decisions[i, 3] = quantity
-
+            # Cython 已经返回实际 quantity，直接使用（已过滤 HOLD）
+            # decisions 的列顺序是 [action_type, side, price, quantity]
             # 构建带 agent_id 的数组: [agent_id, action_type, side, price, quantity]
             full_array = np.column_stack(
                 [
-                    filtered_agent_ids.reshape(-1, 1),
-                    filtered_decisions,
+                    agent_ids.reshape(-1, 1),
+                    decisions,
                 ]
             )
             arrays_to_concat.append(full_array)
@@ -2071,29 +2015,33 @@ class ParallelArenaTrainer:
                     )
 
                     # 缓存过滤后的数组结果供 _execute_with_worker_pool 使用
+                    # Cython 已返回实际 quantity，无需在此转换
                     filtered_decisions = decisions_array[:num_agents][non_hold_mask]
                     self._last_inference_arrays[agent_type][arena_idx] = (
                         agent_ids,
                         filtered_decisions.copy(),
                     )
 
-                    # 同时填充 list 格式结果（用于兼容性）
+                    # P0 优化：如果使用 Worker pool，跳过填充 list 格式结果
+                    # Worker pool 直接使用 _last_inference_arrays 中的数组
+                    if self._execute_worker_pool is not None:
+                        continue
+
+                    # 串行执行路径：填充 list 格式结果
                     # 只处理非 HOLD 动作
                     for i in non_hold_indices:
                         state = arena_states_list[i]
                         try:
                             action_type_int = int(decisions_array[i, 0])
-                            side_int = int(decisions_array[i, 1])
                             price = float(decisions_array[i, 2])
-                            # 注意：Cython 返回的是 quantity_ratio（0-1浮点数），不是实际数量
-                            quantity_ratio = float(decisions_array[i, 3])
+                            # Cython 已返回实际 quantity
+                            quantity = float(decisions_array[i, 3])
 
-                            action, params = self._convert_retail_result(
+                            action, params = self._convert_retail_result_direct(
                                 state,
                                 action_type_int,
-                                side_int,
                                 price,
-                                quantity_ratio,
+                                quantity,
                                 mid_price,
                             )
                             results[arena_idx].append((state, action, params))
@@ -2369,6 +2317,8 @@ class ParallelArenaTrainer:
 
         注意：Cython 返回的 quantity 实际上是 quantity_ratio（0-1浮点数比例），
         需要调用 calculate_order_quantity_from_state 转换为实际订单数量。
+
+        警告：此方法已不推荐使用，新代码应使用 _convert_retail_result_direct。
         """
         params: dict[str, Any] = {}
 
@@ -2409,6 +2359,45 @@ class ParallelArenaTrainer:
                     agent_state, mid_price, quantity_ratio, is_buy=False
                 )
                 params["quantity"] = actual_qty
+        else:
+            action = ActionType.HOLD
+
+        return action, params
+
+    def _convert_retail_result_direct(
+        self,
+        agent_state: AgentAccountState,
+        action_type_int: int,
+        price: float,
+        quantity: float,
+        mid_price: float,
+    ) -> tuple[ActionType, dict[str, Any]]:
+        """将 Cython 返回的散户/高级散户/庄家结果转换为 ActionType 和 params
+
+        P0+P2 优化版本：Cython 已直接返回实际 quantity，无需转换。
+        此方法用于串行执行路径。
+        """
+        params: dict[str, Any] = {}
+        quantity_int = int(quantity)
+
+        if action_type_int == 0:
+            action = ActionType.HOLD
+        elif action_type_int == 1:
+            action = ActionType.PLACE_BID
+            params["price"] = price
+            params["quantity"] = quantity_int
+        elif action_type_int == 2:
+            action = ActionType.PLACE_ASK
+            params["price"] = price
+            params["quantity"] = quantity_int
+        elif action_type_int == 3:
+            action = ActionType.CANCEL
+        elif action_type_int == 4:
+            action = ActionType.MARKET_BUY
+            params["quantity"] = quantity_int
+        elif action_type_int == 5:
+            action = ActionType.MARKET_SELL
+            params["quantity"] = quantity_int
         else:
             action = ActionType.HOLD
 

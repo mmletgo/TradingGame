@@ -228,6 +228,7 @@ cdef BatchAgentState* alloc_batch_agent_state(int num_agents) noexcept:
     data.unrealized_pnl = <double*>calloc(num_agents, sizeof(double))
     data.margin_ratio = <double*>calloc(num_agents, sizeof(double))
     data.available_margin = <double*>calloc(num_agents, sizeof(double))
+    data.leverage = <double*>calloc(num_agents, sizeof(double))
 
     # 挂单信息
     data.has_pending_order = <int*>calloc(num_agents, sizeof(int))
@@ -239,6 +240,7 @@ cdef BatchAgentState* alloc_batch_agent_state(int num_agents) noexcept:
     if (data.balance == NULL or data.position_quantity == NULL or
         data.position_avg_price == NULL or data.unrealized_pnl == NULL or
         data.margin_ratio == NULL or data.available_margin == NULL or
+        data.leverage == NULL or
         data.has_pending_order == NULL or data.pending_side == NULL or
         data.pending_price == NULL or data.pending_quantity == NULL):
         free_batch_agent_state(data)
@@ -264,6 +266,8 @@ cdef void free_batch_agent_state(BatchAgentState* data) noexcept:
         free(data.margin_ratio)
     if data.available_margin != NULL:
         free(data.available_margin)
+    if data.leverage != NULL:
+        free(data.leverage)
     if data.has_pending_order != NULL:
         free(data.has_pending_order)
     if data.pending_side != NULL:
@@ -511,6 +515,8 @@ cdef void _extract_agents_to_batch(list agents, BatchAgentState* batch_data, dou
         batch_data.margin_ratio[i] = account.get_margin_ratio(mid_price)
         # available_margin 不存在于 Account 类，使用 get_equity 代替
         batch_data.available_margin[i] = account.get_equity(mid_price)
+        # 杠杆倍数（用于计算 quantity）
+        batch_data.leverage[i] = account.leverage
 
         # 挂单信息（简化处理）
         batch_data.has_pending_order[i] = 0
@@ -1048,10 +1054,11 @@ cdef void _parse_retail_single(
     int agent_idx,
     double* nn_output,
     DecisionResult* result,
+    BatchAgentState* agents,
     double mid_price,
     double tick_size,
 ) noexcept nogil:
-    """解析散户/高级散户/庄家的神经网络输出
+    """解析散户/高级散户/庄家的神经网络输出，并计算实际订单数量
 
     输出结构（8个值）：
     - [0-5]: 动作类型得分（6种动作）
@@ -1066,12 +1073,22 @@ cdef void _parse_retail_single(
     - 4: MARKET_BUY
     - 5: MARKET_SELL
     """
+    # 订单数量上限
+    cdef double MAX_ORDER_QUANTITY = 100000000.0
+
     # 所有变量声明必须在函数开头
     cdef int action_idx
     cdef double price_offset_norm
     cdef double quantity_ratio_norm
     cdef double quantity_ratio
     cdef double price_offset_ticks
+    cdef double order_price
+
+    # 内联 quantity 计算所需变量
+    cdef double equity, leverage, max_pos_value
+    cdef double current_pos, current_pos_value, available_pos_value
+    cdef double calc_price, raw_quantity
+    cdef int quantity
 
     # 统一使用6种动作
     action_idx = argmax(nn_output, 0, 6)
@@ -1081,34 +1098,131 @@ cdef void _parse_retail_single(
     quantity_ratio_norm = clip(nn_output[7], -1.0, 1.0)
     quantity_ratio = (quantity_ratio_norm + 1.0) * 0.5
 
-    # 设置结果
+    # 设置结果默认值
     result.action_type = action_idx
     result.side = 0
     result.price = 0.0
-    result.quantity = quantity_ratio  # 存储比例，由调用方转换为实际数量
+    result.quantity = 0.0
+
+    # 提取 agent 账户数据
+    equity = agents.available_margin[agent_idx]  # 实际是 equity
+    leverage = agents.leverage[agent_idx]
+    current_pos = agents.position_quantity[agent_idx]
 
     if action_idx == ACTION_PLACE_BID:
         # 买单
         result.side = 1  # BUY
         price_offset_ticks = price_offset_norm * 100.0
-        result.price = round_price(mid_price + price_offset_ticks * tick_size, tick_size)
+        order_price = round_price(mid_price + price_offset_ticks * tick_size, tick_size)
+        result.price = order_price
+
+        # 内联 quantity 计算
+        calc_price = order_price if order_price > 0 else mid_price
+        if equity > 0 and calc_price > 0 and leverage > 0:
+            max_pos_value = equity * leverage
+            current_pos_value = fabs(current_pos) * calc_price
+            # 买入
+            if current_pos >= 0:
+                # 多头或空仓，买入是同向加仓
+                available_pos_value = max_pos_value - current_pos_value
+                if available_pos_value < 0:
+                    available_pos_value = 0
+            else:
+                # 空头，买入是反向平仓+可能开多仓
+                available_pos_value = current_pos_value + max_pos_value
+            raw_quantity = (available_pos_value * quantity_ratio) / calc_price
+            if raw_quantity >= 1.0:
+                quantity = <int>raw_quantity
+                if quantity > <int>MAX_ORDER_QUANTITY:
+                    quantity = <int>MAX_ORDER_QUANTITY
+                result.quantity = <double>quantity
 
     elif action_idx == ACTION_PLACE_ASK:
         # 卖单
         result.side = 2  # SELL
         price_offset_ticks = price_offset_norm * 100.0
-        result.price = round_price(mid_price + price_offset_ticks * tick_size, tick_size)
+        order_price = round_price(mid_price + price_offset_ticks * tick_size, tick_size)
+        result.price = order_price
+
+        # 内联 quantity 计算
+        calc_price = order_price if order_price > 0 else mid_price
+        if equity > 0 and calc_price > 0 and leverage > 0:
+            max_pos_value = equity * leverage
+            current_pos_value = fabs(current_pos) * calc_price
+            # 卖出
+            if current_pos <= 0:
+                # 空头或空仓，卖出是同向加仓
+                available_pos_value = max_pos_value - current_pos_value
+                if available_pos_value < 0:
+                    available_pos_value = 0
+            else:
+                # 多头，卖出是反向平仓+可能开空仓
+                available_pos_value = current_pos_value + max_pos_value
+            raw_quantity = (available_pos_value * quantity_ratio) / calc_price
+            if raw_quantity >= 1.0:
+                quantity = <int>raw_quantity
+                if quantity > <int>MAX_ORDER_QUANTITY:
+                    quantity = <int>MAX_ORDER_QUANTITY
+                result.quantity = <double>quantity
 
     elif action_idx == ACTION_MARKET_BUY:
         result.side = 1  # BUY
 
+        # 内联 quantity 计算（使用 mid_price）
+        calc_price = mid_price if mid_price > 0 else 100.0
+        if equity > 0 and leverage > 0:
+            max_pos_value = equity * leverage
+            current_pos_value = fabs(current_pos) * calc_price
+            # 买入
+            if current_pos >= 0:
+                available_pos_value = max_pos_value - current_pos_value
+                if available_pos_value < 0:
+                    available_pos_value = 0
+            else:
+                available_pos_value = current_pos_value + max_pos_value
+            raw_quantity = (available_pos_value * quantity_ratio) / calc_price
+            if raw_quantity >= 1.0:
+                quantity = <int>raw_quantity
+                if quantity > <int>MAX_ORDER_QUANTITY:
+                    quantity = <int>MAX_ORDER_QUANTITY
+                result.quantity = <double>quantity
+
     elif action_idx == ACTION_MARKET_SELL:
         result.side = 2  # SELL
+
+        # 特殊逻辑：如果持有多仓，卖出持仓的比例
+        if current_pos > 0:
+            quantity = <int>(current_pos * quantity_ratio)
+            if quantity < 1:
+                quantity = 1
+            if quantity > <int>current_pos:
+                quantity = <int>current_pos
+            result.quantity = <double>quantity
+        else:
+            # 空仓或空头，开空仓（使用 mid_price）
+            calc_price = mid_price if mid_price > 0 else 100.0
+            if equity > 0 and leverage > 0:
+                max_pos_value = equity * leverage
+                current_pos_value = fabs(current_pos) * calc_price
+                # 卖出
+                if current_pos <= 0:
+                    available_pos_value = max_pos_value - current_pos_value
+                    if available_pos_value < 0:
+                        available_pos_value = 0
+                else:
+                    available_pos_value = current_pos_value + max_pos_value
+                raw_quantity = (available_pos_value * quantity_ratio) / calc_price
+                if raw_quantity >= 1.0:
+                    quantity = <int>raw_quantity
+                    if quantity > <int>MAX_ORDER_QUANTITY:
+                        quantity = <int>MAX_ORDER_QUANTITY
+                    result.quantity = <double>quantity
 
 
 cdef void batch_parse_retail_nogil(
     double[:, :] nn_outputs,
     DecisionResult* results,
+    BatchAgentState* agents,
     double mid_price,
     double tick_size,
     int num_agents,
@@ -1118,7 +1232,7 @@ cdef void batch_parse_retail_nogil(
     cdef int i
 
     for i in prange(num_agents, nogil=True, num_threads=num_threads, schedule='static'):
-        _parse_retail_single(i, &nn_outputs[i, 0], &results[i], mid_price, tick_size)
+        _parse_retail_single(i, &nn_outputs[i, 0], &results[i], agents, mid_price, tick_size)
 
 
 cdef void _parse_market_maker_single(
@@ -1168,6 +1282,7 @@ cdef void batch_parse_market_maker_nogil(
 cdef void batch_parse_retail_multi_market_nogil(
     double[:, :] nn_outputs,
     DecisionResult* results,
+    BatchAgentState* agents,
     MarketStateData** markets,
     int* market_indices,
     int num_agents,
@@ -1182,7 +1297,7 @@ cdef void batch_parse_retail_multi_market_nogil(
         market_idx = market_indices[i]
         mid_price = markets[market_idx].mid_price
         tick_size = markets[market_idx].tick_size
-        _parse_retail_single(i, &nn_outputs[i, 0], &results[i], mid_price, tick_size)
+        _parse_retail_single(i, &nn_outputs[i, 0], &results[i], agents, mid_price, tick_size)
 
 
 cdef void batch_parse_market_maker_multi_market_nogil(
@@ -1296,8 +1411,8 @@ def batch_decide_retail(
         # 2. 批量前向传播
         batch_forward_nogil(batch_networks, inputs_view, outputs_view, buffers, num_threads)
 
-        # 3. 批量解析
-        batch_parse_retail_nogil(outputs_view, results, mid_price, tick_size, num_agents, num_threads)
+        # 3. 批量解析（传入 agents 以计算 quantity）
+        batch_parse_retail_nogil(outputs_view, results, batch_agents, mid_price, tick_size, num_agents, num_threads)
 
     # 转换结果为 Python 列表
     cdef list result_list = []
@@ -1401,7 +1516,7 @@ def batch_decide_full(
     with nogil:
         batch_observe_full_nogil(batch_agents, market_data, inputs_view, num_threads)
         batch_forward_nogil(batch_networks, inputs_view, outputs_view, buffers, num_threads)
-        batch_parse_retail_nogil(outputs_view, results, mid_price, tick_size, num_agents, num_threads)
+        batch_parse_retail_nogil(outputs_view, results, batch_agents, mid_price, tick_size, num_agents, num_threads)
 
     cdef list result_list = []
     cdef int i
@@ -1782,7 +1897,7 @@ cdef class BatchNetworkCache:
             # 3. 批量解析（非 market_maker）
             if self.cache_type != 2:  # retail or full
                 batch_parse_retail_nogil(
-                    outputs_view, self.results, mid_price,
+                    outputs_view, self.results, self.agent_state, mid_price,
                     tick_size, num_agents, self.num_threads
                 )
             else:  # market_maker
@@ -1967,7 +2082,7 @@ cdef class BatchNetworkCache:
             # 3. 批量解析（使用多市场状态版本）
             if self.cache_type != 2:  # retail or full
                 batch_parse_retail_multi_market_nogil(
-                    outputs_view, results, multi_markets, market_indices,
+                    outputs_view, results, all_agents, multi_markets, market_indices,
                     total_tasks, self.num_threads
                 )
             else:  # market_maker
@@ -2139,6 +2254,7 @@ cdef class BatchNetworkCache:
 
                 all_agents.margin_ratio[task_idx] = state.get_margin_ratio(mid_price)
                 all_agents.available_margin[task_idx] = state.get_equity(mid_price)
+                all_agents.leverage[task_idx] = state.leverage
                 all_agents.has_pending_order[task_idx] = 0
                 all_agents.pending_side[task_idx] = 0
                 all_agents.pending_price[task_idx] = 0.0
@@ -2184,7 +2300,7 @@ cdef class BatchNetworkCache:
             # 3. 批量解析（使用多市场状态版本）
             if self.cache_type != 2:  # retail or full
                 batch_parse_retail_multi_market_nogil(
-                    outputs_view, results, multi_markets, market_indices,
+                    outputs_view, results, all_agents, multi_markets, market_indices,
                     total_tasks, self.num_threads
                 )
             else:  # market_maker
