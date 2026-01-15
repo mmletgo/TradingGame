@@ -136,7 +136,21 @@ class ArenaState:
     episode_high_price: float
     episode_low_price: float
     catfish_liquidated: bool
+    end_reason: str | None  # Episode 结束原因（None=正常结束）
+    end_tick: int           # 结束时的 tick 数
 ```
+
+**Episode 结束原因（end_reason）：**
+
+| 值 | 含义 |
+|---|------|
+| `None` | Episode 正常运行完所有 tick |
+| `"population_depleted:RETAIL"` | 散户种群存活少于初始的 1/4 |
+| `"population_depleted:RETAIL_PRO"` | 高级散户种群存活少于初始的 1/4 |
+| `"population_depleted:WHALE"` | 庄家种群存活少于初始的 1/4 |
+| `"population_depleted:MARKET_MAKER"` | 做市商种群存活少于初始的 1/4 |
+| `"one_sided_orderbook"` | 订单簿只有单边挂单 |
+| `"catfish"` | 鲶鱼被强平 |
 
 ### FitnessAggregator (fitness_aggregator.py)
 

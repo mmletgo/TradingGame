@@ -688,6 +688,9 @@ class ArenaState:
         episode_high_price: Episode 最高价
         episode_low_price: Episode 最低价
         catfish_liquidated: 鲶鱼是否已被强平
+        end_reason: Episode 结束原因（None=正常结束, "catfish"=鲶鱼强平,
+            "pop:TYPE"=某种群不足, "orderbook"=订单簿单边）
+        end_tick: Episode 结束时的 tick 数
     """
 
     arena_id: int
@@ -707,6 +710,8 @@ class ArenaState:
     episode_high_price: float = 0.0
     episode_low_price: float = float("inf")
     catfish_liquidated: bool = False
+    end_reason: str | None = None
+    end_tick: int = 0
 
     def reset_episode(self, initial_price: float) -> None:
         """重置 Episode 状态
@@ -727,6 +732,8 @@ class ArenaState:
         self.episode_high_price = initial_price
         self.episode_low_price = initial_price
         self.catfish_liquidated = False
+        self.end_reason = None
+        self.end_tick = 0
 
     def get_agent_state(self, agent_id: int) -> AgentAccountState | None:
         """获取 Agent 状态

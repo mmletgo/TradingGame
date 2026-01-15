@@ -718,13 +718,17 @@ class ParallelArenaTrainer:
         Returns:
             Episode 统计信息字典
         """
-        # 收集所有竞技场的最高价和最低价
+        # 收集所有竞技场的最高价、最低价和结束原因
         high_prices: list[float] = []
         low_prices: list[float] = []
+        end_reasons: list[str | None] = []
+        end_ticks: list[int] = []
 
         for arena in self.arena_states:
             high_prices.append(arena.episode_high_price)
             low_prices.append(arena.episode_low_price)
+            end_reasons.append(arena.end_reason)
+            end_ticks.append(arena.end_tick)
 
         # 计算全局最高/最低价（取各竞技场的极值）
         global_high = max(high_prices) if high_prices else 0.0
@@ -744,6 +748,8 @@ class ParallelArenaTrainer:
             "low_price": global_low,
             "arena_high_prices": high_prices,
             "arena_low_prices": low_prices,
+            "arena_end_reasons": end_reasons,
+            "arena_end_ticks": end_ticks,
         }
 
     def _collect_species_fitness_stats(self) -> dict[AgentType, dict[str, Any]]:
@@ -1540,10 +1546,20 @@ class ParallelArenaTrainer:
                     self._check_catfish_liquidation_for_arena(arena, current_price)
 
                     # 检查提前结束条件
-                    if self._should_end_episode_early_for_arena(arena) is not None:
-                        all_continue = False
-                    if arena.catfish_liquidated:
-                        all_continue = False
+                    if arena.end_reason is None:
+                        early_end = self._should_end_episode_early_for_arena(arena)
+                        if early_end is not None:
+                            reason, agent_type = early_end
+                            if agent_type is not None:
+                                arena.end_reason = f"{reason}:{agent_type.name}"
+                            else:
+                                arena.end_reason = reason
+                            arena.end_tick = arena.tick
+                            all_continue = False
+                        elif arena.catfish_liquidated:
+                            arena.end_reason = "catfish"
+                            arena.end_tick = arena.tick
+                            all_continue = False
 
             return all_continue
 
@@ -1759,10 +1775,20 @@ class ParallelArenaTrainer:
             self._check_catfish_liquidation_for_arena(arena, current_price)
 
             # 检查提前结束条件
-            if self._should_end_episode_early_for_arena(arena) is not None:
-                all_continue = False
-            if arena.catfish_liquidated:
-                all_continue = False
+            if arena.end_reason is None:
+                early_end = self._should_end_episode_early_for_arena(arena)
+                if early_end is not None:
+                    reason, agent_type = early_end
+                    if agent_type is not None:
+                        arena.end_reason = f"{reason}:{agent_type.name}"
+                    else:
+                        arena.end_reason = reason
+                    arena.end_tick = arena.tick
+                    all_continue = False
+                elif arena.catfish_liquidated:
+                    arena.end_reason = "catfish"
+                    arena.end_tick = arena.tick
+                    all_continue = False
 
         return all_continue
 

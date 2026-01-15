@@ -88,13 +88,38 @@ def episode_callback(stats: dict[str, Any]) -> None:
     episode = stats.get("episode", 0)
     arena_high_prices = stats.get("arena_high_prices", [])
     arena_low_prices = stats.get("arena_low_prices", [])
+    arena_end_reasons = stats.get("arena_end_reasons", [])
+    arena_end_ticks = stats.get("arena_end_ticks", [])
 
     current_time = datetime.now().strftime("%H:%M:%S")
 
-    # 格式化各竞技场的 High/Low 成组显示（2 位小数）
+    # 格式化各竞技场的 High/Low 和结束原因
+    # 格式: A0:(high,low)[reason@tick] 或 A0:(high,low)[ok] 如果正常结束
     arena_price_strs: list[str] = []
     for i, (high, low) in enumerate(zip(arena_high_prices, arena_low_prices)):
-        arena_price_strs.append(f"A{i}:({high:.2f},{low:.2f})")
+        end_reason = arena_end_reasons[i] if i < len(arena_end_reasons) else None
+        end_tick = arena_end_ticks[i] if i < len(arena_end_ticks) else 0
+        if end_reason is None:
+            reason_str = "ok"
+        else:
+            # 简化结束原因显示
+            # population_depleted:RETAIL -> pop:R
+            # population_depleted:RETAIL_PRO -> pop:RP
+            # population_depleted:WHALE -> pop:W
+            # population_depleted:MARKET_MAKER -> pop:MM
+            # one_sided_orderbook -> ob
+            # catfish -> cat
+            reason_abbr = {
+                "population_depleted:RETAIL": "pop:R",
+                "population_depleted:RETAIL_PRO": "pop:RP",
+                "population_depleted:WHALE": "pop:W",
+                "population_depleted:MARKET_MAKER": "pop:MM",
+                "one_sided_orderbook": "ob",
+                "catfish": "cat",
+            }
+            reason_str = reason_abbr.get(end_reason, end_reason[:8])
+            reason_str = f"{reason_str}@{end_tick}"
+        arena_price_strs.append(f"A{i}:({high:.2f},{low:.2f})[{reason_str}]")
 
     prices_str = " ".join(arena_price_strs)
     print(f"  Episode {episode:4d} | {current_time} | {prices_str}")
