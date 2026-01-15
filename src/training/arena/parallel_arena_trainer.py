@@ -547,7 +547,7 @@ class ParallelArenaTrainer:
         - ArenaExecuteWorkerPool（Queue 版，兼容性更好）
         """
         arena_ids = [arena.arena_id for arena in self.arena_states]
-        num_workers = min(4, len(arena_ids))  # 最多 4 个 Worker
+        num_workers = min(self.multi_config.num_arenas, 32)  # 最多 32 个 Worker
 
         if self.multi_config.use_shared_memory_ipc:
             from .execute_worker import ArenaExecuteWorkerPoolShm
@@ -1970,12 +1970,10 @@ class ParallelArenaTrainer:
                 if network_idx < 0:
                     continue
 
-                if agent_type not in type_arena_data:
-                    type_arena_data[agent_type] = {}
-                if arena_idx not in type_arena_data[agent_type]:
-                    type_arena_data[agent_type][arena_idx] = []
-
-                type_arena_data[agent_type][arena_idx].append((state, network_idx))
+                # 使用 setdefault 减少 if 检查
+                type_arena_data.setdefault(agent_type, {}).setdefault(
+                    arena_idx, []
+                ).append((state, network_idx))
 
         # 对每种类型使用 decide_multi_arena_direct 进行批量推理
         for agent_type, arena_data in type_arena_data.items():
