@@ -2064,20 +2064,26 @@ class ParallelArenaTrainer:
                     decisions_array: np.ndarray = arena_results
                     num_agents = min(len(decisions_array), len(arena_states_list))
 
-                    # 构建 agent_ids 数组（用于后续构建带 agent_id 的完整数组）
+                    # 先用 NumPy 过滤掉 HOLD 动作（action_type_int == 0）
+                    non_hold_mask = decisions_array[:num_agents, 0] != 0
+                    non_hold_indices = np.where(non_hold_mask)[0]
+
+                    # 构建 agent_ids 数组（仅非 HOLD 动作）
                     agent_ids = np.array(
-                        [arena_states_list[i].agent_id for i in range(num_agents)],
+                        [arena_states_list[i].agent_id for i in non_hold_indices],
                         dtype=np.float64,
                     )
 
-                    # 缓存数组结果供 _execute_with_worker_pool 使用
+                    # 缓存过滤后的数组结果供 _execute_with_worker_pool 使用
+                    filtered_decisions = decisions_array[:num_agents][non_hold_mask]
                     self._last_inference_arrays[agent_type][arena_idx] = (
                         agent_ids,
-                        decisions_array[:num_agents].copy(),
+                        filtered_decisions.copy(),
                     )
 
                     # 同时填充 list 格式结果（用于兼容性）
-                    for i in range(num_agents):
+                    # 只处理非 HOLD 动作
+                    for i in non_hold_indices:
                         state = arena_states_list[i]
                         try:
                             action_type_int = int(decisions_array[i, 0])
