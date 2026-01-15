@@ -63,6 +63,7 @@ from .arena_state import (
     calculate_order_quantity_from_state,
     calculate_skew_factor_from_state,
 )
+from .execute_worker import CatfishDecision, CatfishTradeResult
 from .fitness_aggregator import FitnessAggregator
 
 # 缓存类型常量
@@ -197,11 +198,8 @@ class ParallelArenaTrainer:
         # 读取 EMA 配置
         self._ema_alpha = self.config.market.ema_alpha
 
-        # 6. 创建 Execute Worker 池（仅在禁用鲶鱼时使用）
-        catfish_enabled = (
-            self.config.catfish is not None and self.config.catfish.enabled
-        )
-        if self._use_execute_workers and not catfish_enabled:
+        # 6. 创建 Execute Worker 池（支持鲶鱼机制）
+        if self._use_execute_workers:
             self._create_execute_worker_pool()
 
         self._is_setup = True
@@ -840,9 +838,16 @@ class ParallelArenaTrainer:
         # 重置 Execute Worker 池的订单簿
         if self._execute_worker_pool is not None:
             fee_rates = self._collect_fee_rates()
+
+            # 收集所有鲶鱼 ID（用于 Worker 注册）
+            catfish_ids: list[int] = []
+            if self.arena_states and self.arena_states[0].catfish_states:
+                catfish_ids = list(self.arena_states[0].catfish_states.keys())
+
             self._execute_worker_pool.reset_all(
                 initial_price=initial_price,
                 fee_rates=fee_rates,
+                catfish_ids=catfish_ids,
             )
 
     def _prepare_mm_init_orders(
@@ -1126,12 +1131,15 @@ class ParallelArenaTrainer:
         all_decisions: dict[
             int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]
         ],
+        catfish_decisions_map: dict[int, list[CatfishDecision]] | None = None,
     ) -> dict[int, Any]:
         """使用 Worker 池执行所有竞技场的决策
 
         Args:
             all_decisions: 各竞技场的决策数据，格式:
                 {arena_idx: [(state, action, params), ...]}
+            catfish_decisions_map: 各竞技场的鲶鱼决策，格式:
+                {arena_idx: [CatfishDecision, ...]}
 
         Returns:
             各竞技场的执行结果
@@ -1156,12 +1164,20 @@ class ParallelArenaTrainer:
             decisions_array = self._build_decisions_array_from_cache(arena_idx)
             mm_decisions_array = self._build_mm_decisions_array_from_cache(arena_idx)
 
+            # 获取该竞技场的鲶鱼决策
+            catfish_decisions = (
+                catfish_decisions_map.get(arena_idx, [])
+                if catfish_decisions_map
+                else []
+            )
+
             arena_commands[arena_idx] = ArenaExecuteData(
                 liquidated_agents=liquidated_agents,
                 decisions=[],  # 使用 decisions_array
                 mm_decisions=[],  # 使用 mm_decisions_array
                 decisions_array=decisions_array,
                 mm_decisions_array=mm_decisions_array,
+                catfish_decisions=catfish_decisions,
             )
 
         # 调用 Worker 池执行
@@ -1340,6 +1356,27 @@ class ParallelArenaTrainer:
                     agent_state.bid_order_ids = list(bid_ids)
                     agent_state.ask_order_ids = list(ask_ids)
 
+            # 处理鲶鱼成交结果
+            for catfish_result in result.catfish_results:
+                catfish_state = arena.catfish_states.get(catfish_result.catfish_id)
+                if catfish_state is None:
+                    continue
+                # 更新鲶鱼账户（成交已在 trades 中包含，这里只更新鲶鱼状态）
+                for trade_tuple in catfish_result.trades:
+                    (
+                        _trade_id,
+                        price,
+                        qty,
+                        buyer_id,
+                        seller_id,
+                        _buyer_fee,
+                        _seller_fee,
+                        is_buyer_taker,
+                    ) = trade_tuple
+                    is_buyer = catfish_result.catfish_id == buyer_id
+                    catfish_state.on_trade(price, qty, is_buyer)
+                    # maker 账户更新已在上面的 trades 处理中完成
+
             # 同步价格
             arena.smooth_mid_price = result.mid_price
 
@@ -1367,6 +1404,7 @@ class ParallelArenaTrainer:
         arena_market_states: list[NormalizedMarketState] = []
         arena_active_agents: list[list[AgentAccountState]] = []
         arena_catfish_trades: list[list[Trade]] = [[] for _ in self.arena_states]
+        catfish_decisions_map: dict[int, list[CatfishDecision]] = {}
 
         for arena_idx, arena in enumerate(self.arena_states):
             arena.tick += 1
@@ -1408,8 +1446,16 @@ class ParallelArenaTrainer:
             # 强平检查
             self._handle_liquidations_for_arena(arena, current_price)
 
-            # 鲶鱼行动
-            arena_catfish_trades[arena_idx] = self._catfish_action_for_arena(arena)
+            # 鲶鱼决策
+            if self._execute_worker_pool is not None:
+                # Worker 池模式：只计算决策，不执行（由 Worker 执行）
+                catfish_decisions_map[arena_idx] = self._compute_catfish_decisions(
+                    arena
+                )
+                arena_catfish_trades[arena_idx] = []  # 成交在 Worker 中处理
+            else:
+                # 串行模式：直接执行鲶鱼行动
+                arena_catfish_trades[arena_idx] = self._catfish_action_for_arena(arena)
 
             # 计算市场状态
             market_state = self._compute_market_state_for_arena(arena)
@@ -1446,14 +1492,18 @@ class ParallelArenaTrainer:
             }
 
             if filtered_decisions:
-                # 使用 Worker 池执行
-                results = self._execute_with_worker_pool(filtered_decisions)
+                # 使用 Worker 池执行（包含鲶鱼决策）
+                results = self._execute_with_worker_pool(
+                    filtered_decisions, catfish_decisions_map
+                )
                 arena_tick_trades = self._process_worker_results(results)
 
                 # 后处理：记录价格历史、检查提前结束条件
                 for arena_idx in filtered_decisions.keys():
                     arena = self.arena_states[arena_idx]
                     tick_trades = arena_tick_trades.get(arena_idx, [])
+                    # Worker 池模式下鲶鱼成交已在 _process_worker_results 中处理
+                    # 串行模式下鲶鱼成交在 arena_catfish_trades 中
                     catfish_trades = arena_catfish_trades[arena_idx]
                     if catfish_trades:
                         tick_trades = catfish_trades + tick_trades
@@ -2818,6 +2868,47 @@ class ParallelArenaTrainer:
             if agent_state.position_quantity != 0:
                 agent_state.position_quantity = 0
                 agent_state.position_avg_price = 0.0
+
+    def _compute_catfish_decisions(
+        self, arena: ArenaState
+    ) -> list[CatfishDecision]:
+        """计算鲶鱼决策
+
+        调用 CatfishAccountState.decide() 获取决策，转换为 CatfishDecision 格式。
+        此方法仅计算决策，不执行订单（用于 Worker 池模式）。
+
+        Args:
+            arena: 竞技场状态
+
+        Returns:
+            鲶鱼决策列表（仅包含需要行动的鲶鱼）
+        """
+        decisions: list[CatfishDecision] = []
+
+        if not arena.catfish_states:
+            return decisions
+
+        tick = arena.tick
+        price_history = arena.price_history
+
+        for catfish_state in arena.catfish_states.values():
+            if catfish_state.is_liquidated:
+                continue
+
+            # 调用鲶鱼决策方法
+            should_act, direction = catfish_state.decide(tick, price_history)
+
+            if should_act and direction != 0:
+                # 创建决策（quantity_ticks 默认为 3，与 _catfish_action_for_arena 一致）
+                decisions.append(
+                    CatfishDecision(
+                        catfish_id=catfish_state.catfish_id,
+                        direction=direction,
+                        quantity_ticks=3,
+                    )
+                )
+
+        return decisions
 
     def _catfish_action_for_arena(self, arena: ArenaState) -> list[Trade]:
         """鲶鱼在竞技场中的行动

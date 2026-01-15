@@ -56,6 +56,42 @@ class ExecuteCommand:
 
 
 @dataclass
+class CatfishDecision:
+    """鲶鱼决策数据
+
+    Attributes:
+        catfish_id: 鲶鱼 ID（负数）
+        direction: 方向，1=买，-1=卖，0=不行动
+        quantity_ticks: 吃多少档（默认3）
+    """
+
+    catfish_id: int
+    direction: int  # 1=买, -1=卖, 0=不行动
+    quantity_ticks: int = 3
+
+
+@dataclass
+class CatfishTradeResult:
+    """鲶鱼成交结果
+
+    Attributes:
+        catfish_id: 鲶鱼 ID
+        trades: 成交列表，每个元素格式:
+            (trade_id, price, quantity, buyer_id, seller_id,
+             buyer_fee, seller_fee, is_buyer_taker)
+        total_quantity: 总成交数量
+        avg_price: 平均成交价格
+    """
+
+    catfish_id: int
+    trades: list[tuple[int, float, int, int, int, float, float, bool]] = field(
+        default_factory=list
+    )
+    total_quantity: int = 0
+    avg_price: float = 0.0
+
+
+@dataclass
 class ArenaExecuteData:
     """execute 命令的数据
 
@@ -73,6 +109,7 @@ class ArenaExecuteData:
         mm_decisions_array: 做市商决策 NumPy 数组（P3优化），
             shape (N, 43)，列顺序: [agent_id, num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
             如果提供此字段，则优先使用此字段而非 mm_decisions 列表
+        catfish_decisions: 鲶鱼决策列表（启用鲶鱼时由主进程计算）
     """
 
     liquidated_agents: list[tuple[int, int, bool]] = field(default_factory=list)
@@ -82,6 +119,7 @@ class ArenaExecuteData:
     )
     decisions_array: NDArray[np.float64] | None = None
     mm_decisions_array: NDArray[np.float64] | None = None
+    catfish_decisions: list[CatfishDecision] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +137,7 @@ class ArenaExecuteResult:
              buyer_fee, seller_fee, is_buyer_taker)
         pending_updates: 非做市商挂单状态更新，agent_id -> pending_order_id | None
         mm_order_updates: 做市商挂单状态更新，agent_id -> (bid_ids, ask_ids)
+        catfish_results: 鲶鱼成交结果列表
         error: 错误信息（如果有）
     """
 
@@ -118,6 +157,7 @@ class ArenaExecuteResult:
     mm_order_updates: dict[int, tuple[list[int], list[int]]] = field(
         default_factory=dict
     )
+    catfish_results: list[CatfishTradeResult] = field(default_factory=list)
     error: str | None = None
 
 
@@ -276,7 +316,7 @@ def _handle_reset(
     Args:
         arena: 竞技场状态
         config: 全局配置
-        reset_data: 重置数据，可包含 "initial_price" 和 "fee_rates"
+        reset_data: 重置数据，可包含 "initial_price"、"fee_rates" 和 "catfish_ids"
     """
     initial_price = config.market.initial_price
     if reset_data and "initial_price" in reset_data:
@@ -296,6 +336,11 @@ def _handle_reset(
     if reset_data and "fee_rates" in reset_data:
         for agent_id, (maker_rate, taker_rate) in reset_data["fee_rates"].items():
             arena.matching_engine.register_agent(agent_id, maker_rate, taker_rate)
+
+    # 注册鲶鱼费率（手续费为 0）
+    if reset_data and "catfish_ids" in reset_data:
+        for catfish_id in reset_data["catfish_ids"]:
+            arena.matching_engine.register_agent(catfish_id, 0.0, 0.0)
 
 
 def _handle_init_mm(
@@ -391,6 +436,113 @@ def _handle_init_mm(
     )
 
 
+def _handle_catfish(
+    arena: WorkerArenaState,
+    catfish_decisions: list[CatfishDecision],
+) -> list[CatfishTradeResult]:
+    """处理鲶鱼市价单
+
+    在 Agent 决策执行之前执行鲶鱼的市价单。
+
+    Args:
+        arena: 竞技场状态
+        catfish_decisions: 鲶鱼决策列表
+
+    Returns:
+        鲶鱼成交结果列表
+    """
+    results: list[CatfishTradeResult] = []
+
+    if not catfish_decisions:
+        return results
+
+    matching_engine = arena.matching_engine
+    orderbook = matching_engine._orderbook
+    process_order = matching_engine.process_order
+
+    for decision in catfish_decisions:
+        catfish_id = decision.catfish_id
+        direction = decision.direction
+        quantity_ticks = decision.quantity_ticks
+
+        # 方向为 0 表示不行动
+        if direction == 0:
+            results.append(CatfishTradeResult(catfish_id=catfish_id))
+            continue
+
+        # 确保鲶鱼的订单计数器存在
+        if catfish_id not in arena.order_counters:
+            arena.order_counters[catfish_id] = 0
+
+        # 获取订单簿深度，计算要吃的数量
+        depth = orderbook.get_depth(levels=quantity_ticks)
+
+        total_quantity = 0
+        if direction > 0:
+            # 买入：吃卖盘 asks
+            asks = depth.get("asks", [])
+            for i in range(min(quantity_ticks, len(asks))):
+                _, qty = asks[i]
+                total_quantity += int(qty)
+            side = OrderSide.BUY
+        else:
+            # 卖出：吃买盘 bids
+            bids = depth.get("bids", [])
+            for i in range(min(quantity_ticks, len(bids))):
+                _, qty = bids[i]
+                total_quantity += int(qty)
+            side = OrderSide.SELL
+
+        # 如果没有可吃的量，跳过
+        if total_quantity <= 0:
+            results.append(CatfishTradeResult(catfish_id=catfish_id))
+            continue
+
+        # 生成订单 ID（鲶鱼 ID 是负数）
+        arena.order_counters[catfish_id] += 1
+        order_id = generate_order_id(
+            arena.arena_id, catfish_id, arena.order_counters[catfish_id]
+        )
+
+        # 创建市价单
+        order = Order(
+            order_id=order_id,
+            agent_id=catfish_id,
+            side=side,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=total_quantity,
+        )
+
+        # 执行订单
+        trades = process_order(order)
+
+        # 收集成交结果
+        trade_tuples: list[tuple[int, float, int, int, int, float, float, bool]] = []
+        executed_quantity = 0
+        total_amount = 0.0
+
+        for trade in trades:
+            trade_tuple = _trade_to_tuple(trade)
+            trade_tuples.append(trade_tuple)
+            arena.recent_trades.append(trade)
+            executed_quantity += trade.quantity
+            total_amount += trade.price * trade.quantity
+
+        avg_price = total_amount / executed_quantity if executed_quantity > 0 else 0.0
+
+        results.append(
+            CatfishTradeResult(
+                catfish_id=catfish_id,
+                trades=trade_tuples,
+                total_quantity=executed_quantity,
+                avg_price=avg_price,
+            )
+        )
+
+    return results
+
+
 def _handle_execute(
     arena: WorkerArenaState,
     execute_data: ArenaExecuteData,
@@ -398,6 +550,7 @@ def _handle_execute(
     """处理 execute 命令（执行订单）
 
     执行顺序：
+    0. 鲶鱼处理（在所有 Agent 之前）
     1. 强平处理（撤单 + 市价平仓）
     2. 做市商执行（撤旧单 -> 挂新单）
     3. 非做市商执行
@@ -418,6 +571,13 @@ def _handle_execute(
     process_order = matching_engine.process_order
     cancel_order = matching_engine.cancel_order
     order_map_get = orderbook.order_map.get
+
+    # 0. 处理鲶鱼（在所有 Agent 之前）
+    catfish_results = _handle_catfish(arena, execute_data.catfish_decisions)
+
+    # 将鲶鱼成交加入 all_trades
+    for catfish_result in catfish_results:
+        all_trades.extend(catfish_result.trades)
 
     # 1. 处理强平
     for agent_id, position_qty, is_mm in execute_data.liquidated_agents:
@@ -675,6 +835,7 @@ def _handle_execute(
         trades=all_trades,
         pending_updates=pending_updates,
         mm_order_updates=mm_order_updates,
+        catfish_results=catfish_results,
     )
 
 
@@ -846,12 +1007,14 @@ class ArenaExecuteWorkerPool:
         self,
         initial_price: float | None = None,
         fee_rates: dict[int, tuple[float, float]] | None = None,
+        catfish_ids: list[int] | None = None,
     ) -> None:
         """重置所有竞技场的订单簿
 
         Args:
             initial_price: 初始价格（可选，默认使用配置）
             fee_rates: Agent 费率映射（可选），agent_id -> (maker_rate, taker_rate)
+            catfish_ids: 鲶鱼 ID 列表（可选），用于注册鲶鱼费率（0, 0）
         """
         if not self._started:
             self.start()
@@ -861,6 +1024,8 @@ class ArenaExecuteWorkerPool:
             reset_data["initial_price"] = initial_price
         if fee_rates is not None:
             reset_data["fee_rates"] = fee_rates
+        if catfish_ids is not None:
+            reset_data["catfish_ids"] = catfish_ids
 
         # 发送 reset 命令到所有竞技场
         for arena_id in self.arena_ids:
@@ -1309,12 +1474,18 @@ class ArenaExecuteWorkerPoolShm:
         self,
         initial_price: float | None = None,
         fee_rates: dict[int, tuple[float, float]] | None = None,
+        catfish_ids: list[int] | None = None,
     ) -> None:
         """重置所有竞技场的订单簿
 
         Args:
             initial_price: 初始价格（可选）
             fee_rates: Agent 费率映射（可选）
+            catfish_ids: 鲶鱼 ID 列表（可选），用于注册鲶鱼费率
+
+        Note:
+            共享内存版暂不支持通过共享内存传递 reset 参数，
+            catfish_ids 参数保留以保持接口一致性。
         """
         from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
 
