@@ -318,8 +318,18 @@ class ParallelArenaTrainer:
 
         self.logger.info(f"竞技场状态创建完成: {len(self.arena_states)} 个竞技场")
 
-    def _build_agent_map(self) -> None:
-        """构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）"""
+    def _build_agent_map(self, force: bool = False) -> None:
+        """构建 Agent ID 到 Agent 对象的映射表（O(1) 查找）
+
+        Args:
+            force: 是否强制重建（默认 False，已存在时跳过）
+        """
+        # 快速路径：如果已构建且数量匹配，跳过重建
+        if not force and self.agent_map:
+            expected_count = sum(len(p.agents) for p in self.populations.values())
+            if len(self.agent_map) == expected_count:
+                return
+
         self.agent_map.clear()
         for population in self.populations.values():
             for agent in population.agents:
@@ -3369,22 +3379,39 @@ class ParallelArenaTrainer:
             population._pending_genome_data = None
             population._genomes_dirty = False
 
-    def _refresh_agent_states(self) -> None:
+    def _refresh_agent_states(self, force: bool = False) -> None:
         """刷新所有竞技场的 Agent 账户状态
 
-        现在使用 calculate_order_quantity_from_state 和 calculate_skew_factor_from_state
-        从 AgentAccountState 计算订单数量，不再依赖 Agent 的原始 account，
-        因此不需要重置 Agent 的原始账户。
-        """
-        for arena in self.arena_states:
-            arena.agent_states.clear()
-            for population in self.populations.values():
-                for agent in population.agents:
-                    state = AgentAccountState.from_agent(agent)
-                    arena.agent_states[agent.agent_id] = state
+        性能优化：进化后 agent_id 保持不变，不需要重新创建 AgentAccountState 对象。
+        只在以下情况需要完整重建：
+        1. force=True（checkpoint 恢复时）
+        2. agent_states 为空（首次创建）
 
-        # 重建 Agent 映射表
-        self._build_agent_map()
+        Args:
+            force: 是否强制重建所有状态
+        """
+        # 快速路径：检查是否需要重建
+        needs_rebuild = force
+        if not needs_rebuild and self.arena_states:
+            # 检查第一个竞技场的状态是否已存在且数量匹配
+            first_arena = self.arena_states[0]
+            expected_count = sum(len(p.agents) for p in self.populations.values())
+            if len(first_arena.agent_states) != expected_count:
+                needs_rebuild = True
+
+        if needs_rebuild:
+            # 完整路径：重新创建所有状态
+            for arena in self.arena_states:
+                arena.agent_states.clear()
+                for population in self.populations.values():
+                    for agent in population.agents:
+                        state = AgentAccountState.from_agent(agent)
+                        arena.agent_states[agent.agent_id] = state
+            # 强制重建映射表
+            self._build_agent_map(force=True)
+        else:
+            # 快速路径：只更新映射表（如果需要）
+            self._build_agent_map()
 
     def train(
         self,
@@ -3539,8 +3566,8 @@ class ParallelArenaTrainer:
         # 更新网络缓存
         self._update_network_caches()
 
-        # 刷新竞技场的 Agent 状态
-        self._refresh_agent_states()
+        # 刷新竞技场的 Agent 状态（checkpoint 恢复后需要强制重建）
+        self._refresh_agent_states(force=True)
 
         # 重置 Worker 池同步标志
         self._worker_pool_synced = False

@@ -657,3 +657,4 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 3. **网络参数传输**：只传输网络参数而非完整基因组，减少序列化开销
 4. **内存管理**：每轮训练后进行垃圾回收和 malloc_trim
 5. **Checkpoint 体积优化**：使用 gzip 压缩保存检查点文件
+6. **AgentAccountState 复用**：`_refresh_agent_states()` 使用快速路径检测，进化后不重新创建对象（从 ~90s 降至 0.1ms）
