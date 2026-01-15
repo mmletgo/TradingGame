@@ -547,7 +547,7 @@ class ParallelArenaTrainer:
         - ArenaExecuteWorkerPool（Queue 版，兼容性更好）
         """
         arena_ids = [arena.arena_id for arena in self.arena_states]
-        num_workers = min(4, len(arena_ids))  # 最多 4 个 Worker
+        num_workers = min(self.multi_config.num_arenas, 32)  # 最多 32 个 Worker
 
         if self.multi_config.use_shared_memory_ipc:
             from .execute_worker import ArenaExecuteWorkerPoolShm
@@ -1475,7 +1475,7 @@ class ParallelArenaTrainer:
                 if not state.is_liquidated
             ]
 
-            # 随机打乱执行顺序
+            # 随机打乱执行顺序（原地打乱，O(n) 时间）
             random.shuffle(active_states)
             arena_active_agents.append(active_states)
 
@@ -1970,12 +1970,10 @@ class ParallelArenaTrainer:
                 if network_idx < 0:
                     continue
 
-                if agent_type not in type_arena_data:
-                    type_arena_data[agent_type] = {}
-                if arena_idx not in type_arena_data[agent_type]:
-                    type_arena_data[agent_type][arena_idx] = []
-
-                type_arena_data[agent_type][arena_idx].append((state, network_idx))
+                # 使用 setdefault 减少 if 检查
+                type_arena_data.setdefault(agent_type, {}).setdefault(
+                    arena_idx, []
+                ).append((state, network_idx))
 
         # 对每种类型使用 decide_multi_arena_direct 进行批量推理
         for agent_type, arena_data in type_arena_data.items():
@@ -2062,20 +2060,26 @@ class ParallelArenaTrainer:
                     decisions_array: np.ndarray = arena_results
                     num_agents = min(len(decisions_array), len(arena_states_list))
 
-                    # 构建 agent_ids 数组（用于后续构建带 agent_id 的完整数组）
+                    # 先用 NumPy 过滤掉 HOLD 动作（action_type_int == 0）
+                    non_hold_mask = decisions_array[:num_agents, 0] != 0
+                    non_hold_indices = np.where(non_hold_mask)[0]
+
+                    # 构建 agent_ids 数组（仅非 HOLD 动作）
                     agent_ids = np.array(
-                        [arena_states_list[i].agent_id for i in range(num_agents)],
+                        [arena_states_list[i].agent_id for i in non_hold_indices],
                         dtype=np.float64,
                     )
 
-                    # 缓存数组结果供 _execute_with_worker_pool 使用
+                    # 缓存过滤后的数组结果供 _execute_with_worker_pool 使用
+                    filtered_decisions = decisions_array[:num_agents][non_hold_mask]
                     self._last_inference_arrays[agent_type][arena_idx] = (
                         agent_ids,
-                        decisions_array[:num_agents].copy(),
+                        filtered_decisions.copy(),
                     )
 
                     # 同时填充 list 格式结果（用于兼容性）
-                    for i in range(num_agents):
+                    # 只处理非 HOLD 动作
+                    for i in non_hold_indices:
                         state = arena_states_list[i]
                         try:
                             action_type_int = int(decisions_array[i, 0])
