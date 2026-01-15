@@ -1035,7 +1035,9 @@ class ParallelArenaTrainer:
 
         # 使用 get_depth_numpy 直接获取 NumPy 数组（Worker 池优先使用快照）
         if cached_depth is not None:
-            bid_depth, ask_depth = _bid_depth, _ask_depth
+            # cached_depth 在上面已解包为 (_bid_depth, _ask_depth, last_price, mid_price)
+            bid_depth: np.ndarray = cached_depth[0]
+            ask_depth: np.ndarray = cached_depth[1]
         else:
             bid_depth, ask_depth = orderbook.get_depth_numpy(levels=100)
 
@@ -1979,22 +1981,19 @@ class ParallelArenaTrainer:
                 )
 
                 if is_market_maker:
-                    # 做市商：raw_results 是 list 格式
+                    # 做市商：Cython 已完成解析，raw_results 是 list[dict] 格式
+                    # 每个 dict 包含 {"bid_orders": [...], "ask_orders": [...]}
                     if arena_results is None:
                         arena_results = []
-                    for i, raw_result in enumerate(arena_results):
+                    for i, params in enumerate(arena_results):
                         if i >= len(arena_states_list):
                             break
 
                         state = arena_states_list[i]
-                        try:
-                            nn_output, _, _ = raw_result
-                            action, params = self._parse_market_maker_output(
-                                state, nn_output, mid_price, tick_size
-                            )
-                            results[arena_idx].append((state, action, params))
-                        except Exception:
-                            pass
+                        # 直接使用 Cython 返回的订单数据，无需再解析
+                        results[arena_idx].append(
+                            (state, ActionType.HOLD, params)
+                        )
                 else:
                     # 非做市商：raw_results 是 NumPy 数组 shape=(num_agents, 4)
                     # 列顺序: [action_type, side, price, quantity]

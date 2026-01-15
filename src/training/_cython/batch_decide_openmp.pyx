@@ -32,6 +32,7 @@ from src.training._cython.batch_decide_openmp cimport (
     ThreadLocalBuffer,
     MarketStateData,
     DecisionResult,
+    MarketMakerOrdersResult,
 )
 
 # ============================================================================
@@ -406,6 +407,17 @@ cdef void free_multi_market_state_data(MarketStateData** data, int num_arenas) n
             free_market_state_data(data[i])
 
     free(data)
+
+
+cdef MarketMakerOrdersResult* alloc_mm_orders_results(int num_agents) noexcept:
+    """分配做市商订单结果数组"""
+    return <MarketMakerOrdersResult*>calloc(num_agents, sizeof(MarketMakerOrdersResult))
+
+
+cdef void free_mm_orders_results(MarketMakerOrdersResult* data) noexcept:
+    """释放做市商订单结果数组"""
+    if data != NULL:
+        free(data)
 
 
 # ============================================================================
@@ -1321,6 +1333,276 @@ cdef void batch_parse_market_maker_multi_market_nogil(
 
 
 # ============================================================================
+# 做市商完整解析函数（直接返回订单数据）
+# ============================================================================
+
+cdef inline double _calculate_skew_factor(
+    double equity,
+    double leverage,
+    double position_qty,
+    double mid_price
+) noexcept nogil:
+    """计算做市商仓位倾斜因子
+
+    与 Python 端 calculate_skew_factor_from_state 逻辑完全一致。
+
+    Returns:
+        倾斜因子，范围 [-1, 1]
+    """
+    if equity <= 0:
+        return 0.0
+
+    if position_qty == 0:
+        return 0.0
+
+    cdef double position_value = fabs(position_qty) * mid_price
+    cdef double max_position_value = equity * leverage
+    cdef double pos_ratio
+
+    if max_position_value > 0:
+        pos_ratio = position_value / max_position_value
+        if pos_ratio > 1.0:
+            pos_ratio = 1.0
+    else:
+        pos_ratio = 0.0
+
+    if position_qty > 0:
+        return -pos_ratio
+    else:
+        return pos_ratio
+
+
+cdef inline void _apply_position_skew_nogil(
+    double* bid_ratios,
+    double* ask_ratios,
+    double skew_factor,
+    double min_side_weight
+) noexcept nogil:
+    """应用仓位倾斜到买卖权重（与 Python 端逻辑完全一致）
+
+    直接修改传入的数组，无需返回值。
+    """
+    cdef double bid_multiplier = 1.0 + skew_factor
+    cdef double ask_multiplier = 1.0 - skew_factor
+    cdef int i
+    cdef double total_bid = 0.0
+    cdef double total_ask = 0.0
+    cdef double total
+    cdef double bid_side_ratio, ask_side_ratio
+    cdef double target_bid_total, target_ask_total
+    cdef double bid_adjusted[10]
+    cdef double ask_adjusted[10]
+
+    # 计算调整后的权重
+    for i in range(10):
+        bid_adjusted[i] = bid_ratios[i] * bid_multiplier
+        ask_adjusted[i] = ask_ratios[i] * ask_multiplier
+        total_bid = total_bid + bid_adjusted[i]
+        total_ask = total_ask + ask_adjusted[i]
+
+    total = total_bid + total_ask
+
+    if total <= 0:
+        # 平均分配
+        for i in range(10):
+            bid_ratios[i] = 0.1
+            ask_ratios[i] = 0.1
+        return
+
+    bid_side_ratio = total_bid / total
+    ask_side_ratio = total_ask / total
+
+    # 确保每边至少有 min_side_weight
+    if bid_side_ratio < min_side_weight:
+        target_bid_total = min_side_weight
+        target_ask_total = 1.0 - min_side_weight
+    elif ask_side_ratio < min_side_weight:
+        target_ask_total = min_side_weight
+        target_bid_total = 1.0 - min_side_weight
+    else:
+        target_bid_total = bid_side_ratio
+        target_ask_total = ask_side_ratio
+
+    # 归一化并应用目标比例
+    if total_bid > 0:
+        for i in range(10):
+            bid_ratios[i] = bid_adjusted[i] / total_bid * target_bid_total
+    else:
+        for i in range(10):
+            bid_ratios[i] = target_bid_total / 10
+
+    if total_ask > 0:
+        for i in range(10):
+            ask_ratios[i] = ask_adjusted[i] / total_ask * target_ask_total
+    else:
+        for i in range(10):
+            ask_ratios[i] = target_ask_total / 10
+
+
+cdef void _parse_market_maker_full_single(
+    int agent_idx,
+    double* nn_output,
+    MarketMakerOrdersResult* result,
+    BatchAgentState* agents,
+    double mid_price,
+    double tick_size,
+) noexcept nogil:
+    """解析做市商的神经网络输出并直接生成订单数据
+
+    神经网络输出结构（共 41 个值）：
+    - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到1-100 ticks）
+    - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1）
+    - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到1-100 ticks）
+    - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
+    - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
+    """
+    cdef double MAX_ORDER_QUANTITY = 100000000.0
+    cdef double MIN_SIDE_WEIGHT = 0.1
+
+    cdef int i, num_bid, num_ask
+    cdef double bid_ratios[10]
+    cdef double ask_ratios[10]
+    cdef double total_raw_ratio, total_ratio_raw, total_ratio_clipped, total_ratio
+    cdef double skew_factor
+    cdef double equity, leverage, max_pos_value, current_pos, current_pos_value
+    cdef double avail_buy, avail_sell
+    cdef double offset, ticks, price, ratio, qty_raw
+    cdef int qty
+
+    # 初始化结果
+    result.num_bid_orders = 0
+    result.num_ask_orders = 0
+
+    # 提取 agent 状态
+    equity = agents.available_margin[agent_idx]  # 实际是 equity
+    leverage = agents.leverage[agent_idx]
+    current_pos = agents.position_quantity[agent_idx]
+
+    if equity <= 0:
+        return
+
+    # 计算权重比例（从神经网络输出）
+    total_raw_ratio = 0.0
+    for i in range(10):
+        # bid_qty_weights[i] = nn_output[10+i]
+        bid_ratios[i] = (clip(nn_output[10 + i], -1.0, 1.0) + 1.0) * 0.5
+        if bid_ratios[i] < 0:
+            bid_ratios[i] = 0
+        total_raw_ratio = total_raw_ratio + bid_ratios[i]
+
+        # ask_qty_weights[i] = nn_output[30+i]
+        ask_ratios[i] = (clip(nn_output[30 + i], -1.0, 1.0) + 1.0) * 0.5
+        if ask_ratios[i] < 0:
+            ask_ratios[i] = 0
+        total_raw_ratio = total_raw_ratio + ask_ratios[i]
+
+    # 归一化
+    if total_raw_ratio > 0:
+        for i in range(10):
+            bid_ratios[i] = bid_ratios[i] / total_raw_ratio
+            ask_ratios[i] = ask_ratios[i] / total_raw_ratio
+    else:
+        # 全部为零，平均分配
+        for i in range(10):
+            bid_ratios[i] = 0.05
+            ask_ratios[i] = 0.05
+
+    # 应用仓位倾斜
+    skew_factor = _calculate_skew_factor(equity, leverage, current_pos, mid_price)
+    _apply_position_skew_nogil(bid_ratios, ask_ratios, skew_factor, MIN_SIDE_WEIGHT)
+
+    # 总下单比例
+    total_ratio_raw = nn_output[40]
+    total_ratio_clipped = clip(total_ratio_raw, -1.0, 1.0)
+    total_ratio = 0.01 + (total_ratio_clipped + 1) * 0.5 * 0.99
+
+    for i in range(10):
+        bid_ratios[i] = bid_ratios[i] * total_ratio
+        ask_ratios[i] = ask_ratios[i] * total_ratio
+
+    # 计算可用仓位价值
+    max_pos_value = equity * leverage
+    current_pos_value = fabs(current_pos) * mid_price
+
+    if current_pos >= 0:
+        avail_buy = max_pos_value - current_pos_value
+        if avail_buy < 0:
+            avail_buy = 0
+    else:
+        avail_buy = current_pos_value + max_pos_value
+
+    if current_pos <= 0:
+        avail_sell = max_pos_value - current_pos_value
+        if avail_sell < 0:
+            avail_sell = 0
+    else:
+        avail_sell = current_pos_value + max_pos_value
+
+    # 生成订单
+    num_bid = 0
+    num_ask = 0
+
+    for i in range(10):
+        # 买单处理
+        ratio = bid_ratios[i]
+        if ratio > 0:
+            offset = clip(nn_output[i], -1.0, 1.0)
+            ticks = 1 + (offset + 1) * 49.5
+            price = mid_price - ticks * tick_size
+            price = round_price(price, tick_size)
+            if price > 0:
+                qty_raw = avail_buy * ratio / price
+                if qty_raw >= 1.0:
+                    qty = <int>qty_raw
+                    if qty > <int>MAX_ORDER_QUANTITY:
+                        qty = <int>MAX_ORDER_QUANTITY
+                    result.bid_prices[num_bid] = price
+                    result.bid_quantities[num_bid] = qty
+                    num_bid = num_bid + 1
+
+        # 卖单处理
+        ratio = ask_ratios[i]
+        if ratio > 0:
+            offset = clip(nn_output[20 + i], -1.0, 1.0)
+            ticks = 1 + (offset + 1) * 49.5
+            price = mid_price + ticks * tick_size
+            price = round_price(price, tick_size)
+            if price > 0:
+                qty_raw = avail_sell * ratio / price
+                if qty_raw >= 1.0:
+                    qty = <int>qty_raw
+                    if qty > <int>MAX_ORDER_QUANTITY:
+                        qty = <int>MAX_ORDER_QUANTITY
+                    result.ask_prices[num_ask] = price
+                    result.ask_quantities[num_ask] = qty
+                    num_ask = num_ask + 1
+
+    result.num_bid_orders = num_bid
+    result.num_ask_orders = num_ask
+
+
+cdef void batch_parse_market_maker_full_multi_market_nogil(
+    double[:, :] nn_outputs,
+    MarketMakerOrdersResult* mm_orders,
+    BatchAgentState* agents,
+    MarketStateData** markets,
+    int* market_indices,
+    int num_agents,
+    int num_threads
+) noexcept nogil:
+    """批量解析做市商的神经网络输出（完整版本，直接返回订单数据）"""
+    cdef int i
+    cdef int market_idx
+    cdef double mid_price, tick_size
+
+    for i in prange(num_agents, nogil=True, num_threads=num_threads, schedule='static'):
+        market_idx = market_indices[i]
+        mid_price = markets[market_idx].mid_price
+        tick_size = markets[market_idx].tick_size
+        _parse_market_maker_full_single(i, &nn_outputs[i, 0], &mm_orders[i], agents, mid_price, tick_size)
+
+
+# ============================================================================
 # Python 入口函数
 # ============================================================================
 
@@ -1745,6 +2027,9 @@ cdef class BatchNetworkCache:
         self.multi_arena_inputs = np.zeros((max_total_tasks, self.input_dim), dtype=np.float64)
         self.multi_arena_outputs = np.zeros((max_total_tasks, self.output_dim), dtype=np.float64)
 
+        # 做市商订单结果预分配
+        self.multi_arena_mm_orders = alloc_mm_orders_results(max_total_tasks)
+
     def __dealloc__(self):
         """释放所有分配的内存"""
         if self.network_data != NULL:
@@ -1769,6 +2054,8 @@ cdef class BatchNetworkCache:
             free(self.multi_arena_market_indices)
         if self.multi_arena_results != NULL:
             free(self.multi_arena_results)
+        if self.multi_arena_mm_orders != NULL:
+            free_mm_orders_results(self.multi_arena_mm_orders)
 
     def update_networks(self, list networks):
         """更新缓存的网络数据
@@ -2154,11 +2441,14 @@ cdef class BatchNetworkCache:
         Returns:
             如果 return_array=False:
                 dict[arena_idx, list[(action_type, side, price, quantity)]]
-                对于做市商类型，返回 dict[arena_idx, list[(nn_output, mid_price, tick_size)]]
+                对于做市商类型，返回 dict[arena_idx, list[dict]] 其中 dict 包含:
+                    - "bid_orders": list[dict] 包含 {"price": float, "quantity": float}
+                    - "ask_orders": list[dict] 包含 {"price": float, "quantity": float}
             如果 return_array=True:
                 dict[arena_idx, np.ndarray] 其中数组 shape=(num_agents, 4)
                 列顺序: [action_type, side, price, quantity]
-                做市商类型仍返回 list 格式
+                做市商类型返回 dict[arena_idx, np.ndarray] shape=(num_agents, 42)
+                列顺序: [num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
         """
         cdef int num_arenas = len(agent_states_per_arena)
         if num_arenas == 0 or self.network_data == NULL:
@@ -2182,6 +2472,7 @@ cdef class BatchNetworkCache:
         cdef int* network_indices
         cdef int* market_indices
         cdef DecisionResult* results
+        cdef MarketMakerOrdersResult* mm_orders
         cdef np.ndarray inputs
         cdef np.ndarray outputs
         cdef bint use_preallocated = (total_tasks <= self.multi_arena_max_tasks and
@@ -2194,6 +2485,7 @@ cdef class BatchNetworkCache:
             network_indices = self.multi_arena_network_indices
             market_indices = self.multi_arena_market_indices
             results = self.multi_arena_results
+            mm_orders = self.multi_arena_mm_orders
             inputs = self.multi_arena_inputs
             outputs = self.multi_arena_outputs
         else:
@@ -2203,11 +2495,12 @@ cdef class BatchNetworkCache:
             network_indices = <int*>calloc(total_tasks, sizeof(int))
             market_indices = <int*>calloc(total_tasks, sizeof(int))
             results = <DecisionResult*>calloc(total_tasks, sizeof(DecisionResult))
+            mm_orders = alloc_mm_orders_results(total_tasks)
             inputs = np.zeros((total_tasks, self.input_dim), dtype=np.float64)
             outputs = np.zeros((total_tasks, self.output_dim), dtype=np.float64)
 
             # 检查分配
-            if all_agents == NULL or multi_markets == NULL or network_indices == NULL or market_indices == NULL or results == NULL:
+            if all_agents == NULL or multi_markets == NULL or network_indices == NULL or market_indices == NULL or results == NULL or mm_orders == NULL:
                 if all_agents != NULL:
                     free_batch_agent_state(all_agents)
                 if multi_markets != NULL:
@@ -2218,6 +2511,8 @@ cdef class BatchNetworkCache:
                     free(market_indices)
                 if results != NULL:
                     free(results)
+                if mm_orders != NULL:
+                    free_mm_orders_results(mm_orders)
                 return {}
 
         # 提取所有市场状态
@@ -2303,9 +2598,9 @@ cdef class BatchNetworkCache:
                     outputs_view, results, all_agents, multi_markets, market_indices,
                     total_tasks, self.num_threads
                 )
-            else:  # market_maker
-                batch_parse_market_maker_multi_market_nogil(
-                    outputs_view, results, multi_markets, market_indices,
+            else:  # market_maker - 使用完整解析，直接生成订单数据
+                batch_parse_market_maker_full_multi_market_nogil(
+                    outputs_view, mm_orders, all_agents, multi_markets, market_indices,
                     total_tasks, self.num_threads
                 )
 
@@ -2316,22 +2611,51 @@ cdef class BatchNetworkCache:
         cdef double tick_size
         cdef np.ndarray result_array
         cdef double[:, :] result_array_view
+        cdef MarketMakerOrdersResult* mm_result
+        cdef int k
+        cdef dict mm_params
+        cdef list bid_orders, ask_orders
 
         for arena_idx in range(num_arenas):
             offset = arena_offsets[arena_idx]
             num_agents_in_arena = arena_offsets[arena_idx + 1] - offset
 
-            if self.cache_type == 2:  # market_maker - 始终返回 list 格式
-                result_list = []
-                mid_price = market_states[arena_idx].mid_price
-                tick_size = market_states[arena_idx].tick_size
-                for i in range(num_agents_in_arena):
-                    result_list.append((
-                        np.asarray(outputs[offset + i]).copy(),
-                        mid_price,
-                        tick_size,
-                    ))
-                result_dict[arena_idx] = result_list
+            if self.cache_type == 2:  # market_maker
+                if return_array:
+                    # 返回 NumPy 数组格式：shape=(num_agents, 42)
+                    # [num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+                    result_array = np.zeros((num_agents_in_arena, 42), dtype=np.float64)
+                    result_array_view = result_array
+                    for i in range(num_agents_in_arena):
+                        mm_result = &mm_orders[offset + i]
+                        result_array_view[i, 0] = <double>mm_result.num_bid_orders
+                        result_array_view[i, 1] = <double>mm_result.num_ask_orders
+                        for k in range(10):
+                            result_array_view[i, 2 + k] = mm_result.bid_prices[k]
+                            result_array_view[i, 12 + k] = <double>mm_result.bid_quantities[k]
+                            result_array_view[i, 22 + k] = mm_result.ask_prices[k]
+                            result_array_view[i, 32 + k] = <double>mm_result.ask_quantities[k]
+                    result_dict[arena_idx] = result_array
+                else:
+                    # 返回 list[dict] 格式
+                    result_list = []
+                    for i in range(num_agents_in_arena):
+                        mm_result = &mm_orders[offset + i]
+                        bid_orders = []
+                        ask_orders = []
+                        for k in range(mm_result.num_bid_orders):
+                            bid_orders.append({
+                                "price": mm_result.bid_prices[k],
+                                "quantity": <double>mm_result.bid_quantities[k]
+                            })
+                        for k in range(mm_result.num_ask_orders):
+                            ask_orders.append({
+                                "price": mm_result.ask_prices[k],
+                                "quantity": <double>mm_result.ask_quantities[k]
+                            })
+                        mm_params = {"bid_orders": bid_orders, "ask_orders": ask_orders}
+                        result_list.append(mm_params)
+                    result_dict[arena_idx] = result_list
             elif return_array:  # retail/full - 返回 NumPy 数组
                 result_array = np.zeros((num_agents_in_arena, 4), dtype=np.float64)
                 result_array_view = result_array
@@ -2359,6 +2683,7 @@ cdef class BatchNetworkCache:
             free(network_indices)
             free(market_indices)
             free(results)
+            free_mm_orders_results(mm_orders)
 
         return result_dict
 

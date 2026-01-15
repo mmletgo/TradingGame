@@ -698,8 +698,31 @@ pool.shutdown()
 **缓存类方法：**
 - `update_networks(networks)` - 从 Python 网络对象提取数据到 C 结构（进化后调用一次）
 - `decide(inputs, orderbooks, mid_prices)` - 使用缓存数据执行批量决策（每 tick 调用）
+- `decide_multi_arena_direct(states, markets, indices, return_array)` - 跨竞技场批量推理，做市商返回解析后的订单数据
 - `is_valid()` - 检查缓存是否有效
 - `clear()` - 清空缓存
+
+**做市商解析优化（P3）：**
+
+将做市商神经网络输出解析从 Python 端移到 Cython 端，直接在 `nogil` 块中完成订单生成：
+
+1. **新增数据结构**：
+   - `MarketMakerOrdersResult` - 存储解析后的订单数据（最多10个买单+10个卖单）
+   - 预分配缓冲区 `multi_arena_mm_orders`，避免每次调用分配内存
+
+2. **新增函数**：
+   - `_calculate_skew_factor()` - 计算仓位倾斜因子（与 Python 端逻辑一致）
+   - `_apply_position_skew_nogil()` - 应用仓位倾斜到权重（nogil 兼容）
+   - `_parse_market_maker_full_single()` - 单个做市商完整解析（直接生成订单）
+   - `batch_parse_market_maker_full_multi_market_nogil()` - 批量做市商解析（OpenMP 并行）
+
+3. **返回格式变更**：
+   - `return_array=False`：返回 `list[dict]`，dict 包含 `{"bid_orders": [...], "ask_orders": [...]}`
+   - `return_array=True`：返回 `np.ndarray` shape=(num_agents, 42)
+
+4. **性能提升**：
+   - 做市商解析耗时从 ~456ms/tick 降到 ~6.7ms/tick
+   - **加速比：约 68x**
 
 **Trainer 集成：**
 - `_init_network_caches()` - 在 `setup()` 末尾初始化缓存

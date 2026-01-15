@@ -87,6 +87,16 @@ cdef struct DecisionResult:
     double quantity
 
 
+# 做市商订单结果（每个做市商最多10个买单+10个卖单）
+cdef struct MarketMakerOrdersResult:
+    int num_bid_orders          # 实际买单数量 (0-10)
+    int num_ask_orders          # 实际卖单数量 (0-10)
+    double bid_prices[10]       # 买单价格
+    int bid_quantities[10]      # 买单数量
+    double ask_prices[10]       # 卖单价格
+    int ask_quantities[10]      # 卖单数量
+
+
 # ============================================================================
 # 内存管理函数
 # ============================================================================
@@ -109,6 +119,10 @@ cdef void free_market_state_data(MarketStateData* data) noexcept
 # 多市场状态内存管理
 cdef MarketStateData** alloc_multi_market_state_data(int num_arenas) noexcept
 cdef void free_multi_market_state_data(MarketStateData** data, int num_arenas) noexcept
+
+# 做市商订单结果内存管理
+cdef MarketMakerOrdersResult* alloc_mm_orders_results(int num_agents) noexcept
+cdef void free_mm_orders_results(MarketMakerOrdersResult* data) noexcept
 
 
 # ============================================================================
@@ -224,6 +238,17 @@ cdef void batch_parse_market_maker_multi_market_nogil(
     int num_threads
 ) noexcept nogil
 
+# 做市商完整解析（直接返回订单数据，不再需要 Python 端解析）
+cdef void batch_parse_market_maker_full_multi_market_nogil(
+    double[:, :] nn_outputs,
+    MarketMakerOrdersResult* mm_orders,
+    BatchAgentState* agents,
+    MarketStateData** markets,
+    int* market_indices,
+    int num_agents,
+    int num_threads
+) noexcept nogil
+
 
 # ============================================================================
 # 缓存类型常量
@@ -281,3 +306,6 @@ cdef class BatchNetworkCache:
     # 预分配的 NumPy 数组（多竞技场用）
     cdef object multi_arena_inputs   # np.ndarray
     cdef object multi_arena_outputs  # np.ndarray
+
+    # 做市商订单结果预分配
+    cdef MarketMakerOrdersResult* multi_arena_mm_orders
