@@ -70,6 +70,9 @@ class ArenaExecuteData:
         decisions_array: 非做市商决策 NumPy 数组（用于共享内存优化），
             shape (N, 5)，列顺序: [agent_id, action_int, side_int, price, quantity]
             如果提供此字段，则优先使用此字段而非 decisions 列表
+        mm_decisions_array: 做市商决策 NumPy 数组（P3优化），
+            shape (N, 43)，列顺序: [agent_id, num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+            如果提供此字段，则优先使用此字段而非 mm_decisions 列表
     """
 
     liquidated_agents: list[tuple[int, int, bool]] = field(default_factory=list)
@@ -78,6 +81,7 @@ class ArenaExecuteData:
         field(default_factory=list)
     )
     decisions_array: NDArray[np.float64] | None = None
+    mm_decisions_array: NDArray[np.float64] | None = None
 
 
 @dataclass
@@ -457,66 +461,137 @@ def _handle_execute(
                 arena.recent_trades.append(trade)
 
     # 2. 处理做市商决策
-    for agent_id, bid_orders, ask_orders in execute_data.mm_decisions:
-        # 确保订单计数器存在
-        if agent_id not in arena.order_counters:
-            arena.order_counters[agent_id] = 0
+    # P3 优化：优先使用 NumPy 数组格式
+    if execute_data.mm_decisions_array is not None and len(execute_data.mm_decisions_array) > 0:
+        # 使用 NumPy 数组格式
+        # 列顺序: [agent_id, num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+        mm_arr = execute_data.mm_decisions_array
+        for row_idx in range(len(mm_arr)):
+            agent_id = int(mm_arr[row_idx, 0])
+            num_bid = int(mm_arr[row_idx, 1])
+            num_ask = int(mm_arr[row_idx, 2])
 
-        # 撤销旧挂单
-        for order_id in arena.mm_bid_order_ids.get(agent_id, []):
-            cancel_order(order_id)
-        for order_id in arena.mm_ask_order_ids.get(agent_id, []):
-            cancel_order(order_id)
+            # 确保订单计数器存在
+            if agent_id not in arena.order_counters:
+                arena.order_counters[agent_id] = 0
 
-        bid_ids: list[int] = []
-        ask_ids: list[int] = []
+            # 撤销旧挂单
+            for order_id in arena.mm_bid_order_ids.get(agent_id, []):
+                cancel_order(order_id)
+            for order_id in arena.mm_ask_order_ids.get(agent_id, []):
+                cancel_order(order_id)
 
-        # 挂买单
-        for order_spec in bid_orders:
-            arena.order_counters[agent_id] += 1
-            order_id = generate_order_id(
-                arena.arena_id, agent_id, arena.order_counters[agent_id]
-            )
-            order = Order(
-                order_id=order_id,
-                agent_id=agent_id,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                price=order_spec["price"],
-                quantity=int(order_spec["quantity"]),
-            )
-            trades = process_order(order)
-            for trade in trades:
-                all_trades.append(_trade_to_tuple(trade))
-                arena.recent_trades.append(trade)
-            if order_map_get(order_id):
-                bid_ids.append(order_id)
+            bid_ids: list[int] = []
+            ask_ids: list[int] = []
 
-        # 挂卖单
-        for order_spec in ask_orders:
-            arena.order_counters[agent_id] += 1
-            order_id = generate_order_id(
-                arena.arena_id, agent_id, arena.order_counters[agent_id]
-            )
-            order = Order(
-                order_id=order_id,
-                agent_id=agent_id,
-                side=OrderSide.SELL,
-                order_type=OrderType.LIMIT,
-                price=order_spec["price"],
-                quantity=int(order_spec["quantity"]),
-            )
-            trades = process_order(order)
-            for trade in trades:
-                all_trades.append(_trade_to_tuple(trade))
-                arena.recent_trades.append(trade)
-            if order_map_get(order_id):
-                ask_ids.append(order_id)
+            # 挂买单（价格在列3-12，数量在列13-22）
+            for k in range(num_bid):
+                arena.order_counters[agent_id] += 1
+                order_id = generate_order_id(
+                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                )
+                order = Order(
+                    order_id=order_id,
+                    agent_id=agent_id,
+                    side=OrderSide.BUY,
+                    order_type=OrderType.LIMIT,
+                    price=mm_arr[row_idx, 3 + k],
+                    quantity=int(mm_arr[row_idx, 13 + k]),
+                )
+                trades = process_order(order)
+                for trade in trades:
+                    all_trades.append(_trade_to_tuple(trade))
+                    arena.recent_trades.append(trade)
+                if order_map_get(order_id):
+                    bid_ids.append(order_id)
 
-        # 更新挂单记录
-        arena.mm_bid_order_ids[agent_id] = bid_ids
-        arena.mm_ask_order_ids[agent_id] = ask_ids
-        mm_order_updates[agent_id] = (bid_ids, ask_ids)
+            # 挂卖单（价格在列23-32，数量在列33-42）
+            for k in range(num_ask):
+                arena.order_counters[agent_id] += 1
+                order_id = generate_order_id(
+                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                )
+                order = Order(
+                    order_id=order_id,
+                    agent_id=agent_id,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.LIMIT,
+                    price=mm_arr[row_idx, 23 + k],
+                    quantity=int(mm_arr[row_idx, 33 + k]),
+                )
+                trades = process_order(order)
+                for trade in trades:
+                    all_trades.append(_trade_to_tuple(trade))
+                    arena.recent_trades.append(trade)
+                if order_map_get(order_id):
+                    ask_ids.append(order_id)
+
+            # 更新挂单记录
+            arena.mm_bid_order_ids[agent_id] = bid_ids
+            arena.mm_ask_order_ids[agent_id] = ask_ids
+            mm_order_updates[agent_id] = (bid_ids, ask_ids)
+    else:
+        # 回退到 list 格式
+        for agent_id, bid_orders, ask_orders in execute_data.mm_decisions:
+            # 确保订单计数器存在
+            if agent_id not in arena.order_counters:
+                arena.order_counters[agent_id] = 0
+
+            # 撤销旧挂单
+            for order_id in arena.mm_bid_order_ids.get(agent_id, []):
+                cancel_order(order_id)
+            for order_id in arena.mm_ask_order_ids.get(agent_id, []):
+                cancel_order(order_id)
+
+            bid_ids = []
+            ask_ids = []
+
+            # 挂买单
+            for order_spec in bid_orders:
+                arena.order_counters[agent_id] += 1
+                order_id = generate_order_id(
+                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                )
+                order = Order(
+                    order_id=order_id,
+                    agent_id=agent_id,
+                    side=OrderSide.BUY,
+                    order_type=OrderType.LIMIT,
+                    price=order_spec["price"],
+                    quantity=int(order_spec["quantity"]),
+                )
+                trades = process_order(order)
+                for trade in trades:
+                    all_trades.append(_trade_to_tuple(trade))
+                    arena.recent_trades.append(trade)
+                if order_map_get(order_id):
+                    bid_ids.append(order_id)
+
+            # 挂卖单
+            for order_spec in ask_orders:
+                arena.order_counters[agent_id] += 1
+                order_id = generate_order_id(
+                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                )
+                order = Order(
+                    order_id=order_id,
+                    agent_id=agent_id,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.LIMIT,
+                    price=order_spec["price"],
+                    quantity=int(order_spec["quantity"]),
+                )
+                trades = process_order(order)
+                for trade in trades:
+                    all_trades.append(_trade_to_tuple(trade))
+                    arena.recent_trades.append(trade)
+                if order_map_get(order_id):
+                    ask_ids.append(order_id)
+
+            # 更新挂单记录
+            arena.mm_bid_order_ids[agent_id] = bid_ids
+            arena.mm_ask_order_ids[agent_id] = ask_ids
+            mm_order_updates[agent_id] = (bid_ids, ask_ids)
 
     # 3. 处理非做市商决策
     for agent_id, action_int, side_int, price, quantity in execute_data.decisions:

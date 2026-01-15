@@ -1152,56 +1152,16 @@ class ParallelArenaTrainer:
                         (state.agent_id, state.position_quantity, is_mm)
                     )
 
-            # 转换决策数据
-            mm_decisions: list[
-                tuple[int, list[dict[str, float]], list[dict[str, float]]]
-            ] = []
-            non_mm_decisions: list[tuple[int, int, int, float, int]] = []
-
-            for state, action, params in decisions:
-                if state.agent_type == AgentType.MARKET_MAKER:
-                    bid_orders = params.get("bid_orders", [])
-                    ask_orders = params.get("ask_orders", [])
-                    mm_decisions.append((state.agent_id, bid_orders, ask_orders))
-                else:
-                    # 转换 action 到 int
-                    action_int = 0  # HOLD
-                    if action == ActionType.PLACE_BID:
-                        action_int = 1
-                    elif action == ActionType.PLACE_ASK:
-                        action_int = 2
-                    elif action == ActionType.CANCEL:
-                        action_int = 3
-                    elif action == ActionType.MARKET_BUY:
-                        action_int = 4
-                    elif action == ActionType.MARKET_SELL:
-                        action_int = 5
-
-                    if action_int == 0:  # HOLD
-                        continue
-
-                    # 方向
-                    side_int = (
-                        1
-                        if action in (ActionType.PLACE_BID, ActionType.MARKET_BUY)
-                        else 2
-                    )
-
-                    price = params.get("price", 0.0)
-                    quantity = int(params.get("quantity", 0))
-
-                    non_mm_decisions.append(
-                        (state.agent_id, action_int, side_int, price, quantity)
-                    )
-
-            # 尝试从缓存的数组结果构建 decisions_array
+            # P3 优化：直接从缓存构建数组，跳过 list 格式转换
             decisions_array = self._build_decisions_array_from_cache(arena_idx)
+            mm_decisions_array = self._build_mm_decisions_array_from_cache(arena_idx)
 
             arena_commands[arena_idx] = ArenaExecuteData(
                 liquidated_agents=liquidated_agents,
-                decisions=non_mm_decisions,
-                mm_decisions=mm_decisions,
+                decisions=[],  # 使用 decisions_array
+                mm_decisions=[],  # 使用 mm_decisions_array
                 decisions_array=decisions_array,
+                mm_decisions_array=mm_decisions_array,
             )
 
         # 调用 Worker 池执行
@@ -1228,6 +1188,10 @@ class ParallelArenaTrainer:
         arrays_to_concat: list[np.ndarray] = []
 
         for agent_type, arena_data in self._last_inference_arrays.items():
+            # P3 优化：跳过做市商（其数组是 42 列，格式不同）
+            if agent_type == AgentType.MARKET_MAKER:
+                continue
+
             if arena_idx not in arena_data:
                 continue
 
@@ -1252,6 +1216,43 @@ class ParallelArenaTrainer:
         # 合并所有类型的数组
         combined_array = np.vstack(arrays_to_concat)
         return combined_array
+
+    def _build_mm_decisions_array_from_cache(
+        self, arena_idx: int
+    ) -> np.ndarray | None:
+        """从缓存的推理结果构建做市商 mm_decisions_array
+
+        P3 优化：直接使用 Cython 返回的数组格式，添加 agent_id 列。
+
+        Args:
+            arena_idx: 竞技场索引
+
+        Returns:
+            mm_decisions_array: shape (N, 43)，列顺序:
+                [agent_id, num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+            如果没有缓存，返回 None
+        """
+        if not self._last_inference_arrays:
+            return None
+
+        # 只取做市商类型的缓存
+        mm_data = self._last_inference_arrays.get(AgentType.MARKET_MAKER)
+        if mm_data is None or arena_idx not in mm_data:
+            return None
+
+        agent_ids, mm_array = mm_data[arena_idx]
+        if len(mm_array) == 0:
+            return None
+
+        # mm_array 的列顺序是 [num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+        # 构建带 agent_id 的数组: [agent_id, num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+        full_array = np.column_stack(
+            [
+                agent_ids.reshape(-1, 1),
+                mm_array,
+            ]
+        )
+        return full_array
 
     def _process_worker_results(
         self,
@@ -1954,21 +1955,20 @@ class ParallelArenaTrainer:
             is_market_maker = agent_type == AgentType.MARKET_MAKER
 
             # 调用 decide_multi_arena_direct 进行批量推理
-            # 非做市商类型使用 return_array=True 以获取 NumPy 数组格式
+            # P3 优化：所有类型都使用 return_array=True 以获取 NumPy 数组格式
             try:
                 raw_results = cache.decide_multi_arena_direct(
                     states_per_arena,
                     market_states,
                     network_indices_per_arena,
-                    return_array=not is_market_maker,
+                    return_array=True,
                 )
             except Exception as e:
                 self.logger.warning(f"批量决策失败 {agent_type.value}: {e}")
                 continue
 
             # 初始化该类型的数组缓存
-            if not is_market_maker:
-                self._last_inference_arrays[agent_type] = {}
+            self._last_inference_arrays[agent_type] = {}
 
             # 解析结果并填充到 results
             for result_idx, arena_idx in enumerate(sorted_arena_indices):
@@ -1981,16 +1981,48 @@ class ParallelArenaTrainer:
                 )
 
                 if is_market_maker:
-                    # 做市商：Cython 已完成解析，raw_results 是 list[dict] 格式
-                    # 每个 dict 包含 {"bid_orders": [...], "ask_orders": [...]}
-                    if arena_results is None:
-                        arena_results = []
-                    for i, params in enumerate(arena_results):
-                        if i >= len(arena_states_list):
-                            break
+                    # 做市商：raw_results 是 NumPy 数组 shape=(num_agents, 42)
+                    # 列顺序: [num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+                    if arena_results is None or len(arena_results) == 0:
+                        continue
 
+                    mm_array: np.ndarray = arena_results
+                    num_agents = min(len(mm_array), len(arena_states_list))
+
+                    # 构建 agent_ids 数组
+                    agent_ids = np.array(
+                        [arena_states_list[i].agent_id for i in range(num_agents)],
+                        dtype=np.float64,
+                    )
+
+                    # P3 优化：缓存做市商数组供 _execute_with_worker_pool 使用
+                    self._last_inference_arrays[agent_type][arena_idx] = (
+                        agent_ids,
+                        mm_array[:num_agents].copy(),
+                    )
+
+                    # 如果使用 Worker pool，跳过填充 list 格式结果
+                    if self._execute_worker_pool is not None:
+                        continue
+
+                    # 串行执行路径：填充 list 格式结果
+                    for i in range(num_agents):
                         state = arena_states_list[i]
-                        # 直接使用 Cython 返回的订单数据，无需再解析
+                        num_bid = int(mm_array[i, 0])
+                        num_ask = int(mm_array[i, 1])
+                        bid_orders = []
+                        ask_orders = []
+                        for k in range(num_bid):
+                            bid_orders.append({
+                                "price": mm_array[i, 2 + k],
+                                "quantity": mm_array[i, 12 + k],
+                            })
+                        for k in range(num_ask):
+                            ask_orders.append({
+                                "price": mm_array[i, 22 + k],
+                                "quantity": mm_array[i, 32 + k],
+                            })
+                        params = {"bid_orders": bid_orders, "ask_orders": ask_orders}
                         results[arena_idx].append(
                             (state, ActionType.HOLD, params)
                         )
