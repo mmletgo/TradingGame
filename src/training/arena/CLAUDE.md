@@ -658,3 +658,7 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 4. **内存管理**：每轮训练后进行垃圾回收和 malloc_trim
 5. **Checkpoint 体积优化**：使用 gzip 压缩保存检查点文件
 6. **AgentAccountState 复用**：`_refresh_agent_states()` 使用快速路径检测，进化后不重新创建对象（从 ~90s 降至 0.1ms）
+7. **Worker 并行度优化**：`num_workers = min(num_arenas, 32)`，确保充分利用多核
+8. **跳过 HOLD 动作**：在推理结果解析阶段过滤掉 HOLD 动作（约减少 15-20% 的处理量）
+9. **执行阶段优化**：执行阶段耗时从 ~2543ms 降至 ~1080ms（-57%）
+10. **总体 tick 耗时**：从 ~4100ms 降至 ~2950ms（-28%，25竞技场×10300Agent 场景）
