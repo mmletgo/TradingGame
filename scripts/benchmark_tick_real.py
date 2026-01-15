@@ -223,6 +223,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=10, help="预热的 tick 数量")
     parser.add_argument("--arenas", type=int, default=25, help="竞技场数量")
     parser.add_argument("--episode-length", type=int, default=100, help="Episode 长度")
+    parser.add_argument("--catfish", action="store_true", help="启用鲶鱼机制（会禁用 Worker 池）")
 
     args = parser.parse_args()
 
@@ -236,13 +237,14 @@ def main() -> None:
     config = create_default_config(
         episode_length=args.episode_length,
         checkpoint_interval=0,
-        catfish_enabled=False,
+        catfish_enabled=args.catfish,
     )
     config.training.num_arenas = args.arenas
     config.training.episodes_per_arena = 1
 
     total_agents = sum(cfg.count for cfg in config.agents.values())
     print(f"竞技场数量: {args.arenas}")
+    print(f"鲶鱼机制: {'启用' if args.catfish else '禁用'}")
     print(f"总 Agent 数量: {total_agents}")
     for agent_type, cfg in config.agents.items():
         print(f"  - {agent_type.value}: {cfg.count}")
