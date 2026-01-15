@@ -10,7 +10,7 @@ def test_matching_engine_init_normal():
     """测试正常创建撮合引擎"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -39,7 +39,7 @@ def test_matching_engine_init_different_configs():
     # 不同的 depth
     config2 = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=50,
     )
@@ -51,7 +51,7 @@ def test_matching_engine_multiple_engines():
     """测试创建多个撮合引擎实例"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -73,7 +73,7 @@ def test_calculate_fee_retail_maker():
     """测试散户挂单费率（万2）"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -95,7 +95,7 @@ def test_calculate_fee_retail_taker():
     """测试散户吃单费率（万5）"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -117,7 +117,7 @@ def test_calculate_fee_whale():
     """测试庄家费率（挂单0，吃单万1）"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -139,7 +139,7 @@ def test_calculate_fee_market_maker():
     """测试做市商费率（挂单0，吃单万1）"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -161,7 +161,7 @@ def test_calculate_fee_unregistered_agent():
     """测试未注册的 Agent 使用默认散户费率"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -179,7 +179,7 @@ def test_calculate_fee_zero_amount():
     """测试成交金额为 0 时手续费为 0"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -199,7 +199,7 @@ def test_register_agent():
     """测试注册 Agent 费率"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -222,7 +222,7 @@ def test_multiple_agents_different_rates():
     """测试多个 Agent 使用不同费率"""
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -263,7 +263,7 @@ def test_match_limit_order_buy_with_asks():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -330,7 +330,7 @@ def test_match_limit_order_sell_with_bids():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -397,7 +397,7 @@ def test_match_limit_order_no_match():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -444,7 +444,7 @@ def test_match_limit_order_partial_fill():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -494,7 +494,7 @@ def test_match_limit_order_multiple_price_levels():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -575,7 +575,7 @@ def test_match_limit_order_empty_orderbook():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -610,7 +610,7 @@ def test_match_limit_order_fully_filled():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -664,7 +664,7 @@ def test_match_limit_order_orderbook_quantity():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -717,7 +717,7 @@ def test_match_market_order_buy_fully_filled():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -778,7 +778,7 @@ def test_match_market_order_sell_fully_filled():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -838,7 +838,7 @@ def test_match_market_order_buy_partial_fill():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -892,7 +892,7 @@ def test_match_market_order_sell_partial_fill():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -946,7 +946,7 @@ def test_match_market_order_empty_orderbook():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -983,7 +983,7 @@ def test_match_market_order_multiple_price_levels():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -1066,7 +1066,7 @@ def test_match_market_order_taker_fee():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -1114,7 +1114,7 @@ def test_process_order_limit_order():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -1161,7 +1161,7 @@ def test_process_order_market_order():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -1206,7 +1206,7 @@ def test_process_order_no_trade():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -1240,7 +1240,7 @@ def test_process_order_multiple_trades():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )
@@ -1297,7 +1297,7 @@ def test_process_order_partial_fill():
 
     config = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )

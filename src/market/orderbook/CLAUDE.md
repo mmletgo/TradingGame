@@ -266,7 +266,7 @@ from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
 
 # 创建订单簿
-ob = OrderBook(tick_size=0.1)
+ob = OrderBook(tick_size=0.01)
 
 # 添加买单
 order = Order(

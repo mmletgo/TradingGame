@@ -160,7 +160,7 @@ class TestAgentObserve:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建 NormalizedMarketState
@@ -177,7 +177,7 @@ class TestAgentObserve:
 
         market_state = NormalizedMarketState(
             mid_price=100.0,
-            tick_size=0.1,
+            tick_size=0.01,
             bid_data=np.array([0.1, 10.0] * 100, dtype=np.float32),  # 100档买盘
             ask_data=np.array([-0.1, 10.0] * 100, dtype=np.float32),  # 100档卖盘
             trade_prices=trade_prices,
@@ -232,11 +232,11 @@ class TestAgentObserve:
 
         # 创建空订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建空市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 observe
         inputs = agent.observe(market_state, orderbook)
@@ -278,11 +278,11 @@ class TestAgentObserve:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 设置持仓
         from src.market.orderbook.order import OrderSide
@@ -333,11 +333,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -374,11 +374,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -420,11 +420,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -465,11 +465,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -505,11 +505,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -547,11 +547,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -589,11 +589,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -629,11 +629,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide 应该抛出异常
         try:
@@ -672,11 +672,11 @@ class TestRetailProAgentDecide:
 
         # 创建订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -716,11 +716,11 @@ class TestRetailProAgentDecide:
 
         # 创建空订单簿
         from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -2339,11 +2339,11 @@ class TestMarketMakerAgentDecide:
         )
 
         # 创建订单簿
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -2392,11 +2392,11 @@ class TestMarketMakerAgentDecide:
         )
 
         # 创建订单簿
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -2429,11 +2429,11 @@ class TestMarketMakerAgentDecide:
         )
 
         # 创建订单簿
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide 应该抛出异常
         try:
@@ -2482,11 +2482,11 @@ class TestMarketMakerAgentDecide:
         )
 
         # 创建订单簿
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
@@ -2545,11 +2545,11 @@ class TestMarketMakerAgentDecide:
         )
 
         # 创建订单簿
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
         orderbook.last_price = 100.0
 
         # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.1)
+        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
 
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)

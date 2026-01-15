@@ -41,7 +41,7 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | initial_price | float | 必填 | 初始价格（默认 100.0） |
-| tick_size | float | 必填 | 最小变动单位（默认 0.1） |
+| tick_size | float | 必填 | 最小变动单位（默认 0.01） |
 | lot_size | float | 必填 | 最小交易单位（默认 1.0） |
 | depth | int | 必填 | 盘口深度（买卖各多少档，默认 100） |
 | ema_alpha | float | 0.1 | EMA 平滑系数，0-1 之间，值越小价格变化越平滑（训练时默认 1.0） |
@@ -269,7 +269,7 @@ from src.config.config import (
 
 market = MarketConfig(
     initial_price=100.0,
-    tick_size=0.1,
+    tick_size=0.01,
     lot_size=1.0,
     depth=100,
     ema_alpha=1.0

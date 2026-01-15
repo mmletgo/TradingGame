@@ -249,7 +249,7 @@ def test_create_orderbook_default():
     assert book.asks == {}
     assert book.order_map == {}
     assert book.last_price == 0.0
-    assert book.tick_size == 0.1
+    assert book.tick_size == 0.01
 
 
 def test_create_orderbook_custom_tick():

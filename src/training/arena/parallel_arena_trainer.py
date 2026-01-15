@@ -875,7 +875,7 @@ class ParallelArenaTrainer:
                 outputs = agent.brain.forward(inputs)  # type: ignore[attr-defined]
                 mid_price = market_state.mid_price
                 tick_size = (
-                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                    market_state.tick_size if market_state.tick_size > 0 else 0.01
                 )
 
                 # 使用 agent_state 解析输出
@@ -973,7 +973,7 @@ class ParallelArenaTrainer:
                 outputs = agent.brain.forward(inputs)  # type: ignore[attr-defined]
                 mid_price = market_state.mid_price
                 tick_size = (
-                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                    market_state.tick_size if market_state.tick_size > 0 else 0.01
                 )
 
                 # 使用 agent_state 解析输出
@@ -1873,7 +1873,7 @@ class ParallelArenaTrainer:
                 market_state = arena_market_states[arena_idx]
                 mid_price = market_state.mid_price
                 tick_size = (
-                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                    market_state.tick_size if market_state.tick_size > 0 else 0.01
                 )
 
                 for i, raw_result in enumerate(arena_results):
@@ -2023,7 +2023,7 @@ class ParallelArenaTrainer:
                 market_state = arena_market_states[arena_idx]
                 mid_price = market_state.mid_price
                 tick_size = (
-                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                    market_state.tick_size if market_state.tick_size > 0 else 0.01
                 )
 
                 if is_market_maker:
@@ -2102,7 +2102,7 @@ class ParallelArenaTrainer:
         arena = self.arena_states[arena_idx]
         orderbook = arena.matching_engine._orderbook
         mid_price = market_state.mid_price
-        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
 
         for adapter in adapters:
             agent = self._get_agent_by_id(adapter.agent_id)

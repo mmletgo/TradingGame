@@ -344,7 +344,7 @@ class MarketMakerAgent(Agent):
         if mid_price == 0:
             mid_price = 100.0
 
-        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
 
         # 计算仓位倾斜因子
         skew_factor = self._calculate_skew_factor(mid_price)

@@ -127,7 +127,7 @@ class RetailProAgent(Agent):
         quantity_ratio = (quantity_ratio_norm + 1) * 0.5  # -1→0, 0→0.5, 1→1.0
 
         # 获取 tick_size
-        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
 
         # 根据动作类型计算参数
         params: dict[str, Any] = {}

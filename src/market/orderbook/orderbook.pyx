@@ -93,7 +93,7 @@ cdef class OrderBook:
     cdef public object _cached_depth  # 缓存的深度数据
     cdef public int _cached_levels  # 缓存的档位数
 
-    def __init__(self, tick_size: float = 0.1) -> None:
+    def __init__(self, tick_size: float = 0.01) -> None:
         """
         创建订单簿
 

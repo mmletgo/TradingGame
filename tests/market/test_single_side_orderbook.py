@@ -56,7 +56,7 @@ def create_market_state_with_only_bids():
 
     return NormalizedMarketState(
         mid_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         bid_data=bid_data,
         ask_data=ask_data,
         trade_prices=np.zeros(100, dtype=np.float32),
@@ -79,7 +79,7 @@ def create_market_state_with_only_asks():
 
     return NormalizedMarketState(
         mid_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         bid_data=bid_data,
         ask_data=ask_data,
         trade_prices=np.zeros(100, dtype=np.float32),
@@ -91,7 +91,7 @@ def create_market_state_empty():
     """创建完全空的市场状态（买卖盘都为空）"""
     return NormalizedMarketState(
         mid_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         bid_data=np.zeros(200, dtype=np.float32),
         ask_data=np.zeros(200, dtype=np.float32),
         trade_prices=np.zeros(100, dtype=np.float32),
@@ -106,7 +106,7 @@ class TestSingleSideOrderbook:
         """测试散户在只有买盘时能否正常推理"""
         agent = create_test_agent(RetailAgent)
         market_state = create_market_state_with_only_bids()
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
 
         # 测试 observe 方法是否正常工作
         inputs = agent.observe(market_state, orderbook)
@@ -132,7 +132,7 @@ class TestSingleSideOrderbook:
         """测试散户在只有卖盘时能否正常推理"""
         agent = create_test_agent(RetailAgent)
         market_state = create_market_state_with_only_asks()
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
 
         # 测试 observe 方法是否正常工作
         inputs = agent.observe(market_state, orderbook)
@@ -158,7 +158,7 @@ class TestSingleSideOrderbook:
         """测试散户在完全空的订单簿时能否正常推理"""
         agent = create_test_agent(RetailAgent)
         market_state = create_market_state_empty()
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
 
         # 测试 observe 方法是否正常工作
         inputs = agent.observe(market_state, orderbook)
@@ -180,7 +180,7 @@ class TestSingleSideOrderbook:
         """测试高级散户在只有买盘时能否正常推理"""
         agent = create_test_agent(RetailProAgent)
         market_state = create_market_state_with_only_bids()
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
 
         # 测试 observe 方法是否正常工作
         inputs = agent.observe(market_state, orderbook)
@@ -203,7 +203,7 @@ class TestSingleSideOrderbook:
         """测试庄家在只有卖盘时能否正常推理"""
         agent = create_test_agent(WhaleAgent)
         market_state = create_market_state_with_only_asks()
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
 
         # 测试 observe 方法是否正常工作
         inputs = agent.observe(market_state, orderbook)
@@ -226,7 +226,7 @@ class TestSingleSideOrderbook:
         """测试神经网络在输入包含大量零值时能否正常前向传播"""
         agent = create_test_agent(RetailAgent)
         market_state = create_market_state_empty()
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
 
         # 多次测试确保稳定性
         for _ in range(10):
@@ -246,13 +246,13 @@ class TestSingleSideOrderbook:
         # 创建 mid_price 非常小的市场状态
         market_state = NormalizedMarketState(
             mid_price=0.001,  # 极小的中间价
-            tick_size=0.1,
+            tick_size=0.01,
             bid_data=np.zeros(200, dtype=np.float32),
             ask_data=np.zeros(200, dtype=np.float32),
             trade_prices=np.zeros(100, dtype=np.float32),
             trade_quantities=np.zeros(100, dtype=np.float32),
         )
-        orderbook = OrderBook(tick_size=0.1)
+        orderbook = OrderBook(tick_size=0.01)
 
         # 神经网络应该仍然能正常推理
         action, params = agent.decide(market_state, orderbook)
@@ -263,7 +263,7 @@ class TestSingleSideOrderbook:
         if action in [ActionType.PLACE_BID, ActionType.PLACE_ASK]:
             price = params.get("price", 0)
             # 价格应该至少是 tick_size
-            assert price >= 0.1, f"价格 {price} 应该至少为 tick_size (0.1)"
+            assert price >= 0.01, f"价格 {price} 应该至少为 tick_size (0.01)"
 
 
 if __name__ == "__main__":

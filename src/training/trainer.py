@@ -1565,7 +1565,7 @@ class Trainer:
         mid_price = market_state.mid_price
         if mid_price == 0:
             mid_price = 100.0
-        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+        tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
 
         agent_type = agent.agent_type
 
@@ -1787,7 +1787,7 @@ class Trainer:
 
             # 转换结果
             is_market_maker = (agent_type == AgentType.MARKET_MAKER)
-            tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+            tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
 
             for i, (idx, agent) in enumerate(group):
                 try:

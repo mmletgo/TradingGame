@@ -27,7 +27,7 @@ def mock_config() -> Config:
     """创建测试用配置"""
     market = MarketConfig(
         initial_price=100.0,
-        tick_size=0.1,
+        tick_size=0.01,
         lot_size=1.0,
         depth=100,
     )

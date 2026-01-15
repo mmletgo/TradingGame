@@ -228,7 +228,7 @@ class TestPopulationInit:
         return Config(
             market=MarketConfig(
                 initial_price=100.0,
-                tick_size=0.1,
+                tick_size=0.01,
                 lot_size=1.0,
                 depth=100,
             ),
@@ -606,7 +606,7 @@ class TestPopulationEvolve:
         return Config(
             market=MarketConfig(
                 initial_price=100.0,
-                tick_size=0.1,
+                tick_size=0.01,
                 lot_size=1.0,
                 depth=100,
             ),
@@ -825,7 +825,7 @@ class TestPopulationResetAgents:
         return Config(
             market=MarketConfig(
                 initial_price=100.0,
-                tick_size=0.1,
+                tick_size=0.01,
                 lot_size=1.0,
                 depth=100,
             ),
