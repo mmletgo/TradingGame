@@ -2293,10 +2293,17 @@ class Trainer:
         self._price_history.append(current_price)
 
         # 更新 episode 价格统计
-        if current_price > self._episode_high_price:
-            self._episode_high_price = current_price
-        if current_price < self._episode_low_price:
-            self._episode_low_price = current_price
+        if tick_trades:
+            tick_high = max(trade.price for trade in tick_trades)
+            tick_low = min(trade.price for trade in tick_trades)
+        else:
+            tick_high = current_price
+            tick_low = current_price
+
+        if tick_high > self._episode_high_price:
+            self._episode_high_price = tick_high
+        if tick_low < self._episode_low_price:
+            self._episode_low_price = tick_low
         # 限制历史长度（避免内存无限增长）
         if len(self._price_history) > 1000:
             self._price_history = self._price_history[-1000:]

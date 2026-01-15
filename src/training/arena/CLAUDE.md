@@ -99,9 +99,13 @@ class CatfishAccountState:
 
 | 类型 | 决策逻辑 |
 |------|---------|
-| TREND_CREATOR | 每个 Episode 开始时随机选择方向，整个 Episode 保持该方向 |
-| MEAN_REVERSION | 当价格偏离 EMA 超过阈值时反向操作 |
-| RANDOM | 随机概率触发，方向也随机 |
+| TREND_CREATOR | 每个 Episode 开始时随机选择方向，整个 Episode 保持该方向，固定 50% 行动概率（不使用共用的 action_probability） |
+| MEAN_REVERSION | 当价格偏离 EMA 超过阈值时反向操作，使用共用的 action_probability |
+| RANDOM | 随机概率触发（使用共用的 action_probability），方向也随机 |
+
+**行动概率说明：**
+- `TREND_CREATOR` 使用固定的 50% 行动概率，确保趋势能够形成
+- `MEAN_REVERSION` 和 `RANDOM` 使用配置的 `action_probability`（默认 30%）
 
 **独立随机性保证：**
 - 每个竞技场在 `reset()` 时独立随机选择趋势创造者方向

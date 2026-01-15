@@ -615,8 +615,9 @@ class CatfishAccountState:
             (should_act, direction): 是否行动和方向（1=买，-1=卖）
         """
         if self.catfish_mode == CatfishMode.TREND_CREATOR:
-            # 趋势创造者：随机概率判断是否行动
-            if not self.can_act():
+            # 趋势创造者：使用更高的固定行动概率（50%），确保趋势能够形成
+            # 不使用共用的 action_probability，因为趋势创造者的方向是固定的，需要更高的行动频率
+            if random.random() >= 0.5:
                 return False, 0
             return True, self.current_direction
 

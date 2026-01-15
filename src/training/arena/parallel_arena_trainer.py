@@ -30,6 +30,7 @@ class MultiArenaConfig:
     episodes_per_arena: int = 50
     use_shared_memory_ipc: bool = True  # 默认使用共享内存 IPC（性能提升约 21%）
 
+
 if TYPE_CHECKING:
     from src.training._cython.batch_decide_openmp import BatchNetworkCache
 
@@ -164,7 +165,11 @@ class ParallelArenaTrainer:
         ] = {}
         # Worker 池返回的订单簿快照（用于构建真实市场状态）
         # {arena_id: (bid_depth, ask_depth, last_price, mid_price)}
-        self._worker_depth_cache: dict[int, tuple[np.ndarray, np.ndarray, float, float]] = {}
+        self._worker_depth_cache: dict[
+            int, tuple[np.ndarray, np.ndarray, float, float]
+        ] = {}
+        # 奇数数量趋势鲶鱼的方向平衡开关（交替多/空以避免系统性偏差）
+        self._catfish_balance_bias_to_buy: bool = True
 
     def setup(self) -> None:
         """初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池"""
@@ -390,17 +395,25 @@ class ParallelArenaTrainer:
 
         # 随机打乱后分配方向
         random.shuffle(trend_creators)
-        half = len(trend_creators) // 2
+        total = len(trend_creators)
+        buy_target = total // 2
+        sell_target = total // 2
+
+        # 奇数数量时，额外的 1 条鲶鱼在多/空之间轮换，避免长期偏向
+        if total % 2 == 1:
+            if self._catfish_balance_bias_to_buy:
+                buy_target += 1
+            else:
+                sell_target += 1
+            self._catfish_balance_bias_to_buy = not self._catfish_balance_bias_to_buy
 
         for i, catfish in enumerate(trend_creators):
-            if i < half:
+            if i < buy_target:
                 catfish.current_direction = 1  # 买方向
             else:
                 catfish.current_direction = -1  # 卖方向
 
-        self.logger.debug(
-            f"鲶鱼方向已平衡: 买方向={half}, 卖方向={len(trend_creators) - half}"
-        )
+        self.logger.debug(f"鲶鱼方向已平衡: 买方向={buy_target}, 卖方向={sell_target}")
 
     def _init_network_caches(self) -> None:
         """初始化共享的网络数据缓存"""
@@ -511,7 +524,9 @@ class ParallelArenaTrainer:
                     )
                 )
 
-        self.evolution_worker_pool = MultiPopulationWorkerPool(config_dir, worker_configs)
+        self.evolution_worker_pool = MultiPopulationWorkerPool(
+            config_dir, worker_configs
+        )
         self.logger.info(f"进化 Worker 池创建完成: {len(worker_configs)} 个 Worker")
 
     def _create_execute_worker_pool(self) -> None:
@@ -755,9 +770,7 @@ class ParallelArenaTrainer:
 
         return result
 
-    def _get_species_fitnesses_from_neat_pop(
-        self, neat_pop: Any
-    ) -> list[float]:
+    def _get_species_fitnesses_from_neat_pop(self, neat_pop: Any) -> list[float]:
         """从 NEAT population 获取各 species 的平均适应度
 
         Args:
@@ -861,7 +874,9 @@ class ParallelArenaTrainer:
                 inputs = agent.observe(market_state, orderbook)  # type: ignore[attr-defined]
                 outputs = agent.brain.forward(inputs)  # type: ignore[attr-defined]
                 mid_price = market_state.mid_price
-                tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+                tick_size = (
+                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                )
 
                 # 使用 agent_state 解析输出
                 _, params = self._parse_market_maker_output(
@@ -914,7 +929,9 @@ class ParallelArenaTrainer:
                     taker_state = arena.agent_states.get(taker_id)
                     if taker_state is not None:
                         fee = buyer_fee if is_buyer_taker else seller_fee
-                        taker_state.on_trade(price, qty, is_buyer_taker, fee, is_maker=False)
+                        taker_state.on_trade(
+                            price, qty, is_buyer_taker, fee, is_maker=False
+                        )
 
                     # 更新 maker
                     maker_id = seller_id if is_buyer_taker else buyer_id
@@ -955,7 +972,9 @@ class ParallelArenaTrainer:
                 inputs = agent.observe(market_state, orderbook)  # type: ignore[attr-defined]
                 outputs = agent.brain.forward(inputs)  # type: ignore[attr-defined]
                 mid_price = market_state.mid_price
-                tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.1
+                tick_size = (
+                    market_state.tick_size if market_state.tick_size > 0 else 0.1
+                )
 
                 # 使用 agent_state 解析输出
                 _, params = self._parse_market_maker_output(
@@ -1092,7 +1111,9 @@ class ParallelArenaTrainer:
 
     def _execute_with_worker_pool(
         self,
-        all_decisions: dict[int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]],
+        all_decisions: dict[
+            int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]
+        ],
     ) -> dict[int, Any]:
         """使用 Worker 池执行所有竞技场的决策
 
@@ -1148,9 +1169,11 @@ class ParallelArenaTrainer:
                         continue
 
                     # 方向
-                    side_int = 1 if action in (
-                        ActionType.PLACE_BID, ActionType.MARKET_BUY
-                    ) else 2
+                    side_int = (
+                        1
+                        if action in (ActionType.PLACE_BID, ActionType.MARKET_BUY)
+                        else 2
+                    )
 
                     price = params.get("price", 0.0)
                     quantity = int(params.get("quantity", 0))
@@ -1173,9 +1196,7 @@ class ParallelArenaTrainer:
         assert self._execute_worker_pool is not None
         return self._execute_worker_pool.execute_all(arena_commands)
 
-    def _build_decisions_array_from_cache(
-        self, arena_idx: int
-    ) -> np.ndarray | None:
+    def _build_decisions_array_from_cache(self, arena_idx: int) -> np.ndarray | None:
         """从缓存的推理结果构建 decisions_array
 
         将各 AgentType 的缓存数组合并，添加 agent_id 列，
@@ -1245,8 +1266,10 @@ class ParallelArenaTrainer:
                 if action_type_int == 5 and state.position_quantity > 0:
                     quantity = max(1, int(state.position_quantity * quantity_ratio))
                 else:
-                    price_for_qty = price
-                    if action_type_int in (4, 5) or price_for_qty <= 0:
+                    price_for_qty = (
+                        mid_price if action_type_int in (1, 2, 4, 5) else price
+                    )
+                    if price_for_qty <= 0:
                         price_for_qty = mid_price
                     quantity = calculate_order_quantity_from_state(
                         state,
@@ -1259,10 +1282,12 @@ class ParallelArenaTrainer:
                 filtered_decisions[i, 3] = quantity
 
             # 构建带 agent_id 的数组: [agent_id, action_type, side, price, quantity]
-            full_array = np.column_stack([
-                filtered_agent_ids.reshape(-1, 1),
-                filtered_decisions,
-            ])
+            full_array = np.column_stack(
+                [
+                    filtered_agent_ids.reshape(-1, 1),
+                    filtered_decisions,
+                ]
+            )
             arrays_to_concat.append(full_array)
 
         if not arrays_to_concat:
@@ -1332,7 +1357,9 @@ class ParallelArenaTrainer:
                 taker_state = arena.agent_states.get(taker_id)
                 if taker_state is not None and not taker_state.is_liquidated:
                     fee = buyer_fee if is_buyer_taker else seller_fee
-                    taker_state.on_trade(price, qty, is_buyer_taker, fee, is_maker=False)
+                    taker_state.on_trade(
+                        price, qty, is_buyer_taker, fee, is_maker=False
+                    )
 
                 # 更新 maker 账户
                 maker_id = seller_id if is_buyer_taker else buyer_id
@@ -1382,21 +1409,35 @@ class ParallelArenaTrainer:
         # 阶段1: 准备（串行）- 强平检查、计算市场状态
         arena_market_states: list[NormalizedMarketState] = []
         arena_active_agents: list[list[AgentAccountState]] = []
+        arena_catfish_trades: list[list[Trade]] = [[] for _ in self.arena_states]
 
-        for arena in self.arena_states:
+        for arena_idx, arena in enumerate(self.arena_states):
             arena.tick += 1
 
             # Tick 1: 只记录做市商初始挂单后的状态
             if arena.tick == 1:
+                # 从 Worker 缓存获取实际价格用于价格统计
+                actual_price = arena.smooth_mid_price
+                if arena.arena_id in self._worker_depth_cache:
+                    _, _, last_price, mid_price = self._worker_depth_cache[
+                        arena.arena_id
+                    ]
+                    if last_price > 0:
+                        actual_price = last_price
+                    elif mid_price > 0:
+                        actual_price = mid_price
+
                 current_price = arena.smooth_mid_price
                 arena.price_history.append(current_price)
                 arena.tick_history_prices.append(current_price)
                 arena.tick_history_volumes.append(0.0)
                 arena.tick_history_amounts.append(0.0)
-                arena.update_price_stats(current_price)
-                arena_market_states.append(
-                    self._compute_market_state_for_arena(arena)
-                )
+                # 使用实际价格更新 high/low 统计
+                if actual_price > arena.episode_high_price:
+                    arena.episode_high_price = actual_price
+                if actual_price < arena.episode_low_price:
+                    arena.episode_low_price = actual_price
+                arena_market_states.append(self._compute_market_state_for_arena(arena))
                 arena_active_agents.append([])
                 continue
 
@@ -1411,7 +1452,7 @@ class ParallelArenaTrainer:
             self._handle_liquidations_for_arena(arena, current_price)
 
             # 鲶鱼行动
-            self._catfish_action_for_arena(arena)
+            arena_catfish_trades[arena_idx] = self._catfish_action_for_arena(arena)
 
             # 计算市场状态
             market_state = self._compute_market_state_for_arena(arena)
@@ -1419,7 +1460,8 @@ class ParallelArenaTrainer:
 
             # 直接收集活跃的 Agent 状态（无需创建 adapter）
             active_states: list[AgentAccountState] = [
-                state for state in arena.agent_states.values()
+                state
+                for state in arena.agent_states.values()
                 if not state.is_liquidated
             ]
 
@@ -1438,7 +1480,9 @@ class ParallelArenaTrainer:
         # 使用 Worker 池执行（如果可用）
         if self._execute_worker_pool is not None:
             # 过滤掉 tick=1 的竞技场
-            filtered_decisions: dict[int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]] = {
+            filtered_decisions: dict[
+                int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]
+            ] = {
                 arena_idx: decisions
                 for arena_idx, decisions in all_decisions.items()
                 if self.arena_states[arena_idx].tick > 1
@@ -1453,11 +1497,31 @@ class ParallelArenaTrainer:
                 for arena_idx in filtered_decisions.keys():
                     arena = self.arena_states[arena_idx]
                     tick_trades = arena_tick_trades.get(arena_idx, [])
+                    catfish_trades = arena_catfish_trades[arena_idx]
+                    if catfish_trades:
+                        tick_trades = catfish_trades + tick_trades
 
-                    # 记录价格历史
+                    # 从 Worker 缓存中获取实际成交价格用于价格统计
+                    actual_price = arena.smooth_mid_price
+                    if arena_idx in self._worker_depth_cache:
+                        _, _, last_price, mid_price = self._worker_depth_cache[
+                            arena_idx
+                        ]
+                        # 优先使用 last_price（实际成交价格），否则使用 mid_price
+                        if last_price > 0:
+                            actual_price = last_price
+                        elif mid_price > 0:
+                            actual_price = mid_price
+
+                    # 记录价格历史（使用 smooth_mid_price 供 Agent 决策参考）
                     current_price = arena.smooth_mid_price
                     arena.price_history.append(current_price)
-                    arena.update_price_stats(current_price)
+                    # 使用本 tick 成交价格更新 high/low 统计
+                    self._update_episode_price_stats_from_trades(
+                        arena,
+                        tick_trades,
+                        fallback_price=actual_price,
+                    )
 
                     # 记录 tick 历史数据
                     arena.tick_history_prices.append(current_price)
@@ -1521,15 +1585,29 @@ class ParallelArenaTrainer:
                         for trade in trades:
                             is_buyer = trade.is_buyer_taker
                             fee = trade.buyer_fee if is_buyer else trade.seller_fee
-                            state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+                            state.on_trade(
+                                trade.price,
+                                trade.quantity,
+                                is_buyer,
+                                fee,
+                                is_maker=False,
+                            )
                             recent_trades_append(trade)
                             tick_trades.append(trade)
                             # 更新 maker 账户
                             maker_id = trade.seller_id if is_buyer else trade.buyer_id
                             maker_state = agent_states_get(maker_id)
                             if maker_state is not None:
-                                maker_fee = trade.seller_fee if is_buyer else trade.buyer_fee
-                                maker_state.on_trade(trade.price, trade.quantity, not is_buyer, maker_fee, is_maker=True)
+                                maker_fee = (
+                                    trade.seller_fee if is_buyer else trade.buyer_fee
+                                )
+                                maker_state.on_trade(
+                                    trade.price,
+                                    trade.quantity,
+                                    not is_buyer,
+                                    maker_fee,
+                                    is_maker=True,
+                                )
                         if order_map_get(order_id):
                             state.bid_order_ids.append(order_id)
 
@@ -1548,14 +1626,28 @@ class ParallelArenaTrainer:
                         for trade in trades:
                             is_buyer = trade.is_buyer_taker
                             fee = trade.buyer_fee if is_buyer else trade.seller_fee
-                            state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+                            state.on_trade(
+                                trade.price,
+                                trade.quantity,
+                                is_buyer,
+                                fee,
+                                is_maker=False,
+                            )
                             recent_trades_append(trade)
                             tick_trades.append(trade)
                             maker_id = trade.seller_id if is_buyer else trade.buyer_id
                             maker_state = agent_states_get(maker_id)
                             if maker_state is not None:
-                                maker_fee = trade.seller_fee if is_buyer else trade.buyer_fee
-                                maker_state.on_trade(trade.price, trade.quantity, not is_buyer, maker_fee, is_maker=True)
+                                maker_fee = (
+                                    trade.seller_fee if is_buyer else trade.buyer_fee
+                                )
+                                maker_state.on_trade(
+                                    trade.price,
+                                    trade.quantity,
+                                    not is_buyer,
+                                    maker_fee,
+                                    is_maker=True,
+                                )
                         if order_map_get(order_id):
                             state.ask_order_ids.append(order_id)
                 else:
@@ -1572,7 +1664,11 @@ class ParallelArenaTrainer:
                             state.pending_order_id = None
 
                         order_id = state.generate_order_id(arena.arena_id)
-                        side = OrderSide.BUY if action == ActionType.PLACE_BID else OrderSide.SELL
+                        side = (
+                            OrderSide.BUY
+                            if action == ActionType.PLACE_BID
+                            else OrderSide.SELL
+                        )
                         order = Order(
                             order_id=order_id,
                             agent_id=state.agent_id,
@@ -1590,9 +1686,16 @@ class ParallelArenaTrainer:
                             cancel_order(state.pending_order_id)
                             state.pending_order_id = None
 
-                    elif action == ActionType.MARKET_BUY or action == ActionType.MARKET_SELL:
+                    elif (
+                        action == ActionType.MARKET_BUY
+                        or action == ActionType.MARKET_SELL
+                    ):
                         order_id = state.generate_order_id(arena.arena_id)
-                        side = OrderSide.BUY if action == ActionType.MARKET_BUY else OrderSide.SELL
+                        side = (
+                            OrderSide.BUY
+                            if action == ActionType.MARKET_BUY
+                            else OrderSide.SELL
+                        )
                         order = Order(
                             order_id=order_id,
                             agent_id=state.agent_id,
@@ -1607,19 +1710,37 @@ class ParallelArenaTrainer:
                     for trade in trades:
                         is_buyer = trade.is_buyer_taker
                         fee = trade.buyer_fee if is_buyer else trade.seller_fee
-                        state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+                        state.on_trade(
+                            trade.price, trade.quantity, is_buyer, fee, is_maker=False
+                        )
                         recent_trades_append(trade)
                         tick_trades.append(trade)
                         maker_id = trade.seller_id if is_buyer else trade.buyer_id
                         maker_state = agent_states_get(maker_id)
                         if maker_state is not None:
-                            maker_fee = trade.seller_fee if is_buyer else trade.buyer_fee
-                            maker_state.on_trade(trade.price, trade.quantity, not is_buyer, maker_fee, is_maker=True)
+                            maker_fee = (
+                                trade.seller_fee if is_buyer else trade.buyer_fee
+                            )
+                            maker_state.on_trade(
+                                trade.price,
+                                trade.quantity,
+                                not is_buyer,
+                                maker_fee,
+                                is_maker=True,
+                            )
+
+            catfish_trades = arena_catfish_trades[arena_idx]
+            if catfish_trades:
+                tick_trades = catfish_trades + tick_trades
 
             # 记录价格历史
             current_price = orderbook.last_price
             arena.price_history.append(current_price)
-            arena.update_price_stats(current_price)
+            self._update_episode_price_stats_from_trades(
+                arena,
+                tick_trades,
+                fallback_price=current_price,
+            )
 
             # 记录 tick 历史数据（deque maxlen=100 自动管理长度）
             arena.tick_history_prices.append(current_price)
@@ -1711,7 +1832,9 @@ class ParallelArenaTrainer:
             agents_per_arena: list[list[Any]] = []
             market_states: list[NormalizedMarketState] = []
             network_indices_per_arena: list[list[int]] = []
-            adapter_mapping: list[list[AgentStateAdapter]] = []  # 记录每个竞技场的 adapter 顺序
+            adapter_mapping: list[list[AgentStateAdapter]] = (
+                []
+            )  # 记录每个竞技场的 adapter 顺序
 
             for arena_idx in sorted_arena_indices:
                 arena_entries = arena_data[arena_idx]
@@ -1770,7 +1893,9 @@ class ParallelArenaTrainer:
                             )
                         else:
                             # 注意：Cython 返回的 quantity 实际上是 quantity_ratio（0-1浮点数）
-                            action_type_int, side_int, price, quantity_ratio = raw_result
+                            action_type_int, side_int, price, quantity_ratio = (
+                                raw_result
+                            )
                             action, params = self._convert_retail_result(
                                 agent,
                                 action_type_int,
@@ -2092,20 +2217,30 @@ class ParallelArenaTrainer:
         ask_qty_weights = output[30:40]
         total_ratio_raw = output[40] if len(output) > 40 else 0.0
 
+        bid_raw_ratios = np.maximum(
+            0.0, (np.clip(bid_qty_weights, -1.0, 1.0) + 1.0) * 0.5
+        )
+        ask_raw_ratios = np.maximum(
+            0.0, (np.clip(ask_qty_weights, -1.0, 1.0) + 1.0) * 0.5
+        )
+
+        total_raw_ratio = float(bid_raw_ratios.sum() + ask_raw_ratios.sum())
+        if total_raw_ratio > 0:
+            bid_ratios = bid_raw_ratios / total_raw_ratio
+            ask_ratios = ask_raw_ratios / total_raw_ratio
+        else:
+            bid_ratios = np.zeros(10, dtype=np.float64)
+            ask_ratios = np.zeros(10, dtype=np.float64)
+
+        skew_factor = calculate_skew_factor_from_state(agent_state, mid_price)
+        bid_ratios, ask_ratios = self._apply_position_skew(
+            bid_ratios, ask_ratios, skew_factor
+        )
+
         # 总下单比例：映射到 [0.01, 1]，与 MarketMakerAgent.decide() 一致
         total_ratio = 0.01 + (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5 * 0.99
-        skew_factor = calculate_skew_factor_from_state(agent_state, mid_price)
-
-        bid_weights_sum = sum(max(0, (w + 1) * 0.5) for w in bid_qty_weights)
-        ask_weights_sum = sum(max(0, (w + 1) * 0.5) for w in ask_qty_weights)
-        total_weights = bid_weights_sum + ask_weights_sum
-
-        if total_weights > 0:
-            bid_multiplier = 1.0 + skew_factor
-            ask_multiplier = 1.0 - skew_factor
-            bid_weights_sum *= bid_multiplier
-            ask_weights_sum *= ask_multiplier
-            total_weights = bid_weights_sum + ask_weights_sum
+        bid_ratios = bid_ratios * total_ratio
+        ask_ratios = ask_ratios * total_ratio
 
         bid_orders: list[dict[str, float]] = []
         ask_orders: list[dict[str, float]] = []
@@ -2117,9 +2252,8 @@ class ParallelArenaTrainer:
             price = mid_price - ticks * tick_size
             price = fast_round_price(price, tick_size)
 
-            weight = max(0, (bid_qty_weights[i] + 1) * 0.5)
-            if total_weights > 0 and weight > 0:
-                ratio = (weight / total_weights) * total_ratio
+            ratio = float(bid_ratios[i])
+            if ratio > 0:
                 qty = calculate_order_quantity_from_state(
                     agent_state, price, ratio, is_buy=True, ref_price=mid_price
                 )
@@ -2131,9 +2265,8 @@ class ParallelArenaTrainer:
             price = mid_price + ticks * tick_size
             price = fast_round_price(price, tick_size)
 
-            weight = max(0, (ask_qty_weights[i] + 1) * 0.5)
-            if total_weights > 0 and weight > 0:
-                ratio = (weight / total_weights) * total_ratio
+            ratio = float(ask_ratios[i])
+            if ratio > 0:
                 qty = calculate_order_quantity_from_state(
                     agent_state, price, ratio, is_buy=False, ref_price=mid_price
                 )
@@ -2141,6 +2274,54 @@ class ParallelArenaTrainer:
                     ask_orders.append({"price": price, "quantity": float(qty)})
 
         return ActionType.HOLD, {"bid_orders": bid_orders, "ask_orders": ask_orders}
+
+    @staticmethod
+    def _apply_position_skew(
+        bid_raw_ratios: np.ndarray,
+        ask_raw_ratios: np.ndarray,
+        skew_factor: float,
+        min_side_weight: float = 0.1,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """应用仓位倾斜到买卖权重（与 MarketMakerAgent 保持一致）"""
+        bid_multiplier = 1.0 + skew_factor
+        ask_multiplier = 1.0 - skew_factor
+
+        bid_adjusted = bid_raw_ratios * bid_multiplier
+        ask_adjusted = ask_raw_ratios * ask_multiplier
+
+        total_bid = float(bid_adjusted.sum())
+        total_ask = float(ask_adjusted.sum())
+        total = total_bid + total_ask
+
+        if total <= 0:
+            return np.full(10, 0.1, dtype=np.float64), np.full(
+                10, 0.1, dtype=np.float64
+            )
+
+        bid_side_ratio = total_bid / total
+        ask_side_ratio = total_ask / total
+
+        if bid_side_ratio < min_side_weight:
+            target_bid_total = min_side_weight
+            target_ask_total = 1.0 - min_side_weight
+        elif ask_side_ratio < min_side_weight:
+            target_ask_total = min_side_weight
+            target_bid_total = 1.0 - min_side_weight
+        else:
+            target_bid_total = bid_side_ratio
+            target_ask_total = ask_side_ratio
+
+        if total_bid > 0:
+            bid_ratios = bid_adjusted / total_bid * target_bid_total
+        else:
+            bid_ratios = np.full(10, target_bid_total / 10, dtype=np.float64)
+
+        if total_ask > 0:
+            ask_ratios = ask_adjusted / total_ask * target_ask_total
+        else:
+            ask_ratios = np.full(10, target_ask_total / 10, dtype=np.float64)
+
+        return bid_ratios, ask_ratios
 
     def _convert_retail_result(
         self,
@@ -2164,14 +2345,14 @@ class ParallelArenaTrainer:
             action = ActionType.PLACE_BID
             params["price"] = price
             actual_qty = calculate_order_quantity_from_state(
-                agent_state, price, quantity_ratio, is_buy=True
+                agent_state, mid_price, quantity_ratio, is_buy=True
             )
             params["quantity"] = actual_qty
         elif action_type_int == 2:
             action = ActionType.PLACE_ASK
             params["price"] = price
             actual_qty = calculate_order_quantity_from_state(
-                agent_state, price, quantity_ratio, is_buy=False
+                agent_state, mid_price, quantity_ratio, is_buy=False
             )
             params["quantity"] = actual_qty
         elif action_type_int == 3:
@@ -2274,7 +2455,9 @@ class ParallelArenaTrainer:
         for trade in trades:
             is_buyer = trade.is_buyer_taker
             fee = trade.buyer_fee if is_buyer else trade.seller_fee
-            agent_state.on_trade(trade.price, trade.quantity, is_buyer, fee, is_maker=False)
+            agent_state.on_trade(
+                trade.price, trade.quantity, is_buyer, fee, is_maker=False
+            )
             arena.recent_trades.append(trade)
 
             # 更新 maker 账户
@@ -2282,9 +2465,15 @@ class ParallelArenaTrainer:
             maker_state = arena.agent_states.get(maker_id)
             if maker_state is not None:
                 maker_is_buyer = not trade.is_buyer_taker
-                maker_fee = trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
+                maker_fee = (
+                    trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
+                )
                 maker_state.on_trade(
-                    trade.price, trade.quantity, maker_is_buyer, maker_fee, is_maker=True
+                    trade.price,
+                    trade.quantity,
+                    maker_is_buyer,
+                    maker_fee,
+                    is_maker=True,
                 )
 
     def _execute_mm_action_in_arena(
@@ -2468,7 +2657,9 @@ class ParallelArenaTrainer:
             if maker_state is not None:
                 maker_is_buyer = not trade.is_buyer_taker
                 # maker fee: 买方是 taker 时 maker 是卖方用 seller_fee，否则用 buyer_fee
-                maker_fee = trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
+                maker_fee = (
+                    trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
+                )
                 maker_state.on_trade(
                     trade.price, trade.quantity, maker_is_buyer, maker_fee, True
                 )
@@ -2496,7 +2687,9 @@ class ParallelArenaTrainer:
                 continue
 
             equity = agent_state.get_equity(current_price)
-            pnl_percent = (equity - agent_state.initial_balance) / agent_state.initial_balance
+            pnl_percent = (
+                equity - agent_state.initial_balance
+            ) / agent_state.initial_balance
 
             if pnl_percent <= 0:
                 continue
@@ -2554,7 +2747,11 @@ class ParallelArenaTrainer:
                     agent_state.position_quantity -= trade_qty
                 else:
                     agent_state.position_quantity += trade_qty
-                agent_state.balance += (adl_price - agent_state.position_avg_price) * trade_qty * (1 if is_long else -1)
+                agent_state.balance += (
+                    (adl_price - agent_state.position_avg_price)
+                    * trade_qty
+                    * (1 if is_long else -1)
+                )
 
                 # 更新对手方
                 if candidate.position_qty > 0:
@@ -2569,7 +2766,7 @@ class ParallelArenaTrainer:
                 agent_state.position_quantity = 0
                 agent_state.position_avg_price = 0.0
 
-    def _catfish_action_for_arena(self, arena: ArenaState) -> None:
+    def _catfish_action_for_arena(self, arena: ArenaState) -> list[Trade]:
         """鲶鱼在竞技场中的行动
 
         实现三种鲶鱼的决策和执行逻辑：
@@ -2578,13 +2775,14 @@ class ParallelArenaTrainer:
         - RANDOM: 随机概率触发，方向也随机
         """
         if not arena.catfish_states:
-            return
+            return []
 
         orderbook = arena.matching_engine._orderbook
         matching_engine = arena.matching_engine
         tick = arena.tick
         price_history = arena.price_history
 
+        catfish_trades: list[Trade] = []
         for catfish_state in arena.catfish_states.values():
             if catfish_state.is_liquidated:
                 continue
@@ -2597,6 +2795,7 @@ class ParallelArenaTrainer:
 
             # 计算下单数量（吃掉前3档）
             quantity = self._calculate_catfish_quantity(orderbook, direction)
+
             if quantity <= 0:
                 continue
 
@@ -2620,6 +2819,7 @@ class ParallelArenaTrainer:
 
             # 更新鲶鱼账户和 maker 账户
             for trade in trades:
+                catfish_trades.append(trade)
                 is_buyer = trade.is_buyer_taker
                 catfish_state.on_trade(trade.price, trade.quantity, is_buyer)
                 arena.recent_trades.append(trade)
@@ -2635,6 +2835,8 @@ class ParallelArenaTrainer:
                     maker_state.on_trade(
                         trade.price, trade.quantity, maker_is_buyer, maker_fee, True
                     )
+
+        return catfish_trades
 
     def _calculate_catfish_quantity(self, orderbook: Any, direction: int) -> int:
         """计算鲶鱼下单数量（吃掉前3档）
@@ -2733,6 +2935,27 @@ class ParallelArenaTrainer:
             return float(-total_volume), -total_amount
         return 0.0, 0.0
 
+    def _update_episode_price_stats_from_trades(
+        self,
+        arena: ArenaState,
+        tick_trades: list[Trade],
+        fallback_price: float | None = None,
+    ) -> None:
+        """使用本 tick 成交价格更新 episode high/low"""
+        if tick_trades:
+            tick_high = max(trade.price for trade in tick_trades)
+            tick_low = min(trade.price for trade in tick_trades)
+        elif fallback_price is not None:
+            tick_high = fallback_price
+            tick_low = fallback_price
+        else:
+            return
+
+        if tick_high > arena.episode_high_price:
+            arena.episode_high_price = tick_high
+        if tick_low < arena.episode_low_price:
+            arena.episode_low_price = tick_low
+
     def _run_episode_all_arenas(
         self,
     ) -> dict[tuple[AgentType, int], np.ndarray]:
@@ -2764,15 +2987,13 @@ class ParallelArenaTrainer:
 
         for arena in self.arena_states:
             if arena.arena_id in self._worker_depth_cache:
-                _bid_depth, _ask_depth, last_price, mid_price = self._worker_depth_cache[
-                    arena.arena_id
-                ]
+                _bid_depth, _ask_depth, last_price, mid_price = (
+                    self._worker_depth_cache[arena.arena_id]
+                )
                 current_price = (
                     mid_price
                     if mid_price > 0
-                    else last_price
-                    if last_price > 0
-                    else arena.smooth_mid_price
+                    else last_price if last_price > 0 else arena.smooth_mid_price
                 )
             else:
                 current_price = arena.matching_engine._orderbook.last_price
@@ -2808,7 +3029,7 @@ class ParallelArenaTrainer:
     ) -> float:
         """计算单个竞技场的市场平均收益率
 
-        遍历所有未被强平的 Agent，计算平均收益率。
+        遍历所有 Agent，按初始资金加权计算平均收益率。
 
         Args:
             arena: 竞技场状态
@@ -2817,19 +3038,20 @@ class ParallelArenaTrainer:
         Returns:
             市场平均收益率
         """
-        total_return = 0.0
-        count = 0
+        total_weighted_return = 0.0
+        total_initial = 0.0
 
         for agent_state in arena.agent_states.values():
-            if agent_state.is_liquidated:
-                continue
-            equity = agent_state.get_equity(current_price)
             initial = agent_state.initial_balance
-            if initial > 0:
-                total_return += (equity - initial) / initial
-                count += 1
+            if initial <= 0:
+                continue
 
-        return total_return / count if count > 0 else 0.0
+            equity = agent_state.get_equity(current_price)
+            weighted = equity - initial
+            total_weighted_return += weighted
+            total_initial += initial
+
+        return total_weighted_return / total_initial if total_initial > 0 else 0.0
 
     def _calculate_fitness_for_population(
         self,
@@ -2876,11 +3098,17 @@ class ParallelArenaTrainer:
         # 2. 根据种群类型计算最终适应度
         if population.agent_type == AgentType.MARKET_MAKER:
             # 做市商：0.5 * 相对收益率 + 0.5 * maker_volume 排名归一化
-            maker_volumes = np.array([
-                arena.agent_states[agent.agent_id].maker_volume
-                if agent.agent_id in arena.agent_states else 0
-                for agent in population.agents
-            ], dtype=np.float32)
+            maker_volumes = np.array(
+                [
+                    (
+                        arena.agent_states[agent.agent_id].maker_volume
+                        if agent.agent_id in arena.agent_states
+                        else 0
+                    )
+                    for agent in population.agents
+                ],
+                dtype=np.float32,
+            )
 
             # 排名归一化到 [0, 1]
             volume_ranks = np.argsort(np.argsort(maker_volumes))
@@ -2893,11 +3121,17 @@ class ParallelArenaTrainer:
 
         elif population.agent_type == AgentType.WHALE:
             # 庄家：0.5 * 相对收益率 + 0.5 * volatility_contribution 排名归一化
-            volatility_contributions = np.array([
-                arena.agent_states[agent.agent_id].volatility_contribution
-                if agent.agent_id in arena.agent_states else 0.0
-                for agent in population.agents
-            ], dtype=np.float32)
+            volatility_contributions = np.array(
+                [
+                    (
+                        arena.agent_states[agent.agent_id].volatility_contribution
+                        if agent.agent_id in arena.agent_states
+                        else 0.0
+                    )
+                    for agent in population.agents
+                ],
+                dtype=np.float32,
+            )
 
             # 排名归一化到 [0, 1]
             volatility_ranks = np.argsort(np.argsort(volatility_contributions))
@@ -2985,7 +3219,11 @@ class ParallelArenaTrainer:
         self,
         evolution_results: dict[
             tuple[AgentType, int],
-            tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]],
+            tuple[
+                tuple[np.ndarray, ...],
+                tuple[np.ndarray, ...],
+                tuple[np.ndarray, np.ndarray],
+            ],
         ],
         deserialize_genomes: bool = False,
     ) -> None:
@@ -3008,12 +3246,20 @@ class ParallelArenaTrainer:
                 if sub_pop_id < len(population.sub_populations):
                     sub_pop = population.sub_populations[sub_pop_id]
                     self._update_single_population(
-                        sub_pop, genome_data, network_params_data, species_data, deserialize_genomes
+                        sub_pop,
+                        genome_data,
+                        network_params_data,
+                        species_data,
+                        deserialize_genomes,
                     )
             else:
                 if sub_pop_id == 0:
                     self._update_single_population(
-                        population, genome_data, network_params_data, species_data, deserialize_genomes
+                        population,
+                        genome_data,
+                        network_params_data,
+                        species_data,
+                        deserialize_genomes,
                     )
 
     def _update_single_population(
@@ -3282,9 +3528,7 @@ class ParallelArenaTrainer:
                             genomes = list(sub_pop.neat_pop.population.items())
                             sub_pop.agents = sub_pop.create_agents(genomes)
                 else:
-                    self.logger.warning(
-                        f"{agent_type.value} 检查点为旧格式，需要迁移"
-                    )
+                    self.logger.warning(f"{agent_type.value} 检查点为旧格式，需要迁移")
             else:
                 population.generation = pop_data.get("generation", 0)
                 population.neat_pop = pop_data.get("neat_pop")
