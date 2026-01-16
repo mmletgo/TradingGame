@@ -246,7 +246,7 @@ class MarketMakerAgent(Agent):
         bid_raw_ratios: np.ndarray,
         ask_raw_ratios: np.ndarray,
         skew_factor: float,
-        min_side_weight: float = 0.1,
+        min_side_weight: float = 0.03,
     ) -> tuple[np.ndarray, np.ndarray]:
         """应用仓位倾斜到买卖权重
 

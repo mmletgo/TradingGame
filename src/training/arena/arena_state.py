@@ -712,6 +712,7 @@ class ArenaState:
     catfish_liquidated: bool = False
     end_reason: str | None = None
     end_tick: int = 0
+    consecutive_one_sided_ticks: int = 0  # 连续单边订单簿 tick 计数
 
     def reset_episode(self, initial_price: float) -> None:
         """重置 Episode 状态
@@ -734,6 +735,7 @@ class ArenaState:
         self.catfish_liquidated = False
         self.end_reason = None
         self.end_tick = 0
+        self.consecutive_one_sided_ticks = 0
 
     def get_agent_state(self, agent_id: int) -> AgentAccountState | None:
         """获取 Agent 状态

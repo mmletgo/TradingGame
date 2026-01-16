@@ -3097,8 +3097,16 @@ class ParallelArenaTrainer:
             orderbook = arena.matching_engine._orderbook
             has_bids = orderbook.get_best_bid() is not None
             has_asks = orderbook.get_best_ask() is not None
+
         if has_bids != has_asks:
-            return ("one_sided_orderbook", None)
+            # 单边订单簿：增加计数器
+            arena.consecutive_one_sided_ticks += 1
+            # 连续 3 个 tick 才结束（给做市商恢复流动性的时间）
+            if arena.consecutive_one_sided_ticks >= 3:
+                return ("one_sided_orderbook", None)
+        else:
+            # 订单簿正常：清零计数器
+            arena.consecutive_one_sided_ticks = 0
 
         return None
 
