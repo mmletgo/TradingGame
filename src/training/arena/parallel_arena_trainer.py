@@ -302,7 +302,7 @@ class ParallelArenaTrainer:
                 agent_states=agent_states,
                 catfish_states=catfish_states,
                 recent_trades=deque(maxlen=100),
-                price_history=[initial_price],
+                price_history=deque([initial_price], maxlen=1000),
                 tick_history_prices=deque([initial_price], maxlen=100),
                 tick_history_volumes=deque([0.0], maxlen=100),
                 tick_history_amounts=deque([0.0], maxlen=100),
@@ -642,8 +642,14 @@ class ParallelArenaTrainer:
                     episode_stats = self._get_episode_stats(ep_idx)
                     episode_callback(episode_stats)
 
-                # 每个episode结束后执行轻量GC（只回收年轻代）
-                gc.collect(0)
+                # GC 策略：每个 episode 清理年轻代，每 10 个 episode 清理全部并释放内存
+                if (ep_idx + 1) % 10 == 0:
+                    gc.collect(0)
+                    gc.collect(1)
+                    gc.collect(2)
+                    malloc_trim()
+                else:
+                    gc.collect(0)
         finally:
             # 确保GC重新启用
             gc.enable()
@@ -1445,9 +1451,6 @@ class ParallelArenaTrainer:
 
                 current_price = arena.smooth_mid_price
                 arena.price_history.append(current_price)
-                # 限制 price_history 长度，防止内存泄漏
-                if len(arena.price_history) > 1000:
-                    arena.price_history = arena.price_history[-1000:]
                 arena.tick_history_prices.append(current_price)
                 arena.tick_history_volumes.append(0.0)
                 arena.tick_history_amounts.append(0.0)
@@ -1548,9 +1551,6 @@ class ParallelArenaTrainer:
                     # 记录价格历史（使用 smooth_mid_price 供 Agent 决策参考）
                     current_price = arena.smooth_mid_price
                     arena.price_history.append(current_price)
-                    # 限制 price_history 长度，防止内存泄漏
-                    if len(arena.price_history) > 1000:
-                        arena.price_history = arena.price_history[-1000:]
                     # 使用本 tick 成交价格更新 high/low 统计
                     self._update_episode_price_stats_from_trades(
                         arena,
@@ -1580,6 +1580,10 @@ class ParallelArenaTrainer:
                         elif arena.catfish_liquidated:
                             arena.end_reason = "catfish"
                             arena.end_tick = arena.tick
+
+            # Worker 池执行完成后立即释放推理数组缓存
+            # 注意：_worker_depth_cache 不在这里清理，因为 _collect_episode_fitness 需要使用
+            self._last_inference_arrays.clear()
 
             # 只有当所有竞技场都结束时才返回 False
             all_continue = any(
@@ -1787,9 +1791,6 @@ class ParallelArenaTrainer:
             # 记录价格历史
             current_price = orderbook.last_price
             arena.price_history.append(current_price)
-            # 限制 price_history 长度，防止内存泄漏
-            if len(arena.price_history) > 1000:
-                arena.price_history = arena.price_history[-1000:]
             self._update_episode_price_stats_from_trades(
                 arena,
                 tick_trades,
@@ -2185,6 +2186,10 @@ class ParallelArenaTrainer:
                             results[arena_idx].append((state, action, params))
                         except Exception:
                             pass
+
+        # 串行执行模式下不需要缓存数组，立即释放
+        if self._execute_worker_pool is None:
+            self._last_inference_arrays.clear()
 
         return results
 

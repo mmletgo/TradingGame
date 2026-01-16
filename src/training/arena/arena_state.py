@@ -7,7 +7,7 @@
 import random
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from src.config.config import AgentConfig, AgentType, CatfishConfig, CatfishMode
 
@@ -600,7 +600,7 @@ class CatfishAccountState:
         """
         return random.random() < self.action_probability
 
-    def decide(self, tick: int, price_history: list[float]) -> tuple[bool, int]:
+    def decide(self, tick: int, price_history: Sequence[float]) -> tuple[bool, int]:
         """决策是否行动以及行动方向
 
         根据鲶鱼类型执行不同的决策逻辑：
@@ -700,7 +700,7 @@ class ArenaState:
     agent_states: dict[int, AgentAccountState]
     catfish_states: dict[int, CatfishAccountState]
     recent_trades: deque[object] = field(default_factory=lambda: deque(maxlen=100))
-    price_history: list[float] = field(default_factory=list)
+    price_history: deque[float] = field(default_factory=lambda: deque(maxlen=1000))
     tick_history_prices: deque[float] = field(default_factory=lambda: deque(maxlen=100))
     tick_history_volumes: deque[float] = field(default_factory=lambda: deque(maxlen=100))
     tick_history_amounts: deque[float] = field(default_factory=lambda: deque(maxlen=100))
