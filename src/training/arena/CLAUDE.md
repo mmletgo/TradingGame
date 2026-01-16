@@ -82,10 +82,6 @@ class CatfishAccountState:
     ma_period: int                 # 均线周期
     deviation_threshold: float     # 偏离阈值
     action_probability: float      # 随机交易触发概率
-    # 做市鲶鱼特有属性
-    pending_order_ids: list[int]   # 当前挂单ID列表
-    target_depth: int              # 挂单档数（默认3）
-    order_size: int                # 每档挂单量（默认100）
 ```
 
 **主要方法：**
@@ -93,7 +89,7 @@ class CatfishAccountState:
 | 方法 | 描述 |
 |------|------|
 | `from_catfish(catfish)` | 类方法，从 CatfishBase 对象创建状态副本 |
-| `reset(initial_balance)` | 重置到初始状态，趋势创造者会重新随机选择方向，做市鲶鱼清空挂单列表 |
+| `reset(initial_balance)` | 重置到初始状态，趋势创造者会重新随机选择方向 |
 | `decide(tick, price_history)` | 决策是否行动和方向，根据鲶鱼类型执行不同逻辑 |
 | `can_act(tick)` | 检查冷却时间和相位偏移 |
 | `record_action(tick)` | 记录行动时间 |
@@ -106,12 +102,11 @@ class CatfishAccountState:
 | TREND_CREATOR | 每个 Episode 开始时随机选择方向，整个 Episode 保持该方向，固定 50% 行动概率（不使用共用的 action_probability） |
 | MEAN_REVERSION | 当价格偏离 EMA 超过阈值时反向操作，使用共用的 action_probability |
 | RANDOM | 随机概率触发（使用共用的 action_probability），方向也随机 |
-| MARKET_MAKING | 总是返回 `(True, 0)`，direction=0 表示双边挂单，每 tick 都行动 |
+
 
 **行动概率说明：**
 - `TREND_CREATOR` 使用固定的 50% 行动概率，确保趋势能够形成
 - `MEAN_REVERSION` 和 `RANDOM` 使用配置的 `action_probability`（默认 30%）
-- `MARKET_MAKING` 每个 tick 都行动（不受 action_probability 限制）
 
 **独立随机性保证：**
 - 每个竞技场在 `reset()` 时独立随机选择趋势创造者方向
@@ -232,27 +227,12 @@ class CatfishTradeResult:
     avg_price: float       # 平均成交价格
 
 @dataclass
-class MarketMakingCatfishDecision:
-    """做市鲶鱼决策数据"""
-    catfish_id: int                           # 鲶鱼 ID（-4）
-    old_order_ids: list[int]                  # 需要撤销的旧挂单 ID 列表
-    bid_orders: list[tuple[float, int]]       # 买单列表 [(price, quantity), ...]
-    ask_orders: list[tuple[float, int]]       # 卖单列表 [(price, quantity), ...]
-
-@dataclass
-class MarketMakingCatfishResult:
-    """做市鲶鱼挂单结果"""
-    catfish_id: int                # 鲶鱼 ID（-4）
-    new_order_ids: list[int]       # 新挂单 ID 列表
-
-@dataclass
 class ArenaExecuteData:
     """execute 命令的数据"""
     liquidated_agents: list[tuple[int, int, bool]]  # (agent_id, position_qty, is_mm)
     decisions: list[tuple[int, int, int, float, int]]  # (agent_id, action_int, side_int, price, quantity)
     mm_decisions: list[tuple[int, list, list]]  # (agent_id, bid_orders, ask_orders)
     catfish_decisions: list[CatfishDecision]  # 吃单鲶鱼决策列表
-    mm_catfish_decisions: list[MarketMakingCatfishDecision]  # 做市鲶鱼决策列表
 
 @dataclass
 class ArenaExecuteResult:
@@ -266,7 +246,6 @@ class ArenaExecuteResult:
     pending_updates: dict[int, int | None]  # agent_id -> pending_order_id
     mm_order_updates: dict[int, tuple[list, list]]  # agent_id -> (bid_ids, ask_ids)
     catfish_results: list[CatfishTradeResult]  # 吃单鲶鱼成交结果列表
-    mm_catfish_results: list[MarketMakingCatfishResult]  # 做市鲶鱼挂单结果列表
     error: str | None
 ```
 
@@ -316,7 +295,6 @@ class AtomicAction:
 
 2. **收集原子动作**
    - 吃单鲶鱼：转换为 MARKET_BUY/MARKET_SELL 动作
-   - 做市鲶鱼：拆分为 CANCEL + LIMIT_BUY/LIMIT_SELL 动作
    - 做市商：拆分为 CANCEL（撤旧单）+ LIMIT_BUY/LIMIT_SELL（挂新单）动作
    - 非做市商：拆分为 CANCEL（如需撤旧单）+ 对应动作
 
@@ -326,7 +304,6 @@ class AtomicAction:
 
 4. **构建返回结果**
    - 聚合鲶鱼成交结果到 `CatfishTradeResult`
-   - 构建做市鲶鱼挂单结果 `MarketMakingCatfishResult`
 
 **设计优势：**
 - 避免分阶段执行导致的流动性枯竭

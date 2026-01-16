@@ -27,7 +27,6 @@ class CatfishMode(Enum):
     TREND_FOLLOWING = "trend_following"  # 趋势追踪（向后兼容别名）
     MEAN_REVERSION = "mean_reversion"  # 逆势操作
     RANDOM = "random"  # 随机买卖
-    MARKET_MAKING = "market_making"  # 做市鲶鱼（提供双边流动性）
 
 
 @dataclass

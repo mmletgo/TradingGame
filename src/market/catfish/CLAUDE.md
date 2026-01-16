@@ -12,7 +12,6 @@
 - `trend_following.py` - 趋势创造者鲶鱼
 - `mean_reversion.py` - 逆势操作型鲶鱼
 - `random_trading.py` - 随机买卖型鲶鱼
-- `market_making.py` - 做市鲶鱼（提供流动性）
 
 ## 核心类
 
@@ -123,36 +122,6 @@
 **reset 方法：**
 - 调用基类的 reset 方法（重置账户、强平标志）
 
-### MarketMakingCatfish (market_making.py)
-
-做市鲶鱼，通过双边挂限价单为市场提供流动性。与其他吃单鲶鱼不同，做市鲶鱼不消耗订单簿深度，反而增加流动性。
-
-**策略逻辑：**
-1. 每个 tick 都行动（不受 `action_probability` 限制）
-2. 先撤销上一个 tick 的所有挂单
-3. 在盘口外侧双边挂限价单：
-   - 买单：在 best_bid - 1~3 tick 处各挂一单
-   - 卖单：在 best_ask + 1~3 tick 处各挂一单
-   - 每档挂单量固定为 100
-4. 若某一边盘口为空，以 last_price 为基准挂单
-
-**额外属性：**
-- `_pending_order_ids: list[int]` - 当前挂单ID列表
-- `_target_depth: int` - 目标深度（默认3档）
-- `_order_size: int` - 每档挂单量（默认100）
-
-**decide 方法：**
-- 总是返回 `(True, 0)`，direction=0 表示双边挂单
-
-**execute 方法：**
-- 重写基类方法，实现限价单挂单逻辑（而非市价单）
-- 返回空列表（限价单不会立即成交）
-
-**reset 方法：**
-- 调用基类的 reset 方法
-- 清空挂单ID列表
-
-**ID 分配：** -4
 
 ## 工厂函数
 
@@ -167,11 +136,11 @@
 - `leverage: float` - 杠杆（默认10.0）
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
-**注意：** 此函数用于单模式创建，当前系统默认使用多模式（四种鲶鱼同时运行）。
+**注意：** 此函数用于单模式创建，当前系统默认使用多模式（三种鲶鱼同时运行）。
 
 ### create_all_catfish(config, initial_balance, leverage=10.0, maintenance_margin_rate=0.05) -> list[CatfishBase]
 
-创建所有四种鲶鱼实例。**这是当前系统的默认行为**。
+创建所有三种鲶鱼实例。**这是当前系统的默认行为**。
 
 **参数：**
 - `config: CatfishConfig` - 鲶鱼配置
@@ -180,9 +149,9 @@
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
 **返回：**
-- 四种鲶鱼实例的列表：[TrendCreator, MeanReversion, RandomTrading, MarketMaking]
-- ID 分配：-1 (TrendCreator), -2 (MeanReversion), -3 (RandomTrading), -4 (MarketMaking)
-- 四种鲶鱼同时运行，每个 tick 各自独立决定是否行动
+- 三种鲶鱼实例的列表：[TrendCreator, MeanReversion, RandomTrading]
+- ID 分配：-1 (TrendCreator), -2 (MeanReversion), -3 (RandomTrading)
+- 三种鲶鱼同时运行，每个 tick 各自独立决定是否行动
 
 ## 使用示例
 
@@ -192,7 +161,7 @@
 from src.config.config import CatfishConfig
 from src.market.catfish import create_all_catfish
 
-# 创建四种鲶鱼
+# 创建三种鲶鱼
 config = CatfishConfig(
     enabled=True,
     multi_mode=True,  # 四种模式同时运行
@@ -206,7 +175,6 @@ catfish_list = create_all_catfish(config, initial_balance=6_600_000_000.0)
 for catfish in catfish_list:
     should_act, direction = catfish.decide(orderbook, tick, price_history)
     if should_act:
-        # direction == 0 表示做市鲶鱼的双边挂单
         trades = catfish.execute(direction, matching_engine)
 ```
 
@@ -266,7 +234,6 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 - 目标：吃掉对手盘前 1 档（调用 `_calculate_quantity` 方法）
 - 累加对手盘前1档的订单数量作为下单量
 
-**挂单量计算（做市鲶鱼）：**
 - 每档挂单量固定为 100
 - 在盘口外侧 1~3 档各挂一单
 - 每个 tick 共挂 6 单（买卖各 3 单）

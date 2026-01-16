@@ -132,36 +132,6 @@ class CatfishTradeResult:
 
 
 @dataclass
-class MarketMakingCatfishDecision:
-    """做市鲶鱼决策数据
-
-    Attributes:
-        catfish_id: 鲶鱼 ID（负数，通常为 -4）
-        old_order_ids: 需要撤销的旧挂单 ID 列表
-        bid_orders: 买单列表，格式: [(price, quantity), ...]
-        ask_orders: 卖单列表，格式: [(price, quantity), ...]
-    """
-
-    catfish_id: int
-    old_order_ids: list[int] = field(default_factory=list)
-    bid_orders: list[tuple[float, int]] = field(default_factory=list)
-    ask_orders: list[tuple[float, int]] = field(default_factory=list)
-
-
-@dataclass
-class MarketMakingCatfishResult:
-    """做市鲶鱼执行结果
-
-    Attributes:
-        catfish_id: 鲶鱼 ID
-        new_order_ids: 新挂单 ID 列表（买单 + 卖单）
-    """
-
-    catfish_id: int
-    new_order_ids: list[int] = field(default_factory=list)
-
-
-@dataclass
 class ArenaExecuteData:
     """execute 命令的数据
 
@@ -190,9 +160,6 @@ class ArenaExecuteData:
     decisions_array: NDArray[np.float64] | None = None
     mm_decisions_array: NDArray[np.float64] | None = None
     catfish_decisions: list[CatfishDecision] = field(default_factory=list)
-    mm_catfish_decisions: list[MarketMakingCatfishDecision] = field(
-        default_factory=list
-    )
 
 
 @dataclass
@@ -231,7 +198,6 @@ class ArenaExecuteResult:
         default_factory=dict
     )
     catfish_results: list[CatfishTradeResult] = field(default_factory=list)
-    mm_catfish_results: list[MarketMakingCatfishResult] = field(default_factory=list)
     error: str | None = None
 
 
@@ -617,94 +583,6 @@ def _handle_catfish(
     return results
 
 
-def _handle_market_making_catfish(
-    arena: WorkerArenaState,
-    mm_catfish_decisions: list[MarketMakingCatfishDecision],
-) -> list[MarketMakingCatfishResult]:
-    """处理做市鲶鱼限价单
-
-    做市鲶鱼与普通鲶鱼不同，它挂限价单而非市价单，提供流动性而非消耗流动性。
-    在普通鲶鱼之后、Agent 决策之前执行。
-
-    Args:
-        arena: 竞技场状态
-        mm_catfish_decisions: 做市鲶鱼决策列表
-
-    Returns:
-        做市鲶鱼执行结果列表
-    """
-    results: list[MarketMakingCatfishResult] = []
-
-    if not mm_catfish_decisions:
-        return results
-
-    matching_engine = arena.matching_engine
-    cancel_order = matching_engine.cancel_order
-    process_order = matching_engine.process_order
-    orderbook = matching_engine._orderbook
-    order_map_get = orderbook.order_map.get
-
-    for decision in mm_catfish_decisions:
-        catfish_id = decision.catfish_id
-
-        # 确保鲶鱼的订单计数器存在
-        if catfish_id not in arena.order_counters:
-            arena.order_counters[catfish_id] = 0
-
-        # 1. 撤销旧挂单
-        for order_id in decision.old_order_ids:
-            cancel_order(order_id)
-
-        new_order_ids: list[int] = []
-
-        # 2. 挂买单
-        for price, quantity in decision.bid_orders:
-            arena.order_counters[catfish_id] += 1
-            order_id = generate_order_id(
-                arena.arena_id, catfish_id, arena.order_counters[catfish_id]
-            )
-            order = Order(
-                order_id=order_id,
-                agent_id=catfish_id,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                price=price,
-                quantity=quantity,
-            )
-            process_order(order)
-            # 检查订单是否仍在订单簿中（未被完全成交）
-            if order_map_get(order_id):
-                new_order_ids.append(order_id)
-
-        # 3. 挂卖单
-        for price, quantity in decision.ask_orders:
-            arena.order_counters[catfish_id] += 1
-            order_id = generate_order_id(
-                arena.arena_id, catfish_id, arena.order_counters[catfish_id]
-            )
-            order = Order(
-                order_id=order_id,
-                agent_id=catfish_id,
-                side=OrderSide.SELL,
-                order_type=OrderType.LIMIT,
-                price=price,
-                quantity=quantity,
-            )
-            process_order(order)
-            # 检查订单是否仍在订单簿中（未被完全成交）
-            if order_map_get(order_id):
-                new_order_ids.append(order_id)
-
-        results.append(
-            MarketMakingCatfishResult(
-                catfish_id=catfish_id,
-                new_order_ids=new_order_ids,
-            )
-        )
-
-    return results
-
-
 def _execute_atomic_action(
     arena: WorkerArenaState,
     action: AtomicAction,
@@ -997,40 +875,7 @@ def _handle_execute(
                     )
                 )
 
-    # 2.2 收集做市鲶鱼动作（拆分撤单和挂单）
-    for mm_decision in execute_data.mm_catfish_decisions:
-        catfish_id = mm_decision.catfish_id
-        for order_id in mm_decision.old_order_ids:
-            atomic_actions.append(
-                AtomicAction(
-                    AtomicActionType.CANCEL,
-                    catfish_id,
-                    order_id=order_id,
-                    is_catfish=True,
-                )
-            )
-        for price, qty in mm_decision.bid_orders:
-            atomic_actions.append(
-                AtomicAction(
-                    AtomicActionType.LIMIT_BUY,
-                    catfish_id,
-                    price=price,
-                    quantity=qty,
-                    is_catfish=True,
-                )
-            )
-        for price, qty in mm_decision.ask_orders:
-            atomic_actions.append(
-                AtomicAction(
-                    AtomicActionType.LIMIT_SELL,
-                    catfish_id,
-                    price=price,
-                    quantity=qty,
-                    is_catfish=True,
-                )
-            )
-
-    # 2.3 收集做市商动作（拆分）
+    # 2.2 收集做市商动作（拆分）
     # 支持两种格式：mm_decisions_array（优先）或 mm_decisions
     if (
         execute_data.mm_decisions_array is not None
@@ -1223,20 +1068,6 @@ def _handle_execute(
             )
         )
 
-    # 构建做市鲶鱼挂单结果
-    mm_catfish_results: list[MarketMakingCatfishResult] = []
-    for mm_decision in execute_data.mm_catfish_decisions:
-        # 做市鲶鱼的新挂单 ID 存储在 catfish_trade_map 中是不合适的
-        # 因为做市鲶鱼是限价单，可能成交也可能挂单
-        # 这里简化处理：返回空列表（因为原子动作执行后挂单ID已经丢失）
-        # 实际应用中，如果需要追踪做市鲶鱼的挂单ID，需要额外的数据结构
-        mm_catfish_results.append(
-            MarketMakingCatfishResult(
-                catfish_id=mm_decision.catfish_id,
-                new_order_ids=[],  # 简化处理
-            )
-        )
-
     # 构建结果
     bid_depth, ask_depth = _get_depth_arrays(orderbook)
     mid_price = orderbook.get_mid_price() or orderbook.last_price
@@ -1251,7 +1082,6 @@ def _handle_execute(
         pending_updates=pending_updates,
         mm_order_updates=mm_order_updates,
         catfish_results=catfish_results,
-        mm_catfish_results=mm_catfish_results,
     )
 
 
@@ -2002,8 +1832,7 @@ class ArenaExecuteWorkerPoolShm:
             # 设置鲶鱼决策
             if execute_data.catfish_decisions:
                 cmd_view.set_catfish_decisions(execute_data.catfish_decisions)
-            if execute_data.mm_catfish_decisions:
-                cmd_view.set_mm_catfish_decisions(execute_data.mm_catfish_decisions)
+            
 
             cmd_view.cmd_type = CommandType.EXECUTE
             cmd_view.status = CommandStatus.PENDING

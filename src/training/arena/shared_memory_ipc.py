@@ -28,7 +28,6 @@ from numpy.typing import NDArray
 if TYPE_CHECKING:
     from src.training.arena.execute_worker import (
         CatfishDecision,
-        MarketMakingCatfishDecision,
     )
 
 # ============================================================================
@@ -44,9 +43,7 @@ MAX_TRADES = 2000            # 每竞技场最大成交数
 MAX_PENDING_UPDATES = 12000  # 最大挂单更新数
 
 # 鲶鱼相关常量
-MAX_CATFISH = 4              # 最大鲶鱼数（4种鲶鱼）
-MAX_CATFISH_ORDERS = 6       # 做市鲶鱼每侧最大订单数（target_depth=3，买卖各3单）
-MAX_OLD_ORDER_IDS = 10       # 做市鲶鱼旧订单ID最大数
+MAX_CATFISH = 3              # 最大鲶鱼数（3种鲶鱼：趋势创造者、均值回归、随机交易）
 
 # Header 大小（64 bytes，填充到缓存行对齐）
 HEADER_SIZE = 64
@@ -60,17 +57,6 @@ MM_DECISIONS_SIZE = MAX_MM_AGENTS * MAX_ORDERS_PER_MM * 2 * 2 * 8  # float64[...
 # 吃单鲶鱼决策: catfish_id(int64), direction(int64), quantity_ticks(int64)
 CATFISH_DECISIONS_SIZE = MAX_CATFISH * 3 * 8  # int64[MAX_CATFISH × 3]
 
-# 做市鲶鱼决策:
-#   catfish_id(int64), num_old_orders(int64), num_bid(int64), num_ask(int64)
-#   old_order_ids[MAX_OLD_ORDER_IDS](int64)
-#   bid_orders[MAX_CATFISH_ORDERS](price float64, quantity int64)
-#   ask_orders[MAX_CATFISH_ORDERS](price float64, quantity int64)
-MM_CATFISH_HEADER_SIZE = 4 * 8  # 4个int64
-MM_CATFISH_OLD_IDS_SIZE = MAX_OLD_ORDER_IDS * 8
-MM_CATFISH_ORDERS_SIZE = MAX_CATFISH_ORDERS * 2 * 8 * 2  # 买卖各 MAX_CATFISH_ORDERS 个订单，每个订单 (price, qty)
-MM_CATFISH_SINGLE_SIZE = MM_CATFISH_HEADER_SIZE + MM_CATFISH_OLD_IDS_SIZE + MM_CATFISH_ORDERS_SIZE
-MM_CATFISH_DECISIONS_SIZE = MAX_CATFISH * MM_CATFISH_SINGLE_SIZE
-
 # Command Region 总大小（包含鲶鱼决策区域）
 COMMAND_REGION_SIZE = (
     HEADER_SIZE
@@ -79,7 +65,6 @@ COMMAND_REGION_SIZE = (
     + MM_AGENT_IDS_SIZE
     + MM_DECISIONS_SIZE
     + CATFISH_DECISIONS_SIZE
-    + MM_CATFISH_DECISIONS_SIZE
 )
 
 # Result Region 各区域大小
@@ -135,14 +120,12 @@ class ArenaCommandView:
         - decisions_count: uint32 (4 bytes)
         - mm_count: uint32 (4 bytes)
         - catfish_count: uint32 (4 bytes)
-        - mm_catfish_count: uint32 (4 bytes)
-        - padding: 36 bytes
+        - padding: 40 bytes
     - liquidated_data: int64[MAX_LIQUIDATED × 3]
     - decisions_data: float64[MAX_DECISIONS × 5]
     - mm_agent_ids: int64[MAX_MM_AGENTS] - 做市商 agent_id 列表
     - mm_decisions_data: float64[MAX_MM_AGENTS × MAX_ORDERS_PER_MM × 2 × 2]
     - catfish_decisions: int64[MAX_CATFISH × 3] - 吃单鲶鱼决策
-    - mm_catfish_decisions: 做市鲶鱼决策区域
 
     Attributes:
         _buffer: 底层内存视图
@@ -153,7 +136,7 @@ class ArenaCommandView:
         _mm_agent_ids: 做市商 agent_id 的 numpy 视图
         _mm_decisions: 做市商决策的 numpy 视图
         _catfish_decisions: 吃单鲶鱼决策的 numpy 视图
-        _mm_catfish_decisions: 做市鲶鱼决策的 numpy 视图
+
     """
 
     _header: NDArray[np.uint32]
@@ -162,72 +145,6 @@ class ArenaCommandView:
     _mm_agent_ids: NDArray[np.int64]
     _mm_decisions: NDArray[np.float64]
     _catfish_decisions: NDArray[np.int64]
-    _mm_catfish_decisions: NDArray[np.uint8]
-
-    def __init__(self, buffer: memoryview, offset: int) -> None:
-        """初始化命令视图
-
-        Args:
-            buffer: 共享内存的 memoryview
-            offset: 本竞技场命令区域在共享内存中的起始偏移量
-        """
-        self._buffer = buffer
-        self._offset = offset
-
-        # 计算各区域偏移
-        header_offset = offset
-        liquidated_offset = header_offset + HEADER_SIZE
-        decisions_offset = liquidated_offset + LIQUIDATED_SIZE
-        mm_agent_ids_offset = decisions_offset + DECISIONS_SIZE
-        mm_decisions_offset = mm_agent_ids_offset + MM_AGENT_IDS_SIZE
-        catfish_decisions_offset = mm_decisions_offset + MM_DECISIONS_SIZE
-        mm_catfish_decisions_offset = catfish_decisions_offset + CATFISH_DECISIONS_SIZE
-
-        # 创建 numpy 视图（零拷贝）
-        self._header = np.ndarray(
-            shape=(16,),  # 16 × 4 bytes = 64 bytes
-            dtype=np.uint32,
-            buffer=buffer,
-            offset=header_offset,
-        )
-        self._liquidated = np.ndarray(
-            shape=(MAX_LIQUIDATED, 3),
-            dtype=np.int64,
-            buffer=buffer,
-            offset=liquidated_offset,
-        )
-        self._decisions = np.ndarray(
-            shape=(MAX_DECISIONS, 5),
-            dtype=np.float64,
-            buffer=buffer,
-            offset=decisions_offset,
-        )
-        self._mm_agent_ids = np.ndarray(
-            shape=(MAX_MM_AGENTS,),
-            dtype=np.int64,
-            buffer=buffer,
-            offset=mm_agent_ids_offset,
-        )
-        self._mm_decisions = np.ndarray(
-            shape=(MAX_MM_AGENTS, MAX_ORDERS_PER_MM * 2, 2),
-            dtype=np.float64,
-            buffer=buffer,
-            offset=mm_decisions_offset,
-        )
-        # 吃单鲶鱼决策：int64[MAX_CATFISH × 3]
-        self._catfish_decisions = np.ndarray(
-            shape=(MAX_CATFISH, 3),
-            dtype=np.int64,
-            buffer=buffer,
-            offset=catfish_decisions_offset,
-        )
-        # 做市鲶鱼决策：使用字节视图，手动解析
-        self._mm_catfish_decisions = np.ndarray(
-            shape=(MM_CATFISH_DECISIONS_SIZE,),
-            dtype=np.uint8,
-            buffer=buffer,
-            offset=mm_catfish_decisions_offset,
-        )
 
     def release(self) -> None:
         """释放所有 numpy 视图引用
@@ -241,7 +158,6 @@ class ArenaCommandView:
         self._mm_agent_ids = None  # type: ignore[assignment]
         self._mm_decisions = None  # type: ignore[assignment]
         self._catfish_decisions = None  # type: ignore[assignment]
-        self._mm_catfish_decisions = None  # type: ignore[assignment]
 
     @property
     def status(self) -> int:
@@ -282,11 +198,6 @@ class ArenaCommandView:
     def catfish_count(self) -> int:
         """获取吃单鲶鱼数量"""
         return int(self._header[5])
-
-    @property
-    def mm_catfish_count(self) -> int:
-        """获取做市鲶鱼数量"""
-        return int(self._header[6])
 
     def set_liquidated(
         self, agents: list[tuple[int, int, bool]]
@@ -470,158 +381,6 @@ class ArenaCommandView:
                 )
             )
         return result
-
-    def set_mm_catfish_decisions(
-        self, decisions: list["MarketMakingCatfishDecision"]
-    ) -> None:
-        """设置做市鲶鱼决策数据
-
-        做市鲶鱼内存布局（每个鲶鱼）：
-        - catfish_id: int64 (8 bytes)
-        - num_old_orders: int64 (8 bytes)
-        - num_bid: int64 (8 bytes)
-        - num_ask: int64 (8 bytes)
-        - old_order_ids: int64[MAX_OLD_ORDER_IDS] (80 bytes)
-        - bid_orders: (price float64, quantity int64)[MAX_CATFISH_ORDERS] (96 bytes)
-        - ask_orders: (price float64, quantity int64)[MAX_CATFISH_ORDERS] (96 bytes)
-
-        Args:
-            decisions: 做市鲶鱼决策列表，MarketMakingCatfishDecision 对象
-        """
-        count = min(len(decisions), MAX_CATFISH)
-        self._header[6] = count
-
-        for i, decision in enumerate(decisions[:count]):
-            base_offset = i * MM_CATFISH_SINGLE_SIZE
-
-            # 写入 header：catfish_id, num_old_orders, num_bid, num_ask
-            header_view = np.frombuffer(
-                self._mm_catfish_decisions[base_offset : base_offset + MM_CATFISH_HEADER_SIZE].data,
-                dtype=np.int64,
-            )
-            num_old = min(len(decision.old_order_ids), MAX_OLD_ORDER_IDS)
-            num_bid = min(len(decision.bid_orders), MAX_CATFISH_ORDERS)
-            num_ask = min(len(decision.ask_orders), MAX_CATFISH_ORDERS)
-
-            # 使用临时数组写入，避免只读视图问题
-            header_data = np.array(
-                [decision.catfish_id, num_old, num_bid, num_ask], dtype=np.int64
-            )
-            self._mm_catfish_decisions[
-                base_offset : base_offset + MM_CATFISH_HEADER_SIZE
-            ] = header_data.view(np.uint8)
-
-            # 写入 old_order_ids
-            old_ids_offset = base_offset + MM_CATFISH_HEADER_SIZE
-            old_ids_data = np.zeros(MAX_OLD_ORDER_IDS, dtype=np.int64)
-            for j, order_id in enumerate(decision.old_order_ids[:num_old]):
-                old_ids_data[j] = order_id
-            self._mm_catfish_decisions[
-                old_ids_offset : old_ids_offset + MM_CATFISH_OLD_IDS_SIZE
-            ] = old_ids_data.view(np.uint8)
-
-            # 写入 bid_orders：每个订单 (price float64, quantity int64)
-            bid_offset = old_ids_offset + MM_CATFISH_OLD_IDS_SIZE
-            bid_data = np.zeros(MAX_CATFISH_ORDERS * 2, dtype=np.float64)
-            for j, (price, quantity) in enumerate(decision.bid_orders[:num_bid]):
-                bid_data[j * 2] = price
-                bid_data[j * 2 + 1] = float(quantity)
-            self._mm_catfish_decisions[
-                bid_offset : bid_offset + MAX_CATFISH_ORDERS * 2 * 8
-            ] = bid_data.view(np.uint8)
-
-            # 写入 ask_orders
-            ask_offset = bid_offset + MAX_CATFISH_ORDERS * 2 * 8
-            ask_data = np.zeros(MAX_CATFISH_ORDERS * 2, dtype=np.float64)
-            for j, (price, quantity) in enumerate(decision.ask_orders[:num_ask]):
-                ask_data[j * 2] = price
-                ask_data[j * 2 + 1] = float(quantity)
-            self._mm_catfish_decisions[
-                ask_offset : ask_offset + MAX_CATFISH_ORDERS * 2 * 8
-            ] = ask_data.view(np.uint8)
-
-    def get_mm_catfish_decisions(self) -> list["MarketMakingCatfishDecision"]:
-        """获取做市鲶鱼决策数据
-
-        Returns:
-            做市鲶鱼决策列表，MarketMakingCatfishDecision 对象
-        """
-        from src.training.arena.execute_worker import MarketMakingCatfishDecision
-
-        count = self.mm_catfish_count
-        if count == 0:
-            return []
-
-        result: list[MarketMakingCatfishDecision] = []
-        for i in range(count):
-            base_offset = i * MM_CATFISH_SINGLE_SIZE
-
-            # 读取 header
-            header_data = np.frombuffer(
-                self._mm_catfish_decisions[
-                    base_offset : base_offset + MM_CATFISH_HEADER_SIZE
-                ].data,
-                dtype=np.int64,
-            )
-            catfish_id = int(header_data[0])
-            num_old = int(header_data[1])
-            num_bid = int(header_data[2])
-            num_ask = int(header_data[3])
-
-            # 读取 old_order_ids
-            old_ids_offset = base_offset + MM_CATFISH_HEADER_SIZE
-            old_ids_data = np.frombuffer(
-                self._mm_catfish_decisions[
-                    old_ids_offset : old_ids_offset + MM_CATFISH_OLD_IDS_SIZE
-                ].data,
-                dtype=np.int64,
-            )
-            old_order_ids = [int(old_ids_data[j]) for j in range(num_old)]
-
-            # 读取 bid_orders
-            bid_offset = old_ids_offset + MM_CATFISH_OLD_IDS_SIZE
-            bid_data = np.frombuffer(
-                self._mm_catfish_decisions[
-                    bid_offset : bid_offset + MAX_CATFISH_ORDERS * 2 * 8
-                ].data,
-                dtype=np.float64,
-            )
-            bid_orders: list[tuple[float, int]] = []
-            for j in range(num_bid):
-                price = bid_data[j * 2]
-                quantity = int(bid_data[j * 2 + 1])
-                bid_orders.append((price, quantity))
-
-            # 读取 ask_orders
-            ask_offset = bid_offset + MAX_CATFISH_ORDERS * 2 * 8
-            ask_data = np.frombuffer(
-                self._mm_catfish_decisions[
-                    ask_offset : ask_offset + MAX_CATFISH_ORDERS * 2 * 8
-                ].data,
-                dtype=np.float64,
-            )
-            ask_orders: list[tuple[float, int]] = []
-            for j in range(num_ask):
-                price = ask_data[j * 2]
-                quantity = int(ask_data[j * 2 + 1])
-                ask_orders.append((price, quantity))
-
-            result.append(
-                MarketMakingCatfishDecision(
-                    catfish_id=catfish_id,
-                    old_order_ids=old_order_ids,
-                    bid_orders=bid_orders,
-                    ask_orders=ask_orders,
-                )
-            )
-
-        return result
-
-
-# ============================================================================
-# Result View
-# ============================================================================
-
 
 class ArenaResultView:
     """单个竞技场结果区域的零拷贝视图
