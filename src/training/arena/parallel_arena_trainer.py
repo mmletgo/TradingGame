@@ -718,17 +718,22 @@ class ParallelArenaTrainer:
         Returns:
             Episode 统计信息字典
         """
-        # 收集所有竞技场的最高价、最低价和结束原因
+        # 收集所有竞技场的最高价、最低价、实际运行tick数和结束原因
         high_prices: list[float] = []
         low_prices: list[float] = []
+        arena_ticks: list[int] = []
         end_reasons: list[str | None] = []
         end_ticks: list[int] = []
 
         for arena in self.arena_states:
             high_prices.append(arena.episode_high_price)
             low_prices.append(arena.episode_low_price)
+            arena_ticks.append(arena.tick)
             end_reasons.append(arena.end_reason)
-            end_ticks.append(arena.end_tick)
+            # 如果正常结束(end_reason=None)，end_tick 使用实际 tick 数
+            end_ticks.append(
+                arena.end_tick if arena.end_reason is not None else arena.tick
+            )
 
         # 计算全局最高/最低价（取各竞技场的极值）
         global_high = max(high_prices) if high_prices else 0.0
@@ -748,6 +753,7 @@ class ParallelArenaTrainer:
             "low_price": global_low,
             "arena_high_prices": high_prices,
             "arena_low_prices": low_prices,
+            "arena_ticks": arena_ticks,
             "arena_end_reasons": end_reasons,
             "arena_end_ticks": end_ticks,
         }
@@ -1413,6 +1419,12 @@ class ParallelArenaTrainer:
         catfish_decisions_map: dict[int, list[CatfishDecision]] = {}
 
         for arena_idx, arena in enumerate(self.arena_states):
+            # 跳过已结束的竞技场
+            if arena.end_reason is not None:
+                arena_market_states.append(self._compute_market_state_for_arena(arena))
+                arena_active_agents.append([])
+                continue
+
             arena.tick += 1
 
             # Tick 1: 只记录做市商初始挂单后的状态
@@ -1555,16 +1567,22 @@ class ParallelArenaTrainer:
                             else:
                                 arena.end_reason = reason
                             arena.end_tick = arena.tick
-                            all_continue = False
                         elif arena.catfish_liquidated:
                             arena.end_reason = "catfish"
                             arena.end_tick = arena.tick
-                            all_continue = False
 
+            # 只有当所有竞技场都结束时才返回 False
+            all_continue = any(
+                arena.end_reason is None for arena in self.arena_states
+            )
             return all_continue
 
         # 原来的串行执行逻辑
         for arena_idx, arena in enumerate(self.arena_states):
+            # 跳过已结束的竞技场
+            if arena.end_reason is not None:
+                continue
+
             if arena.tick == 1:
                 continue
 
@@ -1784,12 +1802,12 @@ class ParallelArenaTrainer:
                     else:
                         arena.end_reason = reason
                     arena.end_tick = arena.tick
-                    all_continue = False
                 elif arena.catfish_liquidated:
                     arena.end_reason = "catfish"
                     arena.end_tick = arena.tick
-                    all_continue = False
 
+        # 只有当所有竞技场都结束时才返回 False
+        all_continue = any(arena.end_reason is None for arena in self.arena_states)
         return all_continue
 
     def _batch_inference_all_arenas(

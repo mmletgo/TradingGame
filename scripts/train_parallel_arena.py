@@ -100,7 +100,8 @@ def episode_callback(stats: dict[str, Any]) -> None:
         end_reason = arena_end_reasons[i] if i < len(arena_end_reasons) else None
         end_tick = arena_end_ticks[i] if i < len(arena_end_ticks) else 0
         if end_reason is None:
-            reason_str = "ok"
+            # 正常结束，显示实际运行的 tick 数
+            reason_str = f"ok@{end_tick}"
         else:
             # 简化结束原因显示
             # population_depleted:RETAIL -> pop:R
