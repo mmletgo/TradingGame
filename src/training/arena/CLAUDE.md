@@ -126,10 +126,10 @@ class ArenaState:
     agent_states: dict[int, AgentAccountState]
     catfish_states: dict[int, CatfishAccountState]
     recent_trades: deque
-    price_history: list[float]
-    tick_history_prices: list[float]
-    tick_history_volumes: list[float]
-    tick_history_amounts: list[float]
+    price_history: deque[float]  # maxlen=1000，自动管理长度
+    tick_history_prices: deque[float]
+    tick_history_volumes: deque[float]
+    tick_history_amounts: deque[float]
     smooth_mid_price: float
     tick: int
     pop_liquidated_counts: dict[AgentType, int]

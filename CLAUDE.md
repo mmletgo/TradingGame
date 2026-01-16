@@ -227,3 +227,6 @@ src/
 - 预分配输入缓冲区
 - NEAT历史数据定期清理
 - Episode后强制垃圾回收
+- `price_history` 使用 `deque(maxlen=1000)` 自动管理长度，避免列表切片创建新对象
+- 推理缓存 `_last_inference_arrays` 在使用完成后立即释放
+- 每 10 个 episode 执行完整 GC + `malloc_trim()` 释放内存给操作系统
