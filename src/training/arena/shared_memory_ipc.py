@@ -146,6 +146,45 @@ class ArenaCommandView:
     _mm_decisions: NDArray[np.float64]
     _catfish_decisions: NDArray[np.int64]
 
+    def __init__(self, buffer: bytes, offset: int = 0) -> None:
+        """初始化命令视图
+
+        Args:
+            buffer: 共享内存缓冲区
+            offset: 在缓冲区中的偏移量
+        """
+        self._buffer = buffer
+        self._offset = offset
+
+        # 计算各区域的偏移量
+        header_offset = offset
+        liquidated_offset = header_offset + HEADER_SIZE
+        decisions_offset = liquidated_offset + LIQUIDATED_SIZE
+        mm_agent_ids_offset = decisions_offset + DECISIONS_SIZE
+        mm_decisions_offset = mm_agent_ids_offset + MM_AGENT_IDS_SIZE
+        catfish_decisions_offset = mm_decisions_offset + MM_DECISIONS_SIZE
+
+        # 创建 numpy 视图
+        self._header = np.ndarray(
+            shape=(16,), dtype=np.uint32, buffer=buffer, offset=header_offset
+        )
+        self._liquidated = np.ndarray(
+            shape=(MAX_LIQUIDATED, 3), dtype=np.int64, buffer=buffer, offset=liquidated_offset
+        )
+        self._decisions = np.ndarray(
+            shape=(MAX_DECISIONS, 5), dtype=np.float64, buffer=buffer, offset=decisions_offset
+        )
+        self._mm_agent_ids = np.ndarray(
+            shape=(MAX_MM_AGENTS,), dtype=np.int64, buffer=buffer, offset=mm_agent_ids_offset
+        )
+        self._mm_decisions = np.ndarray(
+            shape=(MAX_MM_AGENTS, MAX_ORDERS_PER_MM, 2, 2), dtype=np.float64,
+            buffer=buffer, offset=mm_decisions_offset
+        )
+        self._catfish_decisions = np.ndarray(
+            shape=(MAX_CATFISH, 3), dtype=np.int64, buffer=buffer, offset=catfish_decisions_offset
+        )
+
     def release(self) -> None:
         """释放所有 numpy 视图引用
 
