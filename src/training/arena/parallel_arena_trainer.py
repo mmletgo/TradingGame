@@ -2975,12 +2975,12 @@ class ParallelArenaTrainer:
             should_act, direction = catfish_state.decide(tick, price_history)
 
             if should_act and direction != 0:
-                # 创建决策（quantity_ticks 默认为 3，与 _catfish_action_for_arena 一致）
+                # 创建决策（quantity_ticks 默认为 1，与 _catfish_action_for_arena 一致）
                 decisions.append(
                     CatfishDecision(
                         catfish_id=catfish_state.catfish_id,
                         direction=direction,
-                        quantity_ticks=3,
+                        quantity_ticks=1,
                     )
                 )
 
@@ -2993,6 +2993,9 @@ class ParallelArenaTrainer:
 
         做市鲶鱼通过挂限价单提供流动性，与普通鲶鱼的市价单不同。
         此方法仅计算决策，不执行订单（用于 Worker 池模式）。
+
+        注意：挂单基于 last_price 而非 best_bid/best_ask，确保在流动性枯竭时
+        仍能在中间价附近提供双边流动性。
 
         Args:
             arena: 竞技场状态
@@ -3007,6 +3010,7 @@ class ParallelArenaTrainer:
 
         orderbook = arena.matching_engine._orderbook
         tick_size: float = orderbook.tick_size
+        last_price: float = orderbook.last_price
 
         for catfish_state in arena.catfish_states.values():
             if catfish_state.is_liquidated:
@@ -3023,42 +3027,21 @@ class ParallelArenaTrainer:
             if catfish_state.catfish_mode != CatfishMode.MARKET_MAKING:
                 continue
 
-            # 获取盘口信息
-            best_bid: float | None = orderbook.get_best_bid()
-            best_ask: float | None = orderbook.get_best_ask()
-            last_price: float = orderbook.last_price
-
-            # 确定挂单基准价格
-            bid_base: float
-            ask_base: float
-            if best_bid is None and best_ask is None:
-                bid_base = last_price
-                ask_base = last_price
-            elif best_bid is None:
-                bid_base = last_price
-                ask_base = best_ask  # type: ignore[assignment]
-            elif best_ask is None:
-                bid_base = best_bid
-                ask_base = last_price
-            else:
-                bid_base = best_bid
-                ask_base = best_ask
-
             # 获取做市鲶鱼参数
             target_depth = catfish_state.target_depth
             order_size = catfish_state.order_size
 
-            # 构建买卖单列表
+            # 构建买卖单列表（基于 last_price）
             bid_orders: list[tuple[float, int]] = []
             ask_orders: list[tuple[float, int]] = []
 
             for i in range(1, target_depth + 1):
-                # 买单：bid_base - i*tick_size（在盘口下方）
-                bid_price = bid_base - tick_size * i
+                # 买单：last_price - i*tick_size
+                bid_price = last_price - tick_size * i
                 bid_orders.append((bid_price, order_size))
 
-                # 卖单：ask_base + i*tick_size（在盘口上方）
-                ask_price = ask_base + tick_size * i
+                # 卖单：last_price + i*tick_size
+                ask_price = last_price + tick_size * i
                 ask_orders.append((ask_price, order_size))
 
             decisions.append(
@@ -3166,7 +3149,10 @@ class ParallelArenaTrainer:
 
         做市鲶鱼每个 tick：
         1. 撤销上一个 tick 的所有挂单
-        2. 在盘口外侧双边挂限价单
+        2. 在 last_price 附近双边挂限价单
+
+        注意：挂单基于 last_price 而非 best_bid/best_ask，确保在流动性枯竭时
+        仍能在中间价附近提供双边流动性。
 
         Args:
             arena: 竞技场状态
@@ -3180,39 +3166,20 @@ class ParallelArenaTrainer:
             matching_engine.cancel_order(order_id)
         catfish_state.pending_order_ids.clear()
 
-        # 2. 获取盘口信息
-        best_bid = orderbook.get_best_bid()
-        best_ask = orderbook.get_best_ask()
+        # 2. 获取 last_price 作为挂单基准
         last_price = orderbook.last_price
-
-        # 确定挂单基准价格
-        if best_bid is None and best_ask is None:
-            # 订单簿完全为空，以最新成交价为基准
-            bid_base = last_price
-            ask_base = last_price
-        elif best_bid is None:
-            # 无买盘，买单基准为 best_ask - 较大价差
-            bid_base = best_ask - tick_size * 10
-            ask_base = best_ask
-        elif best_ask is None:
-            # 无卖盘，卖单基准为 best_bid + 较大价差
-            bid_base = best_bid
-            ask_base = best_bid + tick_size * 10
-        else:
-            # 正常情况
-            bid_base = best_bid
-            ask_base = best_ask
 
         # 3. 确保鲶鱼已注册（费率为0）
         matching_engine.register_agent(catfish_state.catfish_id, 0.0, 0.0)
 
-        # 4. 在盘口外侧挂单（不会立即成交）
+        # 4. 以 last_price 为基准挂单
+        # 买单在 last_price 下方，卖单在 last_price 上方
         target_depth = catfish_state.target_depth
         order_size = catfish_state.order_size
 
         for i in range(1, target_depth + 1):
-            # 买单：best_bid - i * tick_size
-            bid_price = bid_base - tick_size * i
+            # 买单：last_price - i * tick_size
+            bid_price = last_price - tick_size * i
             bid_order_id = catfish_state.generate_order_id(arena.arena_id)
             bid_order = Order(
                 order_id=bid_order_id,
@@ -3225,8 +3192,8 @@ class ParallelArenaTrainer:
             matching_engine.process_order(bid_order)
             catfish_state.pending_order_ids.append(bid_order_id)
 
-            # 卖单：best_ask + i * tick_size
-            ask_price = ask_base + tick_size * i
+            # 卖单：last_price + i * tick_size
+            ask_price = last_price + tick_size * i
             ask_order_id = catfish_state.generate_order_id(arena.arena_id)
             ask_order = Order(
                 order_id=ask_order_id,
@@ -3240,7 +3207,7 @@ class ParallelArenaTrainer:
             catfish_state.pending_order_ids.append(ask_order_id)
 
     def _calculate_catfish_quantity(self, orderbook: Any, direction: int) -> int:
-        """计算鲶鱼下单数量（吃掉前3档）
+        """计算鲶鱼下单数量（吃掉前1档）
 
         Args:
             orderbook: 订单簿
@@ -3249,7 +3216,7 @@ class ParallelArenaTrainer:
         Returns:
             下单数量
         """
-        target_ticks = 3
+        target_ticks = 1
 
         # 获取盘口深度
         depth = orderbook.get_depth(levels=target_ticks)

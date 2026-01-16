@@ -26,10 +26,13 @@ class MarketMakingCatfish(CatfishBase):
     不会消耗订单簿深度，反而会增加流动性。
 
     策略逻辑：
-    - 每个 tick 在盘口外侧双边挂限价单
+    - 每个 tick 在 last_price 附近双边挂限价单
     - 挂单前先撤销上一个 tick 的所有挂单
-    - 在 best_bid - 1~3 tick 和 best_ask + 1~3 tick 处各挂3单
+    - 买单在 last_price - 1~3 tick 处，卖单在 last_price + 1~3 tick 处
     - 每档挂单量固定为100
+
+    注意：挂单基于 last_price 而非 best_bid/best_ask，确保在流动性枯竭时
+    仍能在中间价附近提供双边流动性。
 
     Attributes:
         catfish_id: 鲶鱼ID（固定为 -4）
@@ -118,38 +121,17 @@ class MarketMakingCatfish(CatfishBase):
         # 2. 获取订单簿信息
         orderbook = matching_engine.orderbook
         tick_size: float = orderbook.tick_size
-
-        best_bid: float | None = orderbook.get_best_bid()
-        best_ask: float | None = orderbook.get_best_ask()
         last_price: float = orderbook.last_price
 
-        # 3. 确定挂单基准价格
-        bid_base: float
-        ask_base: float
-        if best_bid is None and best_ask is None:
-            # 订单簿完全为空，以最新成交价为基准
-            bid_base = last_price
-            ask_base = last_price
-        elif best_bid is None:
-            # 无买盘，买单基准为 last_price
-            bid_base = last_price
-            ask_base = best_ask  # type: ignore[assignment]
-        elif best_ask is None:
-            # 无卖盘，卖单基准为 last_price
-            bid_base = best_bid
-            ask_base = last_price
-        else:
-            # 正常情况
-            bid_base = best_bid
-            ask_base = best_ask
-
-        # 4. 注册鲶鱼费率（maker=0, taker=0）
+        # 3. 注册鲶鱼费率（maker=0, taker=0）
         matching_engine.register_agent(self.catfish_id, 0.0, 0.0)
 
-        # 5. 在盘口外侧挂单（不会立即成交）
+        # 4. 以 last_price 为基准挂单
+        # 买单在 last_price 下方，卖单在 last_price 上方
+        # 这样在流动性枯竭时也能在中间价附近提供双边流动性
         for i in range(1, self._target_depth + 1):
-            # 买单：bid_base - i*tick_size（在盘口下方）
-            bid_price: float = bid_base - tick_size * i
+            # 买单：last_price - i*tick_size
+            bid_price: float = last_price - tick_size * i
             bid_order = Order(
                 order_id=self._generate_order_id(),
                 agent_id=self.catfish_id,
@@ -161,8 +143,8 @@ class MarketMakingCatfish(CatfishBase):
             matching_engine.process_order(bid_order)
             self._pending_order_ids.append(bid_order.order_id)
 
-            # 卖单：ask_base + i*tick_size（在盘口上方）
-            ask_price: float = ask_base + tick_size * i
+            # 卖单：last_price + i*tick_size
+            ask_price: float = last_price + tick_size * i
             ask_order = Order(
                 order_id=self._generate_order_id(),
                 agent_id=self.catfish_id,
@@ -174,7 +156,7 @@ class MarketMakingCatfish(CatfishBase):
             matching_engine.process_order(ask_order)
             self._pending_order_ids.append(ask_order.order_id)
 
-        # 限价单挂在盘口外侧，不会立即成交
+        # 限价单在 last_price 附近，提供双边流动性
         return []
 
     def reset(self) -> None:

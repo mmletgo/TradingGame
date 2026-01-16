@@ -62,12 +62,12 @@ class CatfishDecision:
     Attributes:
         catfish_id: 鲶鱼 ID（负数）
         direction: 方向，1=买，-1=卖，0=不行动
-        quantity_ticks: 吃多少档（默认3）
+        quantity_ticks: 吃多少档（默认1）
     """
 
     catfish_id: int
     direction: int  # 1=买, -1=卖, 0=不行动
-    quantity_ticks: int = 3
+    quantity_ticks: int = 1
 
 
 @dataclass
@@ -1428,12 +1428,16 @@ def arena_execute_worker_shm(
                         liquidated_agents = cmd_view.get_liquidated()
                         decisions = cmd_view.get_decisions()
                         mm_decisions = cmd_view.get_mm_decisions()
+                        catfish_decisions = cmd_view.get_catfish_decisions()
+                        mm_catfish_decisions = cmd_view.get_mm_catfish_decisions()
 
                         # 构建执行数据
                         execute_data = ArenaExecuteData(
                             liquidated_agents=liquidated_agents,
                             decisions=decisions,
                             mm_decisions=mm_decisions,
+                            catfish_decisions=catfish_decisions,
+                            mm_catfish_decisions=mm_catfish_decisions,
                         )
 
                         # 执行
@@ -1708,6 +1712,13 @@ class ArenaExecuteWorkerPoolShm:
                 cmd_view.set_decisions(execute_data.decisions)
 
             cmd_view.set_mm_decisions(execute_data.mm_decisions)
+
+            # 设置鲶鱼决策
+            if execute_data.catfish_decisions:
+                cmd_view.set_catfish_decisions(execute_data.catfish_decisions)
+            if execute_data.mm_catfish_decisions:
+                cmd_view.set_mm_catfish_decisions(execute_data.mm_catfish_decisions)
+
             cmd_view.cmd_type = CommandType.EXECUTE
             cmd_view.status = CommandStatus.PENDING
 
