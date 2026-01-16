@@ -53,6 +53,10 @@ class MarketMakerAgent(Agent):
     神经网络输出维度: 41 = 买单价格(10) + 买单数量(10) + 卖单价格(10) + 卖单数量(10) + 总下单比例基准(1)
     """
 
+    # 最小订单数量保证
+    MIN_ORDER_QUANTITY: int = 1  # 最小订单数量
+    MIN_RATIO_THRESHOLD: float = 0.001  # 最小权重阈值 (0.1%)
+
     agent_id: int
     brain: Brain
     bid_order_ids: list[int]
@@ -246,7 +250,7 @@ class MarketMakerAgent(Agent):
         bid_raw_ratios: np.ndarray,
         ask_raw_ratios: np.ndarray,
         skew_factor: float,
-        min_side_weight: float = 0.03,
+        min_side_weight: float = 0.1,
     ) -> tuple[np.ndarray, np.ndarray]:
         """应用仓位倾斜到买卖权重
 
@@ -403,6 +407,9 @@ class MarketMakerAgent(Agent):
                 is_buy=True,
                 ref_price=mid_price,
             )
+            # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
+            if quantity == 0 and bid_ratios[i] > self.MIN_RATIO_THRESHOLD:
+                quantity = self.MIN_ORDER_QUANTITY
             if quantity > 0:
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
@@ -425,6 +432,9 @@ class MarketMakerAgent(Agent):
                 is_buy=False,
                 ref_price=mid_price,
             )
+            # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
+            if quantity == 0 and ask_ratios[i] > self.MIN_RATIO_THRESHOLD:
+                quantity = self.MIN_ORDER_QUANTITY
             if quantity > 0:
                 ask_orders.append({"price": float(ask_prices[i]), "quantity": quantity})
 

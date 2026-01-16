@@ -1458,6 +1458,8 @@ cdef void _parse_market_maker_full_single(
     """
     cdef double MAX_ORDER_QUANTITY = 100000000.0
     cdef double MIN_SIDE_WEIGHT = 0.1
+    cdef int MM_MIN_ORDER_QUANTITY = 1  # 最小订单数量
+    cdef double MM_MIN_RATIO_THRESHOLD = 0.001  # 最小权重阈值 (0.1%)
 
     cdef int i, num_bid, num_ask
     cdef double bid_ratios[10]
@@ -1552,8 +1554,11 @@ cdef void _parse_market_maker_full_single(
             price = round_price(price, tick_size)
             if price > 0:
                 qty_raw = avail_buy * ratio / price
-                if qty_raw >= 1.0:
-                    qty = <int>qty_raw
+                qty = <int>qty_raw
+                # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
+                if qty == 0 and bid_ratios[i] > MM_MIN_RATIO_THRESHOLD:
+                    qty = MM_MIN_ORDER_QUANTITY
+                if qty >= 1:
                     if qty > <int>MAX_ORDER_QUANTITY:
                         qty = <int>MAX_ORDER_QUANTITY
                     result.bid_prices[num_bid] = price
@@ -1569,8 +1574,11 @@ cdef void _parse_market_maker_full_single(
             price = round_price(price, tick_size)
             if price > 0:
                 qty_raw = avail_sell * ratio / price
-                if qty_raw >= 1.0:
-                    qty = <int>qty_raw
+                qty = <int>qty_raw
+                # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
+                if qty == 0 and ask_ratios[i] > MM_MIN_RATIO_THRESHOLD:
+                    qty = MM_MIN_ORDER_QUANTITY
+                if qty >= 1:
                     if qty > <int>MAX_ORDER_QUANTITY:
                         qty = <int>MAX_ORDER_QUANTITY
                     result.ask_prices[num_ask] = price

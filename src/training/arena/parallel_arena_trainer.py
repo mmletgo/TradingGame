@@ -74,6 +74,10 @@ CACHE_TYPE_RETAIL = 0
 CACHE_TYPE_FULL = 1
 CACHE_TYPE_MARKET_MAKER = 2
 
+# 最小订单数量保证
+MM_MIN_ORDER_QUANTITY: int = 1  # 最小订单数量
+MM_MIN_RATIO_THRESHOLD: float = 0.001  # 最小权重阈值 (0.1%)
+
 # 尝试导入 OpenMP 批量决策缓存模块
 try:
     from src.training._cython.batch_decide_openmp import BatchNetworkCache
@@ -2379,6 +2383,9 @@ class ParallelArenaTrainer:
                 price_bid = max(tick_size, round(price_bid / tick_size) * tick_size)
                 # 内联数量计算
                 qty_bid = int(avail_buy * ratio_bid / price_bid)
+                # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
+                if qty_bid == 0 and bid_ratios[i] > MM_MIN_RATIO_THRESHOLD:
+                    qty_bid = MM_MIN_ORDER_QUANTITY
                 if qty_bid > 0:
                     bid_orders.append({"price": price_bid, "quantity": float(min(qty_bid, 100_000_000))})
 
@@ -2394,6 +2401,9 @@ class ParallelArenaTrainer:
                 price_ask = max(tick_size, round(price_ask / tick_size) * tick_size)
                 # 内联数量计算
                 qty_ask = int(avail_sell * ratio_ask / price_ask)
+                # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
+                if qty_ask == 0 and ask_ratios[i] > MM_MIN_RATIO_THRESHOLD:
+                    qty_ask = MM_MIN_ORDER_QUANTITY
                 if qty_ask > 0:
                     ask_orders.append({"price": price_ask, "quantity": float(min(qty_ask, 100_000_000))})
 
@@ -3118,14 +3128,7 @@ class ParallelArenaTrainer:
             has_asks = orderbook.get_best_ask() is not None
 
         if has_bids != has_asks:
-            # 单边订单簿：增加计数器
-            arena.consecutive_one_sided_ticks += 1
-            # 连续 3 个 tick 才结束（给做市商恢复流动性的时间）
-            if arena.consecutive_one_sided_ticks >= 3:
-                return ("one_sided_orderbook", None)
-        else:
-            # 订单簿正常：清零计数器
-            arena.consecutive_one_sided_ticks = 0
+            return ("one_sided_orderbook", None)
 
         return None
 

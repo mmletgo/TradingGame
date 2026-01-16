@@ -47,7 +47,7 @@ def create_default_config(
         depth=100,
         ema_alpha=0.9,
     )
-    maker_initial_balance = 2_000_000.0  # 做市商初始资金 2M
+    maker_initial_balance = 5_000_000.0  # 做市商初始资金 5M
     maker_leverage = 1.0
 
     agents = {
