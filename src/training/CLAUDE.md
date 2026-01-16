@@ -792,11 +792,13 @@ pool.shutdown()
      - **阶段1（统一撤单）**：遍历所有 Agent 检查强平条件，收集需要淘汰的 Agent，**统一撤销这些 Agent 的所有挂单**
      - **阶段2（统一市价单平仓）**：遍历需要淘汰的 Agent，执行市价单平仓（不触发 ADL），收集需要 ADL 的 Agent
      - **阶段3（用最新价格计算 ADL 候选并执行）**：获取订单簿最新价格，计算 ADL 候选清单，执行 ADL
-   - **Tick 过程**：
-     - 鲶鱼行动（如果启用）
+   - **Tick 过程（原子动作随机执行）**：
      - 向量化计算归一化市场状态
      - **随机打乱 Agent 执行顺序**（每 tick 完全随机，模拟真实环境）
-     - Agent 并行决策 → 串行执行下单
+     - Agent 并行决策
+     - **收集所有原子动作**：将鲶鱼动作和 Agent 动作拆分为原子操作
+     - **随机打乱原子动作顺序**：`random.shuffle(atomic_actions)`
+     - **逐个执行原子动作**：通过 `_execute_atomic_action()` 执行
      - 记录成交到 `recent_trades`，更新 maker 账户
    - **Tick 结束**：
      - 下单产生的价格变动效果在下个 tick 被感知
@@ -804,6 +806,46 @@ pool.shutdown()
      - 记录 tick 历史数据（价格、成交量、成交额，最多保留100条）
      - 检查鲶鱼强平（鲶鱼强平则立即结束 episode）
      - 数据采集使用 `tick_start_price` 计算资产，与强平检查一致
+
+   **原子动作机制**：
+
+   为了模拟真实市场环境，所有订单操作被拆分为原子动作后随机打乱执行，避免分阶段执行导致的流动性枯竭问题。
+
+   **原子动作类型（AtomicActionType）**：
+   - `CANCEL (1)` - 撤单
+   - `LIMIT_BUY (2)` - 限价买单
+   - `LIMIT_SELL (3)` - 限价卖单
+   - `MARKET_BUY (4)` - 市价买单
+   - `MARKET_SELL (5)` - 市价卖单
+
+   **原子动作数据结构（AtomicAction）**：
+   ```python
+   @dataclass
+   class AtomicAction:
+       action_type: AtomicActionType  # 动作类型
+       agent_id: int                  # Agent 或鲶鱼 ID
+       order_id: int = 0              # 撤单时的订单 ID
+       price: float = 0.0             # 限价单价格
+       quantity: int = 0              # 订单数量
+       is_market_maker: bool = False  # 是否为做市商
+       is_catfish: bool = False       # 是否为鲶鱼
+       agent_ref: Any = None          # Agent 或 CatfishBase 引用
+   ```
+
+   **动作收集规则**：
+   - **吃单鲶鱼**：direction != 0 时，收集一个市价单动作
+   - **做市鲶鱼**：direction == 0 时，收集撤旧单动作 + 新挂单动作
+   - **做市商**：收集所有撤单动作 + 所有新挂单动作
+   - **非做市商限价单**：收集撤旧单动作（如有）+ 新挂单动作
+   - **非做市商撤单**：收集撤单动作
+   - **非做市商市价单**：收集市价单动作
+
+   **执行方法（`_execute_atomic_action`）**：
+   - 检查 Agent/鲶鱼是否已被强平，已强平则跳过
+   - 根据动作类型执行对应操作
+   - 更新 taker 账户和 maker 账户
+   - 记录成交到 `recent_trades` 和 `tick_trades`
+   - 庄家市价单/限价单成交时计算波动性贡献
 
 ## 强平与淘汰机制（爆仓即淘汰）
 

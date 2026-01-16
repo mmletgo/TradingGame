@@ -281,21 +281,57 @@ class ArenaExecuteResult:
 | `get_all_depths()` | 获取所有竞技场的订单簿深度 |
 | `shutdown()` | 关闭所有 Worker |
 
-**鲶鱼处理流程：**
+**原子动作执行机制：**
 
-Worker 端的 `_handle_execute` 函数按以下顺序处理：
-1. **吃单鲶鱼处理**（`_handle_catfish`）：在所有 Agent 之前执行
-   - 遍历 `catfish_decisions`
-   - 对于 direction != 0 的决策：获取订单簿深度，累加指定档位的数量
-   - 提交市价单，收集成交结果到 `CatfishTradeResult`
-2. **做市鲶鱼处理**（`_handle_market_making_catfish`）：在吃单鲶鱼之后执行
-   - 遍历 `mm_catfish_decisions`
-   - 撤销 `old_order_ids` 中的旧挂单
-   - 在盘口外侧挂限价单（买单和卖单各 target_depth 档）
-   - 收集新挂单 ID 到 `MarketMakingCatfishResult`
-3. **强平处理**：撤单 + 市价平仓
-4. **做市商执行**：撤旧单 → 挂新单
-5. **非做市商执行**：限价单/市价单/撤单
+Worker 端的 `_handle_execute` 函数采用"原子动作随机打乱"执行策略，避免分阶段执行导致的流动性枯竭问题。
+
+**新增数据结构：**
+
+```python
+class AtomicActionType(IntEnum):
+    """原子动作类型"""
+    CANCEL = 1       # 撤单
+    LIMIT_BUY = 2    # 限价买单
+    LIMIT_SELL = 3   # 限价卖单
+    MARKET_BUY = 4   # 市价买单
+    MARKET_SELL = 5  # 市价卖单
+
+@dataclass
+class AtomicAction:
+    """原子动作"""
+    action_type: AtomicActionType
+    agent_id: int
+    order_id: int = 0          # CANCEL 动作使用
+    price: float = 0.0         # LIMIT 动作使用
+    quantity: int = 0          # 非 CANCEL 动作使用
+    is_market_maker: bool = False
+    is_catfish: bool = False
+```
+
+**执行流程：**
+
+1. **强平处理（不参与打乱，优先执行）**
+   - 撤销被强平 Agent 的所有挂单
+   - 执行市价单平仓
+
+2. **收集原子动作**
+   - 吃单鲶鱼：转换为 MARKET_BUY/MARKET_SELL 动作
+   - 做市鲶鱼：拆分为 CANCEL + LIMIT_BUY/LIMIT_SELL 动作
+   - 做市商：拆分为 CANCEL（撤旧单）+ LIMIT_BUY/LIMIT_SELL（挂新单）动作
+   - 非做市商：拆分为 CANCEL（如需撤旧单）+ 对应动作
+
+3. **随机打乱并执行**
+   - 使用 `random.shuffle()` 打乱所有原子动作
+   - 逐个执行，调用 `_execute_atomic_action()` 函数
+
+4. **构建返回结果**
+   - 聚合鲶鱼成交结果到 `CatfishTradeResult`
+   - 构建做市鲶鱼挂单结果 `MarketMakingCatfishResult`
+
+**设计优势：**
+- 避免分阶段执行导致的流动性枯竭
+- 所有参与者的订单被公平随机执行
+- 做市商的撤单和挂单也被拆分，与其他动作混合执行
 
 **Worker 维护的状态：**
 - `MatchingEngine` / `OrderBook`: 订单簿和撮合引擎

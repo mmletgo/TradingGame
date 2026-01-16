@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 import logging
+import random
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
+from enum import IntEnum
 from multiprocessing import Process, Queue
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +35,44 @@ from src.market.orderbook.order import Order, OrderSide, OrderType
 if TYPE_CHECKING:
     from multiprocessing import Queue as QueueType
     from multiprocessing.synchronize import Event
+
+
+# ============================================================================
+# 原子动作数据结构
+# ============================================================================
+
+
+class AtomicActionType(IntEnum):
+    """原子动作类型"""
+
+    CANCEL = 1  # 撤单
+    LIMIT_BUY = 2  # 限价买单
+    LIMIT_SELL = 3  # 限价卖单
+    MARKET_BUY = 4  # 市价买单
+    MARKET_SELL = 5  # 市价卖单
+
+
+@dataclass
+class AtomicAction:
+    """原子动作
+
+    Attributes:
+        action_type: 动作类型
+        agent_id: Agent ID
+        order_id: 订单 ID（CANCEL 动作使用）
+        price: 订单价格（LIMIT 动作使用）
+        quantity: 订单数量（非 CANCEL 动作使用）
+        is_market_maker: 是否是做市商
+        is_catfish: 是否是鲶鱼
+    """
+
+    action_type: AtomicActionType
+    agent_id: int
+    order_id: int = 0  # CANCEL 动作使用
+    price: float = 0.0  # LIMIT 动作使用
+    quantity: int = 0  # 非 CANCEL 动作使用
+    is_market_maker: bool = False
+    is_catfish: bool = False
 
 
 # ============================================================================
@@ -665,19 +705,200 @@ def _handle_market_making_catfish(
     return results
 
 
+def _execute_atomic_action(
+    arena: WorkerArenaState,
+    action: AtomicAction,
+    all_trades: list[tuple[int, float, int, int, int, float, float, bool]],
+    pending_updates: dict[int, int | None],
+    mm_order_updates: dict[int, tuple[list[int], list[int]]],
+    catfish_trade_map: dict[int, list[tuple[int, float, int, int, int, float, float, bool]]],
+) -> None:
+    """执行单个原子动作
+
+    Args:
+        arena: 竞技场状态
+        action: 原子动作
+        all_trades: 所有成交列表（会被修改）
+        pending_updates: 非做市商挂单状态更新（会被修改）
+        mm_order_updates: 做市商挂单状态更新（会被修改）
+        catfish_trade_map: 鲶鱼成交映射，catfish_id -> trades（会被修改）
+    """
+    matching_engine = arena.matching_engine
+    orderbook = matching_engine._orderbook
+    process_order = matching_engine.process_order
+    cancel_order = matching_engine.cancel_order
+    order_map_get = orderbook.order_map.get
+
+    agent_id = action.agent_id
+
+    # 确保订单计数器存在
+    if agent_id not in arena.order_counters:
+        arena.order_counters[agent_id] = 0
+
+    if action.action_type == AtomicActionType.CANCEL:
+        # 撤单
+        order_id = action.order_id
+        if order_id > 0:
+            cancel_order(order_id)
+
+            # 更新状态
+            if action.is_market_maker:
+                # 做市商撤单：从挂单列表中移除
+                bid_ids = arena.mm_bid_order_ids.get(agent_id, [])
+                ask_ids = arena.mm_ask_order_ids.get(agent_id, [])
+                if order_id in bid_ids:
+                    bid_ids.remove(order_id)
+                if order_id in ask_ids:
+                    ask_ids.remove(order_id)
+            elif not action.is_catfish:
+                # 非做市商撤单
+                if arena.pending_order_ids.get(agent_id) == order_id:
+                    arena.pending_order_ids[agent_id] = None
+                    pending_updates[agent_id] = None
+
+    elif action.action_type == AtomicActionType.LIMIT_BUY:
+        # 限价买单
+        arena.order_counters[agent_id] += 1
+        order_id = generate_order_id(
+            arena.arena_id, agent_id, arena.order_counters[agent_id]
+        )
+        order = Order(
+            order_id=order_id,
+            agent_id=agent_id,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            price=action.price,
+            quantity=action.quantity,
+        )
+        trades = process_order(order)
+        for trade in trades:
+            trade_tuple = _trade_to_tuple(trade)
+            all_trades.append(trade_tuple)
+            arena.recent_trades.append(trade)
+            # 鲶鱼成交记录
+            if action.is_catfish:
+                if agent_id not in catfish_trade_map:
+                    catfish_trade_map[agent_id] = []
+                catfish_trade_map[agent_id].append(trade_tuple)
+
+        # 更新挂单状态
+        if order_map_get(order_id):
+            if action.is_market_maker:
+                if agent_id not in mm_order_updates:
+                    mm_order_updates[agent_id] = ([], [])
+                mm_order_updates[agent_id][0].append(order_id)
+                arena.mm_bid_order_ids[agent_id].append(order_id)
+            elif not action.is_catfish:
+                arena.pending_order_ids[agent_id] = order_id
+                pending_updates[agent_id] = order_id
+        elif not action.is_market_maker and not action.is_catfish:
+            arena.pending_order_ids[agent_id] = None
+            pending_updates[agent_id] = None
+
+    elif action.action_type == AtomicActionType.LIMIT_SELL:
+        # 限价卖单
+        arena.order_counters[agent_id] += 1
+        order_id = generate_order_id(
+            arena.arena_id, agent_id, arena.order_counters[agent_id]
+        )
+        order = Order(
+            order_id=order_id,
+            agent_id=agent_id,
+            side=OrderSide.SELL,
+            order_type=OrderType.LIMIT,
+            price=action.price,
+            quantity=action.quantity,
+        )
+        trades = process_order(order)
+        for trade in trades:
+            trade_tuple = _trade_to_tuple(trade)
+            all_trades.append(trade_tuple)
+            arena.recent_trades.append(trade)
+            # 鲶鱼成交记录
+            if action.is_catfish:
+                if agent_id not in catfish_trade_map:
+                    catfish_trade_map[agent_id] = []
+                catfish_trade_map[agent_id].append(trade_tuple)
+
+        # 更新挂单状态
+        if order_map_get(order_id):
+            if action.is_market_maker:
+                if agent_id not in mm_order_updates:
+                    mm_order_updates[agent_id] = ([], [])
+                mm_order_updates[agent_id][1].append(order_id)
+                arena.mm_ask_order_ids[agent_id].append(order_id)
+            elif not action.is_catfish:
+                arena.pending_order_ids[agent_id] = order_id
+                pending_updates[agent_id] = order_id
+        elif not action.is_market_maker and not action.is_catfish:
+            arena.pending_order_ids[agent_id] = None
+            pending_updates[agent_id] = None
+
+    elif action.action_type == AtomicActionType.MARKET_BUY:
+        # 市价买单
+        arena.order_counters[agent_id] += 1
+        order_id = generate_order_id(
+            arena.arena_id, agent_id, arena.order_counters[agent_id]
+        )
+        order = Order(
+            order_id=order_id,
+            agent_id=agent_id,
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=action.quantity,
+        )
+        trades = process_order(order)
+        for trade in trades:
+            trade_tuple = _trade_to_tuple(trade)
+            all_trades.append(trade_tuple)
+            arena.recent_trades.append(trade)
+            # 鲶鱼成交记录
+            if action.is_catfish:
+                if agent_id not in catfish_trade_map:
+                    catfish_trade_map[agent_id] = []
+                catfish_trade_map[agent_id].append(trade_tuple)
+
+    elif action.action_type == AtomicActionType.MARKET_SELL:
+        # 市价卖单
+        arena.order_counters[agent_id] += 1
+        order_id = generate_order_id(
+            arena.arena_id, agent_id, arena.order_counters[agent_id]
+        )
+        order = Order(
+            order_id=order_id,
+            agent_id=agent_id,
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            quantity=action.quantity,
+        )
+        trades = process_order(order)
+        for trade in trades:
+            trade_tuple = _trade_to_tuple(trade)
+            all_trades.append(trade_tuple)
+            arena.recent_trades.append(trade)
+            # 鲶鱼成交记录
+            if action.is_catfish:
+                if agent_id not in catfish_trade_map:
+                    catfish_trade_map[agent_id] = []
+                catfish_trade_map[agent_id].append(trade_tuple)
+
+
 def _handle_execute(
     arena: WorkerArenaState,
     execute_data: ArenaExecuteData,
 ) -> ArenaExecuteResult:
     """处理 execute 命令（执行订单）
 
+    新的执行逻辑：将所有订单动作拆分为原子动作，随机打乱后执行。
+    强平处理不参与打乱，优先执行。
+
     执行顺序：
-    0. 鲶鱼处理（在所有 Agent 之前）
-       0.1. 普通鲶鱼市价单
-       0.2. 做市鲶鱼限价单
-    1. 强平处理（撤单 + 市价平仓）
-    2. 做市商执行（撤旧单 -> 挂新单）
-    3. 非做市商执行
+    1. 强平处理（不参与打乱，优先执行）
+    2. 收集所有原子动作（吃单鲶鱼、做市鲶鱼、做市商、非做市商）
+    3. 随机打乱并执行
+    4. 构建返回结果
 
     Args:
         arena: 竞技场状态
@@ -689,26 +910,14 @@ def _handle_execute(
     all_trades: list[tuple[int, float, int, int, int, float, float, bool]] = []
     pending_updates: dict[int, int | None] = {}
     mm_order_updates: dict[int, tuple[list[int], list[int]]] = {}
+    catfish_trade_map: dict[int, list[tuple[int, float, int, int, int, float, float, bool]]] = {}
 
     matching_engine = arena.matching_engine
     orderbook = matching_engine._orderbook
     process_order = matching_engine.process_order
     cancel_order = matching_engine.cancel_order
-    order_map_get = orderbook.order_map.get
 
-    # 0.1. 处理普通鲶鱼市价单（在所有 Agent 之前）
-    catfish_results = _handle_catfish(arena, execute_data.catfish_decisions)
-
-    # 将鲶鱼成交加入 all_trades
-    for catfish_result in catfish_results:
-        all_trades.extend(catfish_result.trades)
-
-    # 0.2. 处理做市鲶鱼限价单（在普通鲶鱼之后）
-    mm_catfish_results = _handle_market_making_catfish(
-        arena, execute_data.mm_catfish_decisions
-    )
-
-    # 1. 处理强平
+    # ====== 第一部分：强平处理（不参与打乱，优先执行）======
     for agent_id, position_qty, is_mm in execute_data.liquidated_agents:
         # 撤单
         if is_mm:
@@ -749,207 +958,284 @@ def _handle_execute(
                 all_trades.append(_trade_to_tuple(trade))
                 arena.recent_trades.append(trade)
 
-    # 2. 处理做市商决策
-    # P3 优化：优先使用 NumPy 数组格式
-    if execute_data.mm_decisions_array is not None and len(execute_data.mm_decisions_array) > 0:
-        # 使用 NumPy 数组格式
-        # 列顺序: [agent_id, num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
+    # ====== 第二部分：收集所有原子动作 ======
+    atomic_actions: list[AtomicAction] = []
+
+    # 2.1 收集吃单鲶鱼动作
+    for decision in execute_data.catfish_decisions:
+        if decision.direction == 0:
+            continue
+        # 计算数量（吃掉前 N 档）
+        depth = orderbook.get_depth(levels=decision.quantity_ticks)
+        total_qty = 0
+        if decision.direction > 0:  # 买
+            asks = depth.get("asks", [])
+            for i in range(min(decision.quantity_ticks, len(asks))):
+                _, qty = asks[i]
+                total_qty += int(qty)
+            if total_qty > 0:
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.MARKET_BUY,
+                        decision.catfish_id,
+                        quantity=total_qty,
+                        is_catfish=True,
+                    )
+                )
+        else:  # 卖
+            bids = depth.get("bids", [])
+            for i in range(min(decision.quantity_ticks, len(bids))):
+                _, qty = bids[i]
+                total_qty += int(qty)
+            if total_qty > 0:
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.MARKET_SELL,
+                        decision.catfish_id,
+                        quantity=total_qty,
+                        is_catfish=True,
+                    )
+                )
+
+    # 2.2 收集做市鲶鱼动作（拆分撤单和挂单）
+    for mm_decision in execute_data.mm_catfish_decisions:
+        catfish_id = mm_decision.catfish_id
+        for order_id in mm_decision.old_order_ids:
+            atomic_actions.append(
+                AtomicAction(
+                    AtomicActionType.CANCEL,
+                    catfish_id,
+                    order_id=order_id,
+                    is_catfish=True,
+                )
+            )
+        for price, qty in mm_decision.bid_orders:
+            atomic_actions.append(
+                AtomicAction(
+                    AtomicActionType.LIMIT_BUY,
+                    catfish_id,
+                    price=price,
+                    quantity=qty,
+                    is_catfish=True,
+                )
+            )
+        for price, qty in mm_decision.ask_orders:
+            atomic_actions.append(
+                AtomicAction(
+                    AtomicActionType.LIMIT_SELL,
+                    catfish_id,
+                    price=price,
+                    quantity=qty,
+                    is_catfish=True,
+                )
+            )
+
+    # 2.3 收集做市商动作（拆分）
+    # 支持两种格式：mm_decisions_array（优先）或 mm_decisions
+    if (
+        execute_data.mm_decisions_array is not None
+        and len(execute_data.mm_decisions_array) > 0
+    ):
+        # 使用数组格式
         mm_arr = execute_data.mm_decisions_array
         for row_idx in range(len(mm_arr)):
             agent_id = int(mm_arr[row_idx, 0])
             num_bid = int(mm_arr[row_idx, 1])
             num_ask = int(mm_arr[row_idx, 2])
 
-            # 确保订单计数器存在
-            if agent_id not in arena.order_counters:
-                arena.order_counters[agent_id] = 0
-
-            # 撤销旧挂单
+            # 撤旧单
             for order_id in arena.mm_bid_order_ids.get(agent_id, []):
-                cancel_order(order_id)
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.CANCEL,
+                        agent_id,
+                        order_id=order_id,
+                        is_market_maker=True,
+                    )
+                )
             for order_id in arena.mm_ask_order_ids.get(agent_id, []):
-                cancel_order(order_id)
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.CANCEL,
+                        agent_id,
+                        order_id=order_id,
+                        is_market_maker=True,
+                    )
+                )
+            # 清空旧挂单列表（在收集动作时清空，执行挂单时添加新ID）
+            arena.mm_bid_order_ids[agent_id] = []
+            arena.mm_ask_order_ids[agent_id] = []
+            # 初始化 mm_order_updates
+            mm_order_updates[agent_id] = ([], [])
 
-            bid_ids: list[int] = []
-            ask_ids: list[int] = []
-
-            # 挂买单（价格在列3-12，数量在列13-22）
+            # 挂新买单（价格在列3-12，数量在列13-22）
             for k in range(num_bid):
-                arena.order_counters[agent_id] += 1
-                order_id = generate_order_id(
-                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.LIMIT_BUY,
+                        agent_id,
+                        price=mm_arr[row_idx, 3 + k],
+                        quantity=int(mm_arr[row_idx, 13 + k]),
+                        is_market_maker=True,
+                    )
                 )
-                order = Order(
-                    order_id=order_id,
-                    agent_id=agent_id,
-                    side=OrderSide.BUY,
-                    order_type=OrderType.LIMIT,
-                    price=mm_arr[row_idx, 3 + k],
-                    quantity=int(mm_arr[row_idx, 13 + k]),
-                )
-                trades = process_order(order)
-                for trade in trades:
-                    all_trades.append(_trade_to_tuple(trade))
-                    arena.recent_trades.append(trade)
-                if order_map_get(order_id):
-                    bid_ids.append(order_id)
-
-            # 挂卖单（价格在列23-32，数量在列33-42）
+            # 挂新卖单（价格在列23-32，数量在列33-42）
             for k in range(num_ask):
-                arena.order_counters[agent_id] += 1
-                order_id = generate_order_id(
-                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.LIMIT_SELL,
+                        agent_id,
+                        price=mm_arr[row_idx, 23 + k],
+                        quantity=int(mm_arr[row_idx, 33 + k]),
+                        is_market_maker=True,
+                    )
                 )
-                order = Order(
-                    order_id=order_id,
-                    agent_id=agent_id,
-                    side=OrderSide.SELL,
-                    order_type=OrderType.LIMIT,
-                    price=mm_arr[row_idx, 23 + k],
-                    quantity=int(mm_arr[row_idx, 33 + k]),
-                )
-                trades = process_order(order)
-                for trade in trades:
-                    all_trades.append(_trade_to_tuple(trade))
-                    arena.recent_trades.append(trade)
-                if order_map_get(order_id):
-                    ask_ids.append(order_id)
-
-            # 更新挂单记录
-            arena.mm_bid_order_ids[agent_id] = bid_ids
-            arena.mm_ask_order_ids[agent_id] = ask_ids
-            mm_order_updates[agent_id] = (bid_ids, ask_ids)
     else:
-        # 回退到 list 格式
+        # 使用列表格式
         for agent_id, bid_orders, ask_orders in execute_data.mm_decisions:
-            # 确保订单计数器存在
-            if agent_id not in arena.order_counters:
-                arena.order_counters[agent_id] = 0
-
-            # 撤销旧挂单
+            # 撤旧单
             for order_id in arena.mm_bid_order_ids.get(agent_id, []):
-                cancel_order(order_id)
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.CANCEL,
+                        agent_id,
+                        order_id=order_id,
+                        is_market_maker=True,
+                    )
+                )
             for order_id in arena.mm_ask_order_ids.get(agent_id, []):
-                cancel_order(order_id)
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.CANCEL,
+                        agent_id,
+                        order_id=order_id,
+                        is_market_maker=True,
+                    )
+                )
+            # 清空旧挂单列表
+            arena.mm_bid_order_ids[agent_id] = []
+            arena.mm_ask_order_ids[agent_id] = []
+            # 初始化 mm_order_updates
+            mm_order_updates[agent_id] = ([], [])
 
-            bid_ids = []
-            ask_ids = []
-
-            # 挂买单
             for order_spec in bid_orders:
-                arena.order_counters[agent_id] += 1
-                order_id = generate_order_id(
-                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.LIMIT_BUY,
+                        agent_id,
+                        price=order_spec["price"],
+                        quantity=int(order_spec["quantity"]),
+                        is_market_maker=True,
+                    )
                 )
-                order = Order(
-                    order_id=order_id,
-                    agent_id=agent_id,
-                    side=OrderSide.BUY,
-                    order_type=OrderType.LIMIT,
-                    price=order_spec["price"],
-                    quantity=int(order_spec["quantity"]),
-                )
-                trades = process_order(order)
-                for trade in trades:
-                    all_trades.append(_trade_to_tuple(trade))
-                    arena.recent_trades.append(trade)
-                if order_map_get(order_id):
-                    bid_ids.append(order_id)
-
-            # 挂卖单
             for order_spec in ask_orders:
-                arena.order_counters[agent_id] += 1
-                order_id = generate_order_id(
-                    arena.arena_id, agent_id, arena.order_counters[agent_id]
+                atomic_actions.append(
+                    AtomicAction(
+                        AtomicActionType.LIMIT_SELL,
+                        agent_id,
+                        price=order_spec["price"],
+                        quantity=int(order_spec["quantity"]),
+                        is_market_maker=True,
+                    )
                 )
-                order = Order(
-                    order_id=order_id,
-                    agent_id=agent_id,
-                    side=OrderSide.SELL,
-                    order_type=OrderType.LIMIT,
-                    price=order_spec["price"],
-                    quantity=int(order_spec["quantity"]),
-                )
-                trades = process_order(order)
-                for trade in trades:
-                    all_trades.append(_trade_to_tuple(trade))
-                    arena.recent_trades.append(trade)
-                if order_map_get(order_id):
-                    ask_ids.append(order_id)
 
-            # 更新挂单记录
-            arena.mm_bid_order_ids[agent_id] = bid_ids
-            arena.mm_ask_order_ids[agent_id] = ask_ids
-            mm_order_updates[agent_id] = (bid_ids, ask_ids)
+    # 2.4 收集非做市商动作
+    # 支持两种格式：decisions_array（优先）或 decisions
+    decisions_list: list[tuple[int, int, int, float, int]] = list(execute_data.decisions)
+    if execute_data.decisions_array is not None and len(execute_data.decisions_array) > 0:
+        # 转换数组为列表格式
+        arr = execute_data.decisions_array
+        decisions_list = [
+            (int(arr[i, 0]), int(arr[i, 1]), int(arr[i, 2]), arr[i, 3], int(arr[i, 4]))
+            for i in range(len(arr))
+        ]
 
-    # 3. 处理非做市商决策
-    for agent_id, action_int, side_int, price, quantity in execute_data.decisions:
-        # 确保订单计数器存在
-        if agent_id not in arena.order_counters:
-            arena.order_counters[agent_id] = 0
-
-        # action_int: 0=HOLD, 1=PLACE_BID, 2=PLACE_ASK, 3=CANCEL, 4=MARKET_BUY, 5=MARKET_SELL
+    for agent_id, action_int, side_int, price, quantity in decisions_list:
         if action_int == 0:  # HOLD
             continue
-
         elif action_int in (1, 2):  # PLACE_BID / PLACE_ASK
             # 先撤旧单
             pending_id = arena.pending_order_ids.get(agent_id)
             if pending_id is not None:
-                cancel_order(pending_id)
+                atomic_actions.append(
+                    AtomicAction(AtomicActionType.CANCEL, agent_id, order_id=pending_id)
+                )
                 arena.pending_order_ids[agent_id] = None
-
-            arena.order_counters[agent_id] += 1
-            order_id = generate_order_id(
-                arena.arena_id, agent_id, arena.order_counters[agent_id]
+            # 挂新单
+            action_type = (
+                AtomicActionType.LIMIT_BUY
+                if action_int == 1
+                else AtomicActionType.LIMIT_SELL
             )
-            side = OrderSide.BUY if action_int == 1 else OrderSide.SELL
-            order = Order(
-                order_id=order_id,
-                agent_id=agent_id,
-                side=side,
-                order_type=OrderType.LIMIT,
-                price=price,
-                quantity=quantity,
+            atomic_actions.append(
+                AtomicAction(action_type, agent_id, price=price, quantity=quantity)
             )
-            trades = process_order(order)
-            for trade in trades:
-                all_trades.append(_trade_to_tuple(trade))
-                arena.recent_trades.append(trade)
-
-            # 记录挂单
-            if order_map_get(order_id):
-                arena.pending_order_ids[agent_id] = order_id
-                pending_updates[agent_id] = order_id
-            else:
-                arena.pending_order_ids[agent_id] = None
-                pending_updates[agent_id] = None
-
         elif action_int == 3:  # CANCEL
             pending_id = arena.pending_order_ids.get(agent_id)
             if pending_id is not None:
-                cancel_order(pending_id)
-            arena.pending_order_ids[agent_id] = None
-            pending_updates[agent_id] = None
-
+                atomic_actions.append(
+                    AtomicAction(AtomicActionType.CANCEL, agent_id, order_id=pending_id)
+                )
+                arena.pending_order_ids[agent_id] = None
+                pending_updates[agent_id] = None
         elif action_int in (4, 5):  # MARKET_BUY / MARKET_SELL
-            arena.order_counters[agent_id] += 1
-            order_id = generate_order_id(
-                arena.arena_id, agent_id, arena.order_counters[agent_id]
+            action_type = (
+                AtomicActionType.MARKET_BUY
+                if action_int == 4
+                else AtomicActionType.MARKET_SELL
             )
-            side = OrderSide.BUY if action_int == 4 else OrderSide.SELL
-            order = Order(
-                order_id=order_id,
-                agent_id=agent_id,
-                side=side,
-                order_type=OrderType.MARKET,
-                price=0.0,
-                quantity=quantity,
+            atomic_actions.append(
+                AtomicAction(action_type, agent_id, quantity=quantity)
             )
-            trades = process_order(order)
-            for trade in trades:
-                all_trades.append(_trade_to_tuple(trade))
-                arena.recent_trades.append(trade)
+
+    # ====== 第三部分：随机打乱并执行 ======
+    random.shuffle(atomic_actions)
+
+    for action in atomic_actions:
+        _execute_atomic_action(
+            arena, action, all_trades, pending_updates, mm_order_updates, catfish_trade_map
+        )
+
+    # ====== 第四部分：构建返回结果 ======
+    # 构建鲶鱼成交结果
+    catfish_results: list[CatfishTradeResult] = []
+    # 收集所有出现的鲶鱼 ID（包括无成交的）
+    catfish_ids_set: set[int] = set()
+    for decision in execute_data.catfish_decisions:
+        catfish_ids_set.add(decision.catfish_id)
+    for catfish_id in catfish_ids_set:
+        trades_list = catfish_trade_map.get(catfish_id, [])
+        total_quantity = 0
+        total_amount = 0.0
+        for trade_tuple in trades_list:
+            # trade_tuple: (trade_id, price, quantity, buyer_id, seller_id, buyer_fee, seller_fee, is_buyer_taker)
+            price = trade_tuple[1]
+            qty = trade_tuple[2]
+            total_quantity += qty
+            total_amount += price * qty
+        avg_price = total_amount / total_quantity if total_quantity > 0 else 0.0
+        catfish_results.append(
+            CatfishTradeResult(
+                catfish_id=catfish_id,
+                trades=trades_list,
+                total_quantity=total_quantity,
+                avg_price=avg_price,
+            )
+        )
+
+    # 构建做市鲶鱼挂单结果
+    mm_catfish_results: list[MarketMakingCatfishResult] = []
+    for mm_decision in execute_data.mm_catfish_decisions:
+        # 做市鲶鱼的新挂单 ID 存储在 catfish_trade_map 中是不合适的
+        # 因为做市鲶鱼是限价单，可能成交也可能挂单
+        # 这里简化处理：返回空列表（因为原子动作执行后挂单ID已经丢失）
+        # 实际应用中，如果需要追踪做市鲶鱼的挂单ID，需要额外的数据结构
+        mm_catfish_results.append(
+            MarketMakingCatfishResult(
+                catfish_id=mm_decision.catfish_id,
+                new_order_ids=[],  # 简化处理
+            )
+        )
 
     # 构建结果
     bid_depth, ask_depth = _get_depth_arrays(orderbook)
