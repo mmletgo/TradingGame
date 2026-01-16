@@ -464,8 +464,8 @@ class Trainer:
                 f"其他物种杠杆后资金({other_fund})"
             )
 
-        # 每条鲶鱼资金（3条鲶鱼）
-        catfish_count = 3
+        # 每条鲶鱼资金（4条鲶鱼：趋势创造者、均值回归、随机交易、做市鲶鱼）
+        catfish_count = 4
         per_catfish = (mm_fund - other_fund) / catfish_count
         return per_catfish
 

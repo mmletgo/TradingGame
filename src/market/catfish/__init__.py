@@ -6,13 +6,14 @@
 
 主要类：
 - CatfishBase: 鲶鱼抽象基类
-- TrendCreatorCatfish: 趋势创造者鲶鱼
-- MeanReversionCatfish: 逆势操作型鲶鱼
-- RandomTradingCatfish: 随机买卖型鲶鱼
+- TrendCreatorCatfish: 趋势创造者鲶鱼（ID=-1）
+- MeanReversionCatfish: 逆势操作型鲶鱼（ID=-2）
+- RandomTradingCatfish: 随机买卖型鲶鱼（ID=-3）
+- MarketMakingCatfish: 做市鲶鱼，提供双边流动性（ID=-4）
 
 工厂函数：
 - create_catfish: 根据配置创建鲶鱼实例
-- create_all_catfish: 创建所有三种鲶鱼实例
+- create_all_catfish: 创建所有四种鲶鱼实例
 """
 
 from src.config.config import CatfishConfig, CatfishMode
@@ -20,6 +21,7 @@ from src.market.catfish.catfish_base import CatfishBase
 from src.market.catfish.trend_following import TrendCreatorCatfish, TrendFollowingCatfish
 from src.market.catfish.mean_reversion import MeanReversionCatfish
 from src.market.catfish.random_trading import RandomTradingCatfish
+from src.market.catfish.market_making import MarketMakingCatfish
 
 
 def create_catfish(
@@ -62,6 +64,11 @@ def create_catfish(
             catfish_id, config,
             initial_balance, leverage, maintenance_margin_rate
         )
+    elif config.mode == CatfishMode.MARKET_MAKING:
+        return MarketMakingCatfish(
+            catfish_id, config,
+            initial_balance, leverage, maintenance_margin_rate
+        )
     else:
         raise ValueError(f"未知的鲶鱼模式: {config.mode}")
 
@@ -73,9 +80,9 @@ def create_all_catfish(
     maintenance_margin_rate: float = 0.05,
 ) -> list[CatfishBase]:
     """
-    创建所有三种鲶鱼实例
+    创建所有四种鲶鱼实例
 
-    三种鲶鱼同时运行，每个 tick 各自独立随机决定是否行动。
+    四种鲶鱼同时运行，每个 tick 各自独立随机决定是否行动。
 
     Args:
         config: 鲶鱼配置
@@ -84,7 +91,7 @@ def create_all_catfish(
         maintenance_margin_rate: 维持保证金率
 
     Returns:
-        三种鲶鱼实例的列表
+        四种鲶鱼实例的列表
     """
     catfish_list: list[CatfishBase] = [
         TrendCreatorCatfish(
@@ -99,6 +106,10 @@ def create_all_catfish(
             -3, config,
             initial_balance, leverage, maintenance_margin_rate
         ),
+        MarketMakingCatfish(
+            -4, config,
+            initial_balance, leverage, maintenance_margin_rate
+        ),
     ]
 
     return catfish_list
@@ -110,6 +121,7 @@ __all__ = [
     "TrendFollowingCatfish",  # 向后兼容别名
     "MeanReversionCatfish",
     "RandomTradingCatfish",
+    "MarketMakingCatfish",
     "create_catfish",
     "create_all_catfish",
 ]

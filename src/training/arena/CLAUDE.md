@@ -82,6 +82,10 @@ class CatfishAccountState:
     ma_period: int                 # 均线周期
     deviation_threshold: float     # 偏离阈值
     action_probability: float      # 随机交易触发概率
+    # 做市鲶鱼特有属性
+    pending_order_ids: list[int]   # 当前挂单ID列表
+    target_depth: int              # 挂单档数（默认3）
+    order_size: int                # 每档挂单量（默认100）
 ```
 
 **主要方法：**
@@ -89,7 +93,7 @@ class CatfishAccountState:
 | 方法 | 描述 |
 |------|------|
 | `from_catfish(catfish)` | 类方法，从 CatfishBase 对象创建状态副本 |
-| `reset(initial_balance)` | 重置到初始状态，趋势创造者会重新随机选择方向 |
+| `reset(initial_balance)` | 重置到初始状态，趋势创造者会重新随机选择方向，做市鲶鱼清空挂单列表 |
 | `decide(tick, price_history)` | 决策是否行动和方向，根据鲶鱼类型执行不同逻辑 |
 | `can_act(tick)` | 检查冷却时间和相位偏移 |
 | `record_action(tick)` | 记录行动时间 |
@@ -102,10 +106,12 @@ class CatfishAccountState:
 | TREND_CREATOR | 每个 Episode 开始时随机选择方向，整个 Episode 保持该方向，固定 50% 行动概率（不使用共用的 action_probability） |
 | MEAN_REVERSION | 当价格偏离 EMA 超过阈值时反向操作，使用共用的 action_probability |
 | RANDOM | 随机概率触发（使用共用的 action_probability），方向也随机 |
+| MARKET_MAKING | 总是返回 `(True, 0)`，direction=0 表示双边挂单，每 tick 都行动 |
 
 **行动概率说明：**
 - `TREND_CREATOR` 使用固定的 50% 行动概率，确保趋势能够形成
 - `MEAN_REVERSION` 和 `RANDOM` 使用配置的 `action_probability`（默认 30%）
+- `MARKET_MAKING` 每个 tick 都行动（不受 action_probability 限制）
 
 **独立随机性保证：**
 - 每个竞技场在 `reset()` 时独立随机选择趋势创造者方向
@@ -212,18 +218,32 @@ class ExecuteCommand:
 
 @dataclass
 class CatfishDecision:
-    """鲶鱼决策数据"""
+    """吃单鲶鱼决策数据"""
     catfish_id: int        # 鲶鱼 ID（负数）
-    direction: int         # 1=买, -1=卖, 0=不行动
-    quantity_ticks: int    # 吃多少档（默认3）
+    direction: int         # 1=买, -1=卖
+    quantity_ticks: int    # 吃多少档（默认1）
 
 @dataclass
 class CatfishTradeResult:
-    """鲶鱼成交结果"""
+    """吃单鲶鱼成交结果"""
     catfish_id: int
     trades: list[tuple]    # 成交列表，格式同 ArenaExecuteResult.trades
     total_quantity: int    # 总成交数量
     avg_price: float       # 平均成交价格
+
+@dataclass
+class MarketMakingCatfishDecision:
+    """做市鲶鱼决策数据"""
+    catfish_id: int                           # 鲶鱼 ID（-4）
+    old_order_ids: list[int]                  # 需要撤销的旧挂单 ID 列表
+    bid_orders: list[tuple[float, int]]       # 买单列表 [(price, quantity), ...]
+    ask_orders: list[tuple[float, int]]       # 卖单列表 [(price, quantity), ...]
+
+@dataclass
+class MarketMakingCatfishResult:
+    """做市鲶鱼挂单结果"""
+    catfish_id: int                # 鲶鱼 ID（-4）
+    new_order_ids: list[int]       # 新挂单 ID 列表
 
 @dataclass
 class ArenaExecuteData:
@@ -231,7 +251,8 @@ class ArenaExecuteData:
     liquidated_agents: list[tuple[int, int, bool]]  # (agent_id, position_qty, is_mm)
     decisions: list[tuple[int, int, int, float, int]]  # (agent_id, action_int, side_int, price, quantity)
     mm_decisions: list[tuple[int, list, list]]  # (agent_id, bid_orders, ask_orders)
-    catfish_decisions: list[CatfishDecision]  # 鲶鱼决策列表
+    catfish_decisions: list[CatfishDecision]  # 吃单鲶鱼决策列表
+    mm_catfish_decisions: list[MarketMakingCatfishDecision]  # 做市鲶鱼决策列表
 
 @dataclass
 class ArenaExecuteResult:
@@ -244,7 +265,8 @@ class ArenaExecuteResult:
     trades: list[tuple]  # (trade_id, price, qty, buyer_id, seller_id, buyer_fee, seller_fee, is_buyer_taker)
     pending_updates: dict[int, int | None]  # agent_id -> pending_order_id
     mm_order_updates: dict[int, tuple[list, list]]  # agent_id -> (bid_ids, ask_ids)
-    catfish_results: list[CatfishTradeResult]  # 鲶鱼成交结果列表
+    catfish_results: list[CatfishTradeResult]  # 吃单鲶鱼成交结果列表
+    mm_catfish_results: list[MarketMakingCatfishResult]  # 做市鲶鱼挂单结果列表
     error: str | None
 ```
 
@@ -262,13 +284,18 @@ class ArenaExecuteResult:
 **鲶鱼处理流程：**
 
 Worker 端的 `_handle_execute` 函数按以下顺序处理：
-1. **鲶鱼处理**（`_handle_catfish`）：在所有 Agent 之前执行
+1. **吃单鲶鱼处理**（`_handle_catfish`）：在所有 Agent 之前执行
    - 遍历 `catfish_decisions`
    - 对于 direction != 0 的决策：获取订单簿深度，累加指定档位的数量
    - 提交市价单，收集成交结果到 `CatfishTradeResult`
-2. **强平处理**：撤单 + 市价平仓
-3. **做市商执行**：撤旧单 → 挂新单
-4. **非做市商执行**：限价单/市价单/撤单
+2. **做市鲶鱼处理**（`_handle_market_making_catfish`）：在吃单鲶鱼之后执行
+   - 遍历 `mm_catfish_decisions`
+   - 撤销 `old_order_ids` 中的旧挂单
+   - 在盘口外侧挂限价单（买单和卖单各 target_depth 档）
+   - 收集新挂单 ID 到 `MarketMakingCatfishResult`
+3. **强平处理**：撤单 + 市价平仓
+4. **做市商执行**：撤旧单 → 挂新单
+5. **非做市商执行**：限价单/市价单/撤单
 
 **Worker 维护的状态：**
 - `MatchingEngine` / `OrderBook`: 订单簿和撮合引擎

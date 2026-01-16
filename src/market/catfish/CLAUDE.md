@@ -12,6 +12,7 @@
 - `trend_following.py` - 趋势创造者鲶鱼
 - `mean_reversion.py` - 逆势操作型鲶鱼
 - `random_trading.py` - 随机买卖型鲶鱼
+- `market_making.py` - 做市鲶鱼（提供流动性）
 
 ## 核心类
 
@@ -62,9 +63,9 @@
   - 调用撮合引擎执行订单
   - 返回成交列表
 - `_calculate_quantity(orderbook, direction) -> int` - 计算下单量
-  - 目标：吃掉对手盘前 3 档
-  - 获取盘口深度，累加对手盘前3档的订单数量
-  - 如果对手盘档位不足3档，返回0（不行动）
+  - 目标：吃掉对手盘前 1 档
+  - 获取盘口深度，累加对手盘前1档的订单数量
+  - 如果对手盘档位不足1档，返回0（不行动）
 - `_generate_order_id() -> int` - 生成订单ID（负数空间，每次递减1）
 - `can_act() -> bool` - 随机概率判断是否行动
   - 返回 `random.random() < config.action_probability`
@@ -122,6 +123,37 @@
 **reset 方法：**
 - 调用基类的 reset 方法（重置账户、强平标志）
 
+### MarketMakingCatfish (market_making.py)
+
+做市鲶鱼，通过双边挂限价单为市场提供流动性。与其他吃单鲶鱼不同，做市鲶鱼不消耗订单簿深度，反而增加流动性。
+
+**策略逻辑：**
+1. 每个 tick 都行动（不受 `action_probability` 限制）
+2. 先撤销上一个 tick 的所有挂单
+3. 在盘口外侧双边挂限价单：
+   - 买单：在 best_bid - 1~3 tick 处各挂一单
+   - 卖单：在 best_ask + 1~3 tick 处各挂一单
+   - 每档挂单量固定为 100
+4. 若某一边盘口为空，以 last_price 为基准挂单
+
+**额外属性：**
+- `_pending_order_ids: list[int]` - 当前挂单ID列表
+- `_target_depth: int` - 目标深度（默认3档）
+- `_order_size: int` - 每档挂单量（默认100）
+
+**decide 方法：**
+- 总是返回 `(True, 0)`，direction=0 表示双边挂单
+
+**execute 方法：**
+- 重写基类方法，实现限价单挂单逻辑（而非市价单）
+- 返回空列表（限价单不会立即成交）
+
+**reset 方法：**
+- 调用基类的 reset 方法
+- 清空挂单ID列表
+
+**ID 分配：** -4
+
 ## 工厂函数
 
 ### create_catfish(catfish_id, config, initial_balance=0.0, leverage=10.0, maintenance_margin_rate=0.05) -> CatfishBase
@@ -135,11 +167,11 @@
 - `leverage: float` - 杠杆（默认10.0）
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
-**注意：** 此函数用于单模式创建，当前系统默认使用多模式（三种鲶鱼同时运行）。
+**注意：** 此函数用于单模式创建，当前系统默认使用多模式（四种鲶鱼同时运行）。
 
 ### create_all_catfish(config, initial_balance, leverage=10.0, maintenance_margin_rate=0.05) -> list[CatfishBase]
 
-创建所有三种鲶鱼实例。**这是当前系统的默认行为**。
+创建所有四种鲶鱼实例。**这是当前系统的默认行为**。
 
 **参数：**
 - `config: CatfishConfig` - 鲶鱼配置
@@ -148,9 +180,9 @@
 - `maintenance_margin_rate: float` - 维持保证金率（默认0.05）
 
 **返回：**
-- 三种鲶鱼实例的列表：[TrendCreator, MeanReversion, RandomTrading]
-- ID 分配：-1 (TrendCreator), -2 (MeanReversion), -3 (RandomTrading)
-- 三种鲶鱼同时运行，每个 tick 各自独立随机决定是否行动
+- 四种鲶鱼实例的列表：[TrendCreator, MeanReversion, RandomTrading, MarketMaking]
+- ID 分配：-1 (TrendCreator), -2 (MeanReversion), -3 (RandomTrading), -4 (MarketMaking)
+- 四种鲶鱼同时运行，每个 tick 各自独立决定是否行动
 
 ## 使用示例
 
@@ -160,13 +192,13 @@
 from src.config.config import CatfishConfig
 from src.market.catfish import create_all_catfish
 
-# 创建三种鲶鱼
+# 创建四种鲶鱼
 config = CatfishConfig(
     enabled=True,
-    multi_mode=True,  # 三种模式同时运行
+    multi_mode=True,  # 四种模式同时运行
     ma_period=20,            # 默认值
     deviation_threshold=0.003, # 默认值
-    action_probability=0.1,  # 每个 tick 10% 概率行动
+    action_probability=0.3,  # 每个 tick 30% 概率行动（吃单鲶鱼）
 )
 catfish_list = create_all_catfish(config, initial_balance=6_600_000_000.0)
 
@@ -174,6 +206,7 @@ catfish_list = create_all_catfish(config, initial_balance=6_600_000_000.0)
 for catfish in catfish_list:
     should_act, direction = catfish.decide(orderbook, tick, price_history)
     if should_act:
+        # direction == 0 表示做市鲶鱼的双边挂单
         trades = catfish.execute(direction, matching_engine)
 ```
 
@@ -199,7 +232,7 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | enabled | bool | False | 是否启用鲶鱼 |
-| multi_mode | bool | True | 是否同时启用三种模式 |
+| multi_mode | bool | True | 是否同时启用四种模式 |
 | mode | CatfishMode | TREND_CREATOR | 单模式时的鲶鱼行为模式 |
 | ma_period | int | 20 | 均线周期（EMA计算周期） |
 | deviation_threshold | float | 0.003 | 偏离阈值（价格与EMA的偏离率） |
@@ -219,19 +252,24 @@ catfish = create_catfish(catfish_id=-1, config=config, initial_balance=6_600_000
 **初始资金计算：**
 ```
 鲶鱼总资金 = 做市商杠杆后资金 - 其他物种杠杆后资金
-每条鲶鱼资金 = 总资金 / 3
+每条鲶鱼资金 = 总资金 / 4
 ```
 
 默认配置下（create_config.py）：
 - 做市商：400 × 2M × 1.0 = 800M
 - 其他物种：200M + 2M + 300M = 502M
 - 鲶鱼总资金：800M - 502M = 298M
-- 每条鲶鱼：约 99.3M
+- 每条鲶鱼：约 74.5M
 
-**下单量计算：**
+**下单量计算（吃单鲶鱼）：**
 - 不按自身资金计算，而是按盘口深度计算
-- 目标：吃掉对手盘前 3 档（调用 `_calculate_quantity` 方法）
-- 累加对手盘前3档的订单数量作为下单量
+- 目标：吃掉对手盘前 1 档（调用 `_calculate_quantity` 方法）
+- 累加对手盘前1档的订单数量作为下单量
+
+**挂单量计算（做市鲶鱼）：**
+- 每档挂单量固定为 100
+- 在盘口外侧 1~3 档各挂一单
+- 每个 tick 共挂 6 单（买卖各 3 单）
 
 **手续费：**
 - maker 费率：0

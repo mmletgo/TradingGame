@@ -129,7 +129,7 @@ class CatfishBase(ABC):
         return trades
 
     def _calculate_quantity(self, orderbook: "OrderBook", direction: int) -> int:
-        """计算下单数量（让盘口波动至少 3 tick）
+        """计算下单数量（让盘口波动至少 1 tick）
 
         Args:
             orderbook: 订单簿
@@ -138,7 +138,7 @@ class CatfishBase(ABC):
         Returns:
             下单数量
         """
-        target_ticks = 3
+        target_ticks = 1
 
         # 获取盘口深度
         depth = orderbook.get_depth(levels=target_ticks)

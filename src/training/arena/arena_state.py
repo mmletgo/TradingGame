@@ -319,7 +319,7 @@ class CatfishAccountState:
 
     Attributes:
         catfish_id: 鲶鱼 ID（负数）
-        catfish_mode: 鲶鱼类型（趋势创造者/均值回归/随机）
+        catfish_mode: 鲶鱼类型（趋势创造者/均值回归/随机/做市）
         balance: 当前余额
         position_quantity: 持仓数量
         position_avg_price: 持仓均价
@@ -335,6 +335,9 @@ class CatfishAccountState:
         ma_period: 均线周期
         deviation_threshold: 偏离阈值
         action_probability: 每个 tick 行动的概率（0-1）
+        pending_order_ids: 做市鲶鱼当前挂单ID列表
+        target_depth: 做市鲶鱼挂单档数
+        order_size: 做市鲶鱼每档挂单量
     """
 
     catfish_id: int
@@ -354,6 +357,10 @@ class CatfishAccountState:
     ma_period: int
     deviation_threshold: float
     action_probability: float
+    # 做市鲶鱼特有属性
+    pending_order_ids: list[int] = field(default_factory=list)
+    target_depth: int = 3
+    order_size: int = 100
 
     @classmethod
     def from_catfish(cls, catfish: "CatfishBase") -> "CatfishAccountState":
@@ -377,7 +384,19 @@ class CatfishAccountState:
 
         # 根据类名推断鲶鱼模式
         class_name = catfish.__class__.__name__
-        if "TrendCreator" in class_name or "TrendFollowing" in class_name:
+
+        # 做市鲶鱼特有属性
+        pending_order_ids: list[int] = []
+        target_depth: int = 3
+        order_size: int = 100
+
+        if "MarketMaking" in class_name:
+            catfish_mode = CatfishMode.MARKET_MAKING
+            # 获取做市鲶鱼的特有属性
+            pending_order_ids = list(getattr(catfish, "_pending_order_ids", []))
+            target_depth = getattr(catfish, "_target_depth", 3)
+            order_size = getattr(catfish, "_order_size", 100)
+        elif "TrendCreator" in class_name or "TrendFollowing" in class_name:
             catfish_mode = CatfishMode.TREND_CREATOR
         elif "MeanReversion" in class_name:
             catfish_mode = CatfishMode.MEAN_REVERSION
@@ -404,6 +423,9 @@ class CatfishAccountState:
             ma_period=config.ma_period,
             deviation_threshold=config.deviation_threshold,
             action_probability=config.action_probability,
+            pending_order_ids=pending_order_ids,
+            target_depth=target_depth,
+            order_size=order_size,
         )
 
     def reset(self, initial_balance: float) -> None:
@@ -429,6 +451,8 @@ class CatfishAccountState:
             self.current_direction = 0
         self.ema = 0.0
         self.ema_initialized = False
+        # 做市鲶鱼特有属性重置
+        self.pending_order_ids.clear()
 
     def get_equity(self, current_price: float) -> float:
         """计算净值
@@ -603,6 +627,7 @@ class CatfishAccountState:
         """决策是否行动以及行动方向
 
         根据鲶鱼类型执行不同的决策逻辑：
+        - MARKET_MAKING: 做市鲶鱼总是行动，返回 (True, 0)
         - TREND_CREATOR: 随机概率决定是否行动，保持当前方向
         - MEAN_REVERSION: 价格偏离 EMA 时反向操作，随机概率决定是否行动
         - RANDOM: 随机概率决定是否行动，方向也随机
@@ -612,8 +637,12 @@ class CatfishAccountState:
             price_history: 历史价格列表
 
         Returns:
-            (should_act, direction): 是否行动和方向（1=买，-1=卖）
+            (should_act, direction): 是否行动和方向（1=买，-1=卖，0=双边挂单/做市鲶鱼）
         """
+        # 做市鲶鱼总是行动，direction=0 表示双边挂单
+        if self.catfish_mode == CatfishMode.MARKET_MAKING:
+            return True, 0
+
         if self.catfish_mode == CatfishMode.TREND_CREATOR:
             # 趋势创造者：使用更高的固定行动概率（50%），确保趋势能够形成
             # 不使用共用的 action_probability，因为趋势创造者的方向是固定的，需要更高的行动频率

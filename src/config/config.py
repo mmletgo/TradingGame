@@ -27,6 +27,7 @@ class CatfishMode(Enum):
     TREND_FOLLOWING = "trend_following"  # 趋势追踪（向后兼容别名）
     MEAN_REVERSION = "mean_reversion"  # 逆势操作
     RANDOM = "random"  # 随机买卖
+    MARKET_MAKING = "market_making"  # 做市鲶鱼（提供双边流动性）
 
 
 @dataclass
@@ -165,7 +166,7 @@ class CatfishConfig:
     deviation_threshold: float = 0.003
 
     # 通用参数
-    action_probability: float = 0.6  # 每个 tick 有 60% 概率行动（增强扰动效果）
+    action_probability: float = 0.3  # 每个 tick 有 30% 概率行动
 
 
 @dataclass
