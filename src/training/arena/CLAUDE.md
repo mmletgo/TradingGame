@@ -747,7 +747,10 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 1. **批量推理合并**：N 个竞技场 × M 个 Agent 合并成单次 OpenMP 并行操作
 2. **并行进化**：使用 MultiPopulationWorkerPool 在多个进程中并行执行 NEAT 进化
 3. **网络参数传输**：只传输网络参数而非完整基因组，减少序列化开销
-4. **内存管理**：每轮训练后进行垃圾回收和 malloc_trim
+4. **内存管理**：
+   - 每轮训练后进行垃圾回收和 malloc_trim
+   - 进化后调用 `_cleanup_neat_history()` 清理 NEAT 历史数据（genome_to_species、species.members 等）
+   - `price_history` 限制最大长度为 1000，防止长 episode 中内存泄漏
 5. **Checkpoint 体积优化**：使用 gzip 压缩保存检查点文件
 6. **AgentAccountState 复用**：`_refresh_agent_states()` 使用快速路径检测，进化后不重新创建对象（从 ~90s 降至 0.1ms）
 7. **Worker 并行度优化**：`num_workers = min(num_arenas, 32)`，确保充分利用多核
