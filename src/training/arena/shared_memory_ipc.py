@@ -178,7 +178,7 @@ class ArenaCommandView:
             shape=(MAX_MM_AGENTS,), dtype=np.int64, buffer=buffer, offset=mm_agent_ids_offset
         )
         self._mm_decisions = np.ndarray(
-            shape=(MAX_MM_AGENTS, MAX_ORDERS_PER_MM, 2, 2), dtype=np.float64,
+            shape=(MAX_MM_AGENTS, MAX_ORDERS_PER_MM * 2, 2), dtype=np.float64,
             buffer=buffer, offset=mm_decisions_offset
         )
         self._catfish_decisions = np.ndarray(
