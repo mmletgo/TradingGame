@@ -1545,7 +1545,6 @@ def arena_execute_worker_shm(
                         decisions = cmd_view.get_decisions()
                         mm_decisions = cmd_view.get_mm_decisions()
                         catfish_decisions = cmd_view.get_catfish_decisions()
-                        mm_catfish_decisions = cmd_view.get_mm_catfish_decisions()
 
                         # 构建执行数据
                         execute_data = ArenaExecuteData(
@@ -1553,7 +1552,6 @@ def arena_execute_worker_shm(
                             decisions=decisions,
                             mm_decisions=mm_decisions,
                             catfish_decisions=catfish_decisions,
-                            mm_catfish_decisions=mm_catfish_decisions,
                         )
 
                         # 执行

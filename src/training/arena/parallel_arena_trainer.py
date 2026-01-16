@@ -1445,6 +1445,9 @@ class ParallelArenaTrainer:
 
                 current_price = arena.smooth_mid_price
                 arena.price_history.append(current_price)
+                # 限制 price_history 长度，防止内存泄漏
+                if len(arena.price_history) > 1000:
+                    arena.price_history = arena.price_history[-1000:]
                 arena.tick_history_prices.append(current_price)
                 arena.tick_history_volumes.append(0.0)
                 arena.tick_history_amounts.append(0.0)
@@ -1545,6 +1548,9 @@ class ParallelArenaTrainer:
                     # 记录价格历史（使用 smooth_mid_price 供 Agent 决策参考）
                     current_price = arena.smooth_mid_price
                     arena.price_history.append(current_price)
+                    # 限制 price_history 长度，防止内存泄漏
+                    if len(arena.price_history) > 1000:
+                        arena.price_history = arena.price_history[-1000:]
                     # 使用本 tick 成交价格更新 high/low 统计
                     self._update_episode_price_stats_from_trades(
                         arena,
@@ -1781,6 +1787,9 @@ class ParallelArenaTrainer:
             # 记录价格历史
             current_price = orderbook.last_price
             arena.price_history.append(current_price)
+            # 限制 price_history 长度，防止内存泄漏
+            if len(arena.price_history) > 1000:
+                arena.price_history = arena.price_history[-1000:]
             self._update_episode_price_stats_from_trades(
                 arena,
                 tick_trades,
@@ -3569,6 +3578,9 @@ class ParallelArenaTrainer:
             # 标记数据已同步，不需要再延迟反序列化
             population._pending_genome_data = None
             population._genomes_dirty = False
+
+            # 清理 NEAT 历史数据（关键！防止内存泄漏）
+            population._cleanup_neat_history()
 
     def _refresh_agent_states(self, force: bool = False) -> None:
         """刷新所有竞技场的 Agent 账户状态
