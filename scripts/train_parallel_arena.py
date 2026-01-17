@@ -250,15 +250,22 @@ def main() -> None:
     init_time = time.time() - start_time
     print(f"初始化完成（耗时: {init_time:.2f}s）")
 
-    # 恢复检查点
-    if args.resume:
-        resume_path = Path(args.resume)
+    # 恢复检查点（自动查找最新或使用指定的）
+    resume_path_str = args.resume
+    if resume_path_str is None:
+        # 自动查找最新的检查点
+        resume_path_str = ParallelArenaTrainer.find_latest_checkpoint()
+        if resume_path_str:
+            print(f"自动发现最新检查点: {resume_path_str}")
+
+    if resume_path_str:
+        resume_path = Path(resume_path_str)
         if resume_path.exists():
-            print(f"正在从检查点恢复: {args.resume}")
-            trainer.load_checkpoint(args.resume)
+            print(f"正在从检查点恢复: {resume_path_str}")
+            trainer.load_checkpoint(resume_path_str)
             print(f"已恢复到 Generation {trainer.generation}")
         else:
-            print(f"错误: 检查点文件不存在: {args.resume}")
+            print(f"错误: 检查点文件不存在: {resume_path_str}")
             sys.exit(1)
 
     # 定义检查点回调

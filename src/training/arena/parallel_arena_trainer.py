@@ -3722,6 +3722,53 @@ class ParallelArenaTrainer:
 
         self.logger.info(f"检查点已保存: {path}")
 
+    @staticmethod
+    def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> str | None:
+        """查找最新的多竞技场检查点文件
+
+        按 generation 数字从大到小排序，返回最新的检查点路径。
+        支持的格式：
+        - parallel_arena_gen_*.pkl（多竞技场）
+        - ep_*.pkl（单竞技场兼容）
+
+        Args:
+            checkpoint_dir: 检查点目录路径
+
+        Returns:
+            最新检查点的路径，如果不存在则返回 None
+        """
+        import re
+
+        checkpoint_path = Path(checkpoint_dir)
+        if not checkpoint_path.exists():
+            return None
+
+        # 优先查找 parallel_arena_gen_*.pkl 文件
+        pattern = re.compile(r"parallel_arena_gen_(\d+)\.pkl$")
+        checkpoints: list[tuple[int, Path]] = []
+
+        for f in checkpoint_path.glob("parallel_arena_gen_*.pkl"):
+            match = pattern.match(f.name)
+            if match:
+                generation = int(match.group(1))
+                checkpoints.append((generation, f))
+
+        # 如果没有多竞技场checkpoint，尝试查找单竞技场checkpoint（兼容性）
+        if not checkpoints:
+            pattern_single = re.compile(r"ep_(\d+)\.pkl$")
+            for f in checkpoint_path.glob("ep_*.pkl"):
+                match = pattern_single.match(f.name)
+                if match:
+                    episode = int(match.group(1))
+                    checkpoints.append((episode, f))
+
+        if not checkpoints:
+            return None
+
+        # 按 generation/episode 数字降序排序，取最新的
+        checkpoints.sort(key=lambda x: x[0], reverse=True)
+        return str(checkpoints[0][1])
+
     def load_checkpoint(self, path: str) -> None:
         """加载检查点
 
