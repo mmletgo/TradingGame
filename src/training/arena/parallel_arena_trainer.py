@@ -51,6 +51,8 @@ from src.training.population import (
     WorkerConfig,
     _apply_species_data_to_population,
     _deserialize_genomes_numpy,
+    _serialize_genomes_numpy,
+    _serialize_species_data,
     _unpack_network_params_numpy,
     malloc_trim,
 )
@@ -674,9 +676,22 @@ class ParallelArenaTrainer:
 
         assert self.evolution_worker_pool is not None
 
-        sync_genomes = not self._worker_pool_synced
+        # 首次进化时需要同步基因组到 Worker
+        if not self._worker_pool_synced:
+            genomes_map: dict[tuple[AgentType, int], tuple[np.ndarray, ...]] = {}
+            for agent_type, pop in self.populations.items():
+                if isinstance(pop, SubPopulationManager):
+                    for i, sub_pop in enumerate(pop.sub_populations):
+                        genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
+                        genomes_map[(agent_type, i)] = genome_data
+                else:
+                    genome_data = _serialize_genomes_numpy(pop.neat_pop.population)
+                    genomes_map[(agent_type, 0)] = genome_data
+            self.evolution_worker_pool.set_genomes(genomes_map)
+            self.logger.info("首次进化：基因组已同步到 Worker 池")
+
         evolution_results = self.evolution_worker_pool.evolve_all_parallel(
-            fitness_map, sync_genomes=sync_genomes
+            fitness_map, sync_genomes=False
         )
         self._worker_pool_synced = True
         stats["evolve_time"] = time.perf_counter() - evolve_start
@@ -3668,7 +3683,8 @@ class ParallelArenaTrainer:
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
 
-        格式与 SingleArenaTrainer 和 MultiArenaTrainer 兼容。
+        使用精简格式：只保存基因组核心数据和 species 映射，不保存 NEAT 历史数据。
+        这样 checkpoint 文件更小，加载时也不会带入任何历史数据。
 
         Args:
             path: 检查点文件路径
@@ -3681,37 +3697,38 @@ class ParallelArenaTrainer:
             else:
                 population.sync_genomes_from_pending()
 
-        # 清理 NEAT 历史数据
-        for population in self.populations.values():
-            if isinstance(population, SubPopulationManager):
-                for sub_pop in population.sub_populations:
-                    sub_pop._cleanup_neat_history()
-            else:
-                population._cleanup_neat_history()
-
         checkpoint_data: dict[str, Any] = {
+            "checkpoint_version": 2,  # 新版本标识，用于区分精简格式
             "generation": self.generation,
             "populations": {},
         }
 
         for agent_type, population in self.populations.items():
             if isinstance(population, SubPopulationManager):
-                pop_data = {
+                pop_data: dict[str, Any] = {
                     "is_sub_population_manager": True,
                     "sub_population_count": population.sub_population_count,
                     "sub_populations": [],
                 }
                 for sub_pop in population.sub_populations:
+                    # 只序列化核心数据：基因组 + species 映射
+                    genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
+                    species_data = _serialize_species_data(sub_pop.neat_pop.species)
                     sub_pop_data = {
                         "generation": sub_pop.generation,
-                        "neat_pop": sub_pop.neat_pop,
+                        "genome_data": genome_data,
+                        "species_data": species_data,
                     }
                     pop_data["sub_populations"].append(sub_pop_data)
                 checkpoint_data["populations"][agent_type] = pop_data
             else:
+                # 只序列化核心数据：基因组 + species 映射
+                genome_data = _serialize_genomes_numpy(population.neat_pop.population)
+                species_data = _serialize_species_data(population.neat_pop.species)
                 checkpoint_data["populations"][agent_type] = {
                     "generation": population.generation,
-                    "neat_pop": population.neat_pop,
+                    "genome_data": genome_data,
+                    "species_data": species_data,
                 }
 
         checkpoint_path = Path(path)
@@ -3772,9 +3789,9 @@ class ParallelArenaTrainer:
     def load_checkpoint(self, path: str) -> None:
         """加载检查点
 
-        支持多训练场和单训练场的检查点格式。
-        - 多训练场：使用 generation 字段
-        - 单训练场：使用 episode 字段（映射到 generation）
+        支持多种检查点格式：
+        - version 2（精简格式）：只包含基因组核心数据和 species 映射
+        - version 1 / 无版本（旧格式）：包含完整的 neat_pop 对象
 
         Args:
             path: 检查点文件路径
@@ -3788,6 +3805,9 @@ class ParallelArenaTrainer:
         else:
             with open(path, "rb") as f:
                 checkpoint_data = pickle.load(f)
+
+        # 检测 checkpoint 版本
+        checkpoint_version = checkpoint_data.get("checkpoint_version", 1)
 
         # 兼容多训练场和单训练场检查点格式
         self.generation = checkpoint_data.get(
@@ -3808,18 +3828,34 @@ class ParallelArenaTrainer:
                         if i < len(population.sub_populations):
                             sub_pop = population.sub_populations[i]
                             sub_pop.generation = sub_pop_data.get("generation", 0)
-                            sub_pop.neat_pop = sub_pop_data.get("neat_pop")
 
-                            genomes = list(sub_pop.neat_pop.population.items())
-                            sub_pop.agents = sub_pop.create_agents(genomes)
+                            if checkpoint_version >= 2 and "genome_data" in sub_pop_data:
+                                # 新格式：从精简数据重建
+                                self._load_population_from_compact_data(
+                                    sub_pop, sub_pop_data
+                                )
+                            else:
+                                # 旧格式：直接使用 neat_pop
+                                sub_pop.neat_pop = sub_pop_data.get("neat_pop")
+                                # 【关键修复】清理旧格式 checkpoint 中的历史数据，防止内存泄漏
+                                sub_pop._cleanup_neat_history()
+                                genomes = list(sub_pop.neat_pop.population.items())
+                                sub_pop.agents = sub_pop.create_agents(genomes)
                 else:
                     self.logger.warning(f"{agent_type.value} 检查点为旧格式，需要迁移")
             else:
                 population.generation = pop_data.get("generation", 0)
-                population.neat_pop = pop_data.get("neat_pop")
 
-                genomes = list(population.neat_pop.population.items())
-                population.agents = population.create_agents(genomes)
+                if checkpoint_version >= 2 and "genome_data" in pop_data:
+                    # 新格式：从精简数据重建
+                    self._load_population_from_compact_data(population, pop_data)
+                else:
+                    # 旧格式：直接使用 neat_pop
+                    population.neat_pop = pop_data.get("neat_pop")
+                    # 【关键修复】清理旧格式 checkpoint 中的历史数据，防止内存泄漏
+                    population._cleanup_neat_history()
+                    genomes = list(population.neat_pop.population.items())
+                    population.agents = population.create_agents(genomes)
 
         # 更新网络缓存
         self._update_network_caches()
@@ -3830,7 +3866,42 @@ class ParallelArenaTrainer:
         # 重置 Worker 池同步标志
         self._worker_pool_synced = False
 
-        self.logger.info(f"检查点已加载: {path}, generation={self.generation}")
+        self.logger.info(
+            f"检查点已加载: {path}, generation={self.generation}, "
+            f"version={checkpoint_version}"
+        )
+
+    def _load_population_from_compact_data(
+        self, population: Population, pop_data: dict[str, Any]
+    ) -> None:
+        """从精简格式数据加载种群
+
+        Args:
+            population: Population 对象
+            pop_data: 包含 genome_data 和 species_data 的字典
+        """
+        genome_data = pop_data["genome_data"]
+        species_data = pop_data.get("species_data", (np.array([]), np.array([])))
+
+        # 1. 反序列化基因组
+        keys, fitnesses, metadata, all_nodes, all_conns = genome_data
+        population.neat_pop.population = _deserialize_genomes_numpy(
+            keys, fitnesses, metadata, all_nodes, all_conns,
+            population.neat_config.genome_config,
+        )
+
+        # 2. 应用 species 数据
+        species_genome_ids, species_species_ids = species_data
+        _apply_species_data_to_population(
+            population.neat_pop,
+            species_genome_ids,
+            species_species_ids,
+            population.generation,
+        )
+
+        # 3. 重建 Agent
+        genomes = list(population.neat_pop.population.items())
+        population.agents = population.create_agents(genomes)
 
     def stop(self) -> None:
         """停止训练并清理资源"""

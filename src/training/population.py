@@ -266,8 +266,18 @@ def _apply_species_data_to_population(
     current_species_ids = set(species_members.keys())
     existing_species_ids = set(species_set.species.keys())
 
-    # 删除不再存在的 species
+    # 删除不再存在的 species（先清理内部数据，防止内存泄漏）
     for sid in existing_species_ids - current_species_ids:
+        old_species = species_set.species[sid]
+        # 清理 members 字典引用
+        if hasattr(old_species, 'members') and old_species.members:
+            old_species.members.clear()
+        # 清理 representative 引用
+        if hasattr(old_species, 'representative'):
+            old_species.representative = None
+        # 清理 fitness_history
+        if hasattr(old_species, 'fitness_history'):
+            old_species.fitness_history = []
         del species_set.species[sid]
 
     # 更新或创建 species
@@ -770,6 +780,12 @@ def _worker_process_main(
                 keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
             )
             neat_pop.species.speciate(neat_config, neat_pop.population, generation)
+
+            # 【关键修复】同步基因组后立即清理历史数据
+            # checkpoint 中可能包含大量历史数据（ancestors、fitness_history 等）
+            # 如果不清理，会导致 Worker 进程内存暴涨（20GB+）
+            _cleanup_worker_neat_history(neat_pop)
+
             result_queue.put((worker_id, "ok"))
 
         elif cmd == "evolve_return_params":
@@ -1189,12 +1205,53 @@ def _cleanup_worker_neat_history(neat_pop: neat.Population) -> None:
                         for gid, genome in species.members.items()
                         if gid in current_genome_ids
                     }
+                # 【关键修复】清理 representative（如果不在当前种群中）
+                # 这是 Worker 版本遗漏的重要清理点！
+                if hasattr(species, 'representative') and species.representative is not None:
+                    if species.representative.key not in current_genome_ids:
+                        # 用当前成员中的第一个作为代表
+                        if species.members:
+                            species.representative = next(iter(species.members.values()))
+                        else:
+                            species.representative = None
 
     # 3. 清理 reproduction.ancestors（关键！这是最大的泄漏来源）
     if hasattr(neat_pop, 'reproduction') and neat_pop.reproduction is not None:
         reproduction = neat_pop.reproduction
         if hasattr(reproduction, 'ancestors'):
             reproduction.ancestors = {}  # 完全清空
+
+    # 4. 清理 stagnation 中的历史数据（关键！每代都会累积）
+    if hasattr(neat_pop, 'stagnation') and neat_pop.stagnation is not None:
+        stagnation = neat_pop.stagnation
+        # 清理 species_fitness 历史
+        if hasattr(stagnation, 'species_fitness'):
+            stagnation.species_fitness = {}
+
+    # 5. 清理 reporters 中可能积累的数据
+    if hasattr(neat_pop, 'reporters') and neat_pop.reporters is not None:
+        reporters = neat_pop.reporters
+        if hasattr(reporters, 'reporters'):
+            for reporter in reporters.reporters:
+                # StdOutReporter 等可能有 generation_statistics
+                if hasattr(reporter, 'generation_statistics'):
+                    if len(reporter.generation_statistics) > 5:
+                        reporter.generation_statistics = reporter.generation_statistics[-5:]
+                # 清理 species_statistics
+                if hasattr(reporter, 'species_statistics'):
+                    if len(reporter.species_statistics) > 5:
+                        reporter.species_statistics = reporter.species_statistics[-5:]
+                # 清理 most_fit_genomes
+                if hasattr(reporter, 'most_fit_genomes'):
+                    if len(reporter.most_fit_genomes) > 5:
+                        reporter.most_fit_genomes = reporter.most_fit_genomes[-5:]
+
+    # 6. 强制 GC 回收并释放内存给操作系统
+    import gc
+    gc.collect(0)
+    gc.collect(1)
+    gc.collect(2)
+    malloc_trim()
 
 
 def _multi_worker_process_main(
@@ -1279,6 +1336,12 @@ def _multi_worker_process_main(
                 keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
             )
             neat_pop.species.speciate(neat_config, neat_pop.population, generation)
+
+            # 【关键修复】同步基因组后立即清理历史数据
+            # checkpoint 中可能包含大量历史数据（ancestors、fitness_history 等）
+            # 如果不清理，会导致 Worker 进程内存暴涨（20GB+）
+            _cleanup_worker_neat_history(neat_pop)
+
             result_queue.put((worker_id, "ok"))
 
         elif cmd == "evolve_return_params":

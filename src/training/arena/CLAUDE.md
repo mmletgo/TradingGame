@@ -722,6 +722,42 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 ```
 
 **检查点格式：**
+
+Version 2（精简格式，推荐）：
+```python
+{
+    "checkpoint_version": 2,
+    "generation": int,
+    "populations": {
+        AgentType.RETAIL: {
+            "is_sub_population_manager": True,
+            "sub_population_count": int,
+            "sub_populations": [
+                {
+                    "generation": int,
+                    "genome_data": (keys, fitnesses, metadata, nodes, conns),  # NumPy 数组
+                    "species_data": (genome_ids, species_ids),  # NumPy 数组
+                },
+                ...
+            ]
+        },
+        AgentType.RETAIL_PRO: {
+            "generation": int,
+            "genome_data": (keys, fitnesses, metadata, nodes, conns),
+            "species_data": (genome_ids, species_ids),
+        },
+        ...
+    }
+}
+```
+
+**Version 2 优势：**
+- 只保存基因组核心数据（key、fitness、nodes、connections）和 species 映射
+- 不保存 NEAT 历史数据（ancestors、fitness_history、reporters 等）
+- Checkpoint 文件体积更小
+- 加载时不会带入任何历史数据，彻底避免内存泄漏
+
+Version 1（旧格式，向后兼容）：
 ```python
 {
     "generation": int,
@@ -733,10 +769,6 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
                 {"generation": int, "neat_pop": neat.Population},
                 ...
             ]
-        },
-        AgentType.RETAIL_PRO: {
-            "generation": int,
-            "neat_pop": neat.Population,
         },
         ...
     }
@@ -751,6 +783,8 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
    - 每轮训练后进行垃圾回收和 malloc_trim
    - 进化后调用 `_cleanup_neat_history()` 清理 NEAT 历史数据（genome_to_species、species.members 等）
    - `price_history` 限制最大长度为 1000，防止长 episode 中内存泄漏
+   - **首次进化同步**：从 checkpoint 恢复后首次进化时，会调用 `set_genomes()` 同步基因组到 Worker 池
+   - **旧格式 checkpoint 清理**：加载旧格式（version 1）checkpoint 后，自动调用 `_cleanup_neat_history()` 清理历史数据，避免内存泄漏
 5. **Checkpoint 体积优化**：使用 gzip 压缩保存检查点文件
 6. **AgentAccountState 复用**：`_refresh_agent_states()` 使用快速路径检测，进化后不重新创建对象（从 ~90s 降至 0.1ms）
 7. **Worker 并行度优化**：`num_workers = min(num_arenas, 32)`，确保充分利用多核

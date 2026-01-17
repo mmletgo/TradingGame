@@ -1023,14 +1023,28 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 **泄漏来源**：
 - `reproduction.ancestors` 字典：每代新增 ~75 条祖先记录
 - `species.fitness_history` 列表：每代新增 ~27 条适应度历史
+- `stagnation.species_fitness` 字典：每代累积物种适应度历史
+- `reporters` 统计数据：generation_statistics、species_statistics、most_fit_genomes
 - `best_genome` 引用：持有对旧基因组的引用
 
 **清理机制**：
-- 在 `_worker_process_main()` 和 `_multi_worker_process_main()` 的 `evolve` 和 `evolve_return_params` 命令处理后调用
+- 在 `_worker_process_main()` 和 `_multi_worker_process_main()` 的 `evolve`、`evolve_return_params` 和 **`set_genomes`** 命令处理后调用
+- **【关键修复】** `set_genomes` 命令后也必须清理：当从 checkpoint 恢复时，checkpoint 中可能包含大量历史数据（ancestors、fitness_history 等），如果不清理会导致 Worker 进程内存暴涨（20GB+）
 - 完全清空 `ancestors` 字典
+- 完全清空 `stagnation.species_fitness` 字典
 - 限制 `fitness_history` 长度为 5
+- 限制 `reporters` 中的 `generation_statistics`、`species_statistics`、`most_fit_genomes` 长度为 5
 - 更新 `best_genome` 引用到当前种群中的最优基因组
 - 清理 `genome_to_species` 映射中不存在的基因组 ID
+- **【关键修复】** 清理 `species.representative` 引用：如果 representative 指向的 genome 不在当前种群中，更新为当前成员中的第一个，避免旧 genome 无法被 GC 回收
+- 清理完成后调用三代 gc.collect() 和 malloc_trim()，确保内存释放给操作系统
+
+**5. 主进程 species 清理 (`_apply_species_data_to_population()`)**
+
+从 Worker 同步 species 数据后，主进程需要删除不再存在的 species。删除前必须先清理内部数据，否则会导致内存泄漏：
+- 清理 `species.members` 字典引用（调用 `clear()`）
+- 置空 `species.representative` 引用
+- 清空 `species.fitness_history` 列表
 
 ### 死锁防护
 
@@ -1044,8 +1058,17 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - `_batch_decide_parallel()`: 添加 60 秒超时，防止并行决策时死锁
 - 超时后会取消未完成的任务并记录错误日志
 
+**6. 首次进化时同步基因组到 Worker**
+
+在 `ParallelArenaTrainer` 中，从 checkpoint 恢复后首次进化时，需要先调用 `set_genomes()` 同步基因组到 Worker 池，确保 Worker 和主进程的种群一致。否则 Worker 会使用初始化时创建的空白种群进行进化，导致结果不正确。
+
+**7. 旧格式 checkpoint 加载后清理历史数据**
+
+在 `ParallelArenaTrainer.load_checkpoint()` 中，加载旧格式（version 1）checkpoint 后，会自动调用 `_cleanup_neat_history()` 清理 `neat_pop` 中的历史数据，避免内存泄漏。
+
 ### 内存泄漏排查
 
 如果仍然出现内存增长，可能的原因：
 1. NEAT 配置文件中启用了过多的 reporter
 2. 检查是否有其他未被清理的循环引用
+3. 检查是否使用了旧格式 checkpoint（建议转换为 version 2 格式）

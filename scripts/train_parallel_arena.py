@@ -65,7 +65,12 @@ def progress_callback(stats: dict[str, Any]) -> None:
     # 后续行：各物种的 species 适应度分布（固定顺序）
     from src.bio.agents.base import AgentType
 
-    type_order = [AgentType.RETAIL, AgentType.RETAIL_PRO, AgentType.WHALE, AgentType.MARKET_MAKER]
+    type_order = [
+        AgentType.RETAIL,
+        AgentType.RETAIL_PRO,
+        AgentType.WHALE,
+        AgentType.MARKET_MAKER,
+    ]
     for agent_type in type_order:
         type_stats = species_fitness_stats.get(agent_type, {})
         type_name = agent_type.value
@@ -76,7 +81,9 @@ def progress_callback(stats: dict[str, Any]) -> None:
             arr = np.array(species_fitnesses)
             mean_val = float(arr.mean())
             std_val = float(arr.std())
-            print(f"  {type_name}: species={species_count}, fitness={mean_val:.4f}\u00b1{std_val:.4f}")
+            print(
+                f"  {type_name}: species={species_count}, fitness={mean_val:.4f}\u00b1{std_val:.4f}"
+            )
         else:
             print(f"  {type_name}: species={species_count}, fitness=N/A")
 
@@ -154,7 +161,7 @@ def main() -> None:
         "--episode-length",
         type=int,
         default=100,
-        help="每个 episode 的 tick 数量（默认: 1000）",
+        help="每个 episode 的 tick 数量（默认: 100）",
     )
     parser.add_argument(
         "--checkpoint-interval",

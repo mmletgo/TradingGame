@@ -47,7 +47,7 @@ def create_default_config(
         depth=100,
         ema_alpha=0.9,
     )
-    maker_initial_balance = 20_000_000.0  # 做市商初始资金 20M
+    maker_initial_balance = 10_000_000.0  # 做市商初始资金 10M
     maker_leverage = 1.0
 
     agents = {
@@ -69,7 +69,7 @@ def create_default_config(
         ),
         AgentType.WHALE: AgentConfig(
             count=100,  # 庄家（合并多空）
-            initial_balance=3_000_000.0,  # 300万
+            initial_balance=3_000_000.0,  # 3M
             leverage=1.0,
             maintenance_margin_rate=0.5,  # 50%
             maker_fee_rate=-0.0001,  # 负万1 (maker rebate)
