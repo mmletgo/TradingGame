@@ -170,10 +170,10 @@ class Trainer:
     _executor: ThreadPoolExecutor | None
     _num_workers: int
     catfish_list: list["CatfishBase"]
-    _price_history: list[float]
-    _tick_history_prices: list[float]
-    _tick_history_volumes: list[float]
-    _tick_history_amounts: list[float]
+    _price_history: deque[float]
+    _tick_history_prices: deque[float]
+    _tick_history_volumes: deque[float]
+    _tick_history_amounts: deque[float]
     _episode_high_price: float  # 当前 episode 最高价
     _episode_low_price: float  # 当前 episode 最低价
     _retail_worker_pool: "PersistentWorkerPool | None"  # RETAIL 子种群的多进程 Worker 池（已废弃）
@@ -215,13 +215,13 @@ class Trainer:
 
         # 鲶鱼相关
         self.catfish_list: list["CatfishBase"] = []
-        self._price_history: list[float] = []
+        self._price_history: deque[float] = deque(maxlen=1000)  # 价格历史，自动管理长度
         self._catfish_liquidated: bool = False  # 鲶鱼是否被强平（触发 episode 结束）
 
         # Tick 历史数据（用于 Agent 输入特征）
-        self._tick_history_prices: list[float] = []  # 每 tick 价格
-        self._tick_history_volumes: list[float] = []  # 每 tick 成交量（带方向）
-        self._tick_history_amounts: list[float] = []  # 每 tick 成交额（带方向）
+        self._tick_history_prices: deque[float] = deque(maxlen=100)  # 每 tick 价格
+        self._tick_history_volumes: deque[float] = deque(maxlen=100)  # 每 tick 成交量（带方向）
+        self._tick_history_amounts: deque[float] = deque(maxlen=100)  # 每 tick 成交额（带方向）
 
         # Episode 价格统计
         self._episode_high_price: float = 0.0
@@ -1224,10 +1224,11 @@ class Trainer:
             trade_quantities[:n_trades] = log_normalize_signed(qtys_arr)
 
         # Tick 历史价格归一化（以第一个 tick 价格为基准）
+        # 注意：deque(maxlen=100) 最多 100 个元素，直接转换为 list 即可
         if self._tick_history_prices:
-            hist_prices = np.array(self._tick_history_prices[-100:], dtype=np.float32)
-            volumes = np.array(self._tick_history_volumes[-100:], dtype=np.float32)
-            amounts = np.array(self._tick_history_amounts[-100:], dtype=np.float32)
+            hist_prices = np.array(list(self._tick_history_prices), dtype=np.float32)
+            volumes = np.array(list(self._tick_history_volumes), dtype=np.float32)
+            amounts = np.array(list(self._tick_history_amounts), dtype=np.float32)
             n = len(hist_prices)
 
             # 价格归一化：以第一个 tick 价格为基准
@@ -2433,20 +2434,14 @@ class Trainer:
             self._episode_high_price = tick_high
         if tick_low < self._episode_low_price:
             self._episode_low_price = tick_low
-        # 限制历史长度（避免内存无限增长）
-        if len(self._price_history) > 1000:
-            self._price_history = self._price_history[-1000:]
+        # 注意：_price_history 使用 deque(maxlen=1000)，自动管理长度，无需手动切片
 
         # 记录 tick 历史数据
+        # 注意：_tick_history_* 使用 deque(maxlen=100)，自动管理长度，无需手动切片
         self._tick_history_prices.append(current_price)
         volume, amount = self._aggregate_tick_trades(tick_trades)
         self._tick_history_volumes.append(volume)
         self._tick_history_amounts.append(amount)
-        # 限制历史长度（最多 100 条）
-        if len(self._tick_history_prices) > 100:
-            self._tick_history_prices = self._tick_history_prices[-100:]
-            self._tick_history_volumes = self._tick_history_volumes[-100:]
-            self._tick_history_amounts = self._tick_history_amounts[-100:]
 
         # === 鲶鱼强平检查（放在所有 Agent 之后）===
         self._check_catfish_liquidation(current_price)

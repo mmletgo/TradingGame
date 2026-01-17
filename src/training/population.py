@@ -751,6 +751,9 @@ def _worker_process_main(
                 result_queue.put((worker_id, ("error", str(e))))
                 continue
 
+            # 【关键修复】清理 NEAT 历史数据，防止内存泄漏
+            _cleanup_worker_neat_history(neat_pop)
+
             # 返回新基因组数据（NumPy 格式）
             new_data = _serialize_genomes_numpy(neat_pop.population)
             result_queue.put((worker_id, ("success", new_data)))
@@ -789,6 +792,9 @@ def _worker_process_main(
             except Exception as e:
                 result_queue.put((worker_id, ("error", str(e))))
                 continue
+
+            # 【关键修复】清理 NEAT 历史数据，防止内存泄漏
+            _cleanup_worker_neat_history(neat_pop)
 
             # 1. 序列化基因组数据（NumPy 格式）
             genome_data = _serialize_genomes_numpy(neat_pop.population)
@@ -1136,6 +1142,61 @@ class MultiPopulationWorkerPool:
                 p.terminate()
 
 
+def _cleanup_worker_neat_history(neat_pop: neat.Population) -> None:
+    """清理 Worker 进程中 NEAT 种群的历史数据
+
+    这是内存泄漏的关键修复点！Worker 进程持久运行，每次进化后如果不清理：
+    - ancestors 字典会无限增长（每代 +75 条目）
+    - fitness_history 列表会无限增长（每代 +27 条目）
+    - best_genome 会持有对旧基因组的引用
+
+    Args:
+        neat_pop: NEAT 种群对象
+    """
+    current_genome_ids = set(neat_pop.population.keys())
+
+    # 1. 清理 best_genome 引用
+    if hasattr(neat_pop, 'best_genome') and neat_pop.best_genome is not None:
+        if neat_pop.best_genome.key not in current_genome_ids:
+            # 用当前种群中最优的替代
+            best_in_current = max(
+                neat_pop.population.values(),
+                key=lambda g: g.fitness if g.fitness is not None else float('-inf')
+            )
+            neat_pop.best_genome = best_in_current
+
+    # 2. 清理 species_set 中的历史数据
+    if hasattr(neat_pop, 'species') and neat_pop.species is not None:
+        species_set = neat_pop.species
+
+        # 清理 genome_to_species 映射
+        if hasattr(species_set, 'genome_to_species'):
+            species_set.genome_to_species = {
+                gid: sid
+                for gid, sid in species_set.genome_to_species.items()
+                if gid in current_genome_ids
+            }
+
+        # 清理每个物种的 fitness_history（限制长度为 5）
+        if hasattr(species_set, 'species'):
+            for species in species_set.species.values():
+                if hasattr(species, 'fitness_history') and len(species.fitness_history) > 5:
+                    species.fitness_history = species.fitness_history[-5:]
+                # 清理 members 字典
+                if hasattr(species, 'members') and species.members:
+                    species.members = {
+                        gid: genome
+                        for gid, genome in species.members.items()
+                        if gid in current_genome_ids
+                    }
+
+    # 3. 清理 reproduction.ancestors（关键！这是最大的泄漏来源）
+    if hasattr(neat_pop, 'reproduction') and neat_pop.reproduction is not None:
+        reproduction = neat_pop.reproduction
+        if hasattr(reproduction, 'ancestors'):
+            reproduction.ancestors = {}  # 完全清空
+
+
 def _multi_worker_process_main(
     worker_id: tuple["AgentType", int],
     neat_config_path: str,
@@ -1199,6 +1260,9 @@ def _multi_worker_process_main(
                 result_queue.put((worker_id, ("error", str(e))))
                 continue
 
+            # 【关键修复】清理 NEAT 历史数据，防止内存泄漏
+            _cleanup_worker_neat_history(neat_pop)
+
             # 返回新基因组数据（NumPy 格式）
             new_data = _serialize_genomes_numpy(neat_pop.population)
             result_queue.put((worker_id, ("success", new_data)))
@@ -1237,6 +1301,9 @@ def _multi_worker_process_main(
             except Exception as e:
                 result_queue.put((worker_id, ("error", str(e))))
                 continue
+
+            # 【关键修复】清理 NEAT 历史数据，防止内存泄漏
+            _cleanup_worker_neat_history(neat_pop)
 
             # 1. 序列化基因组数据（NumPy 格式）
             genome_data = _serialize_genomes_numpy(neat_pop.population)

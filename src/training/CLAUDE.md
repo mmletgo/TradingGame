@@ -1015,6 +1015,23 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - 异常处理中保留 gc.collect() + malloc_trim()（异常后清理）
 - 由调用方 `_evolve_populations_parallel()` 统一负责 GC，减少 GC 调用次数
 
+**4. Worker 进程内存清理 (`_cleanup_worker_neat_history()`)**
+
+多竞技场模式使用持久化 Worker 进程进行并行进化，每个 Worker 维护自己的 NEAT 种群。
+如果不在进化后清理历史数据，会导致严重内存泄漏（每轮增长 100MB+）：
+
+**泄漏来源**：
+- `reproduction.ancestors` 字典：每代新增 ~75 条祖先记录
+- `species.fitness_history` 列表：每代新增 ~27 条适应度历史
+- `best_genome` 引用：持有对旧基因组的引用
+
+**清理机制**：
+- 在 `_worker_process_main()` 和 `_multi_worker_process_main()` 的 `evolve` 和 `evolve_return_params` 命令处理后调用
+- 完全清空 `ancestors` 字典
+- 限制 `fitness_history` 长度为 5
+- 更新 `best_genome` 引用到当前种群中的最优基因组
+- 清理 `genome_to_species` 映射中不存在的基因组 ID
+
 ### 死锁防护
 
 **1. 多线程导入锁问题修复**

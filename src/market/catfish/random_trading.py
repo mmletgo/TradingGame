@@ -5,6 +5,7 @@
 """
 
 import random
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from src.config.config import CatfishConfig
@@ -54,7 +55,7 @@ class RandomTradingCatfish(CatfishBase):
         self,
         orderbook: "OrderBook",
         tick: int,
-        price_history: list[float],
+        price_history: Sequence[float],
     ) -> tuple[bool, int]:
         """
         决策是否行动以及行动方向
@@ -64,7 +65,7 @@ class RandomTradingCatfish(CatfishBase):
         Args:
             orderbook: 订单簿
             tick: 当前tick
-            price_history: 历史价格列表
+            price_history: 历史价格序列
 
         Returns:
             (should_act, direction): 是否行动和方向（1=买，-1=卖）

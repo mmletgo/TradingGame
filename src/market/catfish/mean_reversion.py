@@ -4,6 +4,7 @@
 实现均值回归策略的鲶鱼，当价格偏离均线时反向操作。
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from src.config.config import CatfishConfig
@@ -75,7 +76,7 @@ class MeanReversionCatfish(CatfishBase):
         self,
         orderbook: "OrderBook",
         tick: int,
-        price_history: list[float],
+        price_history: Sequence[float],
     ) -> tuple[bool, int]:
         """
         决策是否行动以及行动方向
@@ -85,7 +86,7 @@ class MeanReversionCatfish(CatfishBase):
         Args:
             orderbook: 订单簿
             tick: 当前tick
-            price_history: 历史价格列表
+            price_history: 历史价格序列
 
         Returns:
             (should_act, direction): 是否行动和方向（1=买，-1=卖）
