@@ -521,6 +521,18 @@ def _extract_network_params_from_genome(
     from neat.nn import FastFeedForwardNetwork
     network = FastFeedForwardNetwork.create(genome, config)
     params = network.get_params()
+    # 【内存泄漏修复】显式清理临时网络对象的内部状态
+    # FastFeedForwardNetwork 内部可能持有对 genome 和 config 的引用
+    if hasattr(network, 'node_evals'):
+        network.node_evals = None  # type: ignore[assignment]
+    if hasattr(network, 'values'):
+        network.values = None  # type: ignore[assignment]
+    if hasattr(network, 'input_nodes'):
+        network.input_nodes = None  # type: ignore[assignment]
+    if hasattr(network, 'output_nodes'):
+        network.output_nodes = None  # type: ignore[assignment]
+    # 显式删除网络对象引用
+    del network
     return params
 
 
@@ -769,6 +781,9 @@ def _worker_process_main(
             result_queue.put((worker_id, ("success", new_data)))
             # 【内存泄漏修复】发送后删除大型数据
             del new_data
+            del fitnesses  # 也删除输入的适应度数组
+            # 显式触发年轻代 GC
+            gc.collect(0)
 
         elif cmd == "get_genomes":
             # 返回当前基因组数据
@@ -779,7 +794,7 @@ def _worker_process_main(
 
         elif cmd == "set_genomes":
             # 设置基因组数据
-            keys, fitnesses, metadata, nodes, conns = args
+            keys, fitnesses_in, metadata, nodes, conns = args
 
             # 【内存优化】在替换种群之前，先清理旧数据
             # 帮助 GC 更快回收旧的 genome 对象
@@ -792,7 +807,7 @@ def _worker_process_main(
                 neat_pop.population.clear()
 
             neat_pop.population = _deserialize_genomes_numpy(
-                keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
+                keys, fitnesses_in, metadata, nodes, conns, neat_config.genome_config
             )
 
             # 【关键修复】同步 pop_size 为实际种群大小
@@ -809,7 +824,7 @@ def _worker_process_main(
             _cleanup_worker_neat_history(neat_pop)
 
             # 【内存优化】清理命令参数
-            del keys, fitnesses, metadata, nodes, conns
+            del keys, fitnesses_in, metadata, nodes, conns
             gc.collect(0)
 
             result_queue.put((worker_id, "ok"))
@@ -1220,17 +1235,22 @@ def _cleanup_worker_neat_history(neat_pop: neat.Population) -> None:
             }
 
         # 清理每个物种的 fitness_history（限制长度为 5）
+        # 【关键修复】同时删除空物种，防止物种数量无限增长
         if hasattr(species_set, 'species'):
-            for species in species_set.species.values():
+            empty_species_ids: list[int] = []
+            for sid, species in list(species_set.species.items()):
                 if hasattr(species, 'fitness_history') and len(species.fitness_history) > 5:
                     species.fitness_history = species.fitness_history[-5:]
-                # 清理 members 字典
+                # 【内存泄漏修复】清理 members 字典
+                # 先保存需要保留的 genome，然后清空旧字典，再赋值新字典
                 if hasattr(species, 'members') and species.members:
-                    species.members = {
+                    new_members = {
                         gid: genome
                         for gid, genome in species.members.items()
                         if gid in current_genome_ids
                     }
+                    species.members.clear()  # 显式清空旧字典
+                    species.members = new_members  # 赋值新字典
                 # 【关键修复】清理 representative（如果不在当前种群中）
                 # 这是 Worker 版本遗漏的重要清理点！
                 if hasattr(species, 'representative') and species.representative is not None:
@@ -1240,6 +1260,18 @@ def _cleanup_worker_neat_history(neat_pop: neat.Population) -> None:
                             species.representative = next(iter(species.members.values()))
                         else:
                             species.representative = None
+                # 【关键修复】标记空物种以便删除
+                if not species.members:
+                    empty_species_ids.append(sid)
+
+            # 【关键修复】删除空物种，防止物种数量无限增长导致内存泄漏
+            for sid in empty_species_ids:
+                old_species = species_set.species[sid]
+                # 清理内部引用
+                if hasattr(old_species, 'fitness_history'):
+                    old_species.fitness_history = []
+                old_species.representative = None
+                del species_set.species[sid]
 
     # 3. 清理 reproduction.ancestors（关键！这是最大的泄漏来源）
     if hasattr(neat_pop, 'reproduction') and neat_pop.reproduction is not None:
@@ -1351,6 +1383,9 @@ def _multi_worker_process_main(
             result_queue.put((worker_id, ("success", new_data)))
             # 【内存泄漏修复】发送后删除大型数据
             del new_data
+            del fitnesses  # 也删除输入的适应度数组
+            # 显式触发年轻代 GC
+            gc.collect(0)
 
         elif cmd == "get_genomes":
             # 返回当前基因组数据
@@ -1361,7 +1396,7 @@ def _multi_worker_process_main(
 
         elif cmd == "set_genomes":
             # 设置基因组数据
-            keys, fitnesses, metadata, nodes, conns = args
+            keys, fitnesses_in, metadata, nodes, conns = args
 
             # 【内存优化】在替换种群之前，先清理旧数据
             # 帮助 GC 更快回收旧的 genome 对象
@@ -1374,7 +1409,7 @@ def _multi_worker_process_main(
                 neat_pop.population.clear()
 
             neat_pop.population = _deserialize_genomes_numpy(
-                keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
+                keys, fitnesses_in, metadata, nodes, conns, neat_config.genome_config
             )
 
             # 【关键修复】同步 pop_size 为实际种群大小
@@ -1391,7 +1426,7 @@ def _multi_worker_process_main(
             _cleanup_worker_neat_history(neat_pop)
 
             # 【内存优化】清理命令参数
-            del keys, fitnesses, metadata, nodes, conns
+            del keys, fitnesses_in, metadata, nodes, conns
             gc.collect(0)
 
             result_queue.put((worker_id, "ok"))
@@ -1440,9 +1475,15 @@ def _multi_worker_process_main(
 
             # 【内存泄漏修复】发送后立即删除大型数据，避免占用内存直到下一次循环
             del genome_data
+            # 清理 params_list 中的每个字典内容（包含多个 NumPy 数组）
+            for params in params_list:
+                params.clear()
             del params_list
             del network_params_data
             del species_data
+            del fitnesses  # 也删除输入的适应度数组
+            # 显式触发年轻代 GC
+            gc.collect(0)
 
 
 def malloc_trim() -> None:
@@ -2047,13 +2088,16 @@ class Population:
             genomes: 需要清理的基因组列表
         """
         for genome in genomes:
-            # 清理 connections 字典（ConnectionGene 对象）
+            # 【内存泄漏修复】清理 connections 字典并置为空字典
+            # 不能设为 None，因为 NEAT 库其他地方可能会访问
             if hasattr(genome, 'connections') and genome.connections is not None:
                 genome.connections.clear()
-            # 清理 nodes 字典（NodeGene 对象）
+                genome.connections = {}  # 置为新的空字典，释放旧字典对象
+            # 【内存泄漏修复】清理 nodes 字典并置为空字典
             if hasattr(genome, 'nodes') and genome.nodes is not None:
                 genome.nodes.clear()
-            # 清理 fitness（虽然这是个数值，但为了彻底性也清理）
+                genome.nodes = {}  # 置为新的空字典，释放旧字典对象
+            # 清理 fitness
             genome.fitness = None  # type: ignore[assignment]
 
     def _cleanup_old_agents(self) -> None:
@@ -2148,18 +2192,24 @@ class Population:
                 stats['genome_to_species'] = f"{old_size}->{new_size}"
 
             # 清理每个物种的历史成员列表
+            # 【关键修复】同时删除空物种，防止物种数量无限增长
             if hasattr(species_set, 'species'):
                 total_members_old = 0
                 total_members_new = 0
+                empty_species_ids: list[int] = []
+                species_count_before = len(species_set.species)
                 for sid, species in list(species_set.species.items()):
-                    # 清理 members 字典中可能积累的旧引用
+                    # 【内存泄漏修复】清理 members 字典中可能积累的旧引用
+                    # 先保存需要保留的 genome，然后清空旧字典，再赋值新字典
                     if hasattr(species, 'members') and species.members:
                         total_members_old += len(species.members)
-                        species.members = {
+                        new_members = {
                             gid: genome
                             for gid, genome in species.members.items()
                             if gid in current_genome_ids
                         }
+                        species.members.clear()  # 显式清空旧字典
+                        species.members = new_members  # 赋值新字典
                         total_members_new += len(species.members)
                     # 清理 fitness_history（如果存在）
                     if hasattr(species, 'fitness_history'):
@@ -2172,8 +2222,23 @@ class Population:
                                 # 用当前成员中的第一个作为代表
                                 if species.members:
                                     species.representative = next(iter(species.members.values()))
+                    # 【关键修复】标记空物种以便删除
+                    if not species.members:
+                        empty_species_ids.append(sid)
+
+                # 【关键修复】删除空物种，防止物种数量无限增长导致内存泄漏
+                for sid in empty_species_ids:
+                    old_species = species_set.species[sid]
+                    # 清理内部引用
+                    if hasattr(old_species, 'fitness_history'):
+                        old_species.fitness_history = []
+                    old_species.representative = None
+                    del species_set.species[sid]
+
                 stats['species_members'] = f"{total_members_old}->{total_members_new}"
-                stats['species_count'] = len(species_set.species)
+                stats['species_count'] = f"{species_count_before}->{len(species_set.species)}"
+                if empty_species_ids:
+                    stats['empty_species_removed'] = len(empty_species_ids)
 
         # 2. 清理 stagnation 中的历史数据
         if hasattr(self.neat_pop, 'stagnation') and self.neat_pop.stagnation is not None:

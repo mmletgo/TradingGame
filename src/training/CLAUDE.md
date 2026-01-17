@@ -1026,6 +1026,7 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - `stagnation.species_fitness` 字典：每代累积物种适应度历史
 - `reporters` 统计数据：generation_statistics、species_statistics、most_fit_genomes
 - `best_genome` 引用：持有对旧基因组的引用
+- **空物种累积**：NEAT 进化创建新物种但不删除空物种，导致 `species_set.species` 无限增长
 
 **清理机制**：
 - 在 `_worker_process_main()` 和 `_multi_worker_process_main()` 的 `evolve`、`evolve_return_params` 和 **`set_genomes`** 命令处理后调用
@@ -1037,9 +1038,32 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - 更新 `best_genome` 引用到当前种群中的最优基因组
 - 清理 `genome_to_species` 映射中不存在的基因组 ID
 - **【关键修复】** 清理 `species.representative` 引用：如果 representative 指向的 genome 不在当前种群中，更新为当前成员中的第一个，避免旧 genome 无法被 GC 回收
+- **【关键修复】** 清理 `species.members` 时先 clear() 再赋值新字典，释放旧字典引用
+- **【关键修复】** 删除空物种：NEAT 进化过程中会创建新物种，旧物种可能因为所有成员被淘汰而变空，如果不删除空物种会导致 `species_set.species` 字典无限增长（RETAIL 曾出现 1025 个物种）
 - 清理完成后调用三代 gc.collect() 和 malloc_trim()，确保内存释放给操作系统
 
-**5. 主进程 species 清理 (`_apply_species_data_to_population()`)**
+**5. 临时网络对象清理 (`_extract_network_params_from_genome()`)**
+
+从基因组提取网络参数时创建的临时网络对象需要显式清理：
+- 清理 `network.node_evals`、`network.values`、`network.input_nodes`、`network.output_nodes` 等属性
+- 显式 `del network` 后 gc.collect() 可正确回收
+
+**6. 基因组内部数据清理 (`_cleanup_genome_internals()`)**
+
+进化后清理旧基因组的内部数据：
+- `genome.connections.clear()` 后置为空字典 `{}`（释放旧字典对象）
+- `genome.nodes.clear()` 后置为空字典 `{}`（释放旧字典对象）
+- 仅调用 `.clear()` 而不重新赋值会保持对旧字典对象的引用
+
+**7. Worker 进化后临时数据清理**
+
+Worker 进程执行 `evolve_return_params` 命令后清理临时数据：
+- 清理 `params_list` 中的每个字典
+- 删除 `genome_data`、`network_params_data`、`species_data`
+- 删除输入的 `fitnesses` 数组
+- 调用 `gc.collect(0)` 触发分代回收
+
+**8. 主进程 species 清理 (`_apply_species_data_to_population()`)**
 
 从 Worker 同步 species 数据后，主进程需要删除不再存在的 species。删除前必须先清理内部数据，否则会导致内存泄漏：
 - 清理 `species.members` 字典引用（调用 `clear()`）
@@ -1058,11 +1082,11 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 - `_batch_decide_parallel()`: 添加 60 秒超时，防止并行决策时死锁
 - 超时后会取消未完成的任务并记录错误日志
 
-**6. 首次进化时同步基因组到 Worker**
+**9. 首次进化时同步基因组到 Worker**
 
 在 `ParallelArenaTrainer` 中，从 checkpoint 恢复后首次进化时，需要先调用 `set_genomes()` 同步基因组到 Worker 池，确保 Worker 和主进程的种群一致。否则 Worker 会使用初始化时创建的空白种群进行进化，导致结果不正确。
 
-**7. 旧格式 checkpoint 加载后清理历史数据**
+**10. 旧格式 checkpoint 加载后清理历史数据**
 
 在 `ParallelArenaTrainer.load_checkpoint()` 中，加载旧格式（version 1）checkpoint 后，会自动调用 `_cleanup_neat_history()` 清理 `neat_pop` 中的历史数据，避免内存泄漏。
 
@@ -1072,3 +1096,5 @@ python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 1. NEAT 配置文件中启用了过多的 reporter
 2. 检查是否有其他未被清理的循环引用
 3. 检查是否使用了旧格式 checkpoint（建议转换为 version 2 格式）
+4. 检查物种数量是否异常增长（正常情况下物种数量应该稳定，不应持续增长）
+5. 可通过日志中的 `[MEMORY_NEAT_CLEANUP]` 和 `species_count`、`empty_species_removed` 字段监控物种清理情况
