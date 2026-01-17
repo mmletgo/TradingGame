@@ -694,8 +694,12 @@ class ParallelArenaTrainer:
                     genome_data = _serialize_genomes_numpy(pop.neat_pop.population)
                     genomes_map[(agent_type, 0)] = genome_data
             self.evolution_worker_pool.set_genomes(genomes_map)
-            # 【内存泄漏修复】同步后立即清理 genomes_map
+            # 【内存泄漏修复】同步后立即清理 genomes_map 并强制释放内存
             del genomes_map
+            gc.collect(0)
+            gc.collect(1)
+            gc.collect(2)
+            malloc_trim()
             self.logger.info("首次进化：基因组已同步到 Worker 池")
 
         evolution_results = self.evolution_worker_pool.evolve_all_parallel(

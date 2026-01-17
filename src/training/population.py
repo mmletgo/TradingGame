@@ -780,15 +780,37 @@ def _worker_process_main(
         elif cmd == "set_genomes":
             # 设置基因组数据
             keys, fitnesses, metadata, nodes, conns = args
+
+            # 【内存优化】在替换种群之前，先清理旧数据
+            # 帮助 GC 更快回收旧的 genome 对象
+            if neat_pop.population:
+                for genome in neat_pop.population.values():
+                    if hasattr(genome, 'nodes'):
+                        genome.nodes.clear()
+                    if hasattr(genome, 'connections'):
+                        genome.connections.clear()
+                neat_pop.population.clear()
+
             neat_pop.population = _deserialize_genomes_numpy(
                 keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
             )
+
+            # 【关键修复】同步 pop_size 为实际种群大小
+            # 防止 checkpoint 中的种群大小与配置不一致导致进化失败
+            actual_pop_size = len(neat_pop.population)
+            if neat_config.pop_size != actual_pop_size:
+                neat_config.pop_size = actual_pop_size
+
             neat_pop.species.speciate(neat_config, neat_pop.population, generation)
 
             # 【关键修复】同步基因组后立即清理历史数据
             # checkpoint 中可能包含大量历史数据（ancestors、fitness_history 等）
             # 如果不清理，会导致 Worker 进程内存暴涨（20GB+）
             _cleanup_worker_neat_history(neat_pop)
+
+            # 【内存优化】清理命令参数
+            del keys, fitnesses, metadata, nodes, conns
+            gc.collect(0)
 
             result_queue.put((worker_id, "ok"))
 
@@ -1340,15 +1362,37 @@ def _multi_worker_process_main(
         elif cmd == "set_genomes":
             # 设置基因组数据
             keys, fitnesses, metadata, nodes, conns = args
+
+            # 【内存优化】在替换种群之前，先清理旧数据
+            # 帮助 GC 更快回收旧的 genome 对象
+            if neat_pop.population:
+                for genome in neat_pop.population.values():
+                    if hasattr(genome, 'nodes'):
+                        genome.nodes.clear()
+                    if hasattr(genome, 'connections'):
+                        genome.connections.clear()
+                neat_pop.population.clear()
+
             neat_pop.population = _deserialize_genomes_numpy(
                 keys, fitnesses, metadata, nodes, conns, neat_config.genome_config
             )
+
+            # 【关键修复】同步 pop_size 为实际种群大小
+            # 防止 checkpoint 中的种群大小与配置不一致导致进化失败
+            actual_pop_size = len(neat_pop.population)
+            if neat_config.pop_size != actual_pop_size:
+                neat_config.pop_size = actual_pop_size
+
             neat_pop.species.speciate(neat_config, neat_pop.population, generation)
 
             # 【关键修复】同步基因组后立即清理历史数据
             # checkpoint 中可能包含大量历史数据（ancestors、fitness_history 等）
             # 如果不清理，会导致 Worker 进程内存暴涨（20GB+）
             _cleanup_worker_neat_history(neat_pop)
+
+            # 【内存优化】清理命令参数
+            del keys, fitnesses, metadata, nodes, conns
+            gc.collect(0)
 
             result_queue.put((worker_id, "ok"))
 
