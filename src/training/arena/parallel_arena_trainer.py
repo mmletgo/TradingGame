@@ -667,6 +667,12 @@ class ParallelArenaTrainer:
         avg_fitness = self._collect_fitness_all_arenas(arena_fitnesses, episode_counts)
         stats["aggregate_time"] = time.perf_counter() - aggregate_start
 
+        # 【内存泄漏修复】汇总后清理 arena_fitnesses（包含多个 episode 的适应度数据）
+        # 先保存 episode 总数，再删除 episode_counts
+        episodes_this_round = sum(episode_counts)
+        del arena_fitnesses
+        del episode_counts
+
         # 3. 应用到基因组
         self._apply_fitness_to_genomes(avg_fitness)
 
@@ -688,6 +694,8 @@ class ParallelArenaTrainer:
                     genome_data = _serialize_genomes_numpy(pop.neat_pop.population)
                     genomes_map[(agent_type, 0)] = genome_data
             self.evolution_worker_pool.set_genomes(genomes_map)
+            # 【内存泄漏修复】同步后立即清理 genomes_map
+            del genomes_map
             self.logger.info("首次进化：基因组已同步到 Worker 池")
 
         evolution_results = self.evolution_worker_pool.evolve_all_parallel(
@@ -696,9 +704,15 @@ class ParallelArenaTrainer:
         self._worker_pool_synced = True
         stats["evolve_time"] = time.perf_counter() - evolve_start
 
+        # 【内存泄漏修复】进化完成后清理 fitness_map
+        del fitness_map
+
         # 5. 更新种群
         update_start = time.perf_counter()
         self._update_populations_from_evolution(evolution_results)
+
+        # 【内存泄漏修复】更新完成后清理 evolution_results（包含大量 NumPy 数组）
+        del evolution_results
 
         # 进化后更新网络缓存
         self._update_network_caches()
@@ -710,7 +724,7 @@ class ParallelArenaTrainer:
 
         # 增加代数和总 episode 计数
         self.generation += 1
-        episodes_this_round = sum(episode_counts)
+        # episodes_this_round 已在上面计算
         self.total_episodes += episodes_this_round
         stats["generation"] = self.generation
         stats["episodes_this_round"] = episodes_this_round
@@ -3737,6 +3751,15 @@ class ParallelArenaTrainer:
         with gzip.open(checkpoint_path, "wb") as f:
             pickle.dump(checkpoint_data, f)
 
+        # 【内存泄漏修复】保存后显式删除 checkpoint_data 及其包含的 numpy 数组
+        # checkpoint_data 包含大量序列化的 numpy 数组（每个子种群约 25-50MB）
+        # 如果不显式删除，这些数据会一直保留在内存中直到 GC 回收
+        del checkpoint_data
+        gc.collect(0)
+        gc.collect(1)
+        gc.collect(2)
+        malloc_trim()
+
         self.logger.info(f"检查点已保存: {path}")
 
     @staticmethod
@@ -3866,6 +3889,14 @@ class ParallelArenaTrainer:
         # 重置 Worker 池同步标志
         self._worker_pool_synced = False
 
+        # 【内存泄漏修复】加载完成后释放 checkpoint_data 及临时对象
+        # 加载过程中会反序列化大量 genome 和创建 Agent 对象，需要及时释放中间对象
+        del checkpoint_data
+        gc.collect(0)
+        gc.collect(1)
+        gc.collect(2)
+        malloc_trim()
+
         self.logger.info(
             f"检查点已加载: {path}, generation={self.generation}, "
             f"version={checkpoint_version}"
@@ -3902,6 +3933,10 @@ class ParallelArenaTrainer:
         # 3. 重建 Agent
         genomes = list(population.neat_pop.population.items())
         population.agents = population.create_agents(genomes)
+
+        # 【内存泄漏修复】清理 NEAT 历史数据
+        # 与旧格式 checkpoint 加载保持一致，防止历史数据积累导致内存泄漏
+        population._cleanup_neat_history()
 
     def stop(self) -> None:
         """停止训练并清理资源"""

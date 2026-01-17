@@ -140,7 +140,7 @@ def check_genome_connections_count(neat_pop: neat.Population) -> dict:
 
 def run_memory_test():
     """运行内存泄漏测试"""
-    from src.config.config import Config
+    from src.config.config import Config, AgentType
     from src.training.arena import ParallelArenaTrainer, MultiArenaConfig
 
     print("=" * 60)
@@ -154,15 +154,19 @@ def run_memory_test():
     print(f"\n初始内存: {initial_mem:.1f} MB")
 
     # 创建配置
-    config = Config.from_yaml(project_root / "config" / "config.yaml")
+    from scripts.create_config import create_default_config
+    config = create_default_config(
+        episode_length=10,  # 短 episode
+        checkpoint_interval=10,
+        catfish_enabled=False
+    )
 
     # 减少 agent 数量以加快测试
-    config.agent_config.retail.count = 100
-    config.agent_config.retail_pro.count = 10
-    config.agent_config.whale.count = 10
-    config.agent_config.market_maker.count = 10
-    config.training_config.episode_length = 10  # 短 episode
-    config.training_config.retail_sub_population_count = 1  # 减少子种群
+    config.agents[AgentType.RETAIL].count = 100
+    config.agents[AgentType.RETAIL_PRO].count = 10
+    config.agents[AgentType.WHALE].count = 10
+    config.agents[AgentType.MARKET_MAKER].count = 10
+    config.training.retail_sub_population_count = 1  # 减少子种群
 
     multi_config = MultiArenaConfig(
         num_arenas=2,

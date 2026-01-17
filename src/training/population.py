@@ -767,11 +767,15 @@ def _worker_process_main(
             # 返回新基因组数据（NumPy 格式）
             new_data = _serialize_genomes_numpy(neat_pop.population)
             result_queue.put((worker_id, ("success", new_data)))
+            # 【内存泄漏修复】发送后删除大型数据
+            del new_data
 
         elif cmd == "get_genomes":
             # 返回当前基因组数据
             data = _serialize_genomes_numpy(neat_pop.population)
             result_queue.put((worker_id, data))
+            # 【内存泄漏修复】发送后删除大型数据
+            del data
 
         elif cmd == "set_genomes":
             # 设置基因组数据
@@ -1323,11 +1327,15 @@ def _multi_worker_process_main(
             # 返回新基因组数据（NumPy 格式）
             new_data = _serialize_genomes_numpy(neat_pop.population)
             result_queue.put((worker_id, ("success", new_data)))
+            # 【内存泄漏修复】发送后删除大型数据
+            del new_data
 
         elif cmd == "get_genomes":
             # 返回当前基因组数据
             data = _serialize_genomes_numpy(neat_pop.population)
             result_queue.put((worker_id, data))
+            # 【内存泄漏修复】发送后删除大型数据
+            del data
 
         elif cmd == "set_genomes":
             # 设置基因组数据
@@ -1385,6 +1393,12 @@ def _multi_worker_process_main(
 
             # 5. 返回三者
             result_queue.put((worker_id, ("success_params", genome_data, network_params_data, species_data)))
+
+            # 【内存泄漏修复】发送后立即删除大型数据，避免占用内存直到下一次循环
+            del genome_data
+            del params_list
+            del network_params_data
+            del species_data
 
 
 def malloc_trim() -> None:

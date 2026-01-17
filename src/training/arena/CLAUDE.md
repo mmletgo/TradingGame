@@ -785,6 +785,11 @@ Version 1（旧格式，向后兼容）：
    - `price_history` 限制最大长度为 1000，防止长 episode 中内存泄漏
    - **首次进化同步**：从 checkpoint 恢复后首次进化时，会调用 `set_genomes()` 同步基因组到 Worker 池
    - **旧格式 checkpoint 清理**：加载旧格式（version 1）checkpoint 后，自动调用 `_cleanup_neat_history()` 清理历史数据，避免内存泄漏
+   - **Checkpoint 保存后清理**：`save_checkpoint()` 保存后显式删除 checkpoint_data 并调用 gc.collect + malloc_trim，释放序列化过程中创建的大量 NumPy 数组
+   - **Checkpoint 加载后清理**：`load_checkpoint()` 加载后调用 gc.collect + malloc_trim，释放反序列化过程中的临时对象
+   - **精简格式加载清理**：`_load_population_from_compact_data()` 加载后调用 `_cleanup_neat_history()`，与旧格式保持一致
+   - **run_round 大对象清理**：`evolution_results`、`arena_fitnesses`、`fitness_map`、`genomes_map` 等大型对象在使用后立即删除，避免内存占用直到 GC 回收
+   - **Worker 进程数据清理**：Worker 进程在发送 `genome_data`、`network_params_data` 等大型数据后立即删除，避免占用内存直到下一次循环
 5. **Checkpoint 体积优化**：使用 gzip 压缩保存检查点文件
 6. **AgentAccountState 复用**：`_refresh_agent_states()` 使用快速路径检测，进化后不重新创建对象（从 ~90s 降至 0.1ms）
 7. **Worker 并行度优化**：`num_workers = min(num_arenas, 32)`，确保充分利用多核
