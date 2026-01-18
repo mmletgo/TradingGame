@@ -1387,8 +1387,7 @@ class Trainer:
             old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
             pop._cleanup_genome_internals(old_to_clean)
 
-            # 清理 NEAT 历史
-            pop._cleanup_neat_history()
+            # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
             # 更新 Agent Brain（使用完整的 genome + params）
             new_genomes = list(pop.neat_pop.population.items())

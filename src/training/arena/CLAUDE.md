@@ -689,7 +689,7 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 
 ### 内存管理
 - 每轮训练后进行垃圾回收和 malloc_trim
-- 进化后调用 `_cleanup_neat_history()` 清理 NEAT 历史数据
+- 保存 checkpoint 时调用 `_cleanup_neat_history()` 清理 NEAT 历史数据
 - `price_history` 限制最大长度为 1000
 - 精简格式 checkpoint 减小文件体积
 - AgentAccountState 复用机制

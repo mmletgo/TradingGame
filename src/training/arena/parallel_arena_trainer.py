@@ -3723,7 +3723,7 @@ class ParallelArenaTrainer:
                 population.generation,
             )
 
-            population._cleanup_neat_history()
+            # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
             # 更新 Agent Brain（使用完整的 genome + params）
             new_genomes = list(population.neat_pop.population.items())
@@ -3780,8 +3780,7 @@ class ParallelArenaTrainer:
             population._pending_genome_data = None
             population._genomes_dirty = False
 
-            # 清理 NEAT 历史数据（关键！防止内存泄漏）
-            population._cleanup_neat_history()
+            # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
     def _refresh_agent_states(self, force: bool = False) -> None:
         """刷新所有竞技场的 Agent 账户状态
@@ -3874,6 +3873,14 @@ class ParallelArenaTrainer:
                     sub_pop.sync_genomes_from_pending()
             else:
                 population.sync_genomes_from_pending()
+
+        # 清理 NEAT 历史数据以减少内存占用
+        for population in self.populations.values():
+            if isinstance(population, SubPopulationManager):
+                for sub_pop in population.sub_populations:
+                    sub_pop._cleanup_neat_history()
+            else:
+                population._cleanup_neat_history()
 
         checkpoint_data: dict[str, Any] = {
             "checkpoint_version": 2,  # 新版本标识，用于区分精简格式

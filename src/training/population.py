@@ -1963,12 +1963,8 @@ class Population:
         # 6. 增加代数计数
         self.generation += 1
 
-        # 7. 清理 NEAT 种群中的历史数据，防止内存泄漏
-        mem_before_neat_cleanup = _get_memory_mb()
-        self._cleanup_neat_history()
-        mem_after_neat_cleanup = _get_memory_mb()
-
-        # 8. 【对象池化优化】复用 Agent 对象，只更新 Brain
+        # 7. 【对象池化优化】复用 Agent 对象，只更新 Brain
+        # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
         mem_before_update = _get_memory_mb()
         new_genomes = list(self.neat_pop.population.items())
         for idx, (genome_id, genome) in enumerate(new_genomes):
@@ -1980,7 +1976,6 @@ class Population:
         self.logger.info(
             f"[MEMORY_EVOLVE] {self.agent_type.value} gen_{self.generation}: "
             f"neat_run=+{mem_after_neat - mem_before_cleanup:.1f}MB, "
-            f"neat_cleanup={mem_after_neat_cleanup - mem_before_neat_cleanup:+.1f}MB, "
             f"brain_update=+{mem_after_update - mem_before_update:.1f}MB, "
             f"total={mem_end - mem_start:+.1f}MB"
         )
@@ -2073,10 +2068,8 @@ class Population:
         # 6. 增加代数计数
         self.generation += 1
 
-        # 7. 清理 NEAT 历史数据
-        self._cleanup_neat_history()
-
-        # 8. 【对象池化优化】复用 Agent 对象，只更新 Brain
+        # 7. 【对象池化优化】复用 Agent 对象，只更新 Brain
+        # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
         new_genomes = list(self.neat_pop.population.items())
         for idx, (genome_id, genome) in enumerate(new_genomes):
             self.agents[idx].update_brain(genome, self.neat_config)
@@ -2543,8 +2536,7 @@ class Population:
         old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
         self._cleanup_genome_internals(old_to_clean)
 
-        # 清理 NEAT 历史
-        self._cleanup_neat_history()
+        # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
         # 更新 Agent Brain 的 genome 引用
         new_genomes = list(self.neat_pop.population.items())
@@ -2881,8 +2873,7 @@ class SubPopulationManager:
             # 增加代数
             pop.generation += 1
 
-            # 清理 NEAT 历史
-            pop._cleanup_neat_history()
+            # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
             # 更新 Agent Brain
             new_genomes = list(pop.neat_pop.population.items())
@@ -2975,8 +2966,7 @@ class SubPopulationManager:
             old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
             pop._cleanup_genome_internals(old_to_clean)
 
-            # 清理 NEAT 历史
-            pop._cleanup_neat_history()
+            # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
             # 更新 Agent Brain
             new_genomes = list(pop.neat_pop.population.items())
@@ -3076,8 +3066,7 @@ class SubPopulationManager:
                 old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
                 pop._cleanup_genome_internals(old_to_clean)
 
-                # 清理 NEAT 历史
-                pop._cleanup_neat_history()
+                # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
                 # 解包网络参数并更新 Brain（包含 genome 引用）
                 params_list = _unpack_network_params_numpy(*network_params_data)
@@ -3146,8 +3135,7 @@ class SubPopulationManager:
             old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
             pop._cleanup_genome_internals(old_to_clean)
 
-            # 清理 NEAT 历史
-            pop._cleanup_neat_history()
+            # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 
             # 更新 Agent Brain 的 genome 引用
             new_genomes = list(pop.neat_pop.population.items())
