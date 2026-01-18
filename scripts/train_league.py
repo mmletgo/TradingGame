@@ -10,6 +10,7 @@
     python scripts/train_league.py --no-league-exploiter
 """
 import argparse
+import logging
 import re
 import sys
 from pathlib import Path
@@ -56,20 +57,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-arenas",
         type=int,
-        default=27,
-        help="竞技场数量（默认 27）",
+        default=54,
+        help="竞技场数量（默认 54）",
     )
     parser.add_argument(
         "--episodes-per-arena",
         type=int,
-        default=2,
-        help="每个竞技场的 episode 数（默认 2）",
+        default=1,
+        help="每个竞技场的 episode 数（默认 1）",
     )
     parser.add_argument(
         "--episode-length",
         type=int,
-        default=1000,
-        help="每个 episode 的 tick 数（默认 1000）",
+        default=100,
+        help="每个 episode 的 tick 数（默认 100）",
     )
 
     # 联盟训练配置
@@ -92,8 +93,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--exploiter-ratio",
         type=float,
-        default=0.1,
-        help="Exploiter 种群占 Main 的比例（默认 0.1）",
+        default=0.25,
+        help="Exploiter 种群占 Main 的比例（默认 0.25）",
     )
     parser.add_argument(
         "--sampling-strategy",
@@ -249,7 +250,8 @@ def main() -> None:
     args = parse_args()
 
     # 设置日志
-    setup_logging(level=args.log_level)
+    console_level = getattr(logging, args.log_level)
+    setup_logging(console_level=console_level)
     logger = get_logger("train_league")
 
     logger.info("=" * 60)
@@ -287,7 +289,9 @@ def main() -> None:
     logger.info(f"竞技场数量: {args.num_arenas}")
     logger.info(f"每竞技场 episode 数: {args.episodes_per_arena}")
     logger.info(f"Episode 长度: {args.episode_length} ticks")
-    logger.info(f"League Exploiter: {'启用' if not args.no_league_exploiter else '禁用'}")
+    logger.info(
+        f"League Exploiter: {'启用' if not args.no_league_exploiter else '禁用'}"
+    )
     logger.info(f"Main Exploiter: {'启用' if not args.no_main_exploiter else '禁用'}")
     logger.info(f"采样策略: {args.sampling_strategy}")
     logger.info(f"检查点目录: {args.checkpoint_dir}")

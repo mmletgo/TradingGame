@@ -23,14 +23,14 @@ class LeagueTrainingConfig:
     exploiter_inject_interval: int = 20  # 每 N 代检查是否注入
 
     # 竞技场运行配置
-    num_arenas: int = 27  # 同时运行的竞技场数量
-    episodes_per_arena: int = 2  # 每个竞技场运行的 episode 数
+    num_arenas: int = 54  # 同时运行的竞技场数量
+    episodes_per_arena: int = 1  # 每个竞技场运行的 episode 数
 
     # 竞技场分配
-    num_baseline_arenas: int = 5  # 基准竞技场数量
-    num_generalization_arenas_per_type: int = 4  # 每类型泛化测试竞技场数量
-    num_league_exploiter_arenas_per_type: int = 1  # 每类型 League Exploiter 竞技场数量
-    num_main_exploiter_arenas: int = 2  # Main Exploiter 竞技场数量
+    num_baseline_arenas: int = 10  # 基准竞技场数量
+    num_generalization_arenas_per_type: int = 8  # 每类型泛化测试竞技场数量
+    num_league_exploiter_arenas_per_type: int = 2  # 每类型 League Exploiter 竞技场数量
+    num_main_exploiter_arenas: int = 4  # Main Exploiter 竞技场数量
 
     # 适应度计算
     fitness_strategy: Literal['simple', 'weighted_average', 'min'] = 'weighted_average'

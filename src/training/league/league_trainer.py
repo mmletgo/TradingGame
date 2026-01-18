@@ -4,6 +4,7 @@ from __future__ import annotations
 import gc
 import gzip
 import pickle
+import time
 from ctypes import CDLL, c_int
 from pathlib import Path
 from typing import Any, Callable
@@ -13,6 +14,7 @@ import numpy as np
 from src.config.config import AgentType, Config
 from src.core.log_engine.logger import get_logger
 from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
+from src.training.arena.parallel_arena_trainer import malloc_trim
 from src.training.league.arena_allocator import ArenaAllocator, ArenaAllocation
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.exploiter_manager import ExploiterManager
@@ -20,7 +22,7 @@ from src.training.league.league_fitness import LeagueFitnessAggregator
 from src.training.league.multi_gen_cache import MultiGenerationNetworkCache
 from src.training.league.opponent_entry import OpponentEntry, OpponentMetadata
 from src.training.league.opponent_pool_manager import OpponentPoolManager
-from src.training.population import _serialize_genomes_numpy
+from src.training.population import SubPopulationManager, _serialize_genomes_numpy
 
 
 class LeagueTrainer(ParallelArenaTrainer):
@@ -134,8 +136,8 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self.pool_manager.has_any_historical_opponents():
             self._current_allocation = self.arena_allocator.allocate(self.pool_manager)
         else:
-            # 对手池为空时，仅使用基准竞技场
-            self._current_allocation = self.arena_allocator.allocate_baseline_only()
+            # 对手池为空时，仍然分配 Exploiter 竞技场
+            self._current_allocation = self.arena_allocator.allocate_no_historical()
 
         self.logger.debug(f"竞技场分配完成: {len(self._current_allocation.assignments)} 个竞技场")
 

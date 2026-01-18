@@ -214,16 +214,28 @@ class ArenaAllocator:
             main_exploiter_arena_ids=main_exploiter_ids,
         )
 
-    def allocate_baseline_only(self) -> ArenaAllocation:
-        """分配仅基准竞技场（对手池为空时使用）
+    def allocate_no_historical(self) -> ArenaAllocation:
+        """分配竞技场（无历史对手时使用）
+
+        - 基准竞技场：全当前代
+        - 泛化测试竞技场：不分配（因为没有历史对手），改为额外的基准竞技场
+        - League Exploiter 竞技场：分配，其他类型使用当前代 Main
+        - Main Exploiter 竞技场：正常分配
 
         Returns:
             竞技场分配方案
         """
         assignments: list[ArenaAssignment] = []
         baseline_ids: list[int] = []
+        league_exploiter_ids: dict[AgentType, list[int]] = {t: [] for t in AgentType}
+        main_exploiter_ids: list[int] = []
 
-        for arena_id in range(self.num_arenas):
+        arena_id = 0
+
+        # 1. 基准竞技场：全当前代
+        for _ in range(self.config.num_baseline_arenas):
+            if arena_id >= self.num_arenas:
+                break
             assignment = ArenaAssignment(
                 arena_id=arena_id,
                 purpose='baseline',
@@ -234,11 +246,83 @@ class ArenaAllocator:
             )
             assignments.append(assignment)
             baseline_ids.append(arena_id)
+            arena_id += 1
+
+        # 2. 泛化测试：跳过（因为没有历史对手）
+        # 将这些竞技场也分配给基准
+        generalization_total = self.config.num_generalization_arenas_per_type * len(AgentType)
+        for _ in range(generalization_total):
+            if arena_id >= self.num_arenas:
+                break
+            assignment = ArenaAssignment(
+                arena_id=arena_id,
+                purpose='baseline',
+                agent_sources={
+                    agent_type: AgentSourceConfig(source='current')
+                    for agent_type in AgentType
+                },
+            )
+            assignments.append(assignment)
+            baseline_ids.append(arena_id)
+            arena_id += 1
+
+        # 3. League Exploiter 竞技场：使用当前代 Main 代替历史对手
+        if self.config.enable_league_exploiter:
+            for agent_type in AgentType:
+                for _ in range(self.config.num_league_exploiter_arenas_per_type):
+                    if arena_id >= self.num_arenas:
+                        break
+
+                    agent_sources: dict[AgentType, AgentSourceConfig] = {}
+                    for t in AgentType:
+                        if t == agent_type:
+                            # 该类型使用 League Exploiter
+                            agent_sources[t] = AgentSourceConfig(source='league_exploiter')
+                        else:
+                            # 其他类型使用当前代 Main（因为没有历史对手）
+                            agent_sources[t] = AgentSourceConfig(source='current')
+
+                    assignment = ArenaAssignment(
+                        arena_id=arena_id,
+                        purpose='league_exploiter_training',
+                        agent_sources=agent_sources,
+                        target_type=agent_type,
+                    )
+                    assignments.append(assignment)
+                    league_exploiter_ids[agent_type].append(arena_id)
+                    arena_id += 1
+
+        # 4. Main Exploiter 竞技场：正常分配
+        if self.config.enable_main_exploiter:
+            attack_targets = list(AgentType)[:self.config.num_main_exploiter_arenas]
+
+            for target_type in attack_targets:
+                if arena_id >= self.num_arenas:
+                    break
+
+                agent_sources = {}
+                for t in AgentType:
+                    if t == target_type:
+                        # 被攻击类型使用当前代 Main
+                        agent_sources[t] = AgentSourceConfig(source='current')
+                    else:
+                        # 其他类型使用 Main Exploiter
+                        agent_sources[t] = AgentSourceConfig(source='main_exploiter')
+
+                assignment = ArenaAssignment(
+                    arena_id=arena_id,
+                    purpose='main_exploiter_training',
+                    agent_sources=agent_sources,
+                    target_type=target_type,
+                )
+                assignments.append(assignment)
+                main_exploiter_ids.append(arena_id)
+                arena_id += 1
 
         return ArenaAllocation(
             assignments=assignments,
             baseline_arena_ids=baseline_ids,
             generalization_arena_ids={t: [] for t in AgentType},
-            league_exploiter_arena_ids={t: [] for t in AgentType},
-            main_exploiter_arena_ids=[],
+            league_exploiter_arena_ids=league_exploiter_ids,
+            main_exploiter_arena_ids=main_exploiter_ids,
         )
