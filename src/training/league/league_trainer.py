@@ -480,29 +480,33 @@ class LeagueTrainer(ParallelArenaTrainer):
         """
         self.logger.info(f"开始联盟训练，轮数: {num_rounds or '无限'}")
 
+        self._is_running = True
         round_count = 0
-        while num_rounds is None or round_count < num_rounds:
-            if not self._is_running:
-                break
+        try:
+            while num_rounds is None or round_count < num_rounds:
+                if not self._is_running:
+                    break
 
-            stats = self.run_round(episode_callback=episode_callback)
-            round_count += 1
+                stats = self.run_round(episode_callback=episode_callback)
+                round_count += 1
 
-            # 检查点回调
-            if checkpoint_callback and self.generation % self.config.training.checkpoint_interval == 0:
-                checkpoint_callback(self.generation)
+                # 检查点回调
+                if checkpoint_callback and self.generation % self.config.training.checkpoint_interval == 0:
+                    checkpoint_callback(self.generation)
 
-            # 进度回调
-            if progress_callback:
-                progress_callback(stats)
+                # 进度回调
+                if progress_callback:
+                    progress_callback(stats)
 
-            # 内存清理
-            if self.generation % 10 == 0:
-                gc.collect()
-                try:
-                    libc = CDLL("libc.so.6")
-                    libc.malloc_trim(c_int(0))
-                except Exception:
-                    pass
+                # 内存清理
+                if self.generation % 10 == 0:
+                    gc.collect()
+                    try:
+                        libc = CDLL("libc.so.6")
+                        libc.malloc_trim(c_int(0))
+                    except Exception:
+                        pass
+        finally:
+            self._is_running = False
 
         self.logger.info(f"联盟训练完成，共 {round_count} 轮")
