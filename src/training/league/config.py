@@ -35,6 +35,11 @@ class LeagueTrainingConfig:
     elite_fitness_threshold: float = 0.05  # 平均适应度超过历史最高 5% 时注入
     diversity_threshold: float = 0.3  # 与现有对手差异阈值
 
+    # 泛化优势比配置
+    generalization_advantage_window: int = 20   # 历史窗口大小
+    convergence_threshold: float = 0.01         # 收敛阈值
+    convergence_generations: int = 10           # 连续满足条件的代数
+
     def validate(self) -> None:
         """验证配置有效性"""
         if self.max_pool_size_per_type < 1:

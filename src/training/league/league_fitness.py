@@ -1,11 +1,23 @@
 """联盟适应度汇总器"""
 from __future__ import annotations
 
+from collections import deque
+from dataclasses import dataclass
+
 import numpy as np
 
 from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.arena_allocator import ArenaAllocation
+
+
+@dataclass
+class GeneralizationAdvantageStats:
+    """单代泛化优势比统计"""
+    generation: int
+    advantages: dict[AgentType, float]          # 泛化优势比
+    baseline_avg: dict[AgentType, float]        # 基准平均适应度
+    generalization_avg: dict[AgentType, float]  # 泛化平均适应度
 
 
 class LeagueFitnessAggregator:
@@ -23,6 +35,11 @@ class LeagueFitnessAggregator:
             config: 联盟训练配置
         """
         self.config = config
+
+        # 泛化优势比历史
+        self._advantage_history: deque[GeneralizationAdvantageStats] = deque(
+            maxlen=config.generalization_advantage_window
+        )
 
     def aggregate_main_fitness(
         self,
@@ -190,3 +207,96 @@ class LeagueFitnessAggregator:
         if len(fitness_array) == 0:
             return False
         return float(np.mean(fitness_array)) > threshold
+
+    def compute_generalization_advantage(
+        self,
+        generation: int,
+        allocation: ArenaAllocation,
+        arena_fitnesses: dict[int, dict[AgentType, np.ndarray]],
+    ) -> GeneralizationAdvantageStats | None:
+        """计算泛化优势比
+
+        Args:
+            generation: 当前代数
+            allocation: 竞技场分配方案
+            arena_fitnesses: {arena_id: {AgentType: fitness_array}}
+
+        Returns:
+            泛化优势比统计，无泛化竞技场时返回 None
+        """
+        # 检查是否有泛化测试竞技场
+        has_generalization = any(
+            len(ids) > 0 for ids in allocation.generalization_arena_ids.values()
+        )
+        if not has_generalization:
+            return None
+
+        # 使用已有方法分离基准/泛化适应度
+        collected = self.collect_fitness_by_role(allocation, arena_fitnesses)
+
+        advantages: dict[AgentType, float] = {}
+        baseline_avg: dict[AgentType, float] = {}
+        generalization_avg: dict[AgentType, float] = {}
+
+        for agent_type in AgentType:
+            # 基准平均
+            baseline_arrays = collected['main_baseline'][agent_type]
+            baseline_avg[agent_type] = (
+                float(np.mean([np.mean(arr) for arr in baseline_arrays]))
+                if baseline_arrays else 0.0
+            )
+
+            # 泛化平均
+            gen_arrays = collected['main_generalization'][agent_type]
+            generalization_avg[agent_type] = (
+                float(np.mean([np.mean(arr) for arr in gen_arrays]))
+                if gen_arrays else 0.0
+            )
+
+            # 泛化优势比
+            advantages[agent_type] = generalization_avg[agent_type] - baseline_avg[agent_type]
+
+        stats = GeneralizationAdvantageStats(
+            generation=generation,
+            advantages=advantages,
+            baseline_avg=baseline_avg,
+            generalization_avg=generalization_avg,
+        )
+
+        # 记录到历史
+        self._advantage_history.append(stats)
+
+        return stats
+
+    def check_convergence(self) -> tuple[bool, dict[AgentType, bool]]:
+        """检查是否收敛
+
+        收敛条件：最近 N 代的泛化优势比绝对值都 <= 阈值
+
+        Returns:
+            (全部收敛, {AgentType: 是否收敛})
+        """
+        threshold = self.config.convergence_threshold
+        required_gens = self.config.convergence_generations
+
+        if len(self._advantage_history) < required_gens:
+            return False, {t: False for t in AgentType}
+
+        recent = list(self._advantage_history)[-required_gens:]
+
+        converged_by_type: dict[AgentType, bool] = {}
+        for agent_type in AgentType:
+            converged_by_type[agent_type] = all(
+                abs(stats.advantages[agent_type]) <= threshold
+                for stats in recent
+            )
+
+        return all(converged_by_type.values()), converged_by_type
+
+    def get_advantage_history(self) -> list[GeneralizationAdvantageStats]:
+        """获取泛化优势比历史"""
+        return list(self._advantage_history)
+
+    def clear_history(self) -> None:
+        """清空历史记录"""
+        self._advantage_history.clear()

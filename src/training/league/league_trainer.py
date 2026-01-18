@@ -4,6 +4,8 @@ from __future__ import annotations
 import gc
 import gzip
 import pickle
+
+import numpy as np
 from ctypes import CDLL, c_int
 from pathlib import Path
 from typing import Any, Callable
@@ -13,7 +15,7 @@ from src.core.log_engine.logger import get_logger
 from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
 from src.training.league.arena_allocator import ArenaAllocator, ArenaAllocation
 from src.training.league.config import LeagueTrainingConfig
-from src.training.league.league_fitness import LeagueFitnessAggregator
+from src.training.league.league_fitness import LeagueFitnessAggregator, GeneralizationAdvantageStats
 from src.training.league.multi_gen_cache import MultiGenerationNetworkCache
 from src.training.league.opponent_pool_manager import OpponentPoolManager
 from src.training.population import SubPopulationManager, _serialize_genomes_numpy
@@ -60,6 +62,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 统计
         self._last_injection_generation: int = 0
 
+        # 当前轮次各竞技场的适应度（用于泛化优势比计算）
+        self._current_round_arena_fitnesses: dict[int, dict[AgentType, np.ndarray]] = {}
+
     def setup(self) -> None:
         """初始化
 
@@ -85,6 +90,24 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         self.logger.info("联盟训练器初始化完成")
         self.logger.info(f"对手池大小: {self.pool_manager.get_pool_sizes()}")
+
+    def _on_arena_fitness_collected(
+        self,
+        arena_id: int,
+        agent_type: AgentType,
+        fitness: np.ndarray,
+        current_price: float,
+        market_avg_return: float,
+    ) -> None:
+        """收集各竞技场的适应度用于泛化优势比计算"""
+        if arena_id not in self._current_round_arena_fitnesses:
+            self._current_round_arena_fitnesses[arena_id] = {}
+
+        # 如果同一轮有多个 episode，累加后在计算时平均
+        if agent_type in self._current_round_arena_fitnesses[arena_id]:
+            self._current_round_arena_fitnesses[arena_id][agent_type] += fitness
+        else:
+            self._current_round_arena_fitnesses[arena_id][agent_type] = fitness.copy()
 
     def run_round(
         self,
@@ -119,11 +142,20 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         self.logger.debug(f"竞技场分配完成: {len(self._current_allocation.assignments)} 个竞技场")
 
+        # 清空当前轮次适应度数据
+        self._current_round_arena_fitnesses.clear()
+
+        # 记录是否有历史对手
+        has_historical = self.pool_manager.has_any_historical_opponents()
+
         # 2. 确保历史对手网络已缓存
         self._ensure_historical_networks_cached()
 
         # 3-4. 运行 episodes 并收集适应度（复用父类逻辑）
         round_stats = super().run_round(episode_callback=episode_callback)
+
+        # 计算泛化优势比
+        self._compute_and_log_generalization_advantage(round_stats, has_historical)
 
         # 5. 检查里程碑保存
         if self.generation > 0 and self.generation % self.league_config.milestone_interval == 0:
@@ -150,6 +182,90 @@ class LeagueTrainer(ParallelArenaTrainer):
                         source_config.entry_id,
                         self.pool_manager,
                     )
+
+    def _compute_and_log_generalization_advantage(
+        self,
+        round_stats: dict[str, Any],
+        has_historical: bool,
+    ) -> None:
+        """计算并记录泛化优势比"""
+        round_stats['has_historical_opponents'] = has_historical
+
+        if not has_historical or self._current_allocation is None:
+            round_stats['generalization_advantage'] = None
+            round_stats['baseline_avg_fitness'] = None
+            round_stats['generalization_avg_fitness'] = None
+            round_stats['is_converged'] = False
+            round_stats['converged_by_type'] = None
+            return
+
+        # 多 episode 时取平均
+        episodes = self.multi_config.episodes_per_arena
+        if episodes > 1:
+            for arena_id in self._current_round_arena_fitnesses:
+                for agent_type in self._current_round_arena_fitnesses[arena_id]:
+                    self._current_round_arena_fitnesses[arena_id][agent_type] /= episodes
+
+        # 计算泛化优势比
+        stats = self.fitness_aggregator.compute_generalization_advantage(
+            generation=self.generation,
+            allocation=self._current_allocation,
+            arena_fitnesses=self._current_round_arena_fitnesses,
+        )
+
+        if stats is not None:
+            round_stats['generalization_advantage'] = stats.advantages
+            round_stats['baseline_avg_fitness'] = stats.baseline_avg
+            round_stats['generalization_avg_fitness'] = stats.generalization_avg
+
+            is_converged, converged_by_type = self.fitness_aggregator.check_convergence()
+            round_stats['is_converged'] = is_converged
+            round_stats['converged_by_type'] = converged_by_type
+
+            self._log_generalization_advantage(stats, is_converged, converged_by_type)
+        else:
+            round_stats['generalization_advantage'] = None
+            round_stats['baseline_avg_fitness'] = None
+            round_stats['generalization_avg_fitness'] = None
+            round_stats['is_converged'] = False
+            round_stats['converged_by_type'] = None
+
+        # 清空（释放内存）
+        self._current_round_arena_fitnesses.clear()
+
+    def _log_generalization_advantage(
+        self,
+        stats: GeneralizationAdvantageStats,
+        is_converged: bool,
+        converged_by_type: dict[AgentType, bool],
+    ) -> None:
+        """输出泛化优势比日志"""
+        lines = [f"第 {stats.generation} 代泛化优势比:"]
+
+        for agent_type in AgentType:
+            adv = stats.advantages[agent_type]
+            baseline = stats.baseline_avg[agent_type]
+            gen = stats.generalization_avg[agent_type]
+            conv = converged_by_type.get(agent_type, False)
+
+            if conv:
+                status = "已收敛"
+            elif adv > 0.01:
+                status = "击败历史对手"
+            elif adv < -0.01:
+                status = "不如历史表现"
+            else:
+                status = "趋于收敛"
+
+            lines.append(
+                f"  {agent_type.name}: 泛化优势={adv:+.4f} "
+                f"(基准={baseline:.4f}, 泛化={gen:.4f}) [{status}]"
+            )
+
+        if is_converged:
+            lines.append("  >>> 所有物种已收敛，可以考虑结束训练 <<<")
+
+        self.logger.info("\n".join(lines))
 
     def _save_milestone(self) -> None:
         """保存里程碑到对手池"""

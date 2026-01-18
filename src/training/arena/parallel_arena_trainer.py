@@ -3388,6 +3388,27 @@ class ParallelArenaTrainer:
         # 收集适应度
         return self._collect_episode_fitness()
 
+    def _on_arena_fitness_collected(
+        self,
+        arena_id: int,
+        agent_type: AgentType,
+        fitness: np.ndarray,
+        current_price: float,
+        market_avg_return: float,
+    ) -> None:
+        """竞技场适应度收集钩子（子类可重写）
+
+        在 _collect_episode_fitness() 中每个竞技场的每个种群适应度计算完成后调用。
+
+        Args:
+            arena_id: 竞技场 ID
+            agent_type: Agent 类型
+            fitness: 适应度数组
+            current_price: 当前价格
+            market_avg_return: 市场平均收益率
+        """
+        pass  # 默认空实现
+
     def _collect_episode_fitness(self) -> dict[tuple[AgentType, int], np.ndarray]:
         """收集单个 episode 的适应度（跨所有竞技场求和）
 
@@ -3419,6 +3440,11 @@ class ParallelArenaTrainer:
                         fitness_arr = self._calculate_fitness_for_population(
                             sub_pop, arena, current_price, market_avg_return
                         )
+                        # 调用钩子
+                        self._on_arena_fitness_collected(
+                            arena.arena_id, agent_type, fitness_arr.copy(),
+                            current_price, market_avg_return
+                        )
                         if key not in accumulated:
                             accumulated[key] = fitness_arr.copy()
                         else:
@@ -3427,6 +3453,11 @@ class ParallelArenaTrainer:
                     key = (agent_type, 0)
                     fitness_arr = self._calculate_fitness_for_population(
                         population, arena, current_price, market_avg_return
+                    )
+                    # 调用钩子
+                    self._on_arena_fitness_collected(
+                        arena.arena_id, agent_type, fitness_arr.copy(),
+                        current_price, market_avg_return
                     )
                     if key not in accumulated:
                         accumulated[key] = fitness_arr.copy()

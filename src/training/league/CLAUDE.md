@@ -48,6 +48,9 @@ src/training/league/
 | `num_baseline_arenas` | 16 | 基准竞技场数量 |
 | `num_generalization_arenas_per_type` | 12 | 每类型泛化测试竞技场数量 |
 | `sampling_strategy` | `recency` | 采样策略：uniform/recency/diverse |
+| `generalization_advantage_window` | 20 | 泛化优势比历史窗口大小 |
+| `convergence_threshold` | 0.01 | 收敛判断阈值 |
+| `convergence_generations` | 10 | 连续满足收敛条件的代数 |
 
 ### OpponentEntry (opponent_entry.py)
 
@@ -125,6 +128,24 @@ class ArenaAllocation:
 - **weighted_average**：加权平均（基准权重 1.0，泛化权重 0.8）
 - **min**：取最小值
 
+泛化优势比计算：
+- `compute_generalization_advantage(generation, allocation, arena_fitnesses)`：计算泛化优势比
+- `check_convergence()`：检查是否收敛
+- `get_advantage_history()`：获取历史记录
+- `clear_history()`：清空历史
+
+### GeneralizationAdvantageStats (league_fitness.py)
+
+泛化优势比统计数据类：
+```python
+@dataclass
+class GeneralizationAdvantageStats:
+    generation: int                            # 代数
+    advantages: dict[AgentType, float]         # 泛化优势比
+    baseline_avg: dict[AgentType, float]       # 基准平均适应度
+    generalization_avg: dict[AgentType, float] # 泛化平均适应度
+```
+
 ### LeagueTrainer (league_trainer.py)
 
 联盟训练器主类，继承自 `ParallelArenaTrainer`。
@@ -182,6 +203,52 @@ def run_round(self):
 ```
 
 总权重 = 16×1.0 + 12×0.8 = 25.6
+
+## 泛化优势比（Generalization Advantage）
+
+用于评估训练效果和判断收敛的指标。
+
+### 计算公式
+
+```
+泛化优势比 = 泛化平均适应度 - 基准平均适应度
+```
+
+- **泛化平均适应度**：Main Agents 在泛化测试竞技场（与历史对手对战）中的平均适应度
+- **基准平均适应度**：Main Agents 在基准竞技场（全当前代对战）中的平均适应度
+
+### 含义解读
+
+| 泛化优势比 | 含义 |
+|-----------|------|
+| > 0 | Main 能击败历史对手（继续提升中） |
+| < 0 | Main 不如历史对手（需继续训练） |
+| ≈ 0 | 可能收敛 |
+
+### 收敛判断
+
+收敛条件：最近 `convergence_generations` 代的泛化优势比绝对值都 ≤ `convergence_threshold`
+
+### 日志输出示例
+
+```
+INFO - 第 100 代泛化优势比:
+INFO -   RETAIL: 泛化优势=+0.0234 (基准=0.0512, 泛化=0.0746) [击败历史对手]
+INFO -   RETAIL_PRO: 泛化优势=-0.0087 (基准=0.0893, 泛化=0.0806) [不如历史表现]
+INFO -   WHALE: 泛化优势=+0.0005 (基准=0.1234, 泛化=0.1239) [趋于收敛]
+INFO -   MARKET_MAKER: 泛化优势=+0.0012 (基准=0.0567, 泛化=0.0579) [趋于收敛]
+```
+
+收敛时：
+```
+INFO - 第 200 代泛化优势比:
+INFO -   RETAIL: 泛化优势=+0.0023 (基准=0.0512, 泛化=0.0535) [已收敛]
+INFO -   >>> 所有物种已收敛，可以考虑结束训练 <<<
+```
+
+### 前提条件
+
+只有存在历史对手后才计算泛化优势比。如果对手池为空，`round_stats['generalization_advantage']` 为 `None`。
 
 ## 对手池注入条件
 
