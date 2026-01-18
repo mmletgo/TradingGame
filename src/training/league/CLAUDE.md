@@ -336,8 +336,11 @@ checkpoints/league_training/
 ### 启动训练
 
 ```bash
-# 基本训练
+# 基本训练（默认启用鲶鱼）
 python scripts/train_league.py --rounds 200
+
+# 禁用鲶鱼
+python scripts/train_league.py --rounds 200 --no-catfish
 
 # 指定竞技场数量
 python scripts/train_league.py --num-arenas 16 --rounds 200
