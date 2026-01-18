@@ -871,6 +871,16 @@ def _worker_process_main(
             # 5. 返回三者
             result_queue.put((worker_id, ("success_params", genome_data, network_params_data, species_data)))
 
+            # 【内存泄漏修复】发送后删除大型数据
+            # 与 evolve 命令保持一致的清理方式
+            del genome_data
+            del params_list
+            del network_params_data
+            del species_data
+            del fitnesses  # 也删除输入的适应度数组
+            # 显式触发年轻代 GC
+            gc.collect(0)
+
 
 import multiprocessing
 

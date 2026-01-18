@@ -1308,6 +1308,8 @@ class Trainer:
                         genome_data = _serialize_genomes_numpy(pop.neat_pop.population)
                         genomes_map[(agent_type, 0)] = genome_data
                 self._unified_worker_pool.set_genomes(genomes_map)
+                # 【内存泄漏修复】同步后立即清理 genomes_map
+                del genomes_map
                 self.logger.info("首次进化：基因组已同步到 Worker 池")
 
             results = self._unified_worker_pool.evolve_all_parallel(
@@ -1324,6 +1326,10 @@ class Trainer:
                     self._update_population_from_worker(sub_pop, genome_data, network_params)
                 else:
                     self._update_population_from_worker(pop, genome_data, network_params)
+
+            # 【内存泄漏修复】更新完成后清理 results 和 fitness_map
+            del results
+            del fitness_map
 
         mem_after_evolve = _get_memory_mb()
 

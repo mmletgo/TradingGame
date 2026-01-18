@@ -885,6 +885,9 @@ class ParallelArenaTrainer:
         """重置所有竞技场状态"""
         initial_price = self.config.market.initial_price
         self._worker_depth_cache.clear()
+        # 【内存泄漏修复】清理上次推理的缓存数组
+        # 这些数组在每个 tick 更新，如果不清理会持续占用内存
+        self._last_inference_arrays.clear()
 
         for arena in self.arena_states:
             # 重置订单簿
