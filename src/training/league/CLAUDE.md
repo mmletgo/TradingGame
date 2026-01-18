@@ -187,17 +187,17 @@ def run_round(self):
 
 ## 竞技场分配方案
 
-默认 54 个独立竞技场，每个竞技场运行 1 个 episode：
+默认 64 个独立竞技场，每个竞技场运行 1 个 episode：
 
 | 竞技场范围 | 数量 | 用途 |
 |-----------|------|------|
-| Arena 0-9 | 10 | 基准对战（全当前代） |
-| Arena 10-17 | 8 | 散户泛化测试 |
-| Arena 18-25 | 8 | 高级散户泛化测试 |
-| Arena 26-33 | 8 | 庄家泛化测试 |
-| Arena 34-41 | 8 | 做市商泛化测试 |
-| Arena 42-49 | 8 | League Exploiter 训练（每类型 2 个） |
-| Arena 50-53 | 4 | Main Exploiter 训练（每类型 1 个） |
+| Arena 0-11 | 12 | 基准对战（全当前代） |
+| Arena 12-21 | 10 | 散户泛化测试 |
+| Arena 22-31 | 10 | 高级散户泛化测试 |
+| Arena 32-41 | 10 | 庄家泛化测试 |
+| Arena 42-51 | 10 | 做市商泛化测试 |
+| Arena 52-59 | 8 | League Exploiter 训练（每类型 2 个） |
+| Arena 60-63 | 4 | Main Exploiter 训练（每类型 1 个） |
 
 ## 适应度计算
 
@@ -205,12 +205,12 @@ def run_round(self):
 
 ```python
 散户 Main 适应度 = 加权平均 {
-    基准竞技场(Arena 0-9) × 权重 1.0,
-    散户泛化测试竞技场(Arena 10-17) × 权重 0.8
+    基准竞技场(Arena 0-11) × 权重 1.0,
+    散户泛化测试竞技场(Arena 12-21) × 权重 0.8
 }
 ```
 
-总权重 = 10×1.0 + 8×0.8 = 16.4（与原方案相同）
+总权重 = 12×1.0 + 10×0.8 = 20.0
 
 ## 对手池注入条件
 
@@ -272,7 +272,7 @@ from src.config.config import Config
 from src.training.arena.config import MultiArenaConfig
 
 config = Config()
-multi_config = MultiArenaConfig(num_arenas=27, episodes_per_arena=2)
+multi_config = MultiArenaConfig(num_arenas=64, episodes_per_arena=1)
 league_config = LeagueTrainingConfig(
     sampling_strategy='pfsp',
     enable_league_exploiter=True,

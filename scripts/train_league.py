@@ -57,8 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-arenas",
         type=int,
-        default=54,
-        help="竞技场数量（默认 54）",
+        default=64,
+        help="竞技场数量（默认 64）",
     )
     parser.add_argument(
         "--episodes-per-arena",
