@@ -469,13 +469,35 @@ with pool:
 4. **订单簿独立**：每个竞技场有独立的 `MatchingEngine` 和 `OrderBook`
 
 **核心流程：**
-1. 初始化：创建共享种群、N 个独立竞技场状态、共享网络缓存、进化 Worker 池、Execute Worker 池（可选）
+1. 初始化（setup 阶段的执行顺序很重要，详见下方说明）：
+   a. 先创建 Worker 池（在大内存分配之前 fork，避免 COW 内存泄漏）
+   b. 创建共享种群（大量内存分配）
+   c. 创建 N 个独立竞技场状态
+   d. 初始化共享网络缓存
+   e. 构建 Agent 映射表
+   f. 创建 Execute Worker 池（可选，依赖竞技场状态）
 2. 训练循环：
    a. 重置所有竞技场（及 Execute Worker 池的订单簿）
    b. 同步推进所有竞技场的 tick（批量推理 + 并行/串行执行）
    c. 汇总适应度
    d. 执行 NEAT 进化
    e. 更新网络缓存和 Agent 状态
+
+**Worker 池早期创建（避免 COW 内存泄漏）：**
+
+进化 Worker 池必须在创建种群之前 fork，原因：
+- Worker 进程使用 multiprocessing fork 创建
+- fork 时子进程会继承父进程的内存空间
+- 如果父进程在 fork 前已分配大量内存（如种群数据），子进程修改数据时会触发 COW（Copy-On-Write）
+- COW 导致子进程复制父进程的内存页，造成内存泄漏
+
+`_create_evolution_worker_pool()` 方法直接从 `config` 计算子种群参数，不依赖 `populations`：
+- RETAIL: 10 个子种群，每个 `config.agents[RETAIL].count // 10`
+- RETAIL_PRO: 1 个种群，大小 `config.agents[RETAIL_PRO].count`
+- WHALE: 1 个种群，大小 `config.agents[WHALE].count`
+- MARKET_MAKER: 4 个子种群，每个 `config.agents[MARKET_MAKER].count // 4`
+
+Execute Worker 池因依赖 `arena_states` 而必须在竞技场状态创建之后创建。
 
 **类定义：**
 ```python
@@ -508,7 +530,7 @@ class ParallelArenaTrainer:
 
 | 方法 | 描述 |
 |------|------|
-| `setup()` | 初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池、Execute Worker 池 |
+| `setup()` | 初始化：先创建 Worker 池（避免 COW），再创建种群、竞技场状态、网络缓存、Execute Worker 池 |
 | `run_round()` | 运行一轮训练（所有竞技场的所有 episode + 进化） |
 | `run_tick_all_arenas()` | 并行执行所有竞技场的一个 tick（支持 Worker 池并行执行） |
 | `_batch_inference_all_arenas()` | 批量推理所有竞技场的所有 Agent |

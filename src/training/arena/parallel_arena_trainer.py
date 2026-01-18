@@ -182,32 +182,40 @@ class ParallelArenaTrainer:
         self._catfish_balance_bias_to_buy: bool = True
 
     def setup(self) -> None:
-        """初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池"""
+        """初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池
+
+        重要：Worker 进程池的创建必须在内存分配（如创建种群）之前完成。
+        这是因为 fork 时子进程会继承父进程的内存空间，如果父进程在 fork 前
+        已经分配了大量内存，子进程修改数据时会触发 COW（Copy-On-Write）
+        导致内存复制，引发内存泄漏问题。
+        """
         if self._is_setup:
             self.logger.warning("训练环境已初始化，跳过重复初始化")
             return
 
         self.logger.info("开始初始化多竞技场并行推理训练环境...")
 
-        # 1. 创建种群（共享神经网络）
-        self._create_populations()
-
-        # 2. 创建竞技场状态（每个竞技场独立状态）
-        self._create_arena_states()
-
-        # 3. 初始化网络缓存（共享）
-        self._init_network_caches()
-
-        # 4. 构建 Agent 映射表
-        self._build_agent_map()
-
-        # 5. 创建进化 Worker 池
+        # 1. 先创建 Worker 池（在分配大内存之前 fork）
+        # 这样 Worker 进程继承的内存空间最小，避免 COW 导致的内存复制
         self._create_evolution_worker_pool()
 
         # 读取 EMA 配置
         self._ema_alpha = self.config.market.ema_alpha
 
+        # 2. 创建种群（共享神经网络）- 大量内存分配
+        self._create_populations()
+
+        # 3. 创建竞技场状态（每个竞技场独立状态）
+        self._create_arena_states()
+
+        # 4. 初始化网络缓存（共享）
+        self._init_network_caches()
+
+        # 5. 构建 Agent 映射表
+        self._build_agent_map()
+
         # 6. 创建 Execute Worker 池（支持鲶鱼机制）
+        # 注意：Execute Worker 池依赖 arena_states，所以必须在创建竞技场状态之后
         if self._use_execute_workers:
             self._create_execute_worker_pool()
 
@@ -489,24 +497,34 @@ class ParallelArenaTrainer:
             cache.update_networks(networks)
 
     def _create_evolution_worker_pool(self) -> None:
-        """创建进化 Worker 池"""
+        """创建进化 Worker 池
+
+        重要：此方法在创建种群之前调用，因此不能依赖 self.populations。
+        所有参数直接从 self.config 计算。
+        """
         self.logger.info("正在创建进化 Worker 池...")
 
         config_dir = self.config.training.neat_config_path
         worker_configs: list[WorkerConfig] = []
 
+        # 子种群数量硬编码（与 _create_populations 保持一致）
+        # RETAIL: 10 个子种群
+        # MARKET_MAKER: 4 个子种群
+        retail_sub_count = 10
+        mm_sub_count = 4
+
         # RETAIL Workers
-        retail_pop = self.populations[AgentType.RETAIL]
-        if isinstance(retail_pop, SubPopulationManager):
-            for i in range(retail_pop.sub_population_count):
-                worker_configs.append(
-                    WorkerConfig(
-                        AgentType.RETAIL,
-                        i,
-                        f"{config_dir}/neat_retail.cfg",
-                        retail_pop.agents_per_sub,
-                    )
+        retail_total = self.config.agents[AgentType.RETAIL].count
+        retail_per_sub = retail_total // retail_sub_count
+        for i in range(retail_sub_count):
+            worker_configs.append(
+                WorkerConfig(
+                    AgentType.RETAIL,
+                    i,
+                    f"{config_dir}/neat_retail.cfg",
+                    retail_per_sub,
                 )
+            )
 
         # RETAIL_PRO Worker
         worker_configs.append(
@@ -529,17 +547,17 @@ class ParallelArenaTrainer:
         )
 
         # MARKET_MAKER Workers
-        mm_pop = self.populations[AgentType.MARKET_MAKER]
-        if isinstance(mm_pop, SubPopulationManager):
-            for i in range(mm_pop.sub_population_count):
-                worker_configs.append(
-                    WorkerConfig(
-                        AgentType.MARKET_MAKER,
-                        i,
-                        f"{config_dir}/neat_market_maker.cfg",
-                        mm_pop.agents_per_sub,
-                    )
+        mm_total = self.config.agents[AgentType.MARKET_MAKER].count
+        mm_per_sub = mm_total // mm_sub_count
+        for i in range(mm_sub_count):
+            worker_configs.append(
+                WorkerConfig(
+                    AgentType.MARKET_MAKER,
+                    i,
+                    f"{config_dir}/neat_market_maker.cfg",
+                    mm_per_sub,
                 )
+            )
 
         self.evolution_worker_pool = MultiPopulationWorkerPool(
             config_dir, worker_configs
