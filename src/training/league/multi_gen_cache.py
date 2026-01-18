@@ -11,7 +11,7 @@ class MultiGenerationNetworkCache:
     """多代网络缓存管理器
 
     按 Agent 类型和 entry_id 管理网络缓存。
-    支持当前代、历史代和 Exploiter 的网络缓存。
+    支持当前代和历史代的网络缓存。
     """
 
     def __init__(self, config: Config, max_cached_per_type: int = 5) -> None:
@@ -36,10 +36,6 @@ class MultiGenerationNetworkCache:
         self._access_order: dict[AgentType, list[str]] = {
             agent_type: [] for agent_type in AgentType
         }
-
-        # Exploiter 缓存：{AgentType: BatchNetworkCache}
-        self.league_exploiter_caches: dict[AgentType, Any] = {}
-        self.main_exploiter_caches: dict[AgentType, Any] = {}
 
     def ensure_cached(
         self,
@@ -197,7 +193,7 @@ class MultiGenerationNetworkCache:
 
         Args:
             agent_type: Agent 类型
-            source: 来源 ('current', 'historical', 'league_exploiter', 'main_exploiter')
+            source: 来源 ('current', 'historical')
             entry_id: 条目 ID（historical 时需要）
 
         Returns:
@@ -212,10 +208,6 @@ class MultiGenerationNetworkCache:
             if cache is not None:
                 self._update_access_order(agent_type, entry_id)
             return cache
-        elif source == 'league_exploiter':
-            return self.league_exploiter_caches.get(agent_type)
-        elif source == 'main_exploiter':
-            return self.main_exploiter_caches.get(agent_type)
         else:
             return None
 
@@ -233,32 +225,6 @@ class MultiGenerationNetworkCache:
                 old_cache.clear()
 
         self.current_caches[agent_type] = cache
-
-    def update_exploiter(
-        self,
-        agent_type: AgentType,
-        role: str,
-        cache: Any,
-    ) -> None:
-        """更新 Exploiter 缓存
-
-        Args:
-            agent_type: Agent 类型
-            role: 角色 ('league_exploiter', 'main_exploiter')
-            cache: BatchNetworkCache 实例
-        """
-        if role == 'league_exploiter':
-            if agent_type in self.league_exploiter_caches:
-                old_cache = self.league_exploiter_caches[agent_type]
-                if hasattr(old_cache, 'clear'):
-                    old_cache.clear()
-            self.league_exploiter_caches[agent_type] = cache
-        elif role == 'main_exploiter':
-            if agent_type in self.main_exploiter_caches:
-                old_cache = self.main_exploiter_caches[agent_type]
-                if hasattr(old_cache, 'clear'):
-                    old_cache.clear()
-            self.main_exploiter_caches[agent_type] = cache
 
     def clear_all(self) -> None:
         """清空所有缓存"""
@@ -278,17 +244,6 @@ class MultiGenerationNetworkCache:
         # 清空 LRU 顺序
         for order in self._access_order.values():
             order.clear()
-
-        # 清空 Exploiter 缓存
-        for cache in self.league_exploiter_caches.values():
-            if hasattr(cache, 'clear'):
-                cache.clear()
-        self.league_exploiter_caches.clear()
-
-        for cache in self.main_exploiter_caches.values():
-            if hasattr(cache, 'clear'):
-                cache.clear()
-        self.main_exploiter_caches.clear()
 
     def get_cached_entry_ids(self, agent_type: AgentType) -> list[str]:
         """获取指定类型已缓存的条目 ID

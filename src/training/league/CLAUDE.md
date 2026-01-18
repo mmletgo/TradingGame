@@ -12,14 +12,11 @@
 
 1. **历史对手池**：存储不同代的优秀策略
 2. **Main Agents**：主要进化的 Agent，与混合对手竞争
-3. **League Exploiter**：专门针对历史对手池训练，发现历史策略的弱点
-4. **Main Exploiter**：专门针对当前 Main Agents 训练，发现当前策略的弱点
+3. **泛化测试**：Main Agents 与历史对手池中的对手对战，测试泛化能力
 
 ### 按类型分离架构
 
-每种 Agent 类型（RETAIL, RETAIL_PRO, WHALE, MARKET_MAKER）都有：
-- 独立的对手池（存储其他三种类型的历史版本）
-- 独立的 League Exploiter 和 Main Exploiter
+每种 Agent 类型（RETAIL, RETAIL_PRO, WHALE, MARKET_MAKER）都有独立的对手池（存储其他三种类型的历史版本）。
 
 ## 模块结构
 
@@ -33,7 +30,6 @@ src/training/league/
 ├── opponent_pool_manager.py # 多类型对手池管理器
 ├── multi_gen_cache.py       # 多代网络缓存
 ├── arena_allocator.py       # 竞技场分配器
-├── exploiter_manager.py     # Exploiter 管理器
 ├── league_fitness.py        # 适应度汇总器
 └── league_trainer.py        # 联盟训练器主类
 ```
@@ -49,8 +45,8 @@ src/training/league/
 | `pool_dir` | `checkpoints/league_training/opponent_pools` | 对手池存储目录 |
 | `max_pool_size_per_type` | 20 | 每种类型最多保存的历史版本数 |
 | `milestone_interval` | 50 | 里程碑保存间隔（代数） |
-| `exploiter_population_ratio` | 0.1 | Exploiter 种群占 Main 的比例 |
-| `exploiter_win_rate_threshold` | 0.55 | 注入对手池的胜率阈值 |
+| `num_baseline_arenas` | 16 | 基准竞技场数量 |
+| `num_generalization_arenas_per_type` | 12 | 每类型泛化测试竞技场数量 |
 | `sampling_strategy` | `pfsp` | 采样策略：uniform/pfsp/diverse |
 
 ### OpponentEntry (opponent_entry.py)
@@ -99,8 +95,6 @@ entry_dir/
 缓存类型：
 - `current_caches`：当前代网络缓存
 - `historical_caches`：历史代网络缓存（LRU 淘汰）
-- `league_exploiter_caches`：League Exploiter 网络缓存
-- `main_exploiter_caches`：Main Exploiter 网络缓存
 
 ### ArenaAllocator (arena_allocator.py)
 
@@ -109,16 +103,10 @@ entry_dir/
 竞技场类型：
 - **baseline**：全当前代对战（基准）
 - **generalization_test**：某类型 Main vs 其他类型历史版本
-- **league_exploiter_training**：League Exploiter vs 历史对手（或当前代 Main）
-- **main_exploiter_training**：Main Exploiter vs 当前代 Main
 
 主要方法：
 - `allocate(pool_manager)`：有历史对手时使用，分配完整的竞技场方案
-- `allocate_no_historical()`：无历史对手时使用，仍然分配 Exploiter 竞技场
-  - 基准竞技场：全当前代
-  - 泛化测试竞技场：转为额外的基准竞技场
-  - League Exploiter 竞技场：与当前代 Main 对战（代替历史对手）
-  - Main Exploiter 竞技场：正常分配
+- `allocate_no_historical()`：无历史对手时使用，全部分配为基准竞技场
 
 分配结果数据结构：
 ```python
@@ -127,19 +115,7 @@ class ArenaAllocation:
     assignments: list[ArenaAssignment]
     baseline_arena_ids: list[int]
     generalization_arena_ids: dict[AgentType, list[int]]
-    league_exploiter_arena_ids: dict[AgentType, list[int]]
-    main_exploiter_arena_ids: list[int]
 ```
-
-### ExploiterManager (exploiter_manager.py)
-
-Exploiter 管理器，管理每种类型的 League Exploiter 和 Main Exploiter。
-
-主要方法：
-- `setup(main_population_sizes)`：初始化 Exploiter 种群
-- `evolve_league_exploiter(agent_type, fitness, current_price)`：进化 League Exploiter
-- `should_inject_to_pool(agent_type, exploiter_type)`：检查是否应注入对手池
-- `update_win_rates(agent_type, exploiter_type, opponent_entry_id, won)`：更新胜率
 
 ### LeagueFitnessAggregator (league_fitness.py)
 
@@ -161,7 +137,7 @@ def run_round(self):
     if self.pool_manager.has_any_historical_opponents():
         self._current_allocation = self.arena_allocator.allocate(self.pool_manager)
     else:
-        # 对手池为空时，仍然分配 Exploiter 竞技场
+        # 对手池为空时，全部为基准竞技场
         self._current_allocation = self.arena_allocator.allocate_no_historical()
 
     # 2. 确保历史对手网络已缓存
@@ -170,19 +146,15 @@ def run_round(self):
     # 3. 运行 episodes
     round_stats = self._run_episodes()
 
-    # 4. 汇总适应度
-    fitness_results = self.fitness_aggregator.compute_all_fitness(...)
+    # 4. 汇总适应度并进化
+    self._evolve_populations()
 
-    # 5. 分别进化 Main 和 Exploiter
-    self._evolve_populations(fitness_results)
-    self._evolve_exploiters(fitness_results)
+    # 5. 检查里程碑保存
+    if generation % milestone_interval == 0:
+        self._save_milestone()
 
-    # 6. 检查是否注入对手池
-    self._check_and_inject_to_pool()
-
-    # 7. 保存检查点
-    if self.generation % self.checkpoint_interval == 0:
-        self._save_checkpoint()
+    # 6. 清理对手池
+    self.pool_manager.cleanup_all()
 ```
 
 ## 竞技场分配方案
@@ -191,13 +163,13 @@ def run_round(self):
 
 | 竞技场范围 | 数量 | 用途 |
 |-----------|------|------|
-| Arena 0-11 | 12 | 基准对战（全当前代） |
-| Arena 12-21 | 10 | 散户泛化测试 |
-| Arena 22-31 | 10 | 高级散户泛化测试 |
-| Arena 32-41 | 10 | 庄家泛化测试 |
-| Arena 42-51 | 10 | 做市商泛化测试 |
-| Arena 52-59 | 8 | League Exploiter 训练（每类型 2 个） |
-| Arena 60-63 | 4 | Main Exploiter 训练（每类型 1 个） |
+| Arena 0-15 | 16 | 基准对战（全当前代） |
+| Arena 16-27 | 12 | 散户泛化测试 |
+| Arena 28-39 | 12 | 高级散户泛化测试 |
+| Arena 40-51 | 12 | 庄家泛化测试 |
+| Arena 52-63 | 12 | 做市商泛化测试 |
+
+总计：16 + 12×4 = 64 个竞技场
 
 ## 适应度计算
 
@@ -205,20 +177,18 @@ def run_round(self):
 
 ```python
 散户 Main 适应度 = 加权平均 {
-    基准竞技场(Arena 0-11) × 权重 1.0,
-    散户泛化测试竞技场(Arena 12-21) × 权重 0.8
+    基准竞技场(Arena 0-15) × 权重 1.0,
+    散户泛化测试竞技场(Arena 16-27) × 权重 0.8
 }
 ```
 
-总权重 = 12×1.0 + 10×0.8 = 20.0
+总权重 = 16×1.0 + 12×0.8 = 25.6
 
 ## 对手池注入条件
 
 | 来源 | 注入条件 |
 |------|---------|
 | Main Agents | 里程碑间隔（每 50 代） |
-| League Exploiter | 对历史对手平均胜率 > 55% |
-| Main Exploiter | 对 Main Agents 胜率 > 55% |
 
 ## 存储结构
 
@@ -235,11 +205,8 @@ checkpoints/league_training/
 │   ├── RETAIL_PRO/
 │   ├── WHALE/
 │   └── MARKET_MAKER/
-├── checkpoints/
-│   └── gen_100.pkl
-└── league_exploiters/
-    ├── RETAIL_gen_100.pkl
-    └── ...
+└── checkpoints/
+    └── gen_100.pkl
 ```
 
 ## 使用方法
@@ -256,10 +223,6 @@ python scripts/train_league.py --num-arenas 16 --rounds 200
 # 从检查点恢复
 python scripts/train_league.py --resume checkpoints/league_training/checkpoints/gen_100.pkl
 
-# 禁用 Exploiter
-python scripts/train_league.py --no-league-exploiter
-python scripts/train_league.py --no-main-exploiter
-
 # 指定采样策略
 python scripts/train_league.py --sampling-strategy uniform
 ```
@@ -275,8 +238,6 @@ config = Config()
 multi_config = MultiArenaConfig(num_arenas=64, episodes_per_arena=1)
 league_config = LeagueTrainingConfig(
     sampling_strategy='pfsp',
-    enable_league_exploiter=True,
-    enable_main_exploiter=True,
 )
 
 trainer = LeagueTrainer(config, multi_config, league_config)
@@ -304,5 +265,4 @@ trainer.stop()
 | 网络缓存加载（单类型） | 首次 50-200ms/条目 |
 | 批量推理（多来源）| 增加约 30-50% |
 | 对手池 I/O（单类型） | 散户 75MB ~500ms |
-| Exploiter 进化 | 额外 10-20% |
 | 总内存占用 | +500MB（缓存 5 代历史对手） |

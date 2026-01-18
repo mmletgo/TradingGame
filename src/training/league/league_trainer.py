@@ -4,23 +4,17 @@ from __future__ import annotations
 import gc
 import gzip
 import pickle
-import time
 from ctypes import CDLL, c_int
 from pathlib import Path
 from typing import Any, Callable
 
-import numpy as np
-
 from src.config.config import AgentType, Config
 from src.core.log_engine.logger import get_logger
 from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
-from src.training.arena.parallel_arena_trainer import malloc_trim
 from src.training.league.arena_allocator import ArenaAllocator, ArenaAllocation
 from src.training.league.config import LeagueTrainingConfig
-from src.training.league.exploiter_manager import ExploiterManager
 from src.training.league.league_fitness import LeagueFitnessAggregator
 from src.training.league.multi_gen_cache import MultiGenerationNetworkCache
-from src.training.league.opponent_entry import OpponentEntry, OpponentMetadata
 from src.training.league.opponent_pool_manager import OpponentPoolManager
 from src.training.population import SubPopulationManager, _serialize_genomes_numpy
 
@@ -30,7 +24,6 @@ class LeagueTrainer(ParallelArenaTrainer):
 
     管理按类型分离的联盟训练，包括：
     - 四种 Agent 类型的 Main Agents
-    - 四种类型各自的 League Exploiter 和 Main Exploiter
     - 四种类型各自的对手池
 
     继承 ParallelArenaTrainer，复用多竞技场并行推理能力。
@@ -59,7 +52,6 @@ class LeagueTrainer(ParallelArenaTrainer):
         self.pool_manager: OpponentPoolManager | None = None
         self.multi_cache: MultiGenerationNetworkCache | None = None
         self.arena_allocator: ArenaAllocator | None = None
-        self.exploiter_manager: ExploiterManager | None = None
         self.fitness_aggregator: LeagueFitnessAggregator | None = None
 
         # 当前竞技场分配
@@ -74,8 +66,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         顺序（避免 COW 内存泄漏）：
         1. 调用父类 setup（创建 Worker 池、种群、竞技场状态等）
         2. 创建联盟训练组件
-        3. 初始化 Exploiter
-        4. 加载对手池
+        3. 加载对手池
         """
         # 1. 调用父类 setup
         super().setup()
@@ -87,22 +78,13 @@ class LeagueTrainer(ParallelArenaTrainer):
             self.league_config,
             self.multi_config.num_arenas,
         )
-        self.exploiter_manager = ExploiterManager(self.league_config, self.config)
         self.fitness_aggregator = LeagueFitnessAggregator(self.league_config)
 
-        # 3. 初始化 Exploiter
-        main_pop_sizes = {
-            agent_type: self.config.agents[agent_type].count
-            for agent_type in AgentType
-        }
-        self.exploiter_manager.setup(main_pop_sizes)
-
-        # 4. 加载对手池
+        # 3. 加载对手池
         self.pool_manager.load_all()
 
         self.logger.info("联盟训练器初始化完成")
         self.logger.info(f"对手池大小: {self.pool_manager.get_pool_sizes()}")
-        self.logger.info(f"Exploiter 大小: {self.exploiter_manager.get_exploiter_sizes()}")
 
     def run_round(
         self,
@@ -115,11 +97,8 @@ class LeagueTrainer(ParallelArenaTrainer):
         2. 确保所需的历史对手网络已缓存
         3. 运行所有竞技场的 episodes
         4. 按类型和角色收集适应度
-        5. 分别进化 Main Agents 和各类型的 Exploiters
-        6. 更新对手池胜率统计
-        7. 检查是否注入对手池（每 N 代）
-        8. 清理对手池
-        9. 保存检查点
+        5. 检查里程碑保存
+        6. 清理对手池
 
         Args:
             episode_callback: Episode 回调函数
@@ -129,14 +108,13 @@ class LeagueTrainer(ParallelArenaTrainer):
         """
         assert self.pool_manager is not None
         assert self.arena_allocator is not None
-        assert self.exploiter_manager is not None
         assert self.fitness_aggregator is not None
 
         # 1. 分配竞技场
         if self.pool_manager.has_any_historical_opponents():
             self._current_allocation = self.arena_allocator.allocate(self.pool_manager)
         else:
-            # 对手池为空时，仍然分配 Exploiter 竞技场
+            # 对手池为空时，使用默认分配
             self._current_allocation = self.arena_allocator.allocate_no_historical()
 
         self.logger.debug(f"竞技场分配完成: {len(self._current_allocation.assignments)} 个竞技场")
@@ -145,29 +123,17 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._ensure_historical_networks_cached()
 
         # 3-4. 运行 episodes 并收集适应度（复用父类逻辑）
-        # 注意：这里需要修改父类的 _run_episode_all_arenas 来支持多来源
         round_stats = super().run_round(episode_callback=episode_callback)
 
-        # 5. Exploiter 进化（如果有适应度数据）
-        self._evolve_exploiters()
-
-        # 6. 更新胜率统计
-        self._update_win_rate_statistics()
-
-        # 7. 检查是否注入对手池
-        if self.generation > 0 and self.generation % self.league_config.exploiter_inject_interval == 0:
-            self._check_and_inject_to_pool()
-
-        # 8. 检查里程碑保存
+        # 5. 检查里程碑保存
         if self.generation > 0 and self.generation % self.league_config.milestone_interval == 0:
             self._save_milestone()
 
-        # 9. 清理对手池
+        # 6. 清理对手池
         self.pool_manager.cleanup_all(self.generation)
 
         # 添加联盟训练统计
         round_stats['pool_sizes'] = self.pool_manager.get_pool_sizes()
-        round_stats['exploiter_sizes'] = self.exploiter_manager.get_exploiter_sizes()
 
         return round_stats
 
@@ -184,121 +150,6 @@ class LeagueTrainer(ParallelArenaTrainer):
                         source_config.entry_id,
                         self.pool_manager,
                     )
-
-    def _evolve_exploiters(self) -> None:
-        """进化 Exploiter
-
-        使用 LeagueFitnessAggregator 收集的适应度进行进化。
-        注意：当前实现中 Exploiter 未参与实际交易，使用零适应度作为占位符。
-        TODO: 在竞技场分配支持 Exploiter 后，使用实际适应度。
-        """
-        if self.exploiter_manager is None or not self.exploiter_manager.is_initialized():
-            return
-
-        # 进化 League Exploiter
-        for agent_type in AgentType:
-            pop = self.exploiter_manager.league_exploiter_populations.get(agent_type)
-            if pop and pop.agents:
-                # 临时：使用零适应度，后续需要从 Exploiter 训练竞技场收集
-                self.exploiter_manager.evolve_league_exploiter(
-                    agent_type,
-                    np.zeros(len(pop.agents)),
-                )
-
-        # 进化 Main Exploiter
-        for agent_type in AgentType:
-            pop = self.exploiter_manager.main_exploiter_populations.get(agent_type)
-            if pop and pop.agents:
-                self.exploiter_manager.evolve_main_exploiter(
-                    agent_type,
-                    np.zeros(len(pop.agents)),
-                )
-
-    def _update_win_rate_statistics(self) -> None:
-        """更新胜率统计"""
-        # TODO: 根据实际对战结果更新胜率
-        pass
-
-    def _check_and_inject_to_pool(self) -> None:
-        """检查是否将当前代或 Exploiter 注入对手池"""
-        if self.pool_manager is None or self.exploiter_manager is None:
-            return
-
-        for agent_type in AgentType:
-            # 检查 League Exploiter
-            if self.exploiter_manager.should_inject_to_pool(agent_type, 'league_exploiter'):
-                result = self.exploiter_manager.get_best_for_injection(agent_type, 'league_exploiter')
-                if result:
-                    genome_data, avg_fitness = result
-                    self._inject_to_pool(
-                        agent_type,
-                        genome_data,
-                        avg_fitness,
-                        source='league_exploiter',
-                        add_reason='exploiter_win_rate',
-                    )
-                    self.logger.info(
-                        f"将 {agent_type.value} League Exploiter 注入对手池，"
-                        f"平均适应度: {avg_fitness:.4f}"
-                    )
-
-            # 检查 Main Exploiter
-            if self.exploiter_manager.should_inject_to_pool(agent_type, 'main_exploiter'):
-                result = self.exploiter_manager.get_best_for_injection(agent_type, 'main_exploiter')
-                if result:
-                    genome_data, avg_fitness = result
-                    self._inject_to_pool(
-                        agent_type,
-                        genome_data,
-                        avg_fitness,
-                        source='main_exploiter',
-                        add_reason='exploiter_win_rate',
-                    )
-                    self.logger.info(
-                        f"将 {agent_type.value} Main Exploiter 注入对手池，"
-                        f"平均适应度: {avg_fitness:.4f}"
-                    )
-
-    def _inject_to_pool(
-        self,
-        agent_type: AgentType,
-        genome_data: dict[int, tuple],
-        avg_fitness: float,
-        source: str,
-        add_reason: str,
-    ) -> None:
-        """注入到对手池
-
-        Args:
-            agent_type: Agent 类型
-            genome_data: 基因组数据
-            avg_fitness: 平均适应度
-            source: 来源
-            add_reason: 添加原因
-        """
-        if self.pool_manager is None:
-            return
-
-        entry_id = f"gen_{self.generation:05d}_{source}"
-
-        metadata = OpponentMetadata(
-            entry_id=entry_id,
-            agent_type=agent_type,
-            source=source,
-            source_generation=self.generation,
-            add_reason=add_reason,
-            avg_fitness=avg_fitness,
-            agent_count=sum(len(g[0]) for g in genome_data.values()),
-            sub_population_count=len(genome_data),
-        )
-
-        entry = OpponentEntry(
-            metadata=metadata,
-            genome_data=genome_data,
-        )
-
-        pool = self.pool_manager.get_pool(agent_type)
-        pool.add_entry(entry)
 
     def _save_milestone(self) -> None:
         """保存里程碑到对手池"""
@@ -368,7 +219,6 @@ class LeagueTrainer(ParallelArenaTrainer):
         保存内容：
         - 父类检查点数据
         - 对手池索引
-        - Exploiter 种群（如果有）
         - 统计信息
 
         Args:
@@ -390,10 +240,6 @@ class LeagueTrainer(ParallelArenaTrainer):
         checkpoint_data['league_training'] = {
             'generation': self.generation,
             'pool_sizes': self.pool_manager.get_pool_sizes() if self.pool_manager else {},
-            'exploiter_win_rates': {
-                'league': dict(self.exploiter_manager.league_exploiter_win_rates) if self.exploiter_manager else {},
-                'main': dict(self.exploiter_manager.main_exploiter_win_rates) if self.exploiter_manager else {},
-            },
             'last_injection_generation': self._last_injection_generation,
         }
 
@@ -423,20 +269,6 @@ class LeagueTrainer(ParallelArenaTrainer):
         if 'league_training' in checkpoint_data:
             league_data = checkpoint_data['league_training']
             self._last_injection_generation = league_data.get('last_injection_generation', 0)
-
-            # 恢复 Exploiter 胜率统计
-            if self.exploiter_manager:
-                win_rates = league_data.get('exploiter_win_rates', {})
-                if 'league' in win_rates:
-                    for agent_type, rates in win_rates['league'].items():
-                        if isinstance(agent_type, str):
-                            agent_type = AgentType(agent_type)
-                        self.exploiter_manager.league_exploiter_win_rates[agent_type] = rates
-                if 'main' in win_rates:
-                    for agent_type, rate in win_rates['main'].items():
-                        if isinstance(agent_type, str):
-                            agent_type = AgentType(agent_type)
-                        self.exploiter_manager.main_exploiter_win_rates[agent_type] = rate
 
         # 加载对手池
         if self.pool_manager:

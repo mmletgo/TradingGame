@@ -51,7 +51,6 @@ class OpponentPool:
             "config": {
                 "max_pool_size": self.config.max_pool_size_per_type,
                 "milestone_interval": self.config.milestone_interval,
-                "exploiter_win_rate_threshold": self.config.exploiter_win_rate_threshold,
             }
         }
 

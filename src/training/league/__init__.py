@@ -4,7 +4,6 @@
 """
 from src.training.league.arena_allocator import ArenaAllocator, ArenaAllocation, ArenaAssignment, AgentSourceConfig
 from src.training.league.config import LeagueTrainingConfig
-from src.training.league.exploiter_manager import ExploiterManager
 from src.training.league.league_fitness import LeagueFitnessAggregator
 from src.training.league.league_trainer import LeagueTrainer
 from src.training.league.multi_gen_cache import MultiGenerationNetworkCache
@@ -17,7 +16,6 @@ __all__ = [
     'ArenaAllocator',
     'ArenaAllocation',
     'ArenaAssignment',
-    'ExploiterManager',
     'LeagueFitnessAggregator',
     'LeagueTrainer',
     'LeagueTrainingConfig',

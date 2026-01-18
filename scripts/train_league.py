@@ -7,7 +7,6 @@
     python scripts/train_league.py                    # 无限训练，自动加载最新检查点
     python scripts/train_league.py --rounds 200      # 指定训练轮数
     python scripts/train_league.py --fresh           # 从头开始，不加载检查点
-    python scripts/train_league.py --no-league-exploiter
 """
 import argparse
 import logging
@@ -75,26 +74,10 @@ def parse_args() -> argparse.Namespace:
 
     # 联盟训练配置
     parser.add_argument(
-        "--no-league-exploiter",
-        action="store_true",
-        help="禁用 League Exploiter",
-    )
-    parser.add_argument(
-        "--no-main-exploiter",
-        action="store_true",
-        help="禁用 Main Exploiter",
-    )
-    parser.add_argument(
         "--milestone-interval",
         type=int,
         default=50,
         help="里程碑保存间隔（默认每 50 代）",
-    )
-    parser.add_argument(
-        "--exploiter-ratio",
-        type=float,
-        default=0.25,
-        help="Exploiter 种群占 Main 的比例（默认 0.25）",
     )
     parser.add_argument(
         "--sampling-strategy",
@@ -274,9 +257,6 @@ def main() -> None:
     league_config = LeagueTrainingConfig(
         pool_dir=f"{args.checkpoint_dir}/opponent_pools",
         milestone_interval=args.milestone_interval,
-        enable_league_exploiter=not args.no_league_exploiter,
-        enable_main_exploiter=not args.no_main_exploiter,
-        exploiter_population_ratio=args.exploiter_ratio,
         sampling_strategy=args.sampling_strategy,
         num_arenas=args.num_arenas,
         episodes_per_arena=args.episodes_per_arena,
@@ -289,10 +269,6 @@ def main() -> None:
     logger.info(f"竞技场数量: {args.num_arenas}")
     logger.info(f"每竞技场 episode 数: {args.episodes_per_arena}")
     logger.info(f"Episode 长度: {args.episode_length} ticks")
-    logger.info(
-        f"League Exploiter: {'启用' if not args.no_league_exploiter else '禁用'}"
-    )
-    logger.info(f"Main Exploiter: {'启用' if not args.no_main_exploiter else '禁用'}")
     logger.info(f"采样策略: {args.sampling_strategy}")
     logger.info(f"检查点目录: {args.checkpoint_dir}")
 

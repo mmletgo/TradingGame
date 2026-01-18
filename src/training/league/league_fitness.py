@@ -1,8 +1,6 @@
 """联盟适应度汇总器"""
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 
 from src.config.config import AgentType
@@ -16,7 +14,6 @@ class LeagueFitnessAggregator:
     按类型和角色汇总来自不同竞技场的适应度数据。
 
     Main Agents 的适应度来自基准竞技场和泛化测试竞技场。
-    Exploiter 的适应度仅来自其专用训练竞技场。
     """
 
     def __init__(self, config: LeagueTrainingConfig) -> None:
@@ -93,30 +90,6 @@ class LeagueFitnessAggregator:
                 generalization_fitnesses,
             )
 
-    def aggregate_exploiter_fitness(
-        self,
-        agent_type: AgentType,
-        exploiter_type: Literal['league_exploiter', 'main_exploiter'],
-        exploiter_fitnesses: list[np.ndarray],
-    ) -> np.ndarray:
-        """计算 Exploiter 的适应度
-
-        Exploiter 的适应度仅来自其专用训练竞技场，使用简单平均。
-
-        Args:
-            agent_type: Agent 类型
-            exploiter_type: Exploiter 类型
-            exploiter_fitnesses: Exploiter 训练竞技场中的适应度数组列表
-
-        Returns:
-            Exploiter 的最终适应度数组
-        """
-        if not exploiter_fitnesses:
-            return np.array([])
-
-        # 简单平均
-        return np.mean(exploiter_fitnesses, axis=0)
-
     def collect_fitness_by_role(
         self,
         allocation: ArenaAllocation,
@@ -134,15 +107,11 @@ class LeagueFitnessAggregator:
             {
                 'main_baseline': {AgentType: [fitness_arrays]},
                 'main_generalization': {AgentType: [fitness_arrays]},
-                'league_exploiter': {AgentType: [fitness_arrays]},
-                'main_exploiter': {AgentType: [fitness_arrays]},
             }
         """
         result: dict[str, dict[AgentType, list[np.ndarray]]] = {
             'main_baseline': {t: [] for t in AgentType},
             'main_generalization': {t: [] for t in AgentType},
-            'league_exploiter': {t: [] for t in AgentType},
-            'main_exploiter': {t: [] for t in AgentType},
         }
 
         # 基准竞技场：所有类型都参与 Main 适应度
@@ -165,36 +134,6 @@ class LeagueFitnessAggregator:
                         arena_fitnesses[arena_id][agent_type]
                     )
 
-        # League Exploiter 训练竞技场
-        for agent_type, arena_ids in allocation.league_exploiter_arena_ids.items():
-            for arena_id in arena_ids:
-                if arena_id not in arena_fitnesses:
-                    continue
-                # Exploiter 的适应度
-                if agent_type in arena_fitnesses[arena_id]:
-                    result['league_exploiter'][agent_type].append(
-                        arena_fitnesses[arena_id][agent_type]
-                    )
-
-        # Main Exploiter 训练竞技场
-        for arena_id in allocation.main_exploiter_arena_ids:
-            if arena_id not in arena_fitnesses:
-                continue
-            assignment = allocation.get_assignment(arena_id)
-            if assignment is None:
-                continue
-
-            # 被攻击的类型使用 Main
-            # 攻击者类型使用 Main Exploiter
-            target_type = assignment.target_type
-            for agent_type in AgentType:
-                if agent_type != target_type:
-                    # 这是攻击者（Main Exploiter）
-                    if agent_type in arena_fitnesses[arena_id]:
-                        result['main_exploiter'][agent_type].append(
-                            arena_fitnesses[arena_id][agent_type]
-                        )
-
         return result
 
     def compute_all_fitness(
@@ -211,8 +150,6 @@ class LeagueFitnessAggregator:
         Returns:
             {
                 'main': {AgentType: final_fitness_array},
-                'league_exploiter': {AgentType: final_fitness_array},
-                'main_exploiter': {AgentType: final_fitness_array},
             }
         """
         # 收集适应度
@@ -220,8 +157,6 @@ class LeagueFitnessAggregator:
 
         result: dict[str, dict[AgentType, np.ndarray]] = {
             'main': {},
-            'league_exploiter': {},
-            'main_exploiter': {},
         }
 
         # 计算 Main Agents 适应度
@@ -232,22 +167,6 @@ class LeagueFitnessAggregator:
             if baseline or generalization:
                 result['main'][agent_type] = self.aggregate_main_fitness(
                     agent_type, baseline, generalization
-                )
-
-        # 计算 League Exploiter 适应度
-        for agent_type in AgentType:
-            exploiter_fitness = collected['league_exploiter'][agent_type]
-            if exploiter_fitness:
-                result['league_exploiter'][agent_type] = self.aggregate_exploiter_fitness(
-                    agent_type, 'league_exploiter', exploiter_fitness
-                )
-
-        # 计算 Main Exploiter 适应度
-        for agent_type in AgentType:
-            exploiter_fitness = collected['main_exploiter'][agent_type]
-            if exploiter_fitness:
-                result['main_exploiter'][agent_type] = self.aggregate_exploiter_fitness(
-                    agent_type, 'main_exploiter', exploiter_fitness
                 )
 
         return result
