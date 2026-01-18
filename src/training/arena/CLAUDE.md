@@ -263,6 +263,7 @@ class ParallelArenaTrainer:
 | `_calculate_market_avg_return()` | 计算单个竞技场的市场平均收益率 |
 | `_balance_catfish_directions()` | 强制平衡趋势创造者鲶鱼的方向 |
 | `_check_liquidations_vectorized(arena, current_price)` | 向量化强平检查（使用 NumPy 批量计算保证金率） |
+| `_prepare_batch_data_vectorized(arena, mid_price)` | 向量化准备批量推理数据（利用 ArenaState 扁平化数组） |
 
 **相对收益适应度：**
 
@@ -662,6 +663,12 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 - ArenaState 维护扁平化数组（_balances, _position_quantities 等）
 - 每次成交后通过 `sync_state_to_array()` 保持数组与 agent_states 同步
 - 避免逐个 Agent 调用 Python 方法的开销
+
+### 向量化批量数据准备
+- `_prepare_batch_data_vectorized()` 方法利用 ArenaState 扁平化数组
+- 向量化计算 unrealized_pnl, margin_ratio, equity 等指标
+- 返回仅包含活跃（未强平）Agent 的数组
+- 减少批量推理前的 Python 对象访问开销
 
 ### 并行进化
 - 使用 MultiPopulationWorkerPool 在多个进程中并行执行 NEAT 进化

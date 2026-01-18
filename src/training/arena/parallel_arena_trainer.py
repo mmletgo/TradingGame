@@ -381,6 +381,78 @@ class ParallelArenaTrainer:
             return -1
         return type_map.get(agent_id, -1)
 
+    def _prepare_batch_data_vectorized(
+        self, arena: ArenaState, mid_price: float
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
+        """向量化准备批量数据（仅活跃 Agent）
+
+        利用 ArenaState 中的扁平化数组，向量化计算常用指标。
+        这样在将数据传递给 Cython 模块前，可以减少 Python 对象访问开销。
+
+        Args:
+            arena: 竞技场状态
+            mid_price: 中间价格
+
+        Returns:
+            (active_indices, balances, pos_qtys, avg_prices, unrealized_pnls, margin_ratios, equities)
+            所有数组仅包含活跃（未强平）的 Agent
+        """
+        # 检查扁平化数组是否已初始化
+        if arena._balances is None or arena._is_liquidated_flags is None:
+            # 未初始化，返回空数组
+            empty = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)
+            return empty_int, empty, empty, empty, empty, empty, empty
+
+        # 获取活跃 Agent 的掩码和索引
+        active_mask = ~arena._is_liquidated_flags
+        active_indices = np.where(active_mask)[0]
+
+        if len(active_indices) == 0:
+            empty = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)
+            return empty_int, empty, empty, empty, empty, empty, empty
+
+        # 从扁平化数组中提取活跃 Agent 的数据
+        balances = arena._balances[active_mask]
+        pos_qtys = arena._position_quantities[active_mask]
+        avg_prices = arena._position_avg_prices[active_mask]
+
+        # 向量化计算未实现盈亏
+        # unrealized_pnl = (mid_price - avg_price) * pos_qty
+        unrealized_pnls = (mid_price - avg_prices) * pos_qtys
+
+        # 向量化计算净值
+        equities = balances + unrealized_pnls
+
+        # 向量化计算持仓市值
+        position_values = np.abs(pos_qtys) * mid_price
+
+        # 向量化计算保证金率
+        # margin_ratio = equity / position_value, 无持仓时为 inf
+        with np.errstate(divide="ignore", invalid="ignore"):
+            margin_ratios = np.where(
+                position_values > 0, equities / position_values, 1e10
+            )
+
+        return (
+            active_indices,
+            balances,
+            pos_qtys,
+            avg_prices,
+            unrealized_pnls,
+            margin_ratios,
+            equities,
+        )
+
     def _calculate_catfish_initial_balance(self) -> float:
         """计算每条鲶鱼的初始资金"""
         agents_config = self.config.agents
