@@ -90,10 +90,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="内存泄漏分析工具")
     parser.add_argument("--rounds", type=int, default=20, help="训练轮数")
     parser.add_argument("--num-arenas", type=int, default=10, help="竞技场数量")
-    parser.add_argument("--episodes-per-arena", type=int, default=2, help="每竞技场 episode 数")
+    parser.add_argument(
+        "--episodes-per-arena", type=int, default=2, help="每竞技场 episode 数"
+    )
     parser.add_argument("--episode-length", type=int, default=50, help="Episode 长度")
     parser.add_argument("--trace", action="store_true", help="启用 tracemalloc 追踪")
-    parser.add_argument("--checkpoint-test", action="store_true", help="测试 checkpoint 内存")
+    parser.add_argument(
+        "--checkpoint-test", action="store_true", help="测试 checkpoint 内存"
+    )
     args = parser.parse_args()
 
     # 启用 tracemalloc（可选，会有性能开销）
@@ -104,13 +108,15 @@ def main() -> None:
     print("=" * 70)
     print("内存泄漏分析工具")
     print("=" * 70)
-    print(f"配置: {args.num_arenas} 竞技场 x {args.episodes_per_arena} episodes x {args.episode_length} ticks")
+    print(
+        f"配置: {args.num_arenas} 竞技场 x {args.episodes_per_arena} episodes x {args.episode_length} ticks"
+    )
     print(f"训练轮数: {args.rounds}")
     print("=" * 70)
 
     from src.core.log_engine.logger import setup_logging
     from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
-    from create_config import create_default_config
+    from scripts.create_config import create_default_config
 
     setup_logging("logs")
 
@@ -173,7 +179,9 @@ def main() -> None:
             mem_delta = mem_after_round - mem_before_round
 
             # 每轮后的内存
-            print(f"[MEM] Round {round_idx + 1}: {mem_after_round:.1f} MB (delta: {mem_delta:+.1f} MB)")
+            print(
+                f"[MEM] Round {round_idx + 1}: {mem_after_round:.1f} MB (delta: {mem_delta:+.1f} MB)"
+            )
             mem_history.append((round_idx + 1, mem_after_round, mem_delta))
 
             # 测试 checkpoint 保存的内存影响
@@ -186,7 +194,9 @@ def main() -> None:
                 trainer.save_checkpoint(checkpoint_path)
 
                 mem_after_save = get_memory_mb()
-                print(f"[MEM] Checkpoint 保存后: {mem_after_save:.1f} MB (delta: {mem_after_save - mem_before_save:+.1f} MB)")
+                print(
+                    f"[MEM] Checkpoint 保存后: {mem_after_save:.1f} MB (delta: {mem_after_save - mem_before_save:+.1f} MB)"
+                )
 
                 # 清理测试文件
                 if os.path.exists(checkpoint_path):
@@ -198,7 +208,9 @@ def main() -> None:
                 gc.collect(2)
                 malloc_trim()
                 mem_after_gc = get_memory_mb()
-                print(f"[MEM] GC 后: {mem_after_gc:.1f} MB (delta from save: {mem_after_gc - mem_before_save:+.1f} MB)")
+                print(
+                    f"[MEM] GC 后: {mem_after_gc:.1f} MB (delta from save: {mem_after_gc - mem_before_save:+.1f} MB)"
+                )
                 print_object_counts(f"round {round_idx + 1}")
 
             # 每 5 轮打印一次详细对象统计

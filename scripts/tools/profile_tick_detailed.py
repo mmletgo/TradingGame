@@ -44,7 +44,7 @@ def main() -> None:
     print("=" * 70)
 
     # 导入必要模块
-    from create_config import create_default_config
+    from scripts.create_config import create_default_config
     from src.training.arena import ParallelArenaTrainer, MultiArenaConfig
     from src.training.arena.arena_state import AgentAccountState
     from src.market.market_state import NormalizedMarketState
@@ -117,7 +117,9 @@ def main() -> None:
             if arena.tick == 1:
                 actual_price = arena.smooth_mid_price
                 if arena.arena_id in trainer._worker_depth_cache:
-                    _, _, last_price, mid_price = trainer._worker_depth_cache[arena.arena_id]
+                    _, _, last_price, mid_price = trainer._worker_depth_cache[
+                        arena.arena_id
+                    ]
                     if last_price > 0:
                         actual_price = last_price
                     elif mid_price > 0:
@@ -134,7 +136,9 @@ def main() -> None:
                     arena.episode_low_price = actual_price
 
                 ms_start = time.perf_counter()
-                arena_market_states.append(trainer._compute_market_state_for_arena(arena))
+                arena_market_states.append(
+                    trainer._compute_market_state_for_arena(arena)
+                )
                 total_market_state += time.perf_counter() - ms_start
 
                 arena_active_agents.append([])
@@ -261,7 +265,9 @@ def main() -> None:
         timing_data["total"].append(tick_end - tick_start)
 
         if (tick_num + 1) % 5 == 0:
-            print(f"  Tick {tick_num + 1}/{args.num_ticks} 完成, 耗时: {timing_data['total'][-1]*1000:.1f}ms")
+            print(
+                f"  Tick {tick_num + 1}/{args.num_ticks} 完成, 耗时: {timing_data['total'][-1]*1000:.1f}ms"
+            )
 
     # 打印统计结果
     print("\n" + "=" * 70)

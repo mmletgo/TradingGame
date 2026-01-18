@@ -22,7 +22,7 @@ importlib.invalidate_caches()
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from create_config import create_default_config
+from scripts.create_config import create_default_config
 from src.core.log_engine.logger import setup_logging
 from src.training.trainer import Trainer
 
@@ -30,6 +30,7 @@ from src.training.trainer import Trainer
 @dataclass
 class BenchmarkResult:
     """基准测试结果"""
+
     num_threads: int
     warmup_ticks: int
     test_ticks: int
@@ -132,6 +133,7 @@ def run_benchmark(
     """
     # 动态设置 OpenMP 全局线程数
     from src.training._cython.batch_decide_openmp import set_num_threads
+
     set_num_threads(num_threads)
 
     # 重新初始化缓存以使用新的线程数
@@ -289,7 +291,9 @@ def main() -> None:
     print("\n" + "=" * 80)
     print("汇总结果（多次测试平均值）")
     print("=" * 80)
-    print(f"{'线程数':>8} | {'平均(ms)':>10} | {'P50(ms)':>10} | {'P95(ms)':>10} | {'P99(ms)':>10} | {'最小(ms)':>10} | {'最大(ms)':>10}")
+    print(
+        f"{'线程数':>8} | {'平均(ms)':>10} | {'P50(ms)':>10} | {'P95(ms)':>10} | {'P99(ms)':>10} | {'最小(ms)':>10} | {'最大(ms)':>10}"
+    )
     print("-" * 80)
 
     summary_results: list[tuple[int, float, float, float, float, float, float]] = []
@@ -303,7 +307,9 @@ def main() -> None:
         avg_min = sum(r.min_tick_time_ms for r in results) / len(results)
         avg_max = sum(r.max_tick_time_ms for r in results) / len(results)
 
-        summary_results.append((num_threads, avg_avg, avg_p50, avg_p95, avg_p99, avg_min, avg_max))
+        summary_results.append(
+            (num_threads, avg_avg, avg_p50, avg_p95, avg_p99, avg_min, avg_max)
+        )
 
         print(
             f"{num_threads:>8} | "

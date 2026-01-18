@@ -13,7 +13,7 @@ sys.path.insert(0, str(project_root))
 
 import logging
 from src.core.log_engine.logger import setup_logging
-from create_config import create_default_config
+from scripts.create_config import create_default_config
 
 
 def test_worker_pool_basic():
@@ -97,6 +97,7 @@ def test_worker_pool_basic():
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

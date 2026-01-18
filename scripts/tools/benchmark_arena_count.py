@@ -23,10 +23,12 @@ sys.path.insert(0, str(project_root))
 from src.core.log_engine.logger import setup_logging
 from src.training.arena import ParallelArenaTrainer, MultiArenaConfig
 
-from create_config import create_default_config
+from scripts.create_config import create_default_config
 
 
-def run_benchmark(num_arenas: int, episodes_per_arena: int, episode_length: int = 1000) -> dict[str, Any]:
+def run_benchmark(
+    num_arenas: int, episodes_per_arena: int, episode_length: int = 1000
+) -> dict[str, Any]:
     """运行单个基准测试配置
 
     Args:
@@ -39,7 +41,10 @@ def run_benchmark(num_arenas: int, episodes_per_arena: int, episode_length: int 
     """
     total_episodes = num_arenas * episodes_per_arena
     print(f"\n{'='*60}", flush=True)
-    print(f"测试配置: {num_arenas} 竞技场 × {episodes_per_arena} episodes = {total_episodes} episodes", flush=True)
+    print(
+        f"测试配置: {num_arenas} 竞技场 × {episodes_per_arena} episodes = {total_episodes} episodes",
+        flush=True,
+    )
     print(f"{'='*60}", flush=True)
 
     # 创建配置
@@ -109,18 +114,19 @@ def run_benchmark(num_arenas: int, episodes_per_arena: int, episode_length: int 
 def main() -> None:
     """主函数"""
     import logging
+
     # 设置日志（静默模式）
     setup_logging("logs", console_level=logging.WARNING)
 
     # 测试配置：竞技场数量 × 每竞技场episode数 = 100
     test_configs = [
-        (2, 50),    # 2 × 50 = 100
-        (4, 25),    # 4 × 25 = 100
-        (5, 20),    # 5 × 20 = 100
-        (10, 10),   # 10 × 10 = 100
-        (20, 5),    # 20 × 5 = 100
-        (25, 4),    # 25 × 4 = 100
-        (50, 2),    # 50 × 2 = 100
+        (2, 50),  # 2 × 50 = 100
+        (4, 25),  # 4 × 25 = 100
+        (5, 20),  # 5 × 20 = 100
+        (10, 10),  # 10 × 10 = 100
+        (20, 5),  # 20 × 5 = 100
+        (25, 4),  # 25 × 4 = 100
+        (50, 2),  # 50 × 2 = 100
     ]
 
     # episode 长度（使用较短的长度加快测试）
@@ -152,7 +158,9 @@ def main() -> None:
     for r in results:
         config_str = f"{r['num_arenas']}×{r['episodes_per_arena']}"
         status = "成功" if r["success"] else "失败"
-        print(f"{config_str:<20} {r['init_time']:>10.2f}s {r['round_time']:>10.2f}s {r['total_time']:>10.2f}s {status:>8}")
+        print(
+            f"{config_str:<20} {r['init_time']:>10.2f}s {r['round_time']:>10.2f}s {r['total_time']:>10.2f}s {status:>8}"
+        )
         if r["success"]:
             successful_results.append(r)
 
@@ -164,12 +172,16 @@ def main() -> None:
         print("排名（按总耗时从快到慢）")
         print("=" * 70)
         for i, r in enumerate(successful_results, 1):
-            config_str = f"{r['num_arenas']} 竞技场 × {r['episodes_per_arena']} episodes"
+            config_str = (
+                f"{r['num_arenas']} 竞技场 × {r['episodes_per_arena']} episodes"
+            )
             print(f"{i}. {config_str}: {r['total_time']:.2f}s")
 
         best = successful_results[0]
         print("\n" + "=" * 70)
-        print(f"最佳配置: {best['num_arenas']} 竞技场 × {best['episodes_per_arena']} episodes/竞技场")
+        print(
+            f"最佳配置: {best['num_arenas']} 竞技场 × {best['episodes_per_arena']} episodes/竞技场"
+        )
         print(f"完成 100 episodes 总耗时: {best['total_time']:.2f}s")
         print(f"  - 初始化: {best['init_time']:.2f}s")
         print(f"  - 训练: {best['round_time']:.2f}s")

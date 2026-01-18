@@ -39,7 +39,7 @@ from src.analysis.evolution_tester import EvolutionTester
 from src.config.config import AgentType
 from src.core.log_engine.logger import setup_logging
 
-from create_config import create_default_config
+from scripts.create_config import create_default_config
 
 # 物种中文名称映射
 AGENT_TYPE_NAMES: dict[str, str] = {

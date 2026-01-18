@@ -41,7 +41,7 @@ def main() -> None:
     print("=" * 70)
 
     # 导入必要模块
-    from create_config import create_default_config
+    from scripts.create_config import create_default_config
     from src.training.arena import ParallelArenaTrainer, MultiArenaConfig
     from src.training.arena.arena_state import (
         AgentAccountState,
@@ -124,7 +124,9 @@ def main() -> None:
         # 1. 数据收集和分组
         collection_start = time.perf_counter()
 
-        type_arena_data: dict[AgentType, dict[int, list[tuple[AgentAccountState, int]]]] = {}
+        type_arena_data: dict[
+            AgentType, dict[int, list[tuple[AgentAccountState, int]]]
+        ] = {}
 
         for arena_idx, states in enumerate(arena_active_agents):
             for state in states:
@@ -132,7 +134,9 @@ def main() -> None:
                 network_idx = trainer._get_network_index(agent_type, state.agent_id)
                 if network_idx < 0:
                     continue
-                type_arena_data.setdefault(agent_type, {}).setdefault(arena_idx, []).append((state, network_idx))
+                type_arena_data.setdefault(agent_type, {}).setdefault(
+                    arena_idx, []
+                ).append((state, network_idx))
 
         collection_end = time.perf_counter()
         timing_data["data_collection"].append(collection_end - collection_start)
@@ -199,7 +203,9 @@ def main() -> None:
                 arena_states_list = state_mapping[result_idx]
                 market_state = arena_market_states[arena_idx]
                 mid_price = market_state.mid_price
-                tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
+                tick_size = (
+                    market_state.tick_size if market_state.tick_size > 0 else 0.01
+                )
 
                 if is_market_maker:
                     # 做市商解析
@@ -235,7 +241,9 @@ def main() -> None:
                         dtype=np.float64,
                     )
                     filtered_decisions = decisions_array[:num_agents][non_hold_mask]
-                    trainer._last_inference_arrays.setdefault(agent_type, {})[arena_idx] = (
+                    trainer._last_inference_arrays.setdefault(agent_type, {})[
+                        arena_idx
+                    ] = (
                         agent_ids,
                         filtered_decisions.copy(),
                     )
@@ -280,7 +288,9 @@ def main() -> None:
         inference_end = time.perf_counter()
         timing_data["total_inference"].append(inference_end - inference_start)
 
-        print(f"  Tick {tick_num + 1}/{args.num_ticks} 完成, 推理耗时: {timing_data['total_inference'][-1]*1000:.1f}ms")
+        print(
+            f"  Tick {tick_num + 1}/{args.num_ticks} 完成, 推理耗时: {timing_data['total_inference'][-1]*1000:.1f}ms"
+        )
 
     # 打印统计结果
     print("\n" + "=" * 70)
