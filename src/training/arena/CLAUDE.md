@@ -139,7 +139,30 @@ class ArenaState:
     end_reason: str | None               # Episode 结束原因
     end_tick: int                        # 结束时的 tick 数
     consecutive_one_sided_ticks: int     # 连续单边订单簿 tick 计数
+
+    # 扁平化数组（用于向量化强平检查）
+    _num_agents: int                     # Agent 总数
+    _balances: np.ndarray | None         # shape (num_agents,)
+    _position_quantities: np.ndarray | None
+    _position_avg_prices: np.ndarray | None
+    _leverages: np.ndarray | None
+    _maintenance_margins: np.ndarray | None
+    _is_liquidated_flags: np.ndarray | None
+    _agent_id_to_idx: dict[int, int] | None
+    _idx_to_agent_id: np.ndarray | None
 ```
+
+**主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `init_flat_arrays()` | 从 agent_states 初始化扁平化数组（每个 episode 开始时调用） |
+| `sync_state_to_array(agent_id)` | 同步指定 agent 的状态到数组（成交后调用） |
+| `reset_episode(initial_price)` | 重置 Episode 状态 |
+| `get_agent_state(agent_id)` | 获取 Agent 状态 |
+| `get_catfish_state(catfish_id)` | 获取鲶鱼状态 |
+| `update_price_stats(price)` | 更新价格统计信息 |
+| `mark_agent_liquidated(agent_id, agent_type)` | 标记 Agent 已被强平 |
 
 **Episode 结束原因（end_reason）：**
 
@@ -239,6 +262,7 @@ class ParallelArenaTrainer:
 | `stop()` | 停止训练并清理资源（包括关闭 Execute Worker 池） |
 | `_calculate_market_avg_return()` | 计算单个竞技场的市场平均收益率 |
 | `_balance_catfish_directions()` | 强制平衡趋势创造者鲶鱼的方向 |
+| `_check_liquidations_vectorized(arena, current_price)` | 向量化强平检查（使用 NumPy 批量计算保证金率） |
 
 **相对收益适应度：**
 
@@ -632,6 +656,12 @@ python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_5
 ### 批量推理合并
 - N 个竞技场 × M 个 Agent 合并成单次 OpenMP 并行操作
 - 减少 Python 调用开销
+
+### 向量化强平检查
+- 使用 NumPy 数组批量计算所有 Agent 的保证金率
+- ArenaState 维护扁平化数组（_balances, _position_quantities 等）
+- 每次成交后通过 `sync_state_to_array()` 保持数组与 agent_states 同步
+- 避免逐个 Agent 调用 Python 方法的开销
 
 ### 并行进化
 - 使用 MultiPopulationWorkerPool 在多个进程中并行执行 NEAT 进化
