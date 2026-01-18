@@ -29,7 +29,7 @@ class LeagueTrainingConfig:
     generalization_weight: float = 0.8  # 泛化测试竞技场权重
 
     # 采样策略
-    sampling_strategy: Literal['uniform', 'pfsp', 'diverse'] = 'pfsp'
+    sampling_strategy: Literal['uniform', 'recency', 'diverse'] = 'recency'
 
     # 对手池注入条件
     elite_fitness_threshold: float = 0.05  # 平均适应度超过历史最高 5% 时注入

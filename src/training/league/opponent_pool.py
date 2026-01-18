@@ -175,14 +175,14 @@ class OpponentPool:
         self,
         n: int,
         strategy: str,
-        target_type: AgentType | None = None,
+        target_type: AgentType | None = None,  # 不再使用，保持接口兼容
     ) -> list[str]:
         """采样对手
 
         Args:
             n: 采样数量
-            strategy: 采样策略 ('uniform', 'pfsp', 'diverse')
-            target_type: 目标类型（当前要训练的类型，用于 PFSP）
+            strategy: 采样策略 ('uniform', 'recency', 'diverse')
+            target_type: 不再使用，保持接口兼容
 
         Returns:
             采样的条目 ID 列表
@@ -196,40 +196,34 @@ class OpponentPool:
 
         if strategy == 'uniform':
             return self._sample_uniform(entries, n)
-        elif strategy == 'pfsp':
-            return self._sample_pfsp(entries, n, target_type)
+        elif strategy == 'recency':
+            return self._sample_recency_weighted(entries, n)
         elif strategy == 'diverse':
             return self._sample_diverse(entries, n)
         else:
-            return self._sample_uniform(entries, n)
+            # 默认使用时间加权
+            return self._sample_recency_weighted(entries, n)
 
     def _sample_uniform(self, entries: list[dict[str, Any]], n: int) -> list[str]:
         """均匀随机采样"""
         sampled = random.sample(entries, n)
         return [e["entry_id"] for e in sampled]
 
-    def _sample_pfsp(
+    def _sample_recency_weighted(
         self,
         entries: list[dict[str, Any]],
         n: int,
-        target_type: AgentType | None,
     ) -> list[str]:
-        """PFSP 采样：优先选择当前 Agent 更难战胜的历史对手
+        """时间加权采样：优先选择更新的历史对手
 
-        使用 (1 - win_rate)^2 作为采样权重，胜率越低权重越高。
+        使用 source_generation 作为权重，代数越新权重越高。
         """
-        if target_type is None:
-            return self._sample_uniform(entries, n)
-
         weights: list[float] = []
         for entry in entries:
-            win_rates = entry.get("win_rates", {})
-            # 获取目标类型对该历史对手的胜率
-            win_rate_key = f"vs_{target_type.value}"
-            win_rate = win_rates.get(win_rate_key, 0.5)
-            # 胜率越低（越难战胜），采样权重越高
-            weight = (1 - win_rate) ** 2
-            weights.append(max(weight, 0.01))  # 避免权重为0
+            # 使用代数作为权重
+            generation = entry.get("source_generation", 1)
+            weight = float(max(generation, 1))  # 确保权重 > 0
+            weights.append(weight)
 
         # 归一化
         total = sum(weights)
@@ -259,48 +253,6 @@ class OpponentPool:
             sampled.append(sorted_entries[idx]["entry_id"])
 
         return sampled
-
-    def update_win_rate(
-        self,
-        entry_id: str,
-        opponent_type: AgentType,
-        won: bool,
-    ) -> None:
-        """更新胜率统计
-
-        Args:
-            entry_id: 条目 ID
-            opponent_type: 对手类型
-            won: 是否获胜
-        """
-        win_rate_key = f"vs_{opponent_type.value}"
-
-        # 更新索引中的统计
-        for entry in self._index["entries"]:
-            if entry["entry_id"] == entry_id:
-                if "win_rates" not in entry:
-                    entry["win_rates"] = {}
-                if "match_counts" not in entry:
-                    entry["match_counts"] = {}
-
-                # 获取当前统计
-                current_win_rate = entry["win_rates"].get(win_rate_key, 0.5)
-                current_count = entry["match_counts"].get(win_rate_key, 0)
-
-                # 增量更新胜率
-                new_count = current_count + 1
-                win_value = 1.0 if won else 0.0
-                new_win_rate = (current_win_rate * current_count + win_value) / new_count
-
-                entry["win_rates"][win_rate_key] = new_win_rate
-                entry["match_counts"][win_rate_key] = new_count
-
-                # 更新内存中的条目
-                if entry_id in self.entries:
-                    cached_entry = self.entries[entry_id]
-                    cached_entry.metadata.win_rates[win_rate_key] = new_win_rate
-                    cached_entry.metadata.match_counts[win_rate_key] = new_count
-                break
 
     def cleanup(self, current_generation: int) -> list[str]:
         """清理对手池，保持在最大大小限制内

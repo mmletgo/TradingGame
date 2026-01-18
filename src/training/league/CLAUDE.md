@@ -47,7 +47,7 @@ src/training/league/
 | `milestone_interval` | 50 | 里程碑保存间隔（代数） |
 | `num_baseline_arenas` | 16 | 基准竞技场数量 |
 | `num_generalization_arenas_per_type` | 12 | 每类型泛化测试竞技场数量 |
-| `sampling_strategy` | `pfsp` | 采样策略：uniform/pfsp/diverse |
+| `sampling_strategy` | `recency` | 采样策略：uniform/recency/diverse |
 
 ### OpponentEntry (opponent_entry.py)
 
@@ -71,13 +71,12 @@ entry_dir/
 主要方法：
 - `add_entry(entry)`：添加对手条目
 - `sample_opponents(n, strategy, target_type)`：采样对手
-- `update_win_rate(entry_id, opponent_type, won)`：更新胜率统计
 - `cleanup(current_generation)`：清理旧条目
 
 采样策略：
 - **uniform**：均匀随机采样
-- **pfsp**：优先选择难以战胜的对手，权重 = (1 - win_rate)²
-- **diverse**：随机选择，与 uniform 类似
+- **recency**（默认）：时间加权采样，权重 = 代数，越新的对手采样概率越高
+- **diverse**：多样性采样，均匀间隔选择不同适应度的对手
 
 ### OpponentPoolManager (opponent_pool_manager.py)
 
@@ -237,7 +236,7 @@ from src.training.arena.config import MultiArenaConfig
 config = Config()
 multi_config = MultiArenaConfig(num_arenas=64, episodes_per_arena=1)
 league_config = LeagueTrainingConfig(
-    sampling_strategy='pfsp',
+    sampling_strategy='recency',
 )
 
 trainer = LeagueTrainer(config, multi_config, league_config)
