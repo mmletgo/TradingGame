@@ -76,8 +76,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--milestone-interval",
         type=int,
-        default=50,
-        help="里程碑保存间隔（默认每 50 代）",
+        default=10,
+        help="里程碑保存间隔（默认每 10 代）",
     )
     parser.add_argument(
         "--sampling-strategy",
