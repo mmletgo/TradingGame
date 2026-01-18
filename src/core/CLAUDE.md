@@ -8,8 +8,9 @@
 
 ```
 src/core/
-├── __init__.py           # 模块初始化文件
+├── __init__.py           # 模块初始化文件（空）
 ├── CLAUDE.md             # 本文档
+├── event_engine/         # 事件引擎子模块（保留，暂未实现）
 └── log_engine/           # 日志引擎子模块
     ├── __init__.py       # 导出 setup_logging 函数
     └── logger.py         # 日志配置和工具函数实现
@@ -33,6 +34,12 @@ src/core/
 - `log_dir`: 日志文件存储目录，默认为 `"logs"`
 - `console_level`: 控制台日志级别，默认为 `logging.WARNING`
 
+**返回值：**
+- `None`
+
+**异常：**
+- `OSError`: 如果日志目录创建失败
+
 **功能特性：**
 - 自动创建日志目录（如不存在）
 - 配置根日志器（root logger）级别为 INFO
@@ -51,6 +58,10 @@ from src.core.log_engine.logger import setup_logging
 
 # 在脚本开始时初始化日志系统
 setup_logging(log_dir="logs", console_level=logging.WARNING)
+
+# 也可以自定义控制台级别
+setup_logging(log_dir="logs", console_level=logging.ERROR)  # 只显示错误
+setup_logging(log_dir="logs", console_level=logging.INFO)   # 显示更多信息
 ```
 
 #### `get_logger(name: str) -> logging.Logger`
@@ -99,14 +110,15 @@ Python 标准日志级别（从低到高）：
 | CRITICAL | 50 | 严重错误，程序可能无法继续 | 文件 + 控制台 |
 
 **当前配置：**
+- 根日志器（root logger）：INFO 级别
 - 文件处理器：INFO 及以上
-- 控制台处理器：WARNING 及以上
+- 控制台处理器：WARNING 及以上（默认）
 
 ### 日志格式
 
 所有日志采用统一格式：
 ```
-2026-01-05 18:35:42 - training.population - INFO - 创建 retail 种群，初始 Agent 数量: 50
+2026-01-18 12:35:42 - training.population - INFO - 创建 retail 种群，初始 Agent 数量: 50
 ```
 
 格式说明：
@@ -264,6 +276,21 @@ class ADLManager:
         self.logger = get_logger("adl")
 ```
 
+## 测试覆盖
+
+日志系统拥有完整的单元测试（`tests/core/test_logger.py`），覆盖以下场景：
+
+1. **目录和文件创建**：验证自动创建日志目录和日志文件
+2. **日志级别配置**：验证控制台和文件处理器的日志级别
+3. **防重复处理器**：验证多次调用不会重复添加处理器
+4. **日志写入**：验证日志正确写入文件
+5. **Logger 实例管理**：验证同名返回相同实例，不同名返回不同实例
+
+运行测试：
+```bash
+pytest tests/core/test_logger.py
+```
+
 ## 注意事项
 
 1. **初始化顺序**：必须在导入其他项目模块之前调用 `setup_logging()`，否则这些模块可能无法正确获取日志配置
@@ -275,6 +302,14 @@ class ADLManager:
 4. **日志文件大小**：长时间训练会生成大量日志，建议定期清理或实现日志轮转机制
 
 5. **编码问题**：日志文件使用 UTF-8 编码，确保支持中文等非 ASCII 字符
+
+6. **刷新缓冲区**：在程序异常退出前，建议手动刷新和关闭日志处理器以确保所有日志写入磁盘：
+   ```python
+   import logging
+   for handler in logging.getLogger().handlers:
+       handler.flush()
+       handler.close()
+   ```
 
 ## 扩展建议
 
@@ -290,5 +325,5 @@ class ADLManager:
 
 - Python logging 模块文档：https://docs.python.org/3/library/logging.html
 - 项目根目录 CLAUDE.md：`/home/rongheng/python_project/TradingGame_origin/CLAUDE.md`
-- 训练模块文档：`/home/rongheng/python_project/TradingGame_docs-update/src/training/CLAUDE.md`
-- 市场模块文档：`/home/rongheng/python_project/TradingGame_docs-update/src/market/CLAUDE.md`
+- 训练模块文档：`/home/rongheng/python_project/TradingGame_origin/src/training/CLAUDE.md`
+- 市场模块文档：`/home/rongheng/python_project/TradingGame_origin/src/market/CLAUDE.md`

@@ -2,14 +2,31 @@
 
 ## 模块概述
 
-分析模块负责对演示模式和进化效果的数据进行分析和可视化。
+分析模块提供两个核心功能：
+1. **演示模式分析** - 分析演示结束时各物种存活个体的分布，生成可视化图表和终端摘要
+2. **进化效果测试** - 通过对比测试评估 NEAT 进化算法的有效性
 
-## 文件结构
+## 模块架构
 
-- `__init__.py` - 模块导出
-- `checkpoint_loader.py` - Checkpoint 加载器
-- `demo_analyzer.py` - 演示模式分析器
-- `evolution_tester.py` - 进化效果测试器
+```
+src/analysis/
+├── __init__.py              # 模块导出
+├── checkpoint_loader.py     # Checkpoint 加载器
+├── demo_analyzer.py         # 演示模式分析器
+└── evolution_tester.py      # 进化效果测试器
+```
+
+## 模块导出
+
+```python
+from src.analysis import (
+    CheckpointLoader,    # Checkpoint 加载器
+    DemoAnalyzer,        # 演示模式分析器
+    EvolutionTester,     # 进化效果测试器
+)
+```
+
+---
 
 ## 核心类
 
@@ -297,20 +314,21 @@ print(f"代数: {gen}")  # 输出: 50
 - Windows: msyh, simhei
 - macOS: PingFang, STHeiti Light
 
-## 使用示例
+### 使用示例
 
 ```python
 from src.training.trainer import Trainer
-from src.config.config import AgentType
+from src.config.config import Config, AgentType
 from src.analysis.demo_analyzer import DemoAnalyzer
 
 # 创建训练器并运行演示
+config = Config()
 trainer = Trainer(config)
 trainer.setup()
 
 # ... 运行演示 ...
 
-# 分析结束后调用
+# 演示结束后自动分析
 analyzer = DemoAnalyzer(output_dir="analysis_output")
 analyzer.analyze(
     trainer=trainer,
@@ -319,38 +337,34 @@ analyzer.analyze(
 )
 ```
 
-## 输出文件
+### 输出文件
 
 分析图保存路径格式：`{output_dir}/demo_analysis_{YYYYMMDD_HHMMSS}.png`
 
 例如：`analysis_output/demo_analysis_20260107_123456.png`
 
-## 依赖关系
+### 依赖关系
 
-- `src.training.trainer` - 训练器（用于获取数据）
-- `src.config.config` - 配置类（AgentType）
+- `src.training.trainer.Trainer` - 训练器（用于获取数据）
+- `src.config.config.AgentType` - Agent 类型枚举
 - `matplotlib` - 图表生成
 - `numpy` - 数值计算
 
-## 常量定义
-
-### AGENT_TYPE_NAMES
-Agent 类型中文名称映射：
-- `RETAIL` → "散户"
-- `RETAIL_PRO` → "高级散户"
-- `WHALE` → "庄家"
-- `MARKET_MAKER` → "做市商"
-
 ---
 
-### EvolutionTester
+## 核心类
 
-进化效果测试器，通过对比测试评估进化是否有效。使用多进程并行运行所有测试。
+### EvolutionTester (evolution_tester.py)
+
+进化效果测试器，通过对比测试评估 NEAT 进化算法的有效性。使用多进程并行运行所有测试。
+
+---
 
 **属性：**
 - `config: Config` - 全局配置
 - `checkpoint_dir: str` - checkpoint 文件目录
 - `results_dir: str` - 测试结果保存目录
+- `logger` - 日志器
 
 **构造参数：**
 - `config: Config` - 全局配置对象
@@ -494,45 +508,195 @@ return_rate = (final_equity - initial_balance) / initial_balance
 
 如果结果已存在且 force=False，直接加载返回。
 
-**使用示例：**
+**使用方式：**
 
-```python
-from src.config.config import Config
-from src.analysis.evolution_tester import EvolutionTester
+通过命令行脚本 `scripts/tools/test_evolution.py` 调用：
 
-# 加载配置
-config = Config(...)
+```bash
+# 列出所有代及其测试状态
+python scripts/tools/test_evolution.py --list
 
-# 创建测试器
-tester = EvolutionTester(
-    config,
-    generations_dir="checkpoints/generations",
-    results_dir="checkpoints/test_results"
-)
+# 自动测试所有未完成的代（默认行为）
+python scripts/tools/test_evolution.py
 
-# 评估第 10 代的进化有效性
-# 每次运行执行 10 个 episode，取平均表现
-report = tester.evaluate_evolution_effectiveness(
-    generation=10,
-    num_runs=3,
-    episode_length=1000,
-    episodes_per_run=10  # 每次运行 10 个 episode
-)
+# 测试指定代
+python scripts/tools/test_evolution.py --generation 100
 
-# 查看结果
-print(f"有效物种: {report['summary']['effective_species']}")
-print(f"无效物种: {report['summary']['ineffective_species']}")
+# 强制重新测试所有代
+python scripts/tools/test_evolution.py --force
 
-for agent_type, eff in report['effectiveness'].items():
-    print(f"{agent_type.value}: 改善 {eff['relative_improvement_pct']:.1f}%")
+# 指定测试参数
+python scripts/tools/test_evolution.py --num-runs 5 --episode-length 2000 --episodes-per-run 10
+
+# 禁用鲶鱼机制
+python scripts/tools/test_evolution.py --no-catfish
+```
+
+**命令行参数：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--generation` | None | 只测试指定代（不指定则测试所有未完成的代） |
+| `--num-runs` | 3 | 测试运行次数 |
+| `--episode-length` | 1000 | 每次测试的 tick 数 |
+| `--episodes-per-run` | 10 | 每次测试运行的 episode 数量（应与训练时的 evolution_interval 一致） |
+| `--list` | - | 列出所有代及其测试状态 |
+| `--force` | - | 强制重新运行（忽略已完成的测试结果） |
+| `--checkpoint-dir` | checkpoints | checkpoint 文件目录 |
+| `--results-dir` | checkpoints/test_results | 测试结果保存目录 |
+| `--catfish` | True | 启用鲶鱼机制 |
+| `--no-catfish` | - | 禁用鲶鱼机制 |
+
+**输出示例：**
+
+```
+============================================================
+进化效果测试 - 第 10 代
+============================================================
+
+基准测试（3 次运行）:
+  散户      平均适应度: +0.1234 (±0.0456)  存活率: 85.2%
+  高级散户  平均适应度: +0.2345 (±0.0678)  存活率: 92.1%
+  庄家      平均适应度: +0.3456 (±0.0789)  存活率: 95.5%
+  做市商    平均适应度: +0.4567 (±0.0890)  存活率: 98.3%
+
+比较测试（新物种 vs 第 9 代对手）:
+  散户      适应度: +0.1456 (基准: +0.1234)  变化: +18.0%  ↑ 有效
+  高级散户  适应度: +0.2567 (基准: +0.2345)  变化: +9.5%   ↑ 有效
+  庄家      适应度: +0.3678 (基准: +0.3456)  变化: +6.4%   ↑ 有效
+  做市商    适应度: +0.4789 (基准: +0.4567)  变化: +4.9%   ↑ 有效
+
+总结: 4/4 个物种进化有效
+============================================================
 ```
 
 **关键依赖：**
 
 - `src.training.trainer.Trainer` - 训练器
 - `src.training.population.Population` - 种群管理
-- `src.training.arena.migration.MigrationSystem` - genome 序列化/反序列化
 - `src.bio.brain.brain.Brain` - 神经网络
 - `src.bio.agents.*` - 各类型 Agent
 - `src.market.matching.matching_engine.MatchingEngine` - 撮合引擎
 - `src.market.adl.adl_manager.ADLManager` - ADL 管理器
+- `src.analysis.checkpoint_loader.CheckpointLoader` - Checkpoint 加载器
+
+---
+
+## 模块使用场景
+
+### 场景 1：演示模式分析
+
+在 `scripts/demo_ui.py` 中使用，演示结束后自动生成分析报告：
+
+```python
+from src.analysis.demo_analyzer import DemoAnalyzer
+
+# 演示结束时调用
+analyzer = DemoAnalyzer()
+analyzer.analyze(
+    trainer=trainer,
+    end_reason=end_reason,
+    end_agent_type=depleted_species
+)
+```
+
+### 场景 2：进化效果评估
+
+训练完成后使用脚本评估进化有效性：
+
+```bash
+# 列出所有代及其测试状态
+python scripts/tools/test_evolution.py --list
+
+# 输出示例：
+# ================================================================
+# 代列表及测试状态
+# ================================================================
+#   代数 |       保存时间       | 物种数 |       测试状态
+# ----------------------------------------------------------------
+#      1 | 2026-01-07 10:23:45 |      4 | ✓ 已完成
+#      2 | 2026-01-07 10:45:32 |      4 | ◐ 部分完成 (2/4)
+#     10 | 2026-01-07 15:30:15 |      4 | ○ 未测试
+# ================================================================
+# 共 3 代: 1 已完成, 2 待测试
+
+# 自动测试所有未完成的代
+python scripts/tools/test_evolution.py
+
+# 测试指定代
+python scripts/tools/test_evolution.py --generation 10 --num-runs 5
+
+# 根据输出判断是否需要继续训练
+# 如果 4/4 个物种进化有效 → 继续训练
+# 如果部分物种进化无效 → 考虑调整参数
+```
+
+### 场景 3：Checkpoint 数据加载
+
+从历史 checkpoint 加载基因组数据用于分析：
+
+```python
+from src.analysis.checkpoint_loader import CheckpointLoader
+
+loader = CheckpointLoader("checkpoints")
+
+# 列出所有可用代数
+generations = loader.list_generations()
+print(f"共有 {len(generations)} 代数据")
+
+# 加载某代基因组
+genomes = loader.load_genomes(generation=100)
+for agent_type, genome_list in genomes.items():
+    print(f"{agent_type.value}: {len(genome_list)} 个基因组")
+```
+
+---
+
+## 设计要点
+
+### Checkpoint 自动检测
+
+- 支持两种 checkpoint 格式：`multi_arena_gen_{N}.pkl` 和 `ep_{M}.pkl`
+- 自动检测 gzip 压缩（通过 magic bytes 0x1f 0x8b）
+- 统一接口加载不同格式的 checkpoint
+
+### 多进程并行测试
+
+- 使用 `ProcessPoolExecutor` 实现真正并行
+- 每个 worker 进程独立运行完整 episode
+- 自动汇总多次运行的平均结果
+
+### 适应度计算
+
+不同物种使用不同的适应度函数：
+
+| 物种 | 适应度计算 |
+|------|-----------|
+| 散户/高级散户 | 收益率 = equity / initial_balance |
+| 做市商 | 0.5 × 收益率 + 0.5 × maker_volume 排名归一化 |
+| 庄家 | 0.5 × 收益率 + 0.5 × volatility_contribution 排名归一化 |
+
+### 结果缓存机制
+
+- 测试结果自动保存到 `{results_dir}/baseline/` 和 `{results_dir}/comparison/`
+- 避免重复运行相同测试
+- 使用 `force=True` 强制重新运行
+
+---
+
+## 技术约束
+
+- 严格的 Python 类型定义
+- 所有模块使用 UTF-8 编码
+- 支持跨平台中文字体查找（Linux/Windows/macOS）
+- 图表分辨率 150 DPI，使用 `bbox_inches="tight"` 优化布局
+
+---
+
+## 相关文档
+
+- `CLAUDE.md` - 项目根文档（训练流程、Agent 类型）
+- `src/training/CLAUDE.md` - 训练引擎文档
+- `src/bio/CLAUDE.md` - 生物系统文档
+- `src/config/CLAUDE.md` - 配置管理文档
+

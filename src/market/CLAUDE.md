@@ -1,24 +1,58 @@
-# Market 模块
+# Market 模块 - 市场引擎
 
 ## 模块概述
 
-市场模块负责交易市场引擎的核心功能，包括订单簿管理、撮合引擎、账户管理和市场状态数据。
+市场引擎是交易模拟竞技场的核心基础设施，负责订单簿管理、订单撮合、账户状态跟踪、风险控制和市场扰动。该模块采用高性能的 Cython 加速技术，实现了完整的限价订单簿（LOB）交易机制，支持多种 Agent 类型的差异化手续费策略和复杂的风险控制机制。
+
+## 设计理念
+
+1. **高性能优先**：关键路径使用 Cython 加速，订单簿、持仓计算、神经网络推理等模块性能提升 10-100 倍
+2. **数据一致性**：严格的状态同步机制，确保订单簿、账户、成交记录的一致性
+3. **风险控制**：多层次风险控制机制，包括保证金监控、强制平仓、ADL 自动减仓
+4. **可扩展性**：模块化设计，支持多种订单类型、Agent 类型、鲶鱼模式
+5. **市场真实性**：模拟真实交易所的撮合规则、手续费模型、价格发现机制
 
 ## 文件结构
 
-- `__init__.py` - 模块导出
-- `market_state.py` - 归一化市场状态数据类
-- `orderbook/` - 订单簿实现（Cython 加速）
-- `matching/` - 撮合引擎
-- `account/` - 账户管理（持仓、余额、保证金、强平）
-- `adl/` - ADL 自动减仓模块
-- `catfish/` - 鲶鱼模块（市场扰动器）
+```
+src/market/
+├── __init__.py              # 模块导出（NormalizedMarketState）
+├── market_state.py          # 归一化市场状态数据类
+├── orderbook/               # 订单簿模块（Cython 加速）
+│   ├── order.py            # 订单数据模型
+│   ├── orderbook.pyx       # 订单簿实现（Cython）
+│   └── CLAUDE.md           # 订单簿模块文档
+├── matching/               # 撮合引擎模块
+│   ├── trade.py           # 成交记录数据类
+│   ├── matching_engine.py # 撮合引擎（Python 实现）
+│   ├── fast_matching.pyx  # 撮合引擎（Cython 实现）
+│   └── CLAUDE.md          # 撮合引擎模块文档
+├── account/               # 账户管理模块
+│   ├── account.py        # 账户类（Python 实现）
+│   ├── position.pyx      # 持仓类（Cython 实现）
+│   ├── fast_account.pyx  # 快速账户类（Cython 实现）
+│   └── CLAUDE.md         # 账户管理模块文档
+├── adl/                  # ADL 自动减仓模块
+│   ├── __init__.py
+│   ├── adl_manager.py    # ADL 管理器
+│   └── CLAUDE.md         # ADL 模块文档
+└── catfish/              # 鲶鱼模块（市场扰动器）
+    ├── __init__.py
+    ├── catfish_base.py    # 鲶鱼抽象基类
+    ├── catfish_account.py # 鲶鱼账户
+    ├── trend_following.py # 趋势创造者鲶鱼
+    ├── mean_reversion.py  # 均值回归鲶鱼
+    ├── random_trading.py  # 随机交易鲶鱼
+    └── CLAUDE.md         # 鲶鱼模块文档
+```
 
-## 核心类
+## 核心功能模块
 
-### NormalizedMarketState (market_state.py)
+### 1. 市场状态数据（market_state.py）
 
-预计算的归一化市场数据，用于缓存每个 tick 的公共市场数据，避免每个 Agent 重复计算。
+**NormalizedMarketState** - 预计算的归一化市场数据类
+
+在每个 tick 开始时由 Trainer 预计算一次，然后传递给所有 Agent 使用，避免重复计算订单簿数据的归一化。
 
 **属性：**
 - `mid_price: float` - 中间价（用于归一化计算的参考价格）
@@ -39,164 +73,79 @@
 - Tick 历史成交量归一化：`sign(vol) * log10(|vol| + 1) / 10`
 - Tick 历史成交额归一化：`sign(amt) * log10(|amt| + 1) / 12`
 
-**使用场景：**
-在每个 tick 开始时由 Trainer 预计算一次，然后传递给所有 Agent 使用，避免重复计算订单簿数据的归一化。
+### 2. 订单簿模块（orderbook/）
 
-## 子模块
+详见 [src/market/orderbook/CLAUDE.md](orderbook/CLAUDE.md)
 
-### orderbook/
-
-订单簿实现，使用 Cython 加速，支持买卖各 100 档。
+**核心功能：**
+- 维护买卖盘的价格档位和订单管理
+- 实现价格优先、时间优先的撮合原则
+- 使用 Cython 加速关键数据结构
+- 提供高性能的订单操作接口
 
 **核心类：**
-
 - `Order` - 订单数据类（Python）
-  - `order_id: int` - 订单唯一标识
-  - `agent_id: int` - 所属 Agent ID
-  - `side: OrderSide` - 买卖方向（BUY=1, SELL=-1）
-  - `order_type: OrderType` - 订单类型（LIMIT=1, MARKET=2）
-  - `price: float` - 委托价格
-  - `quantity: int` - 委托数量（整数）
-  - `filled_quantity: int` - 已成交数量（整数，初始为 0）
-  - `timestamp: float` - 时间戳（训练模式下默认为 0）
+- `OrderSide` - 订单方向枚举（BUY=1, SELL=-1）
+- `OrderType` - 订单类型枚举（LIMIT=1, MARKET=2）
+- `PriceLevel` - 价格档位类（Cython）
+- `OrderBook` - 订单簿类（Cython）
 
-- `OrderSide` - 订单方向枚举（IntEnum）
-  - `BUY = 1` - 买单
-  - `SELL = -1` - 卖单
+**性能特征：**
+| 操作 | 时间复杂度 | 说明 |
+|------|-----------|------|
+| add_order | O(log N) | N 为档位数，SortedDict 插入 |
+| cancel_order | O(log N) | N 为档位数，SortedDict 查找 |
+| get_best_bid | O(1) | peekitem(-1) |
+| get_best_ask | O(1) | peekitem(0) |
+| get_mid_price | O(1) | 两次 O(1) 查询 |
+| get_depth | O(levels) | 利用有序性，避免排序 |
 
-- `OrderType` - 订单类型枚举（IntEnum）
-  - `LIMIT = 1` - 限价单
-  - `MARKET = 2` - 市价单
+### 3. 撮合引擎模块（matching/）
 
-- `PriceLevel` (Cython cdef class) - 价格档位类
-  - `price: double` - 档位价格
-  - `orders: OrderedDict[int, Order]` - 订单映射（order_id -> Order），保持 FIFO 顺序
-  - `total_quantity: long long` - 64位整数，档位总数量，避免大量订单累积时溢出
-  - 核心方法：
-    - `add_order(order) -> None` - 添加订单到档位，O(1) 操作
-    - `remove_order(order_id) -> Order | None` - 从档位移除订单，O(1) 操作
-    - `get_volume() -> int` - 获取档位总挂单量
+详见 [src/market/matching/CLAUDE.md](matching/CLAUDE.md)
 
-- `OrderBook` (Cython cdef class) - 订单簿类
-  - `bids: SortedDict[float, PriceLevel]` - 买盘，升序排列
-  - `asks: SortedDict[float, PriceLevel]` - 卖盘，升序排列
-  - `order_map: dict[int, Order]` - 全局订单索引（order_id -> Order）
-  - `last_price: double` - 最新成交价
-  - `tick_size: double` - 最小变动单位
-  - `_depth_dirty: bint` - 深度缓存失效标志
-  - `_cached_depth: object` - 缓存的深度数据
-  - 核心方法：
-    - `add_order(order) -> None` - 向订单簿添加订单
-    - `cancel_order(order_id) -> Order | None` - 撤销订单
-    - `get_best_bid() -> float | None` - 获取最优买价（买盘最高价）
-    - `get_best_ask() -> float | None` - 获取最优卖价（卖盘最低价）
-    - `get_mid_price() -> float | None` - 获取中间价
-    - `get_depth(levels=100) -> dict` - 获取盘口深度数据
-    - `clear(reset_price=None) -> None` - 清空订单簿
-
-**关键优化：**
-- 价格归一化：消除浮点精度问题，确保档位键一致性
-- O(1) 订单查找：order_map 提供全局订单查找
-- O(1) 档位删除：OrderedDict 提供 O(1) 订单删除，同时保持 FIFO
-- O(1) 最优价格：SortedDict.peekitem() 提供 O(1) 最优价格查询
-- O(levels) 深度查询：利用 SortedDict 有序性，避免排序
-- 缓存机制：深度数据缓存，避免重复计算
-
-**核心类型说明：**
-- `Order.quantity: int` - 订单数量（整数）
-- `Order.filled_quantity: int` - 已成交数量（整数）
-- `PriceLevel.total_quantity: long long` - 价格档位总数量（64位整数，支持大量订单累积）
-- `get_volume() -> int` - 返回订单簿总成交量（整数）
-
-### matching/
-
-撮合引擎，实现价格优先、时间优先的撮合规则。
+**核心功能：**
+- 实现价格优先、时间优先的撮合规则
+- 支持限价单和市价单两种订单类型
+- 提供差异化的手续费策略
+- Python 和 Cython 两种实现
 
 **核心类：**
-- `MatchingEngine` - 撮合引擎类
-  - `_config: MarketConfig` - 市场配置
-  - `_orderbook: OrderBook` - 订单簿实例
-  - `_next_trade_id: int` - 下一个成交 ID
-  - `_fee_rates: dict[int, tuple[float, float]]` - Agent 费率缓存
-  - 核心方法：
-    - `register_agent(agent_id, maker_rate, taker_rate)` - 注册 Agent 费率配置
-    - `calculate_fee(agent_id, amount, is_maker)` - 计算手续费
-    - `process_order(order)` - 处理订单入口
-    - `match_limit_order(order)` - 限价单撮合
-    - `match_market_order(order)` - 市价单撮合
-    - `cancel_order(order_id)` - 撤单
-    - `_match_orders(order, price_check)` - 通用撮合逻辑（私有方法）
-
-- `Trade` - 成交记录数据类
-  - `trade_id: int` - 成交 ID
-  - `price: float` - 成交价格
-  - `quantity: int` - 成交数量（整数）
-  - `buyer_id: int` - 买方 Agent ID
-  - `seller_id: int` - 卖方 Agent ID
-  - `buyer_fee: float` - 买方手续费
-  - `seller_fee: float` - 卖方手续费
-  - `is_buyer_taker: bool` - 买方是否为 taker
-  - `timestamp: float` - 成交时间戳
+- `Trade` - 成交记录数据类（Python）
+- `FastTrade` - 快速成交记录类（Cython）
+- `MatchingEngine` - 撮合引擎（Python 实现）
+- `FastMatchingEngine` - 快速撮合引擎（Cython 实现）
+- `fast_match_orders` - 快速撮合核心函数（Cython）
 
 **撮合规则：**
-- 价格优先：最优价格优先成交
-- 时间优先：同价格订单按时间顺序成交（FIFO）
-- 限价单：未成交部分挂在订单簿上
-- 市价单：吃对手盘直到完全成交或对手盘为空，未成交部分丢弃
+- **价格优先**：最优价格优先成交
+- **时间优先**：同价格订单按时间顺序成交（FIFO）
+- **限价单**：未成交部分挂在订单簿上
+- **市价单**：吃对手盘直到完全成交或对手盘为空，未成交部分丢弃
 
-**费率配置：**
-| Agent 类型 | 挂单费率 | 吃单费率 |
-|-----------|----------|----------|
-| 散户 | 0.0002 (万2) | 0.0005 (万5) |
-| 庄家 | -0.0001 (负万1, maker rebate) | 0.0001 (万1) |
-| 做市商 | -0.0001 (负万1, maker rebate) | 0.0001 (万1) |
-| 鲶鱼 | 0 | 0 |
+**手续费模型：**
+| Agent 类型 | 挂单费率 | 吃单费率 | 说明 |
+|-----------|----------|----------|------|
+| 散户 | 0.0002 (万2) | 0.0005 (万5) | 标准费率 |
+| 高级散户 | 0.0002 (万2) | 0.0005 (万5) | 标准费率 |
+| 庄家 | -0.0001 (负万1) | 0.0001 (万1) | Maker rebate |
+| 做市商 | -0.0001 (负万1) | 0.0001 (万1) | Maker rebate |
+| 鲶鱼 | 0 | 0 | 免手续费 |
 
-**性能优化：**
-- 预计算 taker 费率到循环外
-- 内联费率计算，避免函数调用开销
-- 部分成交时同步更新 `PriceLevel.total_quantity`
-- 僵尸订单检测与清理
-- 空档位清理
-- 训练模式使用固定时间戳 0.0
+### 4. 账户管理模块（account/）
 
-**核心类型说明：**
-- `Order.quantity: int` - 订单数量（整数）
-- `Order.filled_quantity: int` - 已成交数量（整数）
-- `Trade.quantity: int` - 成交数量（整数）
+详见 [src/market/account/CLAUDE.md](account/CLAUDE.md)
 
-### account/
-
-账户管理，包括持仓管理、余额管理、保证金计算和强平逻辑。
+**核心功能：**
+- 记录和管理 Agent 的交易账户状态
+- 余额管理、持仓跟踪、保证金计算
+- 强平风险检测
+- ADL 成交处理
 
 **核心类：**
-
-- `Position` (Cython cdef class) - 持仓类（Cython 加速）
-  - `quantity: int` - 持仓数量（正数=多头，负数=空头，0=空仓）
-  - `avg_price: double` - 平均开仓价格
-  - `realized_pnl: double` - 已实现盈亏累计
-  - 核心方法：
-    - `update(side, quantity, price) -> float` - 更新持仓，返回已实现盈亏
-    - `get_unrealized_pnl(current_price) -> float` - 计算浮动盈亏
-    - `get_margin_used(current_price, leverage) -> float` - 计算占用保证金
-
+- `Position` - 持仓类（Cython 加速）
 - `Account` - 账户类（Python 实现）
-  - `agent_id: int` - Agent ID
-  - `agent_type: AgentType` - Agent 类型
-  - `initial_balance: float` - 初始余额
-  - `balance: float` - 当前余额（已实现盈亏已计入）
-  - `position: Position` - 持仓对象
-  - `leverage: float` - 杠杆倍数（散户/高级散户=100，庄家/做市商=10）
-  - `maintenance_margin_rate: float` - 维持保证金率
-  - `maker_fee_rate: float` - 挂单手续费率
-  - `taker_fee_rate: float` - 吃单手续费率
-  - `pending_order_id: int | None` - 当前挂单 ID
-  - 核心方法：
-    - `get_equity(current_price) -> float` - 计算净值 = 余额 + 浮动盈亏
-    - `get_margin_ratio(current_price) -> float` - 计算保证金率
-    - `check_liquidation(current_price) -> bool` - 检查是否需要强平
-    - `on_trade(trade, is_buyer) -> None` - 处理成交回报
-    - `on_adl_trade(quantity, price, is_taker) -> float` - 处理 ADL 成交
+- `FastAccount` - 快速账户类（Cython 实现）
 
 **持仓更新逻辑：**
 - 空仓开仓（多/空）
@@ -211,106 +160,405 @@
 - 保证金率：`margin_ratio = equity / (|quantity| × current_price)`
 - 强平触发条件：`margin_ratio < maintenance_margin_rate`
 
-**核心类型说明：**
-- `Position.quantity: int` - 持仓数量（整数，正数为多仓，负数为空仓）
+### 5. ADL 自动减仓模块（adl/）
 
-### adl/
+详见 [src/market/adl/CLAUDE.md](adl/CLAUDE.md)
 
-ADL（Auto-Deleveraging）自动减仓模块，在强平订单无法完全成交时触发。
-
-**核心类：**
-- `ADLCandidate` - ADL 候选者信息（包含持仓、盈亏百分比、有效杠杆、ADL 分数）
-  - `participant: Union[Agent, CatfishBase]` - 支持代理或鲶鱼作为候选者
-  - `position_qty: int` - 持仓数量（正=多头，负=空头）
-  - `pnl_percent: float` - 盈亏百分比
-  - `effective_leverage: float` - 有效杠杆
-  - `adl_score: float` - ADL 排名分数（越高越优先）
-  - `agent: Agent` (property) - 兼容属性，仅当 participant 是 Agent 时可用
-  - `is_catfish: bool` (property) - 检查候选者是否为鲶鱼
-
-- `ADLManager` - ADL 管理器，负责计算排名和执行减仓
-
-**核心方法：**
-- `get_adl_price(current_price) -> float` - 获取 ADL 成交价格（直接使用当前市场价格）
-- `calculate_adl_score(agent, current_price) -> ADLCandidate | None` - 计算 ADL 排名分数
-
-**ADL 成交价格：**
-- ADL 直接使用当前市场价格成交，不使用破产价格
-- 强平 ≠ 破产：被强平时 Agent 可能还有正的净值
-- 使用当前市场价格的好处：简单公平、避免异常、符合直觉
-
-### catfish/
-
-鲶鱼（Catfish）模块，提供市场扰动机制。鲶鱼不参与 NEAT 进化，而是按照预设的规则进行交易。
+**核心功能：**
+- 在强平订单无法完全成交时触发
+- 强制选择盈利对手方进行减仓
+- 确保市场风险可控
 
 **核心类：**
+- `ADLCandidate` - ADL 候选者信息
+- `ADLManager` - ADL 管理器
 
+**排名公式：**
+| 情况 | 公式 |
+|------|------|
+| 盈利时（PnL% > 0） | `adl_score = PnL% × 有效杠杆` |
+| 亏损时（PnL% <= 0） | `adl_score = PnL% / 有效杠杆` |
+
+**ADL 成交价格：** 直接使用当前市场价格，不使用破产价格
+
+**执行流程（三阶段）：**
+1. **阶段1：预计算 ADL 候选清单**（Tick 开始时）
+   - 遍历所有 Agent 和鲶鱼，计算 ADL 分数
+   - 筛选盈利者（pnl_percent > 0）
+   - 按持仓方向分类（多头/空头）
+   - 按分数降序排序
+
+2. **阶段2：强平市价单执行**
+   - 撤销被淘汰 Agent 的所有挂单
+   - 提交市价平仓单
+   - 返回剩余未平仓数量
+
+3. **阶段3：ADL 自动减仓**（如需要）
+   - 选择对应方向的候选清单
+   - 循环与候选成交
+   - 兜底处理（强制清零）
+
+### 6. 鲶鱼模块（catfish/）
+
+详见 [src/market/catfish/CLAUDE.md](catfish/CLAUDE.md)
+
+**核心功能：**
+- 提供市场扰动机制
+- 不参与 NEAT 进化，按预设规则交易
+- 拥有有限资金，可参与强平和 ADL 机制
+
+**核心类：**
 - `CatfishAccount` - 鲶鱼账户类（简化版账户）
-  - `catfish_id: int` - 鲶鱼 ID（负数）
-  - `initial_balance: float` - 初始余额
-  - `balance: float` - 当前余额
-  - `position: Position` - 持仓对象
-  - `leverage: float` - 杠杆倍数
-  - `maintenance_margin_rate: float` - 维持保证金率
-  - 核心方法：`get_equity()`, `get_margin_ratio()`, `check_liquidation()`, `on_trade()`, `on_adl_trade()`, `reset()`
-
 - `CatfishBase` - 鲶鱼抽象基类
-  - `catfish_id: int` - 鲶鱼 ID（使用负数避免与 Agent 冲突）
-  - `config: CatfishConfig` - 鲶鱼配置
-  - `phase_offset: int` - 相位偏移（用于错开多个鲶鱼的触发时间）
-  - `account: CatfishAccount` - 鲶鱼账户
-  - `is_liquidated: bool` - 是否已被强平
-  - 抽象方法：`decide(orderbook, tick, price_history) -> tuple[bool, int]` - 决策是否行动和方向
-  - 核心方法：`execute()`, `can_act()`, `record_action()`, `reset()`
-
 - `TrendCreatorCatfish` - 趋势创造者鲶鱼
-  - Episode 开始时随机选择方向，整个 Episode 保持该方向持续操作
-  - 配置：`action_cooldown`
-  - 内部状态：`_current_direction` - 当前方向（1=买，-1=卖）
-
 - `MeanReversionCatfish` - 逆势操作型鲶鱼
-  - 当价格偏离 EMA 均线时反向操作
-  - 配置：`ma_period`, `deviation_threshold`, `action_cooldown`
-  - 内部状态：`_ema`, `_ema_initialized`
+- `RandomTradingCatfish` - 随机买卖型鲶鱼
 
-**工厂函数：**
-- `create_catfish(catfish_id, config, phase_offset=0, initial_balance=0.0, leverage=10.0, maintenance_margin_rate=0.05)` - 根据配置创建单个鲶鱼实例
-- `create_all_catfish(config, initial_balance, leverage=10.0, maintenance_margin_rate=0.05)` - 创建所有三种鲶鱼实例（相位错开）
+**三种鲶鱼行为模式：**
+1. **趋势创造者** - Episode 开始时随机选择方向，整个 Episode 保持该方向持续操作
+2. **均值回归** - 当价格偏离 EMA 均线时反向操作
+3. **随机交易** - 以随机概率进行买卖操作
 
 **鲶鱼特点：**
 - 手续费为 0（maker 和 taker 费率均为 0）
 - 拥有有限资金，可参与强平和 ADL 机制
-- 任意鲶鱼被强平则 Episode 立即结束
-- 下单量按盘口深度计算（目标：吃掉前 3 档）
+- 任意鲶鱼被强平 → Episode 立即结束（训练模式）
+- 下单量按盘口深度计算（目标：吃掉前 1 档）
+
+## 市场引擎与训练引擎的交互
+
+### 数据流向
+
+```
+Trainer（训练引擎）
+  ↓
+1. 创建市场组件
+  ├── OrderBook（订单簿）
+  ├── MatchingEngine（撮合引擎）
+  ├── Account/Position（账户和持仓）
+  ├── ADLManager（ADL 管理器）
+  └── CatfishBase（鲶鱼）
+  ↓
+2. Episode 循环
+  ├── 重置所有 Agent 账户
+  ├── 重置市场状态和订单簿
+  └── Tick 循环
+      ├── 强平检查（三阶段）
+      │   ├── 阶段1：预计算 ADL 候选清单
+      │   ├── 阶段2：强平市价单执行
+      │   └── 阶段3：ADL 自动减仓（如需要）
+      ├── 鲶鱼行动（如启用）
+      ├── 计算归一化市场状态（所有 Agent 共用）
+      ├── 随机打乱 Agent 顺序
+      ├── 并行决策（神经网络推理）
+      └── 串行执行（订单提交）
+          ├── MatchingEngine.process_order()
+          │   ├── OrderBook.add_order()
+          │   ├── fast_match_orders()
+          │   └── 返回 Trade 列表
+          └── Account.on_trade()
+              ├── Position.update()
+              ├── 更新余额
+              └── 累加 maker_volume
+  ↓
+3. NEAT 进化阶段
+  ├── 计算适应度（基于 PnL）
+  ├── 执行 NEAT 进化算法
+  └── 从新基因组创建 Agent
+```
+
+### 接口契约
+
+**市场引擎向训练引擎提供：**
+1. **OrderBook** - 订单簿实例，用于深度查询
+2. **MatchingEngine** - 撮合引擎，用于订单提交和撮合
+3. **Account/Position** - 账户和持仓，用于状态查询和更新
+4. **ADLManager** - ADL 管理器，用于风险控制
+5. **CatfishBase** - 鲶鱼实例，用于市场扰动
+6. **NormalizedMarketState** - 归一化市场状态，用于 Agent 观察
+
+**训练引擎向市场引擎提供：**
+1. **Agent 订单** - Agent 提交的订单请求
+2. **当前价格** - 用于强平检测、ADL 计算
+3. **配置参数** - Agent 类型、费率、杠杆等
+
+## 市场引擎与生物系统的交互
+
+### Agent 观察市场
+
+Agent 通过以下方式观察市场状态：
+
+1. **NormalizedMarketState** - 归一化市场数据（预计算）
+   - 订单簿深度（买卖各 100 档）
+   - 最近 100 笔成交记录
+   - 最近 100 个 tick 的历史数据
+
+2. **OrderBook** - 原始订单簿数据
+   - 最优买价/卖价
+   - 中间价
+   - 盘口深度
+
+3. **Account** - 自身账户状态
+   - 余额、持仓、净值
+   - 保证金率
+   - 已实现盈亏、浮动盈亏
+
+### Agent 行为影响市场
+
+Agent 的行为通过以下方式影响市场：
+
+1. **提交订单** - 通过 MatchingEngine.process_order()
+   - 限价单：挂在订单簿上
+   - 市价单：立即吃对手盘
+
+2. **撤销订单** - 通过 MatchingEngine.cancel_order()
+   - 主动撤单
+   - 强平时统一撤单
+
+3. **成交回报** - 通过 Account.on_trade()
+   - 更新持仓
+   - 更新余额
+   - 累计成交量
+
+## 性能优化
+
+### Cython 加速模块
+
+| 模块 | Python 实现 | Cython 实现 | 加速比 |
+|------|------------|------------|--------|
+| OrderBook | - | orderbook.pyx | 10-100x |
+| Position | - | position.pyx | 10x |
+| Account | account.py | fast_account.pyx | 10x |
+| MatchingEngine | matching_engine.py | fast_matching.pyx | 1.1x |
+
+### 并行化策略
+
+- **Agent 决策**：16 个 worker 线程池（神经网络推理）
+- **Agent 创建**：8 个 worker 线程池
+
+### 内存管理
+
+- 预分配输入缓冲区
+- 订单簿深度缓存
+- 使用 `__slots__` 优化内存占用
+- 定期清理历史数据
+
+## 数据类型约定
+
+### 整数类型
+
+- `Order.quantity: int` - 订单数量（整数）
+- `Order.filled_quantity: int` - 已成交数量（整数）
+- `Trade.quantity: int` - 成交数量（整数）
+- `Position.quantity: int` - 持仓数量（整数，正数为多仓，负数为空仓）
+- `PriceLevel.total_quantity: long long` - 价格档位总数量（64 位整数）
+
+**设计原因：**
+- 避免浮点累积误差
+- 确保撮合精度
+- 支持大量订单累积
+
+### 浮点类型
+
+- `Order.price: float` - 委托价格
+- `Trade.price: float` - 成交价格
+- `Position.avg_price: double` - 平均开仓价格（Cython）
+- `Account.balance: float` - 余额
+- `Account.initial_balance: float` - 初始余额
+
+## 配置依赖
+
+市场引擎依赖以下配置：
+
+### MarketConfig
+
+- `tick_size: float` - 最小价格变动单位（默认 0.01）
+
+### AgentConfig
+
+- `initial_balance: float` - 初始余额
+- `leverage: float` - 杠杆倍数
+- `maintenance_margin_rate: float` - 维持保证金率
+- `maker_fee_rate: float` - 挂单手续费率
+- `taker_fee_rate: float` - 吃单手续费率
+
+### CatfishConfig
+
+- `enabled: bool` - 是否启用鲶鱼
+- `multi_mode: bool` - 是否同时启用三种模式
+- `mode: CatfishMode` - 鲶鱼行为模式（单模式）
+- `ma_period: int` - EMA 均线周期
+- `deviation_threshold: float` - 价格偏离阈值
+- `action_probability: float` - 每个 tick 行动概率
 
 ## 依赖关系
 
 ### 外部依赖
+
 - `numpy` - 数值计算
-- `sortedcontainers.SortedDict` - 高性能排序字典（订单簿）
-- `collections.OrderedDict` - 保持插入顺序的字典（价格档位）
-- `dataclasses` - 数据类装饰器（NormalizedMarketState, ADLCandidate）
+- `sortedcontainers.SortedDict` - 高性能排序字典
+- `collections.OrderedDict` - 保持插入顺序的字典
+- `dataclasses` - 数据类装饰器
+- `random` - 随机数生成（鲶鱼）
 
 ### 内部依赖
-- `src.config.config` - 配置类（AgentConfig, MarketConfig, CatfishConfig, AgentType, CatfishMode）
+
+- `src.config.config` - 配置类
 - `src.core.log_engine.logger` - 日志系统
 
-### 模块间依赖关系
-```
-NormalizedMarketState (market_state.py)
-    ↓ 无依赖，独立数据类
+## 模块导出
 
-OrderBook (orderbook/)
-    ↓ 依赖
-MatchingEngine (matching/)
-    ↓ 依赖
-Account/Position (account/)
-    ↓ 依赖
-ADLManager (adl/)
-
-CatfishAccount/CatfishBase (catfish/)
-    ↓ 依赖
-Position (account/)
-OrderBook (orderbook/)
-MatchingEngine (matching/)
+```python
+from src.market import NormalizedMarketState
+from src.market.orderbook import Order, OrderSide, OrderType, OrderBook
+from src.market.matching import MatchingEngine, FastMatchingEngine, Trade, FastTrade
+from src.market.account import Account, FastAccount, Position
+from src.market.adl import ADLManager, ADLCandidate
+from src.market.catfish import CatfishBase, CatfishAccount, create_all_catfish
 ```
+
+## 使用示例
+
+### 基本使用
+
+```python
+from src.market import NormalizedMarketState
+from src.market.orderbook import Order, OrderSide, OrderType, OrderBook
+from src.market.matching import MatchingEngine
+from src.market.account import Account, Position
+from src.config.config import MarketConfig, AgentConfig, AgentType
+
+# 创建市场组件
+config = MarketConfig()
+orderbook = OrderBook(tick_size=config.tick_size)
+matching_engine = MatchingEngine(config)
+
+# 创建 Agent 账户
+agent_config = AgentConfig()
+account = Account(
+    agent_id=1,
+    agent_type=AgentType.RETAIL,
+    config=agent_config
+)
+
+# 注册 Agent 费率
+matching_engine.register_agent(
+    agent_id=1,
+    maker_rate=agent_config.maker_fee_rate,
+    taker_rate=agent_config.taker_fee_rate
+)
+
+# 提交订单
+order = Order(
+    order_id=1,
+    agent_id=1,
+    side=OrderSide.BUY,
+    order_type=OrderType.LIMIT,
+    price=100.5,
+    quantity=1000
+)
+trades = matching_engine.process_order(order)
+
+# 处理成交
+for trade in trades:
+    account.on_trade(trade, is_buyer=(trade.buyer_id == 1))
+
+# 计算归一化市场状态
+mid_price = orderbook.get_mid_price()
+depth = orderbook.get_depth_numpy(levels=100)
+market_state = NormalizedMarketState(
+    mid_price=mid_price,
+    tick_size=config.tick_size,
+    bid_data=depth[0],
+    ask_data=depth[1],
+    # ... 其他字段
+)
+```
+
+### 强平和 ADL 流程
+
+```python
+from src.market.adl import ADLManager
+
+# 创建 ADL 管理器
+adl_manager = ADLManager()
+
+# 阶段1：预计算 ADL 候选清单
+candidates = []
+for agent in agents:
+    candidate = adl_manager.calculate_adl_score(agent, current_price)
+    if candidate and candidate.pnl_percent > 0:
+        candidates.append(candidate)
+candidates.sort(key=lambda c: c.adl_score, reverse=True)
+
+# 阶段2：强平市价单执行
+liquidated_agent = agents[0]
+matching_engine.cancel_order(liquidated_agent.pending_order_id)
+market_order = Order(
+    order_id=-1,
+    agent_id=liquidated_agent.agent_id,
+    side=OrderSide.SELL if liquidated_agent.account.position.quantity > 0 else OrderSide.BUY,
+    order_type=OrderType.MARKET,
+    price=0.0,
+    quantity=abs(liquidated_agent.account.position.quantity)
+)
+trades = matching_engine.process_order(market_order)
+remaining_qty = market_order.quantity - market_order.filled_quantity
+
+# 阶段3：ADL 自动减仓（如需要）
+if remaining_qty > 0:
+    adl_price = adl_manager.get_adl_price(current_price)
+    for candidate in candidates:
+        if remaining_qty <= 0:
+            break
+        trade_qty = min(abs(candidate.position_qty), remaining_qty)
+        liquidated_agent.account.on_adl_trade(trade_qty, adl_price, is_taker=True)
+        candidate.participant.account.on_adl_trade(trade_qty, adl_price, is_taker=False)
+        remaining_qty -= trade_qty
+```
+
+## 注意事项
+
+### 线程安全
+
+- 所有市场组件**不是线程安全的**
+- 多线程环境需要外部加锁
+- Trainer 串行执行订单提交和账户更新
+
+### 浮点精度
+
+- 价格使用双重舍入归一化到 tick_size 的整数倍
+- 数量使用整数类型避免累积误差
+- 保证金计算注意除零情况
+
+### 内存管理
+
+- Episode 结束时调用 `OrderBook.clear()` 清空订单簿
+- Episode 结束时调用 `Account.reset()` 重置账户
+- 定期清理历史数据防止内存泄漏
+
+### ADL 边界情况
+
+- 净值为零或负数时，有效杠杆设为无穷大
+- 无持仓时不参与 ADL
+- 兜底处理确保被淘汰者仓位清零
+
+### 鲶鱼约束
+
+- 鲶鱼被强平 → Episode 立即结束（训练模式）
+- 鲶鱼手续费为 0
+- 鲶鱼订单 ID 使用负数空间
+
+## 子模块文档
+
+各子模块的详细文档：
+
+- [订单簿模块](orderbook/CLAUDE.md) - OrderBook、PriceLevel、Order
+- [撮合引擎模块](matching/CLAUDE.md) - MatchingEngine、Trade、撮合规则
+- [账户管理模块](account/CLAUDE.md) - Account、Position、保证金计算
+- [ADL 模块](adl/CLAUDE.md) - ADLManager、ADLCandidate、排名算法
+- [鲶鱼模块](catfish/CLAUDE.md) - CatfishBase、三种鲶鱼模式
+
+## 总结
+
+市场引擎是交易模拟竞技场的核心基础设施，通过高性能的 Cython 加速技术、严格的数据一致性保证、多层次的风险控制机制，实现了完整的限价订单簿交易系统。模块化设计确保了可扩展性和可维护性，与训练引擎和生物系统的接口清晰明确。
