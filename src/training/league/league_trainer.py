@@ -102,7 +102,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         self.logger.info(f"对手池大小: {self.pool_manager.get_pool_sizes()}")
         self.logger.info(f"Exploiter 大小: {self.exploiter_manager.get_exploiter_sizes()}")
 
-    def run_round(self) -> dict[str, Any]:
+    def run_round(
+        self,
+        episode_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """运行一轮训练
 
         流程：
@@ -115,6 +118,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         7. 检查是否注入对手池（每 N 代）
         8. 清理对手池
         9. 保存检查点
+
+        Args:
+            episode_callback: Episode 回调函数
 
         Returns:
             统计信息字典
@@ -138,7 +144,7 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 3-4. 运行 episodes 并收集适应度（复用父类逻辑）
         # 注意：这里需要修改父类的 _run_episode_all_arenas 来支持多来源
-        round_stats = super().run_round()
+        round_stats = super().run_round(episode_callback=episode_callback)
 
         # 5. Exploiter 进化（如果有适应度数据）
         self._evolve_exploiters()
@@ -462,6 +468,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         num_rounds: int | None = None,
         checkpoint_callback: Callable[[int], None] | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        episode_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """主训练循环
 
@@ -469,6 +476,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             num_rounds: 训练轮数，None 表示无限训练
             checkpoint_callback: 检查点回调
             progress_callback: 进度回调
+            episode_callback: Episode 回调，每个 episode 完成后调用
         """
         self.logger.info(f"开始联盟训练，轮数: {num_rounds or '无限'}")
 
@@ -477,7 +485,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             if not self._is_running:
                 break
 
-            stats = self.run_round()
+            stats = self.run_round(episode_callback=episode_callback)
             round_count += 1
 
             # 检查点回调

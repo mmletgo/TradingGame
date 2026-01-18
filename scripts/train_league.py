@@ -23,6 +23,7 @@ from src.core.log_engine import get_logger, setup_logging
 from src.training.arena import MultiArenaConfig
 from src.training.league import LeagueTrainingConfig
 from src.training.league.league_trainer import LeagueTrainer
+from src.config.config import AgentType
 
 
 def parse_args() -> argparse.Namespace:
@@ -159,6 +160,90 @@ def find_latest_checkpoint(checkpoint_dir: Path) -> Path | None:
     return checkpoint_files[0][1]
 
 
+def episode_callback(stats: dict) -> None:
+    """Episode 完成回调函数"""
+    from datetime import datetime
+
+    episode = stats.get("episode", 0)
+    arena_high_prices = stats.get("arena_high_prices", [])
+    arena_low_prices = stats.get("arena_low_prices", [])
+    arena_end_reasons = stats.get("arena_end_reasons", [])
+    arena_end_ticks = stats.get("arena_end_ticks", [])
+
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    # 格式化各竞技场的 High/Low 和结束原因
+    arena_price_strs: list[str] = []
+    for i, (high, low) in enumerate(zip(arena_high_prices, arena_low_prices)):
+        end_reason = arena_end_reasons[i] if i < len(arena_end_reasons) else None
+        end_tick = arena_end_ticks[i] if i < len(arena_end_ticks) else 0
+        if end_reason is None:
+            reason_str = f"ok@{end_tick}"
+        else:
+            # 简化结束原因显示
+            reason_abbr = {
+                "population_depleted:RETAIL": "pop:R",
+                "population_depleted:RETAIL_PRO": "pop:RP",
+                "population_depleted:WHALE": "pop:W",
+                "population_depleted:MARKET_MAKER": "pop:MM",
+                "one_sided_orderbook": "ob",
+                "catfish": "cat",
+            }
+            reason_str = reason_abbr.get(end_reason, end_reason[:8])
+            reason_str = f"{reason_str}@{end_tick}"
+        arena_price_strs.append(f"A{i}:({high:.2f},{low:.2f})[{reason_str}]")
+
+    prices_str = " ".join(arena_price_strs)
+    print(f"  Episode {episode:4d} | {current_time} | {prices_str}")
+
+
+def progress_callback(stats: dict) -> None:
+    """训练进度回调函数"""
+    from datetime import datetime
+
+    import numpy as np
+
+    generation = stats.get("generation", 0)
+    total_episodes = stats.get("total_episodes", 0)
+    round_time = stats.get("total_time", 0.0)
+    species_fitness_stats = stats.get("species_fitness_stats", {})
+    pool_sizes = stats.get("pool_sizes", {})
+
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    # 第一行：基础信息
+    total_pool = sum(pool_sizes.values()) if pool_sizes else 0
+    print(
+        f"Gen {generation:4d} | {current_time} | "
+        f"Episodes={total_episodes:6d} | "
+        f"Time={round_time:.1f}s | "
+        f"Pool={total_pool}"
+    )
+
+    # 后续行：各物种的 species 适应度分布
+    type_order = [
+        AgentType.RETAIL,
+        AgentType.RETAIL_PRO,
+        AgentType.WHALE,
+        AgentType.MARKET_MAKER,
+    ]
+    for agent_type in type_order:
+        type_stats = species_fitness_stats.get(agent_type, {})
+        type_name = agent_type.value
+        species_count = type_stats.get("species_count", 0)
+        species_fitnesses = type_stats.get("species_avg_fitnesses", [])
+
+        if species_fitnesses:
+            arr = np.array(species_fitnesses)
+            mean_val = float(arr.mean())
+            std_val = float(arr.std())
+            print(
+                f"  {type_name}: species={species_count}, fitness={mean_val:.4f}±{std_val:.4f}"
+            )
+        else:
+            print(f"  {type_name}: species={species_count}, fitness=N/A")
+
+
 def main() -> None:
     """主函数"""
     args = parse_args()
@@ -237,25 +322,18 @@ def main() -> None:
         else:
             logger.info("从头开始训练")
 
-        # 定义回调
+        # 定义检查点回调
         def checkpoint_callback(generation: int) -> None:
             checkpoint_path = checkpoint_dir / f"gen_{generation:05d}.pkl.gz"
             trainer.save_checkpoint(str(checkpoint_path))
             logger.info(f"保存检查点: {checkpoint_path}")
-
-        def progress_callback(stats: dict) -> None:
-            generation = stats.get('generation', 0)
-            pool_sizes = stats.get('pool_sizes', {})
-            logger.info(
-                f"[Gen {generation}] "
-                f"对手池: {sum(pool_sizes.values())} 条目"
-            )
 
         # 开始训练
         trainer.train(
             num_rounds=args.rounds,
             checkpoint_callback=checkpoint_callback,
             progress_callback=progress_callback,
+            episode_callback=episode_callback,
         )
 
     except KeyboardInterrupt:
