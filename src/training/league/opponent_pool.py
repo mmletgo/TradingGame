@@ -39,6 +39,29 @@ class OpponentPool:
         self.config = config
         self.entries: dict[str, OpponentEntry] = {}
         self._index: dict[str, Any] = self._create_empty_index()
+        # Recency 采样权重缓存
+        self._prob_cache: np.ndarray | None = None
+        self._entry_ids_cache: list[str] | None = None
+        self._cache_version: int = 0
+
+    def _invalidate_cache(self) -> None:
+        """失效缓存"""
+        self._prob_cache = None
+        self._entry_ids_cache = None
+
+    def _rebuild_cache_if_needed(self) -> None:
+        """按需重建缓存"""
+        entries = self._index.get("entries", [])
+        current_version = len(entries)
+
+        if self._prob_cache is None or self._cache_version != current_version:
+            self._entry_ids_cache = [e["entry_id"] for e in entries]
+            weights = np.array([
+                float(max(e.get("source_generation", 1), 1))
+                for e in entries
+            ], dtype=np.float64)
+            self._prob_cache = weights / weights.sum() if len(weights) > 0 else None
+            self._cache_version = current_version
 
     def _create_empty_index(self) -> dict[str, Any]:
         """创建空索引"""
@@ -102,6 +125,7 @@ class OpponentPool:
         }
         self._index["entries"].append(entry_meta)
         self.save_index()
+        self._invalidate_cache()
 
         return entry_id
 
@@ -125,6 +149,7 @@ class OpponentPool:
             e for e in self._index["entries"] if e["entry_id"] != entry_id
         ]
         self.save_index()
+        self._invalidate_cache()
 
     def get_entry(self, entry_id: str, load_networks: bool = False) -> OpponentEntry | None:
         """获取条目
@@ -217,27 +242,18 @@ class OpponentPool:
         """时间加权采样：优先选择更新的历史对手
 
         使用 source_generation 作为权重，代数越新权重越高。
+        使用缓存避免每次采样重复计算权重。
         """
-        weights: list[float] = []
-        for entry in entries:
-            # 使用代数作为权重
-            generation = entry.get("source_generation", 1)
-            weight = float(max(generation, 1))  # 确保权重 > 0
-            weights.append(weight)
-
-        # 归一化
-        total = sum(weights)
-        probs = [w / total for w in weights]
-
-        # 按概率采样
-        entry_ids = [e["entry_id"] for e in entries]
-        sampled_ids = np.random.choice(
-            entry_ids,
-            size=min(n, len(entry_ids)),
+        self._rebuild_cache_if_needed()
+        if self._prob_cache is None or self._entry_ids_cache is None or len(self._entry_ids_cache) == 0:
+            return []
+        sampled = np.random.choice(
+            self._entry_ids_cache,
+            size=min(n, len(self._entry_ids_cache)),
             replace=False,
-            p=probs,
+            p=self._prob_cache,
         )
-        return list(sampled_ids)
+        return list(sampled)
 
     def _sample_diverse(self, entries: list[dict[str, Any]], n: int) -> list[str]:
         """多样性采样：选择适应度分布较均匀的对手"""
