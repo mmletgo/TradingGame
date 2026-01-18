@@ -9,6 +9,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Sequence
 
+import numpy as np
+
 from src.config.config import AgentConfig, AgentType, CatfishConfig, CatfishMode
 
 if TYPE_CHECKING:
@@ -714,6 +716,67 @@ class ArenaState:
     end_reason: str | None = None
     end_tick: int = 0
     consecutive_one_sided_ticks: int = 0  # 连续单边订单簿 tick 计数
+
+    # 扁平化数组（进化后初始化，用于向量化强平检查）
+    _num_agents: int = 0
+    _balances: np.ndarray | None = None  # shape (num_agents,)
+    _position_quantities: np.ndarray | None = None
+    _position_avg_prices: np.ndarray | None = None
+    _leverages: np.ndarray | None = None
+    _maintenance_margins: np.ndarray | None = None
+    _is_liquidated_flags: np.ndarray | None = None
+    _agent_id_to_idx: dict[int, int] | None = None
+    _idx_to_agent_id: np.ndarray | None = None
+
+    def init_flat_arrays(self) -> None:
+        """从 agent_states 初始化扁平化数组
+
+        初始化用于向量化计算的 NumPy 数组，将 agent_states 字典中的状态
+        映射到连续内存中，为高效的向量化强平检查做准备。
+        """
+        n = len(self.agent_states)
+        self._num_agents = n
+        self._balances = np.zeros(n, dtype=np.float64)
+        self._position_quantities = np.zeros(n, dtype=np.float64)
+        self._position_avg_prices = np.zeros(n, dtype=np.float64)
+        self._leverages = np.zeros(n, dtype=np.float64)
+        self._maintenance_margins = np.zeros(n, dtype=np.float64)
+        self._is_liquidated_flags = np.zeros(n, dtype=np.bool_)
+        self._agent_id_to_idx = {}
+        self._idx_to_agent_id = np.zeros(n, dtype=np.int64)
+
+        for idx, (agent_id, state) in enumerate(self.agent_states.items()):
+            self._agent_id_to_idx[agent_id] = idx
+            self._idx_to_agent_id[idx] = agent_id
+            self._sync_to_array(state, idx)
+
+    def _sync_to_array(self, state: AgentAccountState, idx: int) -> None:
+        """同步单个状态到数组
+
+        Args:
+            state: Agent 账户状态
+            idx: 状态在数组中的索引
+        """
+        if self._balances is None:
+            return
+        self._balances[idx] = state.balance
+        self._position_quantities[idx] = state.position_quantity
+        self._position_avg_prices[idx] = state.position_avg_price
+        self._leverages[idx] = state.leverage
+        self._maintenance_margins[idx] = state.maintenance_margin_rate
+        self._is_liquidated_flags[idx] = state.is_liquidated
+
+    def sync_state_to_array(self, agent_id: int) -> None:
+        """同步指定 agent 到数组
+
+        Args:
+            agent_id: Agent ID
+        """
+        if self._agent_id_to_idx is None:
+            return
+        idx = self._agent_id_to_idx.get(agent_id)
+        if idx is not None:
+            self._sync_to_array(self.agent_states[agent_id], idx)
 
     def reset_episode(self, initial_price: float) -> None:
         """重置 Episode 状态

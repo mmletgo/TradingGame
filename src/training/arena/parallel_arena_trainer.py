@@ -381,6 +381,78 @@ class ParallelArenaTrainer:
             return -1
         return type_map.get(agent_id, -1)
 
+    def _prepare_batch_data_vectorized(
+        self, arena: ArenaState, mid_price: float
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
+        """向量化准备批量数据（仅活跃 Agent）
+
+        利用 ArenaState 中的扁平化数组，向量化计算常用指标。
+        这样在将数据传递给 Cython 模块前，可以减少 Python 对象访问开销。
+
+        Args:
+            arena: 竞技场状态
+            mid_price: 中间价格
+
+        Returns:
+            (active_indices, balances, pos_qtys, avg_prices, unrealized_pnls, margin_ratios, equities)
+            所有数组仅包含活跃（未强平）的 Agent
+        """
+        # 检查扁平化数组是否已初始化
+        if arena._balances is None or arena._is_liquidated_flags is None:
+            # 未初始化，返回空数组
+            empty = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)
+            return empty_int, empty, empty, empty, empty, empty, empty
+
+        # 获取活跃 Agent 的掩码和索引
+        active_mask = ~arena._is_liquidated_flags
+        active_indices = np.where(active_mask)[0]
+
+        if len(active_indices) == 0:
+            empty = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)
+            return empty_int, empty, empty, empty, empty, empty, empty
+
+        # 从扁平化数组中提取活跃 Agent 的数据
+        balances = arena._balances[active_mask]
+        pos_qtys = arena._position_quantities[active_mask]
+        avg_prices = arena._position_avg_prices[active_mask]
+
+        # 向量化计算未实现盈亏
+        # unrealized_pnl = (mid_price - avg_price) * pos_qty
+        unrealized_pnls = (mid_price - avg_prices) * pos_qtys
+
+        # 向量化计算净值
+        equities = balances + unrealized_pnls
+
+        # 向量化计算持仓市值
+        position_values = np.abs(pos_qtys) * mid_price
+
+        # 向量化计算保证金率
+        # margin_ratio = equity / position_value, 无持仓时为 inf
+        with np.errstate(divide="ignore", invalid="ignore"):
+            margin_ratios = np.where(
+                position_values > 0, equities / position_values, 1e10
+            )
+
+        return (
+            active_indices,
+            balances,
+            pos_qtys,
+            avg_prices,
+            unrealized_pnls,
+            margin_ratios,
+            equities,
+        )
+
     def _calculate_catfish_initial_balance(self) -> float:
         """计算每条鲶鱼的初始资金"""
         agents_config = self.config.agents
@@ -910,6 +982,9 @@ class ParallelArenaTrainer:
                 for catfish_state in arena.catfish_states.values():
                     catfish_state.reset(catfish_balance)
 
+            # 初始化扁平化数组（用于向量化强平检查）
+            arena.init_flat_arrays()
+
         # 强制平衡趋势创造者鲶鱼的方向（跨所有竞技场）
         if self.config.catfish and self.config.catfish.enabled:
             self._balance_catfish_directions()
@@ -1026,6 +1101,7 @@ class ParallelArenaTrainer:
                         taker_state.on_trade(
                             price, qty, is_buyer_taker, fee, is_maker=False
                         )
+                        arena.sync_state_to_array(taker_id)
 
                     # 更新 maker
                     maker_id = seller_id if is_buyer_taker else buyer_id
@@ -1035,6 +1111,7 @@ class ParallelArenaTrainer:
                         maker_state.on_trade(
                             price, qty, not is_buyer_taker, maker_fee, is_maker=True
                         )
+                        arena.sync_state_to_array(maker_id)
 
                 # 更新做市商挂单 ID
                 for agent_id, (bid_ids, ask_ids) in result.mm_order_updates.items():
@@ -1412,6 +1489,7 @@ class ParallelArenaTrainer:
                     taker_state.on_trade(
                         price, qty, is_buyer_taker, fee, is_maker=False
                     )
+                    arena.sync_state_to_array(taker_id)
 
                 # 更新 maker 账户
                 maker_id = seller_id if is_buyer_taker else buyer_id
@@ -1421,6 +1499,7 @@ class ParallelArenaTrainer:
                     maker_state.on_trade(
                         price, qty, not is_buyer_taker, maker_fee, is_maker=True
                     )
+                    arena.sync_state_to_array(maker_id)
 
             # 更新非做市商挂单 ID
             for agent_id, pending_id in result.pending_updates.items():
@@ -1705,6 +1784,7 @@ class ParallelArenaTrainer:
                                 fee,
                                 is_maker=False,
                             )
+                            arena.sync_state_to_array(state.agent_id)
                             recent_trades_append(trade)
                             tick_trades.append(trade)
                             # 更新 maker 账户
@@ -1721,6 +1801,7 @@ class ParallelArenaTrainer:
                                     maker_fee,
                                     is_maker=True,
                                 )
+                                arena.sync_state_to_array(maker_id)
                         if order_map_get(order_id):
                             state.bid_order_ids.append(order_id)
 
@@ -1746,6 +1827,7 @@ class ParallelArenaTrainer:
                                 fee,
                                 is_maker=False,
                             )
+                            arena.sync_state_to_array(state.agent_id)
                             recent_trades_append(trade)
                             tick_trades.append(trade)
                             maker_id = trade.seller_id if is_buyer else trade.buyer_id
@@ -1761,6 +1843,7 @@ class ParallelArenaTrainer:
                                     maker_fee,
                                     is_maker=True,
                                 )
+                                arena.sync_state_to_array(maker_id)
                         if order_map_get(order_id):
                             state.ask_order_ids.append(order_id)
                 else:
@@ -1826,6 +1909,7 @@ class ParallelArenaTrainer:
                         state.on_trade(
                             trade.price, trade.quantity, is_buyer, fee, is_maker=False
                         )
+                        arena.sync_state_to_array(state.agent_id)
                         recent_trades_append(trade)
                         tick_trades.append(trade)
                         maker_id = trade.seller_id if is_buyer else trade.buyer_id
@@ -1841,6 +1925,7 @@ class ParallelArenaTrainer:
                                 maker_fee,
                                 is_maker=True,
                             )
+                            arena.sync_state_to_array(maker_id)
 
             catfish_trades = arena_catfish_trades[arena_idx]
             if catfish_trades:
@@ -2610,17 +2695,58 @@ class ParallelArenaTrainer:
 
         return action, params
 
+    def _check_liquidations_vectorized(
+        self, arena: ArenaState, current_price: float
+    ) -> list[int]:
+        """向量化强平检查
+
+        使用 NumPy 向量化操作批量计算保证金率，返回需要强平的 Agent ID 列表。
+
+        Args:
+            arena: 竞技场状态
+            current_price: 当前市场价格
+
+        Returns:
+            需要强平的 Agent ID 列表
+        """
+        if arena._balances is None:
+            return []
+
+        # 活跃 Agent 掩码
+        active_mask = ~arena._is_liquidated_flags
+
+        # 向量化计算 unrealized_pnl
+        unrealized_pnl = (
+            current_price - arena._position_avg_prices
+        ) * arena._position_quantities
+
+        # 向量化计算 equity
+        equities = arena._balances + unrealized_pnl
+
+        # 向量化计算 position_value
+        position_values = np.abs(arena._position_quantities) * current_price
+
+        # 向量化计算 margin_ratio
+        with np.errstate(divide="ignore", invalid="ignore"):
+            margin_ratios = np.where(
+                position_values > 0, equities / position_values, np.inf
+            )
+
+        # 找出需要强平的
+        need_liquidation = active_mask & (margin_ratios < arena._maintenance_margins)
+        liquidation_indices = np.where(need_liquidation)[0]
+
+        return [int(arena._idx_to_agent_id[idx]) for idx in liquidation_indices]
+
     def _handle_liquidations_for_arena(
         self, arena: ArenaState, current_price: float
     ) -> None:
         """处理单个竞技场的强平"""
         # 向量化检查强平条件
-        agents_to_liquidate: list[AgentAccountState] = []
-        for agent_state in arena.agent_states.values():
-            if agent_state.is_liquidated:
-                continue
-            if agent_state.check_liquidation(current_price):
-                agents_to_liquidate.append(agent_state)
+        liquidation_ids = self._check_liquidations_vectorized(arena, current_price)
+        agents_to_liquidate: list[AgentAccountState] = [
+            arena.agent_states[agent_id] for agent_id in liquidation_ids
+        ]
 
         if not agents_to_liquidate:
             return
@@ -2634,6 +2760,7 @@ class ParallelArenaTrainer:
                     agent_state.agent_id,
                     agent_state.agent_type,
                 )
+                arena.sync_state_to_array(agent_state.agent_id)
             return
 
         # 阶段1: 撤销挂单
@@ -2654,6 +2781,8 @@ class ParallelArenaTrainer:
 
             if agent_state.balance < 0:
                 agent_state.balance = 0.0
+
+            arena.sync_state_to_array(agent_state.agent_id)
 
         # 阶段3: ADL
         if agents_need_adl:
@@ -2687,6 +2816,7 @@ class ParallelArenaTrainer:
             agent_state.on_trade(
                 trade.price, trade.quantity, is_buyer, fee, is_maker=False
             )
+            arena.sync_state_to_array(agent_state.agent_id)
             arena.recent_trades.append(trade)
 
             # 更新 maker 账户
@@ -2704,6 +2834,7 @@ class ParallelArenaTrainer:
                     maker_fee,
                     is_maker=True,
                 )
+                arena.sync_state_to_array(maker_id)
 
     def _execute_mm_action_in_arena(
         self,
@@ -2879,6 +3010,7 @@ class ParallelArenaTrainer:
             # taker fee: 买方是 taker 时用 buyer_fee，否则用 seller_fee
             fee = trade.buyer_fee if trade.is_buyer_taker else trade.seller_fee
             agent_state.on_trade(trade.price, trade.quantity, is_buyer, fee, False)
+            arena.sync_state_to_array(agent_state.agent_id)
             arena.recent_trades.append(trade)
 
             maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
@@ -2892,6 +3024,7 @@ class ParallelArenaTrainer:
                 maker_state.on_trade(
                     trade.price, trade.quantity, maker_is_buyer, maker_fee, True
                 )
+                arena.sync_state_to_array(maker_id)
 
         remaining_qty = abs(agent_state.position_quantity)
         return remaining_qty, is_long
@@ -2981,12 +3114,16 @@ class ParallelArenaTrainer:
                     * trade_qty
                     * (1 if is_long else -1)
                 )
+                arena.sync_state_to_array(agent_state.agent_id)
 
                 # 更新对手方
                 if candidate.position_qty > 0:
                     candidate.position_qty -= trade_qty
                 else:
                     candidate.position_qty += trade_qty
+                # 对手方是 mock 对象，通过 _state 同步
+                counter_state = candidate.participant._state  # type: ignore
+                arena.sync_state_to_array(counter_state.agent_id)
 
                 remaining_qty -= trade_qty
 
@@ -2994,6 +3131,7 @@ class ParallelArenaTrainer:
             if agent_state.position_quantity != 0:
                 agent_state.position_quantity = 0
                 agent_state.position_avg_price = 0.0
+                arena.sync_state_to_array(agent_state.agent_id)
 
     def _compute_catfish_decisions(
         self, arena: ArenaState
@@ -3106,6 +3244,7 @@ class ParallelArenaTrainer:
                     maker_state.on_trade(
                         trade.price, trade.quantity, maker_is_buyer, maker_fee, True
                     )
+                    arena.sync_state_to_array(maker_id)
 
         return catfish_trades
 
