@@ -4,11 +4,13 @@
 基于 AlphaStar 联盟训练思路的 NEAT 进化训练。
 
 用法:
-    python scripts/train_league.py --rounds 200
-    python scripts/train_league.py --resume checkpoints/league_training/gen_100.pkl
+    python scripts/train_league.py                    # 无限训练，自动加载最新检查点
+    python scripts/train_league.py --rounds 200      # 指定训练轮数
+    python scripts/train_league.py --fresh           # 从头开始，不加载检查点
     python scripts/train_league.py --no-league-exploiter
 """
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -41,7 +43,12 @@ def parse_args() -> argparse.Namespace:
         "--resume",
         type=str,
         default=None,
-        help="从检查点恢复训练",
+        help="从指定检查点恢复训练",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="从头开始训练，不自动加载检查点",
     )
 
     # 竞技场配置
@@ -121,6 +128,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def find_latest_checkpoint(checkpoint_dir: Path) -> Path | None:
+    """查找最新的检查点文件
+
+    Args:
+        checkpoint_dir: 检查点目录
+
+    Returns:
+        最新检查点路径，如果没有则返回 None
+    """
+    if not checkpoint_dir.exists():
+        return None
+
+    # 支持的检查点格式：gen_00100.pkl.gz, gen_00100.pkl
+    checkpoint_files: list[tuple[int, Path]] = []
+
+    for pattern in ["gen_*.pkl.gz", "gen_*.pkl"]:
+        for f in checkpoint_dir.glob(pattern):
+            # 从文件名提取代数
+            match = re.search(r"gen_(\d+)", f.name)
+            if match:
+                gen = int(match.group(1))
+                checkpoint_files.append((gen, f))
+
+    if not checkpoint_files:
+        return None
+
+    # 按代数排序，返回最新的
+    checkpoint_files.sort(key=lambda x: x[0], reverse=True)
+    return checkpoint_files[0][1]
+
+
 def main() -> None:
     """主函数"""
     args = parse_args()
@@ -181,9 +219,23 @@ def main() -> None:
         trainer.setup()
 
         # 恢复检查点
+        resume_path: str | None = None
+
         if args.resume:
-            logger.info(f"从检查点恢复: {args.resume}")
-            trainer.load_checkpoint(args.resume)
+            # 用户指定了检查点
+            resume_path = args.resume
+        elif not args.fresh:
+            # 自动查找最新检查点
+            latest = find_latest_checkpoint(checkpoint_dir)
+            if latest:
+                resume_path = str(latest)
+                logger.info(f"自动检测到最新检查点: {latest.name}")
+
+        if resume_path:
+            logger.info(f"从检查点恢复: {resume_path}")
+            trainer.load_checkpoint(resume_path)
+        else:
+            logger.info("从头开始训练")
 
         # 定义回调
         def checkpoint_callback(generation: int) -> None:
