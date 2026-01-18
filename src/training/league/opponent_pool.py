@@ -89,8 +89,17 @@ class OpponentPool:
         """加载索引文件"""
         index_path = self.pool_dir / "pool_index.json"
         if index_path.exists():
-            with open(index_path, 'r', encoding='utf-8') as f:
-                self._index = json.load(f)
+            try:
+                with open(index_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content:
+                        self._index = json.loads(content)
+                    else:
+                        # 文件为空，创建新索引
+                        self._index = self._create_empty_index()
+            except json.JSONDecodeError:
+                # 文件损坏，创建新索引
+                self._index = self._create_empty_index()
         else:
             self._index = self._create_empty_index()
 
