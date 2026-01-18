@@ -187,25 +187,20 @@ class LeagueTrainer(ParallelArenaTrainer):
         """进化 Exploiter
 
         使用 LeagueFitnessAggregator 收集的适应度进行进化。
+        注意：当前实现中 Exploiter 未参与实际交易，使用零适应度作为占位符。
+        TODO: 在竞技场分配支持 Exploiter 后，使用实际适应度。
         """
         if self.exploiter_manager is None or not self.exploiter_manager.is_initialized():
             return
-
-        # 获取当前价格
-        if self.arena_states:
-            current_price = self.arena_states[0].matching_engine.orderbook.get_mid_price()
-        else:
-            current_price = self.config.market.initial_price
 
         # 进化 League Exploiter
         for agent_type in AgentType:
             pop = self.exploiter_manager.league_exploiter_populations.get(agent_type)
             if pop and pop.agents:
-                # 使用累积的适应度进行进化
+                # 临时：使用零适应度，后续需要从 Exploiter 训练竞技场收集
                 self.exploiter_manager.evolve_league_exploiter(
                     agent_type,
-                    np.zeros(len(pop.agents)),  # 临时：使用零适应度
-                    current_price,
+                    np.zeros(len(pop.agents)),
                 )
 
         # 进化 Main Exploiter
@@ -214,8 +209,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             if pop and pop.agents:
                 self.exploiter_manager.evolve_main_exploiter(
                     agent_type,
-                    np.zeros(len(pop.agents)),  # 临时：使用零适应度
-                    current_price,
+                    np.zeros(len(pop.agents)),
                 )
 
     def _update_win_rate_statistics(self) -> None:
