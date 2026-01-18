@@ -197,6 +197,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             round_stats['generalization_avg_fitness'] = None
             round_stats['is_converged'] = False
             round_stats['converged_by_type'] = None
+            round_stats['first_convergence_generation'] = None
             return
 
         # 多 episode 时取平均
@@ -221,6 +222,9 @@ class LeagueTrainer(ParallelArenaTrainer):
             is_converged, converged_by_type = self.fitness_aggregator.check_convergence()
             round_stats['is_converged'] = is_converged
             round_stats['converged_by_type'] = converged_by_type
+            round_stats['first_convergence_generation'] = (
+                self.fitness_aggregator.get_first_convergence_generation()
+            )
 
             self._log_generalization_advantage(stats, is_converged, converged_by_type)
         else:
@@ -229,6 +233,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             round_stats['generalization_avg_fitness'] = None
             round_stats['is_converged'] = False
             round_stats['converged_by_type'] = None
+            round_stats['first_convergence_generation'] = None
 
         # 清空（释放内存）
         self._current_round_arena_fitnesses.clear()
@@ -240,7 +245,14 @@ class LeagueTrainer(ParallelArenaTrainer):
         converged_by_type: dict[AgentType, bool],
     ) -> None:
         """输出泛化优势比日志"""
-        lines = [f"第 {stats.generation} 代泛化优势比:"]
+        # 获取首次收敛代数
+        first_conv_gen = self.fitness_aggregator.get_first_convergence_generation()
+
+        # 构建标题行
+        if first_conv_gen is not None:
+            lines = [f"第 {stats.generation} 代泛化优势比 (首次收敛于第 {first_conv_gen} 代):"]
+        else:
+            lines = [f"第 {stats.generation} 代泛化优势比:"]
 
         for agent_type in AgentType:
             adv = stats.advantages[agent_type]
@@ -262,7 +274,8 @@ class LeagueTrainer(ParallelArenaTrainer):
                 f"(基准={baseline:.4f}, 泛化={gen:.4f}) [{status}]"
             )
 
-        if is_converged:
+        if is_converged and first_conv_gen == stats.generation:
+            # 首次收敛
             lines.append("  >>> 所有物种已收敛，可以考虑结束训练 <<<")
 
         self.logger.info("\n".join(lines))

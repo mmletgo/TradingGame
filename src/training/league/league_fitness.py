@@ -41,6 +41,9 @@ class LeagueFitnessAggregator:
             maxlen=config.generalization_advantage_window
         )
 
+        # 首次收敛的代数（所有物种都收敛时记录）
+        self._first_convergence_generation: int | None = None
+
     def aggregate_main_fitness(
         self,
         agent_type: AgentType,
@@ -291,7 +294,21 @@ class LeagueFitnessAggregator:
                 for stats in recent
             )
 
-        return all(converged_by_type.values()), converged_by_type
+        is_all_converged = all(converged_by_type.values())
+
+        # 记录首次收敛的代数
+        if is_all_converged and self._first_convergence_generation is None:
+            self._first_convergence_generation = self._advantage_history[-1].generation
+
+        return is_all_converged, converged_by_type
+
+    def get_first_convergence_generation(self) -> int | None:
+        """获取首次收敛的代数
+
+        Returns:
+            首次所有物种都收敛时的代数，未收敛过则返回 None
+        """
+        return self._first_convergence_generation
 
     def get_advantage_history(self) -> list[GeneralizationAdvantageStats]:
         """获取泛化优势比历史"""
@@ -300,3 +317,4 @@ class LeagueFitnessAggregator:
     def clear_history(self) -> None:
         """清空历史记录"""
         self._advantage_history.clear()
+        self._first_convergence_generation = None
