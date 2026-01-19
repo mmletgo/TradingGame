@@ -97,10 +97,13 @@ class LeagueFitnessAggregator:
                 total_fitness += fitness * generalization_weight
                 total_weight += generalization_weight
 
+            # 【内存泄漏修复】计算结果后删除中间变量
             if total_weight > 0:
-                return total_fitness / total_weight
+                result = total_fitness / total_weight
             else:
-                return np.zeros(n_agents, dtype=np.float64)
+                result = np.zeros(n_agents, dtype=np.float64)
+            del total_fitness
+            return result
 
         elif strategy == 'min':
             # 取最小值（保守策略）
@@ -193,6 +196,9 @@ class LeagueFitnessAggregator:
                 result['main'][agent_type] = self.aggregate_main_fitness(
                     agent_type, baseline, generalization
                 )
+
+        # 【内存泄漏修复】删除 collected 字典
+        del collected
 
         return result
 
@@ -289,6 +295,8 @@ class LeagueFitnessAggregator:
             if baseline_arrays:
                 all_baseline = np.concatenate(baseline_arrays)
                 elite_baseline_avg[agent_type] = self._compute_elite_avg(all_baseline)
+                # 【内存泄漏修复】删除临时数组
+                del all_baseline
             else:
                 elite_baseline_avg[agent_type] = 0.0
 
@@ -296,6 +304,8 @@ class LeagueFitnessAggregator:
             if gen_arrays:
                 all_gen = np.concatenate(gen_arrays)
                 elite_generalization_avg[agent_type] = self._compute_elite_avg(all_gen)
+                # 【内存泄漏修复】删除临时数组
+                del all_gen
             else:
                 elite_generalization_avg[agent_type] = 0.0
 
@@ -313,6 +323,9 @@ class LeagueFitnessAggregator:
             elite_baseline_avg=elite_baseline_avg,
             elite_generalization_avg=elite_generalization_avg,
         )
+
+        # 【内存泄漏修复】删除 collected 字典
+        del collected
 
         # 记录到历史
         self._advantage_history.append(stats)

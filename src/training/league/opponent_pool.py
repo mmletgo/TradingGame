@@ -118,7 +118,12 @@ class OpponentPool:
         entry_dir = self.pool_dir / entry_id
         entry.save(entry_dir)
 
-        # 添加到内存
+        # 【内存泄漏修复】保存后清理大数据字段，只在内存中保留元数据
+        # genome_data 和 network_data 已保存到磁盘，不需要在内存中保留
+        entry.genome_data = None
+        entry.network_data = None
+
+        # 添加到内存（只保留元数据）
         self.entries[entry_id] = entry
 
         # 更新索引
@@ -151,6 +156,10 @@ class OpponentPool:
 
         # 从内存删除
         if entry_id in self.entries:
+            # 【内存泄漏修复】显式清理大数据字段
+            entry = self.entries[entry_id]
+            entry.genome_data = None
+            entry.network_data = None
             del self.entries[entry_id]
 
         # 更新索引
@@ -329,3 +338,13 @@ class OpponentPool:
     def is_empty(self) -> bool:
         """检查对手池是否为空"""
         return self.get_pool_size() == 0
+
+    def clear_memory_cache(self) -> None:
+        """清理内存缓存中的大数据
+
+        【内存泄漏修复】清理所有 entries 中的 genome_data 和 network_data，
+        只保留元数据。这些大数据已保存到磁盘，需要时可重新加载。
+        """
+        for entry in self.entries.values():
+            entry.genome_data = None
+            entry.network_data = None

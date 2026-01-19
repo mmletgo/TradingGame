@@ -95,9 +95,10 @@ class MultiGenerationNetworkCache:
             oldest_id = order.pop(0)
             if oldest_id in self.historical_caches[agent_type]:
                 cache = self.historical_caches[agent_type].pop(oldest_id)
-                # 清理缓存
+                # 【内存泄漏修复】显式清理缓存数据
                 if hasattr(cache, 'clear'):
                     cache.clear()
+                del cache
 
     def _create_cache_from_network_data(
         self,
@@ -134,6 +135,12 @@ class MultiGenerationNetworkCache:
             # 实际实现中可能需要调整
             networks = self._create_networks_from_params(agent_type, all_params_list)
             cache.update_networks(networks)
+
+            # 【内存泄漏修复】清理中间变量
+            del all_params_list
+            # 清理网络列表（cache 已持有引用）
+            self._clear_networks(networks)
+            del networks
 
             return cache
 
@@ -182,6 +189,18 @@ class MultiGenerationNetworkCache:
             return []
         except Exception:
             return []
+
+    def _clear_networks(self, networks: list[Any]) -> None:
+        """清理网络列表中的网络对象
+
+        【内存泄漏修复】在 cache.update_networks 后，原始 networks 列表
+        不再需要，但网络对象可能持有大量内存。此方法清理列表但不删除
+        网络对象本身（因为 cache 可能持有引用）。
+
+        Args:
+            networks: 网络对象列表
+        """
+        networks.clear()
 
     def get_cache(
         self,

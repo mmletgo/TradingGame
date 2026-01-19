@@ -256,6 +256,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 清空（释放内存）
         self._current_round_arena_fitnesses.clear()
 
+        # 【内存泄漏修复】强制释放中间计算的 numpy 数组
+        gc.collect(0)
+
     def _log_generalization_advantage(
         self,
         stats: GeneralizationAdvantageStats,
@@ -375,6 +378,12 @@ class LeagueTrainer(ParallelArenaTrainer):
             agent_counts=agent_counts,
         )
 
+        # 【内存泄漏修复】保存后显式删除临时数据，释放序列化的 numpy 数组
+        del genome_data_map
+        del fitness_map
+        del agent_counts
+        del sub_pop_counts
+
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
 
@@ -488,8 +497,16 @@ class LeagueTrainer(ParallelArenaTrainer):
                 if progress_callback:
                     progress_callback(stats)
 
-                # 内存清理
+                # 内存清理（增强版）
                 if self.generation % 10 == 0:
+                    # 【内存泄漏修复】定期清理 NEAT 历史数据
+                    for population in self.populations.values():
+                        if isinstance(population, SubPopulationManager):
+                            for sub_pop in population.sub_populations:
+                                sub_pop._cleanup_neat_history()
+                        else:
+                            population._cleanup_neat_history()
+
                     gc.collect()
                     try:
                         libc = CDLL("libc.so.6")

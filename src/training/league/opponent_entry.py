@@ -47,10 +47,14 @@ class OpponentEntry:
     """单个类型的对手池条目
 
     存储对手的完整数据，包括元数据、基因组数据和网络参数。
+
+    注意：genome_data 和 network_data 可以为 None，用于内存优化场景
+    （保存到磁盘后清理内存中的大数据，只保留元数据）。
     """
     metadata: OpponentMetadata
     # {sub_pop_id: (keys, fitnesses, metadata, nodes, conns)}
-    genome_data: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
+    # 可以为 None（内存优化：保存后清理，需要时重新加载）
+    genome_data: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] | None
     # {sub_pop_id: network_params_tuple} - 可选，延迟加载
     network_data: dict[int, tuple] | None = None
 
@@ -77,16 +81,17 @@ class OpponentEntry:
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(self.metadata.to_dict(), f, indent=2, ensure_ascii=False)
 
-        # 2. 保存基因组数据
-        genomes_path = entry_dir / "genomes.npz"
-        genome_arrays: dict[str, np.ndarray] = {}
-        for sub_pop_id, (keys, fitnesses, meta, nodes, conns) in self.genome_data.items():
-            genome_arrays[f"sub_{sub_pop_id}_keys"] = keys
-            genome_arrays[f"sub_{sub_pop_id}_fitnesses"] = fitnesses
-            genome_arrays[f"sub_{sub_pop_id}_metadata"] = meta
-            genome_arrays[f"sub_{sub_pop_id}_nodes"] = nodes
-            genome_arrays[f"sub_{sub_pop_id}_conns"] = conns
-        np.savez_compressed(genomes_path, **genome_arrays)
+        # 2. 保存基因组数据（如果有）
+        if self.genome_data is not None:
+            genomes_path = entry_dir / "genomes.npz"
+            genome_arrays: dict[str, np.ndarray] = {}
+            for sub_pop_id, (keys, fitnesses, meta, nodes, conns) in self.genome_data.items():
+                genome_arrays[f"sub_{sub_pop_id}_keys"] = keys
+                genome_arrays[f"sub_{sub_pop_id}_fitnesses"] = fitnesses
+                genome_arrays[f"sub_{sub_pop_id}_metadata"] = meta
+                genome_arrays[f"sub_{sub_pop_id}_nodes"] = nodes
+                genome_arrays[f"sub_{sub_pop_id}_conns"] = conns
+            np.savez_compressed(genomes_path, **genome_arrays)
 
         # 3. 保存网络参数（如果有）
         if self.network_data is not None:
@@ -176,6 +181,8 @@ class OpponentEntry:
 
     def get_total_agent_count(self) -> int:
         """获取总 Agent 数量"""
+        if self.genome_data is None:
+            return self.metadata.agent_count
         total = 0
         for keys, _, _, _, _ in self.genome_data.values():
             total += len(keys)
