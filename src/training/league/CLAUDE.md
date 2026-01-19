@@ -418,6 +418,52 @@ trainer.stop()
 - `src/bio/brain/batch_network_cache.py`：批量网络缓存
 - `src/config/config.py`：基础配置
 
+## 内存管理
+
+联盟训练涉及大量历史对手数据，需要特别注意内存管理。
+
+### OpponentEntry 内存优化
+
+`OpponentEntry` 的 `genome_data` 和 `network_data` 字段可以为 `None`：
+
+```python
+genome_data: dict[int, tuple[...]] | None  # 保存后可置为 None
+network_data: dict[int, tuple] | None      # 延迟加载
+```
+
+**优化策略**：保存到磁盘后，清理内存中的大数据字段，只保留元数据。需要时从磁盘重新加载。
+
+### OpponentPool 清理
+
+- `add_entry()`：保存后自动清理 `genome_data` 和 `network_data`
+- `remove_entry()`：删除前显式清理大数据字段
+- `clear_memory_cache()`：批量清理所有条目的内存缓存
+
+### MultiGenerationNetworkCache 清理
+
+- LRU 淘汰时显式调用 `cache.clear()` 并删除引用
+- 创建缓存后清理中间变量（`all_params_list`、`networks` 列表）
+
+### LeagueFitnessAggregator 清理
+
+- `np.concatenate()` 产生的临时数组在使用后立即删除
+- `collected` 字典在使用后删除
+
+### LeagueTrainer 清理
+
+- `_current_round_arena_fitnesses` 清空后调用 `gc.collect(0)`
+- `_save_milestone()` 保存后删除 `genome_data_map` 等临时变量
+- 每 10 代清理所有种群的 NEAT 历史数据
+
+### 清理时机
+
+| 时机 | 清理操作 |
+|------|---------|
+| 里程碑保存后 | 删除序列化中间变量 |
+| 进化完成后 | 清空 arena_fitnesses + gc.collect(0) |
+| 每 10 代 | 清理 NEAT 历史 + gc.collect + malloc_trim |
+| 缓存 LRU 淘汰 | 显式 clear() + del |
+
 ## 性能预估
 
 | 操作 | 时间影响 |
