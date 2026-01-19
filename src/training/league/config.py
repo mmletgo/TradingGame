@@ -1,5 +1,5 @@
 """联盟训练配置模块"""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 
@@ -39,6 +39,7 @@ class LeagueTrainingConfig:
     generalization_advantage_window: int = 20   # 历史窗口大小
     convergence_threshold: float = 0.01         # 收敛阈值
     convergence_generations: int = 10           # 连续满足条件的代数
+    elite_ratio: float = 0.1                    # 精英比例，用于计算精英适应度，默认 top 10%
 
     def validate(self) -> None:
         """验证配置有效性"""
