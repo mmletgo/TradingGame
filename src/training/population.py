@@ -1545,6 +1545,29 @@ def _get_memory_mb() -> float:
     return 0.0
 
 
+def _sigmoid_rank_transform(rank_normalized: np.ndarray, steepness: float = 10.0) -> np.ndarray:
+    """使用 sigmoid 函数对排名进行非线性映射
+
+    将线性排名通过 sigmoid 函数变换，放大头部和尾部的差距，
+    使精英个体获得更高的分数，加速自然选择。
+
+    Args:
+        rank_normalized: 归一化到 [0, 1] 的线性排名数组
+        steepness: sigmoid 曲线的陡峭程度，值越大曲线越陡峭（默认 10.0）
+
+    Returns:
+        sigmoid 变换后的排名数组，范围仍为 [0, 1]
+    """
+    # 使用 sigmoid: 1 / (1 + exp(-k*(x - 0.5)))
+    # 其中 k 是 steepness，x 是 rank_normalized
+    # 结果会将中间部分压缩，放大两端差距
+    raw_sigmoid = 1.0 / (1.0 + np.exp(-steepness * (rank_normalized - 0.5)))
+    # 归一化到 [0, 1]：sigmoid(0) 和 sigmoid(1) 分别映射到 0 和 1
+    min_val = 1.0 / (1.0 + np.exp(steepness * 0.5))  # sigmoid(0)
+    max_val = 1.0 / (1.0 + np.exp(-steepness * 0.5))  # sigmoid(1)
+    return (raw_sigmoid - min_val) / (max_val - min_val)
+
+
 class Population:
     """种群管理类
 
@@ -1788,7 +1811,10 @@ class Population:
         return [agent for _, agent in results]
 
     def evaluate(
-        self, current_price: float, market_avg_return: float = 0.0
+        self,
+        current_price: float,
+        market_avg_return: float = 0.0,
+        global_volume_rank_normalized: np.ndarray | None = None,
     ) -> list[tuple[Agent, float]]:
         """评估种群适应度
 
@@ -1802,6 +1828,7 @@ class Population:
         Args:
             current_price: 当前市场价格，用于计算未实现盈亏
             market_avg_return: 市场平均收益率，用于计算相对收益
+            global_volume_rank_normalized: 做市商使用的全局流动性排名归一化值（由SubPopulationManager传入）
 
         Returns:
             按适应度从高到低排序的 (Agent, 适应度) 元组列表
@@ -1830,22 +1857,28 @@ class Population:
 
         # 6. 根据种群类型计算适应度
         if self.agent_type == AgentType.MARKET_MAKER:
-            # 做市商：复合适应度 = 0.5 * 相对收益率 + 0.5 * 流动性排名归一化
-            maker_volumes = np.array([a.account.maker_volume for a in self.agents])
-
-            # 排名归一化到 [0, 1]
-            # 使用 argsort 两次获取排名：第一次获取排序索引，第二次获取每个元素的排名
-            volume_ranks = np.argsort(np.argsort(maker_volumes))  # 从 0 到 n-1
-            if n > 1:
-                volume_rank_normalized = volume_ranks / (n - 1)  # 归一化到 [0, 1]
+            # 做市商：复合适应度 = 0.8 * 相对收益率 + 0.2 * sigmoid(流动性排名归一化)
+            if global_volume_rank_normalized is not None:
+                # 使用SubPopulationManager传入的全局排名（跨所有子种群）
+                volume_rank_normalized = global_volume_rank_normalized
             else:
-                volume_rank_normalized = np.zeros(n)  # 只有一个 agent 时，排名为 0
+                # 单独使用时，在本种群内部排名
+                maker_volumes = np.array([a.account.maker_volume for a in self.agents])
+                # 排名归一化到 [0, 1]
+                # 使用 argsort 两次获取排名：第一次获取排序索引，第二次获取每个元素的排名
+                volume_ranks = np.argsort(np.argsort(maker_volumes))  # 从 0 到 n-1
+                if n > 1:
+                    volume_rank_normalized = volume_ranks / (n - 1)  # 归一化到 [0, 1]
+                else:
+                    volume_rank_normalized = np.zeros(n)  # 只有一个 agent 时，排名为 0
 
+            # 使用 sigmoid 非线性变换放大头部差距
+            volume_rank_sigmoid = _sigmoid_rank_transform(volume_rank_normalized)
             # 复合适应度
-            fitnesses = 0.5 * relative_returns + 0.5 * volume_rank_normalized
+            fitnesses = 0.8 * relative_returns + 0.2 * volume_rank_sigmoid
 
         elif self.agent_type == AgentType.WHALE:
-            # 庄家：复合适应度 = 0.5 * 相对收益率 + 0.5 * 波动性贡献排名归一化
+            # 庄家：复合适应度 = 0.8 * 相对收益率 + 0.2 * sigmoid(波动性贡献排名归一化)
             volatility_contributions = np.array(
                 [a.account.volatility_contribution for a in self.agents]
             )
@@ -1857,8 +1890,10 @@ class Population:
             else:
                 volatility_rank_normalized = np.zeros(n)
 
+            # 使用 sigmoid 非线性变换放大头部差距
+            volatility_rank_sigmoid = _sigmoid_rank_transform(volatility_rank_normalized)
             # 复合适应度
-            fitnesses = 0.5 * relative_returns + 0.5 * volatility_rank_normalized
+            fitnesses = 0.8 * relative_returns + 0.2 * volatility_rank_sigmoid
 
         else:
             # 其他种群（散户、高级散户）：纯相对收益率适应度
@@ -2716,6 +2751,9 @@ class SubPopulationManager:
     ) -> list[tuple[Agent, float]]:
         """评估所有Agent适应度
 
+        对于做市商类型，会先计算全局流动性排名（跨所有子种群），
+        然后将排名传递给各子种群的evaluate方法，确保排名是全局的。
+
         Args:
             current_price: 当前价格
             market_avg_return: 市场平均收益率，用于计算相对收益
@@ -2724,9 +2762,43 @@ class SubPopulationManager:
             (Agent, fitness) 元组列表
         """
         all_results: list[tuple[Agent, float]] = []
-        for pop in self.sub_populations:
-            results = pop.evaluate(current_price, market_avg_return)
-            all_results.extend(results)
+
+        if self.agent_type == AgentType.MARKET_MAKER:
+            # 做市商：需要跨所有子种群计算全局流动性排名
+            all_agents = self.agents  # 获取所有子种群的agent
+            total_n = len(all_agents)
+
+            if total_n > 0:
+                # 收集所有做市商的maker_volume
+                maker_volumes = np.array([a.account.maker_volume for a in all_agents])
+
+                # 全局排名归一化到 [0, 1]
+                volume_ranks = np.argsort(np.argsort(maker_volumes))  # 从 0 到 total_n-1
+                if total_n > 1:
+                    global_volume_rank_normalized = volume_ranks / (total_n - 1)
+                else:
+                    global_volume_rank_normalized = np.zeros(total_n)
+
+                # 将全局排名切片传递给各子种群
+                offset = 0
+                for pop in self.sub_populations:
+                    n = len(pop.agents)
+                    # 获取该子种群对应的全局排名切片
+                    sub_rank = global_volume_rank_normalized[offset : offset + n]
+                    results = pop.evaluate(
+                        current_price, market_avg_return, global_volume_rank_normalized=sub_rank
+                    )
+                    all_results.extend(results)
+                    offset += n
+            else:
+                # 没有agent时，直接返回空结果
+                pass
+        else:
+            # 其他类型：直接调用各子种群的evaluate
+            for pop in self.sub_populations:
+                results = pop.evaluate(current_price, market_avg_return)
+                all_results.extend(results)
+
         return all_results
 
     def evolve(self, current_price: float) -> None:
@@ -2782,11 +2854,41 @@ class SubPopulationManager:
         start_time = time.perf_counter()
 
         # 1. 先评估所有子种群的适应度并设置到基因组
-        for pop in self.sub_populations:
-            agent_fitnesses = pop.evaluate(current_price)
-            for agent, fitness in agent_fitnesses:
-                genome = agent.brain.get_genome()
-                genome.fitness = fitness
+        if self.agent_type == AgentType.MARKET_MAKER:
+            # 做市商：需要跨所有子种群计算全局流动性排名
+            all_agents = self.agents
+            total_n = len(all_agents)
+
+            if total_n > 0:
+                # 收集所有做市商的maker_volume
+                maker_volumes = np.array([a.account.maker_volume for a in all_agents])
+
+                # 全局排名归一化到 [0, 1]
+                volume_ranks = np.argsort(np.argsort(maker_volumes))
+                if total_n > 1:
+                    global_volume_rank_normalized = volume_ranks / (total_n - 1)
+                else:
+                    global_volume_rank_normalized = np.zeros(total_n)
+
+                # 将全局排名切片传递给各子种群
+                offset = 0
+                for pop in self.sub_populations:
+                    n = len(pop.agents)
+                    sub_rank = global_volume_rank_normalized[offset : offset + n]
+                    agent_fitnesses = pop.evaluate(
+                        current_price, global_volume_rank_normalized=sub_rank
+                    )
+                    for agent, fitness in agent_fitnesses:
+                        genome = agent.brain.get_genome()
+                        genome.fitness = fitness
+                    offset += n
+        else:
+            # 其他类型：直接调用各子种群的evaluate
+            for pop in self.sub_populations:
+                agent_fitnesses = pop.evaluate(current_price)
+                for agent, fitness in agent_fitnesses:
+                    genome = agent.brain.get_genome()
+                    genome.fitness = fitness
 
         eval_time = time.perf_counter() - start_time
 
@@ -2910,11 +3012,41 @@ class SubPopulationManager:
         start_time = time.perf_counter()
 
         # 1. 评估所有子种群的适应度
-        for pop in self.sub_populations:
-            agent_fitnesses = pop.evaluate(current_price)
-            for agent, fitness in agent_fitnesses:
-                genome = agent.brain.get_genome()
-                genome.fitness = fitness
+        if self.agent_type == AgentType.MARKET_MAKER:
+            # 做市商：需要跨所有子种群计算全局流动性排名
+            all_agents = self.agents
+            total_n = len(all_agents)
+
+            if total_n > 0:
+                # 收集所有做市商的maker_volume
+                maker_volumes = np.array([a.account.maker_volume for a in all_agents])
+
+                # 全局排名归一化到 [0, 1]
+                volume_ranks = np.argsort(np.argsort(maker_volumes))
+                if total_n > 1:
+                    global_volume_rank_normalized = volume_ranks / (total_n - 1)
+                else:
+                    global_volume_rank_normalized = np.zeros(total_n)
+
+                # 将全局排名切片传递给各子种群
+                offset = 0
+                for pop in self.sub_populations:
+                    n = len(pop.agents)
+                    sub_rank = global_volume_rank_normalized[offset : offset + n]
+                    agent_fitnesses = pop.evaluate(
+                        current_price, global_volume_rank_normalized=sub_rank
+                    )
+                    for agent, fitness in agent_fitnesses:
+                        genome = agent.brain.get_genome()
+                        genome.fitness = fitness
+                    offset += n
+        else:
+            # 其他类型：直接调用各子种群的evaluate
+            for pop in self.sub_populations:
+                agent_fitnesses = pop.evaluate(current_price)
+                for agent, fitness in agent_fitnesses:
+                    genome = agent.brain.get_genome()
+                    genome.fitness = fitness
 
         eval_time = time.perf_counter() - start_time
 
@@ -3021,17 +3153,53 @@ class SubPopulationManager:
 
         # 1. 评估所有子种群的适应度，构建适应度数组列表
         fitnesses_list: list[np.ndarray] = []
-        for pop in self.sub_populations:
-            # 先评估获取每个 agent 的适应度
-            agent_fitnesses = pop.evaluate(current_price)
-            fitness_dict = {agent.agent_id: fitness for agent, fitness in agent_fitnesses}
 
-            # 构建适应度数组（按 agent 顺序）
-            fitness_arr = np.empty(len(pop.agents), dtype=np.float32)
-            for idx, agent in enumerate(pop.agents):
-                fitness = fitness_dict.get(agent.agent_id, 0.0)
-                fitness_arr[idx] = fitness
-            fitnesses_list.append(fitness_arr)
+        if self.agent_type == AgentType.MARKET_MAKER:
+            # 做市商：需要跨所有子种群计算全局流动性排名
+            all_agents = self.agents
+            total_n = len(all_agents)
+
+            if total_n > 0:
+                # 收集所有做市商的maker_volume
+                maker_volumes = np.array([a.account.maker_volume for a in all_agents])
+
+                # 全局排名归一化到 [0, 1]
+                volume_ranks = np.argsort(np.argsort(maker_volumes))
+                if total_n > 1:
+                    global_volume_rank_normalized = volume_ranks / (total_n - 1)
+                else:
+                    global_volume_rank_normalized = np.zeros(total_n)
+
+                # 将全局排名切片传递给各子种群
+                offset = 0
+                for pop in self.sub_populations:
+                    n = len(pop.agents)
+                    sub_rank = global_volume_rank_normalized[offset : offset + n]
+                    agent_fitnesses = pop.evaluate(
+                        current_price, global_volume_rank_normalized=sub_rank
+                    )
+                    fitness_dict = {agent.agent_id: fitness for agent, fitness in agent_fitnesses}
+
+                    # 构建适应度数组（按 agent 顺序）
+                    fitness_arr = np.empty(len(pop.agents), dtype=np.float32)
+                    for idx, agent in enumerate(pop.agents):
+                        fitness = fitness_dict.get(agent.agent_id, 0.0)
+                        fitness_arr[idx] = fitness
+                    fitnesses_list.append(fitness_arr)
+                    offset += n
+        else:
+            # 其他类型：直接调用各子种群的evaluate
+            for pop in self.sub_populations:
+                # 先评估获取每个 agent 的适应度
+                agent_fitnesses = pop.evaluate(current_price)
+                fitness_dict = {agent.agent_id: fitness for agent, fitness in agent_fitnesses}
+
+                # 构建适应度数组（按 agent 顺序）
+                fitness_arr = np.empty(len(pop.agents), dtype=np.float32)
+                for idx, agent in enumerate(pop.agents):
+                    fitness = fitness_dict.get(agent.agent_id, 0.0)
+                    fitness_arr[idx] = fitness
+                fitnesses_list.append(fitness_arr)
 
         eval_time = time.perf_counter() - start_time - sync_time
 
