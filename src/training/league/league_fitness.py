@@ -15,9 +15,14 @@ from src.training.league.arena_allocator import ArenaAllocation
 class GeneralizationAdvantageStats:
     """单代泛化优势比统计"""
     generation: int
-    advantages: dict[AgentType, float]          # 泛化优势比
-    baseline_avg: dict[AgentType, float]        # 基准平均适应度
-    generalization_avg: dict[AgentType, float]  # 泛化平均适应度
+    # 种群级别
+    advantages: dict[AgentType, float]          # 种群泛化优势比
+    baseline_avg: dict[AgentType, float]        # 种群基准平均适应度
+    generalization_avg: dict[AgentType, float]  # 种群泛化平均适应度
+    # 精英级别
+    elite_advantages: dict[AgentType, float]          # 精英泛化优势比
+    elite_baseline_avg: dict[AgentType, float]        # 精英基准平均适应度
+    elite_generalization_avg: dict[AgentType, float]  # 精英泛化平均适应度
 
 
 class LeagueFitnessAggregator:
@@ -191,6 +196,21 @@ class LeagueFitnessAggregator:
 
         return result
 
+    def _compute_elite_avg(self, fitness_array: np.ndarray) -> float:
+        """计算精英平均适应度
+
+        Args:
+            fitness_array: 适应度数组
+
+        Returns:
+            精英平均适应度
+        """
+        if len(fitness_array) == 0:
+            return 0.0
+        n_elite = max(1, int(len(fitness_array) * self.config.elite_ratio))
+        sorted_fitness = np.sort(fitness_array)[::-1]  # 降序
+        return float(np.mean(sorted_fitness[:n_elite]))
+
     def determine_winner(
         self,
         fitness_array: np.ndarray,
@@ -237,33 +257,61 @@ class LeagueFitnessAggregator:
         # 使用已有方法分离基准/泛化适应度
         collected = self.collect_fitness_by_role(allocation, arena_fitnesses)
 
+        # 种群级别
         advantages: dict[AgentType, float] = {}
         baseline_avg: dict[AgentType, float] = {}
         generalization_avg: dict[AgentType, float] = {}
 
+        # 精英级别
+        elite_advantages: dict[AgentType, float] = {}
+        elite_baseline_avg: dict[AgentType, float] = {}
+        elite_generalization_avg: dict[AgentType, float] = {}
+
         for agent_type in AgentType:
-            # 基准平均
+            # 基准平均（种群）
             baseline_arrays = collected['main_baseline'][agent_type]
             baseline_avg[agent_type] = (
                 float(np.mean([np.mean(arr) for arr in baseline_arrays]))
                 if baseline_arrays else 0.0
             )
 
-            # 泛化平均
+            # 泛化平均（种群）
             gen_arrays = collected['main_generalization'][agent_type]
             generalization_avg[agent_type] = (
                 float(np.mean([np.mean(arr) for arr in gen_arrays]))
                 if gen_arrays else 0.0
             )
 
-            # 泛化优势比
+            # 泛化优势比（种群）
             advantages[agent_type] = generalization_avg[agent_type] - baseline_avg[agent_type]
+
+            # 基准精英平均
+            if baseline_arrays:
+                all_baseline = np.concatenate(baseline_arrays)
+                elite_baseline_avg[agent_type] = self._compute_elite_avg(all_baseline)
+            else:
+                elite_baseline_avg[agent_type] = 0.0
+
+            # 泛化精英平均
+            if gen_arrays:
+                all_gen = np.concatenate(gen_arrays)
+                elite_generalization_avg[agent_type] = self._compute_elite_avg(all_gen)
+            else:
+                elite_generalization_avg[agent_type] = 0.0
+
+            # 精英泛化优势比
+            elite_advantages[agent_type] = (
+                elite_generalization_avg[agent_type] - elite_baseline_avg[agent_type]
+            )
 
         stats = GeneralizationAdvantageStats(
             generation=generation,
             advantages=advantages,
             baseline_avg=baseline_avg,
             generalization_avg=generalization_avg,
+            elite_advantages=elite_advantages,
+            elite_baseline_avg=elite_baseline_avg,
+            elite_generalization_avg=elite_generalization_avg,
         )
 
         # 记录到历史
@@ -271,36 +319,57 @@ class LeagueFitnessAggregator:
 
         return stats
 
-    def check_convergence(self) -> tuple[bool, dict[AgentType, bool]]:
+    def check_convergence(
+        self,
+    ) -> tuple[bool, dict[AgentType, bool], dict[AgentType, bool]]:
         """检查是否收敛
 
-        收敛条件：最近 N 代的泛化优势比绝对值都 <= 阈值
+        双重收敛条件：
+        1. 种群收敛：最近 N 代的种群泛化优势比绝对值都 <= 阈值
+        2. 精英收敛：最近 N 代的精英泛化优势比绝对值都 <= 阈值
 
         Returns:
-            (全部收敛, {AgentType: 是否收敛})
+            (全部收敛, {AgentType: 种群是否收敛}, {AgentType: 精英是否收敛})
         """
         threshold = self.config.convergence_threshold
         required_gens = self.config.convergence_generations
 
         if len(self._advantage_history) < required_gens:
-            return False, {t: False for t in AgentType}
+            return (
+                False,
+                {t: False for t in AgentType},
+                {t: False for t in AgentType},
+            )
 
         recent = list(self._advantage_history)[-required_gens:]
 
-        converged_by_type: dict[AgentType, bool] = {}
+        # 种群收敛
+        pop_converged_by_type: dict[AgentType, bool] = {}
         for agent_type in AgentType:
-            converged_by_type[agent_type] = all(
+            pop_converged_by_type[agent_type] = all(
                 abs(stats.advantages[agent_type]) <= threshold
                 for stats in recent
             )
 
-        is_all_converged = all(converged_by_type.values())
+        # 精英收敛
+        elite_converged_by_type: dict[AgentType, bool] = {}
+        for agent_type in AgentType:
+            elite_converged_by_type[agent_type] = all(
+                abs(stats.elite_advantages[agent_type]) <= threshold
+                for stats in recent
+            )
+
+        # 双重收敛：种群和精英都收敛才算真正收敛
+        is_all_converged = (
+            all(pop_converged_by_type.values()) and
+            all(elite_converged_by_type.values())
+        )
 
         # 记录首次收敛的代数
         if is_all_converged and self._first_convergence_generation is None:
             self._first_convergence_generation = self._advantage_history[-1].generation
 
-        return is_all_converged, converged_by_type
+        return is_all_converged, pop_converged_by_type, elite_converged_by_type
 
     def get_first_convergence_generation(self) -> int | None:
         """获取首次收敛的代数

@@ -51,6 +51,7 @@ src/training/league/
 | `generalization_advantage_window` | 20 | 泛化优势比历史窗口大小 |
 | `convergence_threshold` | 0.01 | 收敛判断阈值 |
 | `convergence_generations` | 10 | 连续满足收敛条件的代数 |
+| `elite_ratio` | 0.1 | 精英比例，用于计算精英适应度 |
 
 #### 泛化优势比参数详解
 
@@ -100,13 +101,26 @@ src/training/league/
 → 最近 10 代（92-101）都满足 <= 0.01，判定为收敛
 ```
 
+**`elite_ratio`（精英比例）**
+
+用于计算精英平均适应度的比例。取种群中适应度排名前 N% 的个体计算平均值。
+
+- **作用**：聚焦于精英个体的表现，避免探索个体拉低平均值
+- **计算**：`n_elite = max(1, int(len(fitness_array) * elite_ratio))`
+- **影响**：
+  - 值越小，关注的个体越少，对精英的要求越严格
+  - 值越大，关注的个体越多，趋近于种群平均
+- **示例**：
+  - `0.1` 表示取 top 10% 的个体
+  - `0.05` 表示取 top 5% 的个体
+
 **调参建议**
 
-| 场景 | window | threshold | generations | 说明 |
-|------|--------|-----------|-------------|------|
-| 快速验证 | 15 | 0.02 | 5 | 宽松条件，快速得到结论 |
-| 默认配置 | 20 | 0.01 | 10 | 平衡稳健性和效率 |
-| 严格收敛 | 30 | 0.005 | 15 | 严格条件，确保充分收敛 |
+| 场景 | window | threshold | generations | elite_ratio | 说明 |
+|------|--------|-----------|-------------|-------------|------|
+| 快速验证 | 15 | 0.02 | 5 | 0.2 | 宽松条件，快速得到结论 |
+| 默认配置 | 20 | 0.01 | 10 | 0.1 | 平衡稳健性和效率 |
+| 严格收敛 | 30 | 0.005 | 15 | 0.05 | 严格条件，确保充分收敛 |
 
 ### OpponentEntry (opponent_entry.py)
 
@@ -192,14 +206,19 @@ class ArenaAllocation:
 
 ### GeneralizationAdvantageStats (league_fitness.py)
 
-泛化优势比统计数据类：
+泛化优势比统计数据类（支持双重收敛判断）：
 ```python
 @dataclass
 class GeneralizationAdvantageStats:
-    generation: int                            # 代数
-    advantages: dict[AgentType, float]         # 泛化优势比
-    baseline_avg: dict[AgentType, float]       # 基准平均适应度
-    generalization_avg: dict[AgentType, float] # 泛化平均适应度
+    generation: int                                   # 代数
+    # 种群级别
+    advantages: dict[AgentType, float]                # 种群泛化优势比
+    baseline_avg: dict[AgentType, float]              # 种群基准平均适应度
+    generalization_avg: dict[AgentType, float]        # 种群泛化平均适应度
+    # 精英级别
+    elite_advantages: dict[AgentType, float]          # 精英泛化优势比
+    elite_baseline_avg: dict[AgentType, float]        # 精英基准平均适应度
+    elite_generalization_avg: dict[AgentType, float]  # 精英泛化平均适应度
 ```
 
 ### LeagueTrainer (league_trainer.py)
@@ -281,25 +300,42 @@ def run_round(self):
 | < 0 | Main 不如历史对手（需继续训练） |
 | ≈ 0 | 可能收敛 |
 
-### 收敛判断
+### 双重收敛判断
 
-收敛条件：最近 `convergence_generations` 代的泛化优势比绝对值都 ≤ `convergence_threshold`
+收敛采用"双重收敛"机制，同时监控种群和精英的收敛状态：
+
+1. **种群收敛**：最近 `convergence_generations` 代的种群泛化优势比绝对值都 ≤ `convergence_threshold`
+2. **精英收敛**：最近 `convergence_generations` 代的精英泛化优势比绝对值都 ≤ `convergence_threshold`
+
+只有当种群和精英都收敛时，才判定为真正收敛。
+
+**设计原因**：
+- 防止假阳性：平均已收敛但精英还在提升
+- 防止假阴性：精英已收敛但探索个体拉低平均值
+
+**收敛状态**：
+| 种群收敛 | 精英收敛 | 状态 |
+|---------|---------|------|
+| 是 | 是 | 双重收敛（真正收敛） |
+| 是 | 否 | 种群收敛（精英仍在提升） |
+| 否 | 是 | 精英收敛（探索个体拉低平均） |
+| 否 | 否 | 未收敛 |
 
 ### 日志输出示例
 
 ```
 INFO - 第 100 代泛化优势比:
-INFO -   RETAIL: 泛化优势=+0.0234 (基准=0.0512, 泛化=0.0746) [击败历史对手]
-INFO -   RETAIL_PRO: 泛化优势=-0.0087 (基准=0.0893, 泛化=0.0806) [不如历史表现]
-INFO -   WHALE: 泛化优势=+0.0005 (基准=0.1234, 泛化=0.1239) [趋于收敛]
-INFO -   MARKET_MAKER: 泛化优势=+0.0012 (基准=0.0567, 泛化=0.0579) [趋于收敛]
+INFO -   RETAIL: 种群=+0.0234(基准=0.0512,泛化=0.0746) | 精英=+0.0156(基准=0.0823,泛化=0.0979) [击败历史对手]
+INFO -   RETAIL_PRO: 种群=-0.0087(基准=0.0893,泛化=0.0806) | 精英=-0.0045(基准=0.1234,泛化=0.1189) [不如历史表现]
+INFO -   WHALE: 种群=+0.0005(基准=0.1234,泛化=0.1239) | 精英=+0.0008(基准=0.1567,泛化=0.1575) [趋于收敛]
+INFO -   MARKET_MAKER: 种群=+0.0012(基准=0.0567,泛化=0.0579) | 精英=+0.0003(基准=0.0789,泛化=0.0792) [双重收敛]
 ```
 
-收敛时：
+全部收敛时：
 ```
-INFO - 第 200 代泛化优势比:
-INFO -   RETAIL: 泛化优势=+0.0023 (基准=0.0512, 泛化=0.0535) [已收敛]
-INFO -   >>> 所有物种已收敛，可以考虑结束训练 <<<
+INFO - 第 200 代泛化优势比 (首次收敛于第 195 代):
+INFO -   RETAIL: 种群=+0.0023(基准=0.0512,泛化=0.0535) | 精英=+0.0015(基准=0.0823,泛化=0.0838) [双重收敛]
+INFO -   >>> 所有物种已双重收敛，可以考虑结束训练 <<<
 ```
 
 ### 前提条件

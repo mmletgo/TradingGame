@@ -215,24 +215,42 @@ class LeagueTrainer(ParallelArenaTrainer):
         )
 
         if stats is not None:
+            # 种群级别
             round_stats['generalization_advantage'] = stats.advantages
             round_stats['baseline_avg_fitness'] = stats.baseline_avg
             round_stats['generalization_avg_fitness'] = stats.generalization_avg
 
-            is_converged, converged_by_type = self.fitness_aggregator.check_convergence()
+            # 精英级别
+            round_stats['elite_generalization_advantage'] = stats.elite_advantages
+            round_stats['elite_baseline_avg_fitness'] = stats.elite_baseline_avg
+            round_stats['elite_generalization_avg_fitness'] = stats.elite_generalization_avg
+
+            is_converged, pop_converged_by_type, elite_converged_by_type = (
+                self.fitness_aggregator.check_convergence()
+            )
             round_stats['is_converged'] = is_converged
-            round_stats['converged_by_type'] = converged_by_type
+            round_stats['pop_converged_by_type'] = pop_converged_by_type
+            round_stats['elite_converged_by_type'] = elite_converged_by_type
             round_stats['first_convergence_generation'] = (
                 self.fitness_aggregator.get_first_convergence_generation()
             )
 
-            self._log_generalization_advantage(stats, is_converged, converged_by_type)
+            self._log_generalization_advantage(
+                stats, is_converged, pop_converged_by_type, elite_converged_by_type
+            )
         else:
+            # 种群级别
             round_stats['generalization_advantage'] = None
             round_stats['baseline_avg_fitness'] = None
             round_stats['generalization_avg_fitness'] = None
+            # 精英级别
+            round_stats['elite_generalization_advantage'] = None
+            round_stats['elite_baseline_avg_fitness'] = None
+            round_stats['elite_generalization_avg_fitness'] = None
+            # 收敛状态
             round_stats['is_converged'] = False
-            round_stats['converged_by_type'] = None
+            round_stats['pop_converged_by_type'] = None
+            round_stats['elite_converged_by_type'] = None
             round_stats['first_convergence_generation'] = None
 
         # 清空（释放内存）
@@ -242,7 +260,8 @@ class LeagueTrainer(ParallelArenaTrainer):
         self,
         stats: GeneralizationAdvantageStats,
         is_converged: bool,
-        converged_by_type: dict[AgentType, bool],
+        pop_converged_by_type: dict[AgentType, bool],
+        elite_converged_by_type: dict[AgentType, bool],
     ) -> None:
         """输出泛化优势比日志"""
         # 获取首次收敛代数
@@ -255,13 +274,25 @@ class LeagueTrainer(ParallelArenaTrainer):
             lines = [f"第 {stats.generation} 代泛化优势比:"]
 
         for agent_type in AgentType:
+            # 种群级别
             adv = stats.advantages[agent_type]
             baseline = stats.baseline_avg[agent_type]
             gen = stats.generalization_avg[agent_type]
-            conv = converged_by_type.get(agent_type, False)
+            pop_conv = pop_converged_by_type.get(agent_type, False)
 
-            if conv:
-                status = "已收敛"
+            # 精英级别
+            elite_adv = stats.elite_advantages[agent_type]
+            elite_baseline = stats.elite_baseline_avg[agent_type]
+            elite_gen = stats.elite_generalization_avg[agent_type]
+            elite_conv = elite_converged_by_type.get(agent_type, False)
+
+            # 状态判断
+            if pop_conv and elite_conv:
+                status = "双重收敛"
+            elif pop_conv:
+                status = "种群收敛"
+            elif elite_conv:
+                status = "精英收敛"
             elif adv > 0.01:
                 status = "击败历史对手"
             elif adv < -0.01:
@@ -270,13 +301,15 @@ class LeagueTrainer(ParallelArenaTrainer):
                 status = "趋于收敛"
 
             lines.append(
-                f"  {agent_type.name}: 泛化优势={adv:+.4f} "
-                f"(基准={baseline:.4f}, 泛化={gen:.4f}) [{status}]"
+                f"  {agent_type.name}: "
+                f"种群={adv:+.4f}(基准={baseline:.4f},泛化={gen:.4f}) | "
+                f"精英={elite_adv:+.4f}(基准={elite_baseline:.4f},泛化={elite_gen:.4f}) "
+                f"[{status}]"
             )
 
         if is_converged and first_conv_gen == stats.generation:
             # 首次收敛
-            lines.append("  >>> 所有物种已收敛，可以考虑结束训练 <<<")
+            lines.append("  >>> 所有物种已双重收敛，可以考虑结束训练 <<<")
 
         self.logger.info("\n".join(lines))
 
