@@ -3440,9 +3440,9 @@ class ParallelArenaTrainer:
                         fitness_arr = self._calculate_fitness_for_population(
                             sub_pop, arena, current_price, market_avg_return
                         )
-                        # 调用钩子
+                        # 调用钩子（不再冗余 copy，钩子内部按需拷贝）
                         self._on_arena_fitness_collected(
-                            arena.arena_id, agent_type, fitness_arr.copy(),
+                            arena.arena_id, agent_type, fitness_arr,
                             current_price, market_avg_return
                         )
                         if key not in accumulated:
@@ -3454,9 +3454,9 @@ class ParallelArenaTrainer:
                     fitness_arr = self._calculate_fitness_for_population(
                         population, arena, current_price, market_avg_return
                     )
-                    # 调用钩子
+                    # 调用钩子（不再冗余 copy，钩子内部按需拷贝）
                     self._on_arena_fitness_collected(
-                        arena.arena_id, agent_type, fitness_arr.copy(),
+                        arena.arena_id, agent_type, fitness_arr,
                         current_price, market_avg_return
                     )
                     if key not in accumulated:

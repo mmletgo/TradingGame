@@ -185,8 +185,11 @@ class OpponentPool:
             # 如果需要网络但缓存中没有，重新加载
             if load_networks and entry.network_data is None:
                 entry_dir = self.pool_dir / entry_id
-                entry = OpponentEntry.load(entry_dir, load_networks=True)
-                self.entries[entry_id] = entry
+                loaded = OpponentEntry.load(entry_dir, load_networks=True)
+                # 【内存泄漏修复】赋值字段而非替换对象，确保外部引用
+                # （如 ensure_cached 中的 entry）指向同一对象
+                entry.genome_data = loaded.genome_data
+                entry.network_data = loaded.network_data
             return entry
 
         # 从磁盘加载

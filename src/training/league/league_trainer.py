@@ -418,6 +418,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         with gzip.open(path, 'wb') as f:
             pickle.dump(checkpoint_data, f)
 
+        # 【内存泄漏修复】显式释放大型 checkpoint_data
+        del checkpoint_data
+        gc.collect(0)
+
         # 保存对手池索引
         if self.pool_manager:
             self.pool_manager.save_all()
@@ -498,14 +502,19 @@ class LeagueTrainer(ParallelArenaTrainer):
                     progress_callback(stats)
 
                 # 内存清理（增强版）
-                if self.generation % 10 == 0:
-                    # 【内存泄漏修复】定期清理 NEAT 历史数据
+                if self.generation % 5 == 0:
+                    # 【内存泄漏修复】定期清理 NEAT 历史数据（每 5 代）
                     for population in self.populations.values():
                         if isinstance(population, SubPopulationManager):
                             for sub_pop in population.sub_populations:
                                 sub_pop._cleanup_neat_history()
                         else:
                             population._cleanup_neat_history()
+
+                    # 【内存泄漏修复】清理对手池中 get_entry() 积累的大数据
+                    if self.pool_manager is not None:
+                        for pool in self.pool_manager.pools.values():
+                            pool.clear_memory_cache()
 
                     gc.collect()
                     try:

@@ -131,47 +131,48 @@ class OpponentEntry:
             metadata = OpponentMetadata.from_dict(json.load(f))
 
         # 2. 加载基因组数据
+        # 【内存泄漏修复】使用 with 上下文管理器确保 NpzFile 关闭，
+        # 并用 np.array() 拷贝独立数组（脱离 mmap 引用）
         genomes_path = entry_dir / "genomes.npz"
-        genome_arrays = np.load(genomes_path)
+        with np.load(genomes_path) as genome_arrays:
+            # 解析子种群 ID
+            sub_pop_ids: set[int] = set()
+            for key in genome_arrays.files:
+                if key.startswith("sub_") and "_keys" in key:
+                    sub_pop_id = int(key.split("_")[1])
+                    sub_pop_ids.add(sub_pop_id)
 
-        # 解析子种群 ID
-        sub_pop_ids: set[int] = set()
-        for key in genome_arrays.files:
-            if key.startswith("sub_") and "_keys" in key:
-                sub_pop_id = int(key.split("_")[1])
-                sub_pop_ids.add(sub_pop_id)
-
-        genome_data: dict[int, tuple] = {}
-        for sub_pop_id in sorted(sub_pop_ids):
-            keys = genome_arrays[f"sub_{sub_pop_id}_keys"]
-            fitnesses = genome_arrays[f"sub_{sub_pop_id}_fitnesses"]
-            meta = genome_arrays[f"sub_{sub_pop_id}_metadata"]
-            nodes = genome_arrays[f"sub_{sub_pop_id}_nodes"]
-            conns = genome_arrays[f"sub_{sub_pop_id}_conns"]
-            genome_data[sub_pop_id] = (keys, fitnesses, meta, nodes, conns)
+            genome_data: dict[int, tuple] = {}
+            for sub_pop_id in sorted(sub_pop_ids):
+                keys = np.array(genome_arrays[f"sub_{sub_pop_id}_keys"])
+                fitnesses = np.array(genome_arrays[f"sub_{sub_pop_id}_fitnesses"])
+                meta = np.array(genome_arrays[f"sub_{sub_pop_id}_metadata"])
+                nodes = np.array(genome_arrays[f"sub_{sub_pop_id}_nodes"])
+                conns = np.array(genome_arrays[f"sub_{sub_pop_id}_conns"])
+                genome_data[sub_pop_id] = (keys, fitnesses, meta, nodes, conns)
 
         # 3. 加载网络参数（可选）
         network_data: dict[int, tuple] | None = None
         if load_networks:
             networks_path = entry_dir / "networks.npz"
             if networks_path.exists():
-                network_arrays = np.load(networks_path)
-                network_data = {}
-                for sub_pop_id in sorted(sub_pop_ids):
-                    prefix = f"sub_{sub_pop_id}_"
-                    network_data[sub_pop_id] = (
-                        network_arrays[f"{prefix}headers"],
-                        network_arrays[f"{prefix}input_keys"],
-                        network_arrays[f"{prefix}output_keys"],
-                        network_arrays[f"{prefix}node_ids"],
-                        network_arrays[f"{prefix}biases"],
-                        network_arrays[f"{prefix}responses"],
-                        network_arrays[f"{prefix}act_types"],
-                        network_arrays[f"{prefix}conn_indptr"],
-                        network_arrays[f"{prefix}conn_sources"],
-                        network_arrays[f"{prefix}conn_weights"],
-                        network_arrays[f"{prefix}output_indices"],
-                    )
+                with np.load(networks_path) as network_arrays:
+                    network_data = {}
+                    for sub_pop_id in sorted(sub_pop_ids):
+                        prefix = f"sub_{sub_pop_id}_"
+                        network_data[sub_pop_id] = (
+                            np.array(network_arrays[f"{prefix}headers"]),
+                            np.array(network_arrays[f"{prefix}input_keys"]),
+                            np.array(network_arrays[f"{prefix}output_keys"]),
+                            np.array(network_arrays[f"{prefix}node_ids"]),
+                            np.array(network_arrays[f"{prefix}biases"]),
+                            np.array(network_arrays[f"{prefix}responses"]),
+                            np.array(network_arrays[f"{prefix}act_types"]),
+                            np.array(network_arrays[f"{prefix}conn_indptr"]),
+                            np.array(network_arrays[f"{prefix}conn_sources"]),
+                            np.array(network_arrays[f"{prefix}conn_weights"]),
+                            np.array(network_arrays[f"{prefix}output_indices"]),
+                        )
 
         return cls(
             metadata=metadata,

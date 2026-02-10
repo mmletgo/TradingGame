@@ -433,16 +433,20 @@ network_data: dict[int, tuple] | None      # 延迟加载
 
 **优化策略**：保存到磁盘后，清理内存中的大数据字段，只保留元数据。需要时从磁盘重新加载。
 
+**NpzFile 管理**：`load()` 方法使用 `with np.load() as f:` 上下文管理器确保 NpzFile 及时关闭文件描述符和内存映射，并用 `np.array()` 拷贝独立数组（脱离 mmap 引用）。
+
 ### OpponentPool 清理
 
 - `add_entry()`：保存后自动清理 `genome_data` 和 `network_data`
 - `remove_entry()`：删除前显式清理大数据字段
+- `get_entry(load_networks=True)`：赋值字段到已有对象（而非替换对象），确保外部引用的清理能生效
 - `clear_memory_cache()`：批量清理所有条目的内存缓存
 
 ### MultiGenerationNetworkCache 清理
 
 - LRU 淘汰时显式调用 `cache.clear()` 并删除引用
 - 创建缓存后清理中间变量（`all_params_list`、`networks` 列表）
+- `ensure_cached()` 创建缓存后清理 entry 的 `genome_data` 和 `network_data`
 
 ### LeagueFitnessAggregator 清理
 
@@ -453,16 +457,23 @@ network_data: dict[int, tuple] | None      # 延迟加载
 
 - `_current_round_arena_fitnesses` 清空后调用 `gc.collect(0)`
 - `_save_milestone()` 保存后删除 `genome_data_map` 等临时变量
-- 每 10 代清理所有种群的 NEAT 历史数据
+- `save_checkpoint()` 完成后显式 `del checkpoint_data` + `gc.collect(0)`
+- 每 5 代清理所有种群的 NEAT 历史数据 + 对手池内存缓存
+
+### 适应度收集优化
+
+- `_collect_episode_fitness()` 调用钩子时不再冗余拷贝 fitness 数组，由钩子内部按需 `.copy()`
 
 ### 清理时机
 
 | 时机 | 清理操作 |
 |------|---------|
 | 里程碑保存后 | 删除序列化中间变量 |
+| 检查点保存后 | del checkpoint_data + gc.collect(0) |
 | 进化完成后 | 清空 arena_fitnesses + gc.collect(0) |
-| 每 10 代 | 清理 NEAT 历史 + gc.collect + malloc_trim |
+| 每 5 代 | 清理 NEAT 历史 + 对手池 clear_memory_cache + gc.collect + malloc_trim |
 | 缓存 LRU 淘汰 | 显式 clear() + del |
+| ensure_cached 后 | 清理 entry 的 genome_data/network_data |
 
 ## 性能预估
 

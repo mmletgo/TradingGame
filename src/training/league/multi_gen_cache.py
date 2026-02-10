@@ -68,6 +68,11 @@ class MultiGenerationNetworkCache:
         if cache is None:
             return False
 
+        # 【内存泄漏修复】缓存创建成功后，清理 entry 的大数据字段
+        # get_entry() 加载的 genome_data/network_data 已不再需要
+        entry.genome_data = None
+        entry.network_data = None
+
         # 检查是否需要淘汰旧缓存
         self._evict_if_needed(agent_type)
 
