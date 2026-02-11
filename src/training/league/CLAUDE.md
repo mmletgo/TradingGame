@@ -53,7 +53,6 @@ src/training/league/
 | `convergence_generations` | 10 | 连续满足收敛条件的代数 |
 | `elite_ratio` | 0.1 | 精英比例，用于计算精英适应度 |
 | `freeze_on_convergence` | `True` | 收敛时是否冻结进化 |
-| `freeze_reevaluation_interval` | 20 | 冻结后每 N 代复评一次 |
 | `freeze_thaw_threshold` | 0.05 | 基准适应度下降超过 5% 则解冻 |
 
 #### 泛化优势比参数详解
@@ -345,8 +344,8 @@ def run_round(self):
 2. 冻结物种的泛化竞技场转为额外的 baseline 竞技场（更稳定的适应度评估）
 3. 冻结物种不参与 NEAT 进化（从 `_build_fitness_map` 中排除）
 
-**定期复评**：
-- 每 `freeze_reevaluation_interval`（默认 20）代复评一次
+**每代复评**：
+- 冻结物种每代都在 baseline 竞技场参与对战，因此每代都复评
 - 复评指标：当前 baseline 平均适应度 vs 冻结时的 baseline 平均适应度
 - 下降比例 `(freeze_fitness - current_fitness) / |freeze_fitness|` 超过 `freeze_thaw_threshold`（默认 5%）则解冻
 
@@ -511,7 +510,9 @@ network_data: dict[int, tuple] | None      # 延迟加载
 - `_current_round_arena_fitnesses` 清空后调用 `gc.collect(0)`
 - `_save_milestone()` 保存后删除 `genome_data_map` 等临时变量
 - `save_checkpoint()` 完成后显式 `del checkpoint_data` + `gc.collect(0)`
-- 每 5 代清理所有种群的 NEAT 历史数据 + 对手池内存缓存
+- 每代执行轻量级 NEAT 历史清理（`_cleanup_neat_history_light`）
+- 每 5 代清理所有种群的 NEAT 历史数据（完整版）+ 对手池内存缓存
+- `run_round()` 开始时显式清理旧 `_current_allocation`（clear assignments + 置 None）
 
 ### 适应度收集优化
 
@@ -524,7 +525,8 @@ network_data: dict[int, tuple] | None      # 延迟加载
 | 里程碑保存后 | 删除序列化中间变量 |
 | 检查点保存后 | del checkpoint_data + gc.collect(0) |
 | 进化完成后 | 清空 arena_fitnesses + gc.collect(0) |
-| 每 5 代 | 清理 NEAT 历史 + 对手池 clear_memory_cache + gc.collect + malloc_trim |
+| 每代 | 轻量级 NEAT 历史清理（genome_to_species、stagnation、ancestors） |
+| 每 5 代 | 完整 NEAT 历史清理 + 对手池 clear_memory_cache + gc.collect + malloc_trim |
 | 缓存 LRU 淘汰 | 显式 clear() + del |
 | ensure_cached 后 | 清理 entry 的 genome_data/network_data |
 

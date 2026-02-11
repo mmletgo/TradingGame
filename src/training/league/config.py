@@ -41,9 +41,8 @@ class LeagueTrainingConfig:
     convergence_generations: int = 10           # 连续满足条件的代数
     elite_ratio: float = 0.1                    # 精英比例，用于计算精英适应度，默认 top 10%
 
-    # 冻结与定期复评配置
+    # 冻结与复评配置
     freeze_on_convergence: bool = True           # 收敛时是否冻结进化
-    freeze_reevaluation_interval: int = 20       # 冻结后每 N 代复评一次
     freeze_thaw_threshold: float = 0.05          # 基准适应度下降超过 5% 则解冻
 
     def validate(self) -> None:
@@ -56,8 +55,6 @@ class LeagueTrainingConfig:
             raise ValueError("num_arenas must be at least 1")
         if self.episodes_per_arena < 1:
             raise ValueError("episodes_per_arena must be at least 1")
-        if self.freeze_reevaluation_interval < 1:
-            raise ValueError("freeze_reevaluation_interval must be at least 1")
         if not 0.0 < self.freeze_thaw_threshold < 1.0:
             raise ValueError("freeze_thaw_threshold must be between 0.0 and 1.0 (exclusive)")
 

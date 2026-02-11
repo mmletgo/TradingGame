@@ -415,12 +415,18 @@ class AtomicAction:
 
 ## 内存管理
 
-**1. NEAT 种群历史清理**
-- `genome_to_species` 字典：只保留当前代基因组的映射
-- `species.members`：清理已不存在的基因组引用
-- `stagnation.species_fitness`：清空物种适应度历史
-- `reproduction.ancestors`：清空祖先引用
-- `reporters` 统计数据：只保留最近 5 代
+**1. NEAT 种群历史清理（两级策略）**
+
+- **轻量级清理（`_cleanup_neat_history_light`，每代调用）**：
+  - `genome_to_species` 字典：只保留当前代基因组的映射
+  - `stagnation.species_fitness`：清空物种适应度历史
+  - `reproduction.ancestors`：清空祖先引用
+
+- **完整清理（`_cleanup_neat_history`，每 5 代调用）**：
+  - 以上轻量级清理的全部内容
+  - `species.members`：清理已不存在的基因组引用
+  - `reporters` 统计数据：只保留最近 5 代
+  - 清理空物种、更新 `best_genome` 引用
 
 **2. Agent 对象清理**
 - 清理 `Brain.network` 内部状态
@@ -429,6 +435,7 @@ class AtomicAction:
 
 **3. 进化后垃圾回收**
 - 所有种群进化完成后，统一调用三代 GC 和 malloc_trim()
+- `_update_populations_from_evolution` 中每个种群更新后调用 `gc.collect(0)` 清理年轻代
 
 **4. Worker 进程内存清理**
 - 在 `evolve`、`evolve_return_params` 和 `set_genomes` 命令处理后调用
@@ -439,10 +446,19 @@ class AtomicAction:
 
 **5. 临时网络对象清理**
 - 清理 `network.node_evals`、`network.values` 等属性
+- `_update_network_caches` 中 networks 临时列表使用后立即清理
 
 **6. 基因组内部数据清理**
 - `genome.connections.clear()` 后置为空字典
 - `genome.nodes.clear()` 后置为空字典
+
+**7. 进化结果中间变量清理**
+- `_update_single_population` 中 `params_list`、`old_genomes`、`old_to_clean`、`new_genomes` 使用后立即释放
+- `_apply_species_data_to_population` 中旧 `species.members` 在赋新值前显式 `clear()`
+
+**8. numpy view 引用链防护（neat-python）**
+- `FastFeedForwardNetwork.create_from_params` 使用 `np.ascontiguousarray()` 替代 `astype(copy=False)`
+- 确保网络数组独立于进化结果源数据，防止旧代数据因 view 引用无法释放
 
 ---
 

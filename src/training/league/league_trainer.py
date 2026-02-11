@@ -354,15 +354,12 @@ class LeagueTrainer(ParallelArenaTrainer):
                         f"elite_baseline={state.freeze_elite_fitness:.4f})"
                     )
 
-        # 2. 检查已冻结物种是否需要复评
-        interval = self.league_config.freeze_reevaluation_interval
+        # 2. 每代复评已冻结物种（baseline 数据每代都有）
         for agent_type in AgentType:
             state = self._freeze_states[agent_type]
             if not state.is_frozen:
                 continue
-
-            generations_frozen = self.generation - state.freeze_generation
-            if generations_frozen > 0 and generations_frozen % interval == 0:
+            if self.generation > state.freeze_generation:
                 self._reevaluate_frozen_species(agent_type, round_stats)
 
         # 3. 检查是否所有物种都已冻结
