@@ -9,6 +9,7 @@ import numpy as np
 from ctypes import CDLL, c_int
 from pathlib import Path
 from typing import Any, Callable
+from dataclasses import dataclass
 
 from src.config.config import AgentType, Config
 from src.core.log_engine.logger import get_logger
@@ -19,6 +20,16 @@ from src.training.league.league_fitness import LeagueFitnessAggregator, Generali
 from src.training.league.multi_gen_cache import MultiGenerationNetworkCache
 from src.training.league.opponent_pool_manager import OpponentPoolManager
 from src.training.population import SubPopulationManager, _serialize_genomes_numpy
+
+
+@dataclass
+class SpeciesFreezeState:
+    """物种冻结状态"""
+    is_frozen: bool = False
+    freeze_generation: int = 0           # 冻结时的代数
+    freeze_baseline_fitness: float = 0.0  # 冻结时的 baseline 平均适应度
+    freeze_elite_fitness: float = 0.0     # 冻结时的精英 baseline 平均适应度
+    thaw_count: int = 0                   # 解冻次数
 
 
 class LeagueTrainer(ParallelArenaTrainer):
@@ -65,6 +76,11 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 当前轮次各竞技场的适应度（用于泛化优势比计算）
         self._current_round_arena_fitnesses: dict[int, dict[AgentType, np.ndarray]] = {}
 
+        # 冻结状态
+        self._freeze_states: dict[AgentType, SpeciesFreezeState] = {
+            agent_type: SpeciesFreezeState() for agent_type in AgentType
+        }
+
     def setup(self) -> None:
         """初始化
 
@@ -109,6 +125,31 @@ class LeagueTrainer(ParallelArenaTrainer):
         else:
             self._current_round_arena_fitnesses[arena_id][agent_type] = fitness.copy()
 
+    def _build_fitness_map(
+        self,
+        avg_fitness: dict[tuple[AgentType, int], np.ndarray],
+    ) -> dict[tuple[AgentType, int], np.ndarray]:
+        """构建进化所需的适应度映射（排除冻结物种）
+
+        冻结物种不参与进化，从 fitness_map 中排除。
+        Worker 不收到进化命令 → 基因组保持不变。
+        """
+        fitness_map = super()._build_fitness_map(avg_fitness)
+
+        # 排除冻结物种
+        if self.league_config.freeze_on_convergence:
+            frozen_keys = set()
+            for agent_type, state in self._freeze_states.items():
+                if state.is_frozen:
+                    # 删除该类型的所有 sub_pop 的 key
+                    for key in list(fitness_map.keys()):
+                        if key[0] == agent_type:
+                            frozen_keys.add(key)
+            for key in frozen_keys:
+                del fitness_map[key]
+
+        return fitness_map
+
     def run_round(
         self,
         episode_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -140,7 +181,10 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 分配竞技场
         if self.pool_manager.has_any_historical_opponents():
-            self._current_allocation = self.arena_allocator.allocate(self.pool_manager)
+            frozen_types = {t for t, s in self._freeze_states.items() if s.is_frozen}
+            self._current_allocation = self.arena_allocator.allocate(
+                self.pool_manager, frozen_types if frozen_types else None
+            )
         else:
             # 对手池为空时，使用默认分配
             self._current_allocation = self.arena_allocator.allocate_no_historical()
@@ -161,6 +205,10 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 计算泛化优势比
         self._compute_and_log_generalization_advantage(round_stats, has_historical)
+
+        # 检查冻结/解冻
+        if self.league_config.freeze_on_convergence:
+            self._check_freeze_thaw(round_stats)
 
         # 5. 检查里程碑保存
         if self.generation > 0 and self.generation % self.league_config.milestone_interval == 0:
@@ -264,6 +312,113 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 【内存泄漏修复】强制释放中间计算的 numpy 数组
         gc.collect(0)
 
+    def _check_freeze_thaw(self, round_stats: dict[str, Any]) -> None:
+        """检查并执行冻结/解冻逻辑
+
+        1. 未冻结物种：若双重收敛 → 冻结
+        2. 已冻结物种：每 N 代复评一次
+        3. 所有物种冻结 → 标记训练完成
+
+        Args:
+            round_stats: 当前轮次统计信息
+        """
+        pop_converged = round_stats.get('pop_converged_by_type')
+        elite_converged = round_stats.get('elite_converged_by_type')
+        stats_available = pop_converged is not None and elite_converged is not None
+
+        # 1. 检查未冻结物种是否需要冻结
+        if stats_available:
+            for agent_type in AgentType:
+                state = self._freeze_states[agent_type]
+                if state.is_frozen:
+                    continue
+
+                # 双重收敛检查
+                is_dual_converged = (
+                    pop_converged.get(agent_type, False) and
+                    elite_converged.get(agent_type, False)
+                )
+                if is_dual_converged:
+                    # 获取当前 baseline 适应度作为基准
+                    baseline_avg = round_stats.get('baseline_avg_fitness', {})
+                    elite_baseline_avg = round_stats.get('elite_baseline_avg_fitness', {})
+
+                    state.is_frozen = True
+                    state.freeze_generation = self.generation
+                    state.freeze_baseline_fitness = baseline_avg.get(agent_type, 0.0)
+                    state.freeze_elite_fitness = elite_baseline_avg.get(agent_type, 0.0)
+
+                    self.logger.info(
+                        f"物种 {agent_type.name} 已冻结 (第 {self.generation} 代, "
+                        f"baseline={state.freeze_baseline_fitness:.4f}, "
+                        f"elite_baseline={state.freeze_elite_fitness:.4f})"
+                    )
+
+        # 2. 检查已冻结物种是否需要复评
+        interval = self.league_config.freeze_reevaluation_interval
+        for agent_type in AgentType:
+            state = self._freeze_states[agent_type]
+            if not state.is_frozen:
+                continue
+
+            generations_frozen = self.generation - state.freeze_generation
+            if generations_frozen > 0 and generations_frozen % interval == 0:
+                self._reevaluate_frozen_species(agent_type, round_stats)
+
+        # 3. 检查是否所有物种都已冻结
+        all_frozen = all(s.is_frozen for s in self._freeze_states.values())
+        round_stats['all_species_frozen'] = all_frozen
+        if all_frozen:
+            self.logger.info(">>> 所有物种已冻结，训练即将完成 <<<")
+
+    def _reevaluate_frozen_species(
+        self,
+        agent_type: AgentType,
+        round_stats: dict[str, Any],
+    ) -> None:
+        """复评冻结物种
+
+        比较当前 baseline 适应度与冻结时的基准：
+        - 下降超过阈值 → 解冻
+        - 否则 → 保持冻结
+
+        Args:
+            agent_type: 要复评的物种类型
+            round_stats: 当前轮次统计信息
+        """
+        state = self._freeze_states[agent_type]
+        threshold = self.league_config.freeze_thaw_threshold
+
+        # 获取当前 baseline 适应度
+        baseline_avg = round_stats.get('baseline_avg_fitness', {})
+        current_fitness = baseline_avg.get(agent_type, 0.0)
+
+        # 计算下降比例
+        freeze_fitness = state.freeze_baseline_fitness
+        if abs(freeze_fitness) > 1e-10:
+            drop_ratio = (freeze_fitness - current_fitness) / abs(freeze_fitness)
+        else:
+            drop_ratio = 0.0
+
+        self.logger.info(
+            f"物种 {agent_type.name} 复评 (冻结于第 {state.freeze_generation} 代): "
+            f"冻结时baseline={freeze_fitness:.4f}, 当前baseline={current_fitness:.4f}, "
+            f"下降比例={drop_ratio:.4f}, 阈值={threshold:.4f}"
+        )
+
+        if drop_ratio > threshold:
+            # 解冻
+            state.is_frozen = False
+            state.thaw_count += 1
+            self.logger.info(
+                f"物种 {agent_type.name} 已解冻 (下降 {drop_ratio:.2%} > {threshold:.2%}), "
+                f"累计解冻 {state.thaw_count} 次"
+            )
+        else:
+            self.logger.info(
+                f"物种 {agent_type.name} 保持冻结 (下降 {drop_ratio:.2%} <= {threshold:.2%})"
+            )
+
     def _log_generalization_advantage(
         self,
         stats: GeneralizationAdvantageStats,
@@ -295,7 +450,10 @@ class LeagueTrainer(ParallelArenaTrainer):
             elite_conv = elite_converged_by_type.get(agent_type, False)
 
             # 状态判断
-            if pop_conv and elite_conv:
+            freeze_state = self._freeze_states.get(agent_type)
+            if freeze_state and freeze_state.is_frozen:
+                status = f"已冻结(第{freeze_state.freeze_generation}代起)"
+            elif pop_conv and elite_conv:
                 status = "双重收敛"
             elif pop_conv:
                 status = "种群收敛"
@@ -417,6 +575,16 @@ class LeagueTrainer(ParallelArenaTrainer):
             'generation': self.generation,
             'pool_sizes': self.pool_manager.get_pool_sizes() if self.pool_manager else {},
             'last_injection_generation': self._last_injection_generation,
+            'freeze_states': {
+                agent_type.value: {
+                    'is_frozen': state.is_frozen,
+                    'freeze_generation': state.freeze_generation,
+                    'freeze_baseline_fitness': state.freeze_baseline_fitness,
+                    'freeze_elite_fitness': state.freeze_elite_fitness,
+                    'thaw_count': state.thaw_count,
+                }
+                for agent_type, state in self._freeze_states.items()
+            },
         }
 
         # 保存
@@ -449,6 +617,22 @@ class LeagueTrainer(ParallelArenaTrainer):
         if 'league_training' in checkpoint_data:
             league_data = checkpoint_data['league_training']
             self._last_injection_generation = league_data.get('last_injection_generation', 0)
+
+            # 恢复冻结状态
+            freeze_states_data = league_data.get('freeze_states', {})
+            for agent_type in AgentType:
+                data = freeze_states_data.get(agent_type.value, {})
+                if data:
+                    state = self._freeze_states[agent_type]
+                    state.is_frozen = data.get('is_frozen', False)
+                    state.freeze_generation = data.get('freeze_generation', 0)
+                    state.freeze_baseline_fitness = data.get('freeze_baseline_fitness', 0.0)
+                    state.freeze_elite_fitness = data.get('freeze_elite_fitness', 0.0)
+                    state.thaw_count = data.get('thaw_count', 0)
+
+            if any(s.is_frozen for s in self._freeze_states.values()):
+                frozen_names = [t.name for t, s in self._freeze_states.items() if s.is_frozen]
+                self.logger.info(f"已恢复冻结状态: {', '.join(frozen_names)}")
 
         # 加载对手池
         if self.pool_manager:
@@ -496,6 +680,17 @@ class LeagueTrainer(ParallelArenaTrainer):
                     break
 
                 stats = self.run_round(episode_callback=episode_callback)
+
+                # 所有物种冻结时退出训练
+                if stats.get('all_species_frozen', False):
+                    self.logger.info("所有物种已冻结，训练完成")
+                    # 执行回调（round_count 会在下面自然递增）
+                    if checkpoint_callback and self.generation % self.config.training.checkpoint_interval == 0:
+                        checkpoint_callback(self.generation)
+                    if progress_callback:
+                        progress_callback(stats)
+                    round_count += 1
+                    break
                 round_count += 1
 
                 # 检查点回调

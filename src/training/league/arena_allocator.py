@@ -58,15 +58,17 @@ class ArenaAllocator:
         self.config = config
         self.num_arenas = num_arenas
 
-    def allocate(self, pool_manager: OpponentPoolManager) -> ArenaAllocation:
+    def allocate(self, pool_manager: OpponentPoolManager, frozen_types: set[AgentType] | None = None) -> ArenaAllocation:
         """分配竞技场
 
         分配策略：
         1. 基准竞技场：全当前代 Main vs Main
         2. 泛化测试竞技场：按类型轮流测试，一种类型用 Main，其他用历史
+           - 冻结物种不需要泛化测试，改为额外的 baseline 竞技场
 
         Args:
             pool_manager: 对手池管理器
+            frozen_types: 已冻结的物种集合
 
         Returns:
             竞技场分配方案
@@ -98,6 +100,21 @@ class ArenaAllocator:
             for _ in range(self.config.num_generalization_arenas_per_type):
                 if arena_id >= self.num_arenas:
                     break
+
+                # 冻结物种不需要泛化测试，改为额外的 baseline 竞技场
+                if frozen_types and agent_type in frozen_types:
+                    assignment = ArenaAssignment(
+                        arena_id=arena_id,
+                        purpose='baseline',
+                        agent_sources={
+                            t: AgentSourceConfig(source='current')
+                            for t in AgentType
+                        },
+                    )
+                    assignments.append(assignment)
+                    baseline_ids.append(arena_id)
+                    arena_id += 1
+                    continue
 
                 # 采样历史对手
                 historical = pool_manager.sample_opponents_for_arena(
