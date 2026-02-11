@@ -567,6 +567,8 @@ class ParallelArenaTrainer:
 
             networks = [agent.brain.network for agent in population.agents]
             cache.update_networks(networks)
+            networks.clear()
+            del networks
 
     def _create_evolution_worker_pool(self) -> None:
         """创建进化 Worker 池
@@ -3694,6 +3696,7 @@ class ParallelArenaTrainer:
                         species_data,
                         deserialize_genomes,
                     )
+                    gc.collect(0)  # 每个种群更新后清理年轻代
             else:
                 if sub_pop_id == 0:
                     self._update_single_population(
@@ -3703,6 +3706,7 @@ class ParallelArenaTrainer:
                         species_data,
                         deserialize_genomes,
                     )
+                    gc.collect(0)  # 每个种群更新后清理年轻代
 
     def _update_single_population(
         self,
@@ -3763,6 +3767,14 @@ class ParallelArenaTrainer:
                     population.agents[idx].brain.update_from_network_params(
                         genome, params_list[idx]
                     )
+            # 释放中间变量
+            for p in params_list:
+                p.clear()
+            params_list.clear()
+            del params_list
+            del old_genomes
+            del old_to_clean
+            del new_genomes
         else:
             # 延迟反序列化：只更新网络参数（不更新 genome 引用）
             for idx, params in enumerate(params_list):
@@ -3810,6 +3822,14 @@ class ParallelArenaTrainer:
             # 标记数据已同步，不需要再延迟反序列化
             population._pending_genome_data = None
             population._genomes_dirty = False
+            # 释放中间变量
+            for p in params_list:
+                p.clear()
+            params_list.clear()
+            del params_list
+            del old_genomes
+            del old_to_clean
+            del new_genomes
 
             # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
 

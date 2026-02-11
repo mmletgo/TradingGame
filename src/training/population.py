@@ -285,6 +285,8 @@ def _apply_species_data_to_population(
         if sid in species_set.species:
             # 更新现有 species 的 members
             species = species_set.species[sid]
+            if species.members:
+                species.members.clear()  # 显式清空旧 dict
             species.members = members
             # 更新 representative（使用第一个成员）
             if members:
@@ -2333,6 +2335,29 @@ class Population:
             self.logger.info(
                 f"[MEMORY_NEAT_CLEANUP] {self.agent_type.value}: {stats_str}"
             )
+
+    def _cleanup_neat_history_light(self) -> None:
+        """轻量级 NEAT 历史清理（每代调用）
+
+        只清理 3 个关键数据结构，避免每代都执行完整清理的开销。
+        """
+        current_genome_ids = set(self.neat_pop.population.keys())
+
+        if hasattr(self.neat_pop, 'species') and self.neat_pop.species is not None:
+            species_set = self.neat_pop.species
+            if hasattr(species_set, 'genome_to_species'):
+                species_set.genome_to_species = {
+                    gid: sid for gid, sid in species_set.genome_to_species.items()
+                    if gid in current_genome_ids
+                }
+
+        if hasattr(self.neat_pop, 'stagnation') and self.neat_pop.stagnation is not None:
+            if hasattr(self.neat_pop.stagnation, 'species_fitness'):
+                self.neat_pop.stagnation.species_fitness = {}
+
+        if hasattr(self.neat_pop, 'reproduction') and self.neat_pop.reproduction is not None:
+            if hasattr(self.neat_pop.reproduction, 'ancestors'):
+                self.neat_pop.reproduction.ancestors = {}
 
     def _reset_neat_population(self) -> None:
         """重置 NEAT 种群

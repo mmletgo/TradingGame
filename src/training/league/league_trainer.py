@@ -133,7 +133,12 @@ class LeagueTrainer(ParallelArenaTrainer):
         assert self.arena_allocator is not None
         assert self.fitness_aggregator is not None
 
-        # 1. 分配竞技场
+        # 1. 清理旧 allocation
+        if self._current_allocation is not None:
+            self._current_allocation.assignments.clear()
+            self._current_allocation = None
+
+        # 分配竞技场
         if self.pool_manager.has_any_historical_opponents():
             self._current_allocation = self.arena_allocator.allocate(self.pool_manager)
         else:
@@ -500,6 +505,14 @@ class LeagueTrainer(ParallelArenaTrainer):
                 # 进度回调
                 if progress_callback:
                     progress_callback(stats)
+
+                # 每代执行轻量级 NEAT 历史清理
+                for population in self.populations.values():
+                    if isinstance(population, SubPopulationManager):
+                        for sub_pop in population.sub_populations:
+                            sub_pop._cleanup_neat_history_light()
+                    else:
+                        population._cleanup_neat_history_light()
 
                 # 内存清理（增强版）
                 if self.generation % 5 == 0:
