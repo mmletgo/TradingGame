@@ -52,6 +52,9 @@ src/training/league/
 | `convergence_threshold` | 0.01 | 收敛判断阈值 |
 | `convergence_generations` | 10 | 连续满足收敛条件的代数 |
 | `elite_ratio` | 0.1 | 精英比例，用于计算精英适应度 |
+| `freeze_on_convergence` | `True` | 收敛时是否冻结进化 |
+| `freeze_reevaluation_interval` | 20 | 冻结后每 N 代复评一次 |
+| `freeze_thaw_threshold` | 0.05 | 基准适应度下降超过 5% 则解冻 |
 
 #### 泛化优势比参数详解
 
@@ -177,7 +180,7 @@ entry_dir/
 - **generalization_test**：某类型 Main vs 其他类型历史版本
 
 主要方法：
-- `allocate(pool_manager)`：有历史对手时使用，分配完整的竞技场方案
+- `allocate(pool_manager, frozen_types=None)`：有历史对手时使用，分配完整的竞技场方案。冻结物种的泛化竞技场转为额外的 baseline 竞技场。
 - `allocate_no_historical()`：无历史对手时使用，全部分配为基准竞技场
 
 分配结果数据结构：
@@ -228,11 +231,11 @@ class GeneralizationAdvantageStats:
 主要流程：
 ```python
 def run_round(self):
-    # 1. 分配竞技场
+    # 1. 分配竞技场（冻结物种的泛化竞技场转为 baseline）
+    frozen_types = {t for t, s in self._freeze_states.items() if s.is_frozen}
     if self.pool_manager.has_any_historical_opponents():
-        self._current_allocation = self.arena_allocator.allocate(self.pool_manager)
+        self._current_allocation = self.arena_allocator.allocate(self.pool_manager, frozen_types)
     else:
-        # 对手池为空时，全部为基准竞技场
         self._current_allocation = self.arena_allocator.allocate_no_historical()
 
     # 2. 确保历史对手网络已缓存
@@ -241,16 +244,26 @@ def run_round(self):
     # 3. 运行 episodes
     round_stats = self._run_episodes()
 
-    # 4. 汇总适应度并进化
+    # 4. 汇总适应度并进化（冻结物种不参与进化）
     self._evolve_populations()
 
-    # 5. 检查里程碑保存
+    # 5. 检查冻结/解冻
+    self._check_freeze_thaw(round_stats)
+
+    # 6. 检查里程碑保存
     if generation % milestone_interval == 0:
         self._save_milestone()
 
-    # 6. 清理对手池
+    # 7. 清理对手池
     self.pool_manager.cleanup_all()
 ```
+
+**冻结相关方法**：
+- `_build_fitness_map()` - 覆写父类方法，排除冻结物种的适应度（使其不参与进化）
+- `_check_freeze_thaw(round_stats)` - 检查未冻结物种的双重收敛→冻结，已冻结物种的定期复评→解冻
+- `_reevaluate_frozen_species(agent_type, round_stats)` - 复评单个冻结物种，比较 baseline 适应度下降比例
+
+**冻结状态**：`_freeze_states: dict[AgentType, SpeciesFreezeState]`，随检查点持久化。
 
 ## 竞技场分配方案
 
@@ -265,6 +278,8 @@ def run_round(self):
 | Arena 52-63 | 12 | 做市商泛化测试 |
 
 总计：16 + 12×4 = 64 个竞技场
+
+**冻结物种的竞技场重分配**：冻结物种的泛化竞技场转为额外的 baseline 竞技场。例如 WHALE 冻结后：16+12=28 个 baseline，36 个泛化（其他 3 种类型各 12 个）。
 
 ## 适应度计算
 
@@ -321,6 +336,31 @@ def run_round(self):
 | 否 | 是 | 精英收敛（探索个体拉低平均） |
 | 否 | 否 | 未收敛 |
 
+### 物种冻结与定期复评
+
+物种达到双重收敛后，冻结其 NEAT 进化（基因组不再变异/交叉），但仍作为对手参与所有竞技场。
+
+**冻结流程**：
+1. 某物种达到双重收敛 → 记录当前 baseline 适应度作为基准 → 冻结
+2. 冻结物种的泛化竞技场转为额外的 baseline 竞技场（更稳定的适应度评估）
+3. 冻结物种不参与 NEAT 进化（从 `_build_fitness_map` 中排除）
+
+**定期复评**：
+- 每 `freeze_reevaluation_interval`（默认 20）代复评一次
+- 复评指标：当前 baseline 平均适应度 vs 冻结时的 baseline 平均适应度
+- 下降比例 `(freeze_fitness - current_fitness) / |freeze_fitness|` 超过 `freeze_thaw_threshold`（默认 5%）则解冻
+
+**隐式冷却期**：解冻后需要 `convergence_generations`（10 代）连续收敛才会重新冻结，天然防止快速反复冻结/解冻。
+
+**训练完成**：所有 4 种物种均冻结时，训练自动完成。
+
+**冻结状态持久化**：`SpeciesFreezeState` 随检查点保存/恢复，包含：
+- `is_frozen`：是否冻结
+- `freeze_generation`：冻结时的代数
+- `freeze_baseline_fitness`：冻结时的 baseline 平均适应度
+- `freeze_elite_fitness`：冻结时的精英 baseline 平均适应度
+- `thaw_count`：累计解冻次数
+
 ### 日志输出示例
 
 ```
@@ -331,11 +371,24 @@ INFO -   WHALE: 种群=+0.0005(基准=0.1234,泛化=0.1239) | 精英=+0.0008(基
 INFO -   MARKET_MAKER: 种群=+0.0012(基准=0.0567,泛化=0.0579) | 精英=+0.0003(基准=0.0789,泛化=0.0792) [双重收敛]
 ```
 
-全部收敛时：
+冻结后：
 ```
-INFO - 第 200 代泛化优势比 (首次收敛于第 195 代):
+INFO - 物种 WHALE 已冻结 (第 120 代, baseline=0.1234, elite_baseline=0.1567)
+INFO - 第 140 代泛化优势比:
 INFO -   RETAIL: 种群=+0.0023(基准=0.0512,泛化=0.0535) | 精英=+0.0015(基准=0.0823,泛化=0.0838) [双重收敛]
-INFO -   >>> 所有物种已双重收敛，可以考虑结束训练 <<<
+INFO -   WHALE: 种群=+0.0005(基准=0.1234,泛化=0.1239) | 精英=+0.0008(基准=0.1567,泛化=0.1575) [已冻结(第120代起)]
+```
+
+复评日志：
+```
+INFO - 物种 WHALE 复评 (冻结于第 120 代): 冻结时baseline=0.1234, 当前baseline=0.1200, 下降比例=0.0275, 阈值=0.0500
+INFO - 物种 WHALE 保持冻结 (下降 2.75% <= 5.00%)
+```
+
+所有物种冻结时：
+```
+INFO - >>> 所有物种已冻结，训练即将完成 <<<
+INFO - 所有物种已冻结，训练完成
 ```
 
 ### 前提条件
