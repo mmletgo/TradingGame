@@ -2194,6 +2194,35 @@ class ParallelArenaTrainer:
                         mm_array[:num_agents].copy(),
                     )
 
+                    # 计算做市商 spread score 并累积到 AgentAccountState
+                    arena = self.arena_states[arena_idx]
+                    for i in range(num_agents):
+                        state = arena_states_list[i]
+                        if state.is_liquidated:
+                            continue
+                        num_bid = int(mm_array[i, 0])
+                        num_ask = int(mm_array[i, 1])
+                        if num_bid == 0 or num_ask == 0:
+                            continue
+                        bid_prices = mm_array[i, 2:2 + num_bid]
+                        bid_qtys = mm_array[i, 12:12 + num_bid]
+                        ask_prices = mm_array[i, 22:22 + num_ask]
+                        ask_qtys = mm_array[i, 32:32 + num_ask]
+                        valid_bids = bid_prices[bid_qtys > 0]
+                        valid_asks = ask_prices[ask_qtys > 0]
+                        if len(valid_bids) == 0 or len(valid_asks) == 0:
+                            continue
+                        best_bid = np.max(valid_bids)
+                        best_ask = np.min(valid_asks)
+                        if best_ask <= best_bid:
+                            tick_score = 1.0  # 交叉报价，视为最紧盘口
+                        else:
+                            quoted_spread = best_ask - best_bid
+                            max_spread = 200.0 * tick_size
+                            tick_score = max(0.0, 1.0 - quoted_spread / max_spread)
+                        state.cumulative_spread_score += tick_score
+                        state.quote_tick_count += 1
+
                     # 如果使用 Worker pool，跳过填充 list 格式结果
                     if self._execute_worker_pool is not None:
                         continue
@@ -3410,7 +3439,8 @@ class ParallelArenaTrainer:
     ) -> np.ndarray:
         """计算单个种群在单个竞技场中的适应度
 
-        计算每个 Agent 的实际收益率作为适应度。
+        非做市商：使用纯收益率。
+        做市商：使用四组件复合适应度（PnL + Spread质量 + Maker成交量 + 存活）。
 
         Args:
             population: 种群
@@ -3424,7 +3454,42 @@ class ParallelArenaTrainer:
         if n == 0:
             return np.zeros(0, dtype=np.float32)
 
-        # 计算所有 Agent 的实际收益率
+        # 做市商使用四组件复合适应度
+        if population.agent_type == AgentType.MARKET_MAKER:
+            pnl_arr = np.zeros(n, dtype=np.float32)
+            spread_arr = np.zeros(n, dtype=np.float32)
+            volume_arr = np.zeros(n, dtype=np.float32)
+            survival_arr = np.zeros(n, dtype=np.float32)
+
+            for idx, agent in enumerate(population.agents):
+                state = arena.agent_states.get(agent.agent_id)
+                if state is None:
+                    continue
+                equity = state.get_equity(current_price)
+                initial = state.initial_balance
+                if initial > 0:
+                    pnl_arr[idx] = (equity - initial) / initial
+                if state.quote_tick_count > 0:
+                    spread_arr[idx] = (
+                        state.cumulative_spread_score / state.quote_tick_count
+                    )
+                volume_arr[idx] = float(state.maker_volume)
+                survival_arr[idx] = 0.0 if state.is_liquidated else 1.0
+
+            # 归一化 maker 成交量
+            max_volume = np.max(volume_arr)
+            norm_volume = volume_arr / (max_volume + 1.0)
+
+            w = self.config.training
+            fitnesses = (
+                w.mm_fitness_pnl_weight * pnl_arr
+                + w.mm_fitness_spread_weight * spread_arr
+                + w.mm_fitness_volume_weight * norm_volume
+                + w.mm_fitness_survival_weight * survival_arr
+            )
+            return fitnesses
+
+        # 非做市商：计算所有 Agent 的实际收益率
         fitnesses = np.zeros(n, dtype=np.float32)
         for idx, agent in enumerate(population.agents):
             agent_state = arena.agent_states.get(agent.agent_id)

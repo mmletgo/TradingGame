@@ -2328,6 +2328,26 @@ class Trainer:
                             is_market_maker=True,
                             agent_ref=agent,
                         ))
+
+                # 计算做市商盘口价差质量 spread_score 并累积
+                valid_bid_prices: list[float] = [
+                    s["price"] for s in bid_orders
+                    if int(s.get("quantity", 0)) > 0
+                ]
+                valid_ask_prices: list[float] = [
+                    s["price"] for s in ask_orders
+                    if int(s.get("quantity", 0)) > 0
+                ]
+                if valid_bid_prices and valid_ask_prices:
+                    best_bid = max(valid_bid_prices)
+                    best_ask = min(valid_ask_prices)
+                    tick_size = orderbook.tick_size
+                    if best_ask <= best_bid:
+                        tick_score = 1.0
+                    else:
+                        tick_score = max(0.0, 1.0 - (best_ask - best_bid) / (200.0 * tick_size))
+                    agent._cumulative_spread_score += tick_score
+                    agent._quote_tick_count += 1
             else:
                 # 非做市商
                 account = agent.account

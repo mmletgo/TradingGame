@@ -1530,7 +1530,7 @@ from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.agents.whale import WhaleAgent
 from src.bio.brain.brain import Brain
-from src.config.config import AgentConfig, AgentType, Config
+from src.config.config import AgentConfig, AgentType, Config, TrainingConfig
 from src.core.log_engine.logger import get_logger
 
 
@@ -1569,6 +1569,7 @@ class Population:
     neat_config: neat.Config
     neat_config_path: str  # NEAT 配置文件路径
     agent_config: AgentConfig
+    _training_config: TrainingConfig  # 训练配置（用于做市商复合适应度权重）
     generation: int
     logger: logging.Logger
     _executor: ThreadPoolExecutor | None
@@ -1603,6 +1604,7 @@ class Population:
         """
         self.agent_type = agent_type
         self.agent_config = config.agents[agent_type]
+        self._training_config: TrainingConfig = config.training  # 用于做市商复合适应度权重
         self.generation = 0
         self.logger = get_logger("population")
         self._executor = None
@@ -1796,7 +1798,8 @@ class Population:
         """评估种群适应度
 
         使用向量化运算计算所有 Agent 的适应度，并按适应度从高到低排序。
-        统一使用实际收益率 (equity - initial) / initial
+        非做市商：统一使用实际收益率 (equity - initial) / initial
+        做市商：使用四组件复合适应度（PnL + 盘口价差 + 成交量 + 存活）
 
         Args:
             current_price: 当前市场价格，用于计算未实现盈亏
@@ -1808,6 +1811,10 @@ class Population:
         if n == 0:
             return []
 
+        if self.agent_type == AgentType.MARKET_MAKER:
+            return self._evaluate_market_maker(current_price, n)
+
+        # 非做市商：纯收益率适应度
         # 1. 收集所有 Agent 的账户数据到 numpy 数组
         balances = np.array([a.account.balance for a in self.agents])
         quantities = np.array([a.account.position.quantity for a in self.agents])
@@ -1827,6 +1834,67 @@ class Population:
         sorted_indices = np.argsort(fitnesses)[::-1]
 
         # 6. 按排序索引构建结果
+        return [(self.agents[i], float(fitnesses[i])) for i in sorted_indices]
+
+    def _evaluate_market_maker(
+        self,
+        current_price: float,
+        n: int,
+    ) -> list[tuple[Agent, float]]:
+        """做市商复合适应度评估
+
+        四组件加权适应度：
+        - PnL 收益率：(equity - initial) / initial
+        - 盘口价差质量：cumulative_spread_score / quote_tick_count
+        - Maker 成交量：归一化后的 maker_volume
+        - 存活奖励：未被强平为 1.0，否则为 0.0
+
+        Args:
+            current_price: 当前市场价格
+            n: Agent 数量
+
+        Returns:
+            按适应度从高到低排序的 (Agent, 适应度) 元组列表
+        """
+        pnl_arr = np.zeros(n, dtype=np.float64)
+        spread_arr = np.zeros(n, dtype=np.float64)
+        volume_arr = np.zeros(n, dtype=np.float64)
+        survival_arr = np.zeros(n, dtype=np.float64)
+
+        for idx, agent in enumerate(self.agents):
+            # PnL 收益率
+            equity = agent.account.get_equity(current_price)
+            initial = agent.account.initial_balance
+            if initial > 0:
+                pnl_arr[idx] = (equity - initial) / initial
+
+            # 盘口价差质量（平均 spread score）
+            if agent._quote_tick_count > 0:
+                spread_arr[idx] = agent._cumulative_spread_score / agent._quote_tick_count
+
+            # Maker 成交量（原始值，后续归一化）
+            volume_arr[idx] = float(agent.account.maker_volume)
+
+            # 存活奖励
+            survival_arr[idx] = 0.0 if agent.is_liquidated else 1.0
+
+        # 归一化 maker_volume：除以 (max_volume + 1.0) 避免除零
+        max_volume = np.max(volume_arr) if n > 0 else 0.0
+        norm_volume = volume_arr / (max_volume + 1.0)
+
+        # 加权求和
+        w = self._training_config
+        fitnesses = (
+            w.mm_fitness_pnl_weight * pnl_arr
+            + w.mm_fitness_spread_weight * spread_arr
+            + w.mm_fitness_volume_weight * norm_volume
+            + w.mm_fitness_survival_weight * survival_arr
+        )
+
+        # 获取从高到低的排序索引
+        sorted_indices = np.argsort(fitnesses)[::-1]
+
+        # 按排序索引构建结果
         return [(self.agents[i], float(fitnesses[i])) for i in sorted_indices]
 
     def evolve(self, current_price: float) -> None:
@@ -2697,7 +2765,8 @@ class SubPopulationManager:
     ) -> list[tuple[Agent, float]]:
         """评估所有Agent适应度
 
-        统一使用实际收益率 (equity - initial) / initial
+        委托给各子种群的 Population.evaluate()。
+        非做市商使用纯收益率，做市商使用四组件复合适应度。
 
         Args:
             current_price: 当前价格

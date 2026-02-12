@@ -73,7 +73,7 @@ Episode循环（每episode N个tick）
         └─ 串行执行（订单提交）
 
 NEAT进化阶段
-├─ 计算适应度（基于PnL）
+├─ 计算适应度（非做市商基于PnL，做市商使用复合适应度）
 ├─ 执行NEAT进化算法
 ├─ 清理历史数据防止内存泄漏
 └─ 从新基因组创建Agent
@@ -107,6 +107,28 @@ NEAT进化阶段
 - 散户/高级散户/庄家：同时只能挂一单
 - 做市商：每tick必须双边挂单，先撤旧单再挂新单
 - 所有操作在最新价 ±100 个最小变动单位内
+
+### 做市商复合适应度
+
+做市商使用四组件加权复合适应度，激励做市商不仅盈利，还要实际提供流动性：
+
+```
+mm_fitness = α × pnl + β × spread_score + γ × volume_score + δ × survival
+```
+
+| 组件 | 权重 | 计算方式 | 范围 | 激励方向 |
+|------|------|---------|------|---------|
+| `pnl` | α=0.4 | `(equity - initial) / initial` | [-1, +∞) | 盈利能力 |
+| `spread_score` | β=0.3 | 每 tick 报价价差的归一化得分，episode 内取均值 | [0, 1] | 提供紧盘口 |
+| `volume_score` | γ=0.2 | `maker_volume / (max_maker_volume_in_pop + 1)` | [0, 1) | 做市成交量 |
+| `survival` | δ=0.1 | `1.0 if alive else 0.0` | {0, 1} | 风控存活 |
+
+**Spread Score 计算：**
+- 每 tick 从做市商报价中提取最优买价和最优卖价
+- `tick_spread_score = max(0.0, 1.0 - quoted_spread / (200 * tick_size))`
+- Episode 内所有 tick 的 spread_score 取平均值
+
+权重可通过 `TrainingConfig` 的 `mm_fitness_*_weight` 参数配置。
 
 ### 鲶鱼机制
 

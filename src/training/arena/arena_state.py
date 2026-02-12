@@ -44,6 +44,8 @@ class AgentAccountState:
         order_counter: 订单计数器
         maker_fee_rate: 挂单费率
         taker_fee_rate: 吃单费率
+        cumulative_spread_score: 累积 spread 归一化得分（做市商用）
+        quote_tick_count: 有效报价 tick 数（做市商用）
     """
 
     agent_id: int
@@ -64,6 +66,8 @@ class AgentAccountState:
     taker_fee_rate: float
     bid_order_ids: list[int] = field(default_factory=list)
     ask_order_ids: list[int] = field(default_factory=list)
+    cumulative_spread_score: float = 0.0   # 累积 spread 归一化得分
+    quote_tick_count: int = 0              # 有效报价 tick 数
 
     @classmethod
     def from_agent(cls, agent: "Agent") -> "AgentAccountState":
@@ -132,6 +136,8 @@ class AgentAccountState:
         self.taker_fee_rate = config.taker_fee_rate
         self.bid_order_ids = []
         self.ask_order_ids = []
+        self.cumulative_spread_score = 0.0
+        self.quote_tick_count = 0
 
     def get_equity(self, current_price: float) -> float:
         """计算净值

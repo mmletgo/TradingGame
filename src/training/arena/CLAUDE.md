@@ -50,6 +50,8 @@ class AgentAccountState:
     taker_fee_rate: float
     bid_order_ids: list[int]   # 做市商买单挂单 ID 列表
     ask_order_ids: list[int]   # 做市商卖单挂单 ID 列表
+    cumulative_spread_score: float = 0.0   # 累积 spread 归一化得分
+    quote_tick_count: int = 0              # 有效报价 tick 数
 ```
 
 **主要方法：**
@@ -267,12 +269,16 @@ class ParallelArenaTrainer:
 
 **适应度计算：**
 
-适应度直接使用每个 Agent 的实际收益率：
-
+非做市商：直接使用每个 Agent 的实际收益率：
 ```python
-# Agent 适应度 = 实际收益率
 fitness = (equity - initial) / initial
 ```
+
+做市商：四组件加权复合适应度：
+```python
+fitness = α × pnl + β × avg_spread_score + γ × norm_volume + δ × survival
+```
+其中 spread_score 在每个 tick 的批量推理后计算并累积到 AgentAccountState 中。
 
 **鲶鱼方向平衡：**
 

@@ -83,7 +83,8 @@ Numba JIT 加速的高频数学函数模块。
 
 | 种群类型 | 适应度公式 |
 |---------|-----------|
-| 所有物种 | (equity - initial) / initial |
+| 非做市商物种 | (equity - initial) / initial |
+| 做市商 | α × pnl + β × spread + γ × volume + δ × survival |
 
 **关键方法：**
 - `create_agents(genomes)` - 从基因组列表创建 Agent（小批量串行，大批量并行）
@@ -92,6 +93,7 @@ Numba JIT 加速的高频数学函数模块。
 - `evolve_with_cached_fitness(current_price)` - 使用缓存的适应度进行进化
 - `get_elite_species_avg_fitness()` - 获取最精英 species 的平均适应度
 - `reset_agents()` - 重置所有 Agent 账户
+- `_evaluate_market_maker(current_price, n)` - 做市商四组件复合适应度评估
 - `accumulate_fitness(current_price)` - 累积当前 episode 的适应度（所有物种统一使用实际收益率）
 - `apply_accumulated_fitness()` - 将累积的平均适应度应用到基因组
 - `clear_accumulated_fitness()` - 清空累积的适应度数据

@@ -142,6 +142,10 @@ class Agent:
         # 初始化订单计数器
         self._order_counter = 0
 
+        # 做市商 spread 追踪（单竞技场模式使用）
+        self._cumulative_spread_score: float = 0.0
+        self._quote_tick_count: int = 0
+
     def observe(
         self, market_state: NormalizedMarketState, orderbook: OrderBook
     ) -> np.ndarray:
@@ -531,6 +535,10 @@ class Agent:
 
         # 重置订单计数器
         self._order_counter = 0
+
+        # 重置 spread 追踪
+        self._cumulative_spread_score = 0.0
+        self._quote_tick_count = 0
 
     def update_brain(self, genome: neat.DefaultGenome, config: neat.Config) -> None:
         """原地更新 brain，复用 Agent 对象
