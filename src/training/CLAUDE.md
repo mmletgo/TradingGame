@@ -79,28 +79,20 @@ Numba JIT 加速的高频数学函数模块。
 - 执行 NEAT 进化算法
 - 重置 Agent 账户状态
 
-**适应度计算公式（相对收益）：**
+**适应度计算公式：**
 
 | 种群类型 | 适应度公式 |
 |---------|-----------|
-| 散户 | 相对收益率 |
-| 高级散户 | 相对收益率 |
-| 庄家 | 0.8 × 相对收益率 + 0.2 × sigmoid(波动性贡献排名归一化) |
-| 做市商 | 0.8 × 相对收益率 + 0.2 × sigmoid(maker_volume 排名归一化) |
-
-**相对收益率 = Agent 收益率 - 市场平均收益率**
-
-**sigmoid 排名变换：** 使用 `_sigmoid_rank_transform(rank_normalized, steepness=10.0)` 对线性排名进行非线性映射，放大头部和尾部的差距，使精英个体获得更高的分数，加速自然选择。
+| 所有物种 | (equity - initial) / initial |
 
 **关键方法：**
 - `create_agents(genomes)` - 从基因组列表创建 Agent（小批量串行，大批量并行）
-- `evaluate(current_price, market_avg_return, global_volume_rank_normalized)` - 评估种群适应度并排序
-  - 可选参数 `global_volume_rank_normalized`: 做市商使用的全局流动性排名（由 SubPopulationManager 传入）
+- `evaluate(current_price)` - 评估种群适应度并排序
 - `evolve(current_price)` - 执行一代 NEAT 进化，异常时自动重置种群
 - `evolve_with_cached_fitness(current_price)` - 使用缓存的适应度进行进化
 - `get_elite_species_avg_fitness()` - 获取最精英 species 的平均适应度
 - `reset_agents()` - 重置所有 Agent 账户
-- `accumulate_fitness(current_price, market_avg_return)` - 累积当前 episode 的适应度
+- `accumulate_fitness(current_price)` - 累积当前 episode 的适应度（所有物种统一使用实际收益率）
 - `apply_accumulated_fitness()` - 将累积的平均适应度应用到基因组
 - `clear_accumulated_fitness()` - 清空累积的适应度数据
 
@@ -143,20 +135,9 @@ Numba JIT 加速的高频数学函数模块。
 
 **主要方法：**
 - `reset_agents()` - 重置所有子种群的Agent
-- `evaluate(current_price)` - 评估所有Agent适应度
+- `evaluate(current_price)` - 评估所有Agent适应度（统一使用实际收益率）
 - `evolve(current_price)` - 进化所有子种群（串行）
 - `get_all_genomes()` - 获取所有子种群的基因组
-
-**做市商全局排名：**
-
-做市商的适应度公式中包含 `maker_volume 排名归一化` 项。当使用 SubPopulationManager 管理多个子种群时，排名在 **所有子种群的全部做市商之间** 全局计算，而不是在每个子种群内部独立计算。
-
-实现方式：
-1. `evaluate()` 方法先收集所有子种群的 `maker_volume`
-2. 对全部做市商进行全局排名并归一化到 `[0, 1]`
-3. 将排名切片传递给各子种群的 `Population.evaluate()` 方法
-
-这确保了流动性提供能力的评估是公平的——在全部400个做市商中提供最多流动性的个体获得最高排名分，而不是仅在其所属的100个个体子种群中排名。
 
 ### WorkerConfig (population.py)
 

@@ -113,7 +113,6 @@ class LeagueTrainer(ParallelArenaTrainer):
         agent_type: AgentType,
         fitness: np.ndarray,
         current_price: float,
-        market_avg_return: float,
     ) -> None:
         """收集各竞技场的适应度用于泛化优势比计算"""
         if arena_id not in self._current_round_arena_fitnesses:

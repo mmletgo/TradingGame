@@ -260,27 +260,19 @@ class ParallelArenaTrainer:
 | `save_checkpoint(path)` | 保存检查点 |
 | `load_checkpoint(path)` | 加载检查点 |
 | `stop()` | 停止训练并清理资源（包括关闭 Execute Worker 池） |
-| `_calculate_market_avg_return()` | 计算单个竞技场的市场平均收益率 |
+| `setup_for_testing(populations_data)` | 测试模式初始化：从 genome 数据创建种群，不创建进化 Worker 池 |
 | `_balance_catfish_directions()` | 强制平衡趋势创造者鲶鱼的方向 |
 | `_check_liquidations_vectorized(arena, current_price)` | 向量化强平检查（使用 NumPy 批量计算保证金率） |
 | `_prepare_batch_data_vectorized(arena, mid_price)` | 向量化准备批量推理数据（利用 ArenaState 扁平化数组） |
 
-**相对收益适应度：**
+**适应度计算：**
 
-为避免市场整体方向偏移导致的正反馈循环，适应度计算使用相对收益而非绝对收益：
+适应度直接使用每个 Agent 的实际收益率：
 
 ```python
-# 计算每个竞技场的市场平均收益率
-market_avg_return = mean([(equity - initial) / initial for all agents])
-
-# Agent 适应度 = Agent 收益率 - 市场平均收益率
-fitness = agent_return - market_avg_return
+# Agent 适应度 = 实际收益率
+fitness = (equity - initial) / initial
 ```
-
-这样可以：
-- 消除市场整体方向（上涨/下跌）的影响
-- 鼓励 Agent 做出相对于市场的超额收益
-- 即使市场整体下跌，表现好于平均的 Agent 仍能获得正向适应度
 
 **鲶鱼方向平衡：**
 
@@ -637,19 +629,6 @@ with pool:
         ),
         ...
     })
-```
-
-### 启动脚本
-
-```bash
-# 默认训练
-python scripts/train_parallel_arena.py --rounds 100
-
-# 自定义参数
-python scripts/train_parallel_arena.py --num-arenas 8 --episodes-per-arena 5 --rounds 200
-
-# 从检查点恢复
-python scripts/train_parallel_arena.py --resume checkpoints/parallel_arena_gen_50.pkl
 ```
 
 ## 性能优化

@@ -826,7 +826,6 @@ class ParallelArenaTrainer:
         stats["episodes_this_round"] = episodes_this_round
         stats["total_episodes"] = self.total_episodes
         stats["avg_fitnesses"] = avg_fitness
-        stats["species_fitness_stats"] = self._collect_species_fitness_stats()
 
         # 垃圾回收
         gc.collect(0)
@@ -895,65 +894,6 @@ class ParallelArenaTrainer:
             "arena_end_reasons": end_reasons,
             "arena_end_ticks": end_ticks,
         }
-
-    def _collect_species_fitness_stats(self) -> dict[AgentType, dict[str, Any]]:
-        """收集各物种的 NEAT species 适应度统计
-
-        遍历各种群的 NEAT population，收集每个 species 的平均适应度。
-
-        Returns:
-            {AgentType: {"species_count": int, "species_avg_fitnesses": list[float]}}
-        """
-        result: dict[AgentType, dict[str, Any]] = {}
-
-        for agent_type, population in self.populations.items():
-            species_avg_fitnesses: list[float] = []
-
-            # SubPopulationManager 需要遍历所有子种群
-            if isinstance(population, SubPopulationManager):
-                for sub_pop in population.sub_populations:
-                    species_avg_fitnesses.extend(
-                        self._get_species_fitnesses_from_neat_pop(sub_pop.neat_pop)
-                    )
-            else:
-                # Population 直接访问 neat_pop
-                species_avg_fitnesses.extend(
-                    self._get_species_fitnesses_from_neat_pop(population.neat_pop)
-                )
-
-            result[agent_type] = {
-                "species_count": len(species_avg_fitnesses),
-                "species_avg_fitnesses": species_avg_fitnesses,
-            }
-
-        return result
-
-    def _get_species_fitnesses_from_neat_pop(self, neat_pop: Any) -> list[float]:
-        """从 NEAT population 获取各 species 的平均适应度
-
-        Args:
-            neat_pop: NEAT Population 对象
-
-        Returns:
-            各 species 的平均适应度列表
-        """
-        species_avg_fitnesses: list[float] = []
-
-        if not hasattr(neat_pop, "species") or neat_pop.species is None:
-            return species_avg_fitnesses
-
-        species_set = neat_pop.species
-        if not hasattr(species_set, "species") or not species_set.species:
-            return species_avg_fitnesses
-
-        for species in species_set.species.values():
-            member_fitnesses = species.get_fitnesses()
-            valid_fitnesses = [f for f in member_fitnesses if f is not None]
-            if valid_fitnesses:
-                avg = sum(valid_fitnesses) / len(valid_fitnesses)
-                species_avg_fitnesses.append(avg)
-
-        return species_avg_fitnesses
 
     def _reset_all_arenas(self) -> None:
         """重置所有竞技场状态"""
@@ -3396,7 +3336,6 @@ class ParallelArenaTrainer:
         agent_type: AgentType,
         fitness: np.ndarray,
         current_price: float,
-        market_avg_return: float,
     ) -> None:
         """竞技场适应度收集钩子（子类可重写）
 
@@ -3407,15 +3346,13 @@ class ParallelArenaTrainer:
             agent_type: Agent 类型
             fitness: 适应度数组
             current_price: 当前价格
-            market_avg_return: 市场平均收益率
         """
         pass  # 默认空实现
 
     def _collect_episode_fitness(self) -> dict[tuple[AgentType, int], np.ndarray]:
         """收集单个 episode 的适应度（跨所有竞技场求和）
 
-        使用相对收益适应度：Agent 收益率 - 市场平均收益率
-        这样可以消除市场整体方向的影响，鼓励 Agent 做出相对于市场的超额收益
+        计算每个 Agent 的实际收益率作为适应度。
         """
         accumulated: dict[tuple[AgentType, int], np.ndarray] = {}
 
@@ -3432,20 +3369,17 @@ class ParallelArenaTrainer:
             else:
                 current_price = arena.matching_engine._orderbook.last_price
 
-            # 计算该竞技场的市场平均收益率（用于相对适应度）
-            market_avg_return = self._calculate_market_avg_return(arena, current_price)
-
             for agent_type, population in self.populations.items():
                 if isinstance(population, SubPopulationManager):
                     for sub_pop in population.sub_populations:
                         key = (agent_type, sub_pop.sub_population_id or 0)
                         fitness_arr = self._calculate_fitness_for_population(
-                            sub_pop, arena, current_price, market_avg_return
+                            sub_pop, arena, current_price
                         )
                         # 调用钩子（不再冗余 copy，钩子内部按需拷贝）
                         self._on_arena_fitness_collected(
                             arena.arena_id, agent_type, fitness_arr,
-                            current_price, market_avg_return
+                            current_price
                         )
                         if key not in accumulated:
                             accumulated[key] = fitness_arr.copy()
@@ -3454,12 +3388,12 @@ class ParallelArenaTrainer:
                 else:
                     key = (agent_type, 0)
                     fitness_arr = self._calculate_fitness_for_population(
-                        population, arena, current_price, market_avg_return
+                        population, arena, current_price
                     )
                     # 调用钩子（不再冗余 copy，钩子内部按需拷贝）
                     self._on_arena_fitness_collected(
                         arena.arena_id, agent_type, fitness_arr,
-                        current_price, market_avg_return
+                        current_price
                     )
                     if key not in accumulated:
                         accumulated[key] = fitness_arr.copy()
@@ -3468,53 +3402,20 @@ class ParallelArenaTrainer:
 
         return accumulated
 
-    def _calculate_market_avg_return(
-        self, arena: ArenaState, current_price: float
-    ) -> float:
-        """计算单个竞技场的市场平均收益率
-
-        遍历所有 Agent，按初始资金加权计算平均收益率。
-
-        Args:
-            arena: 竞技场状态
-            current_price: 当前价格
-
-        Returns:
-            市场平均收益率
-        """
-        total_weighted_return = 0.0
-        total_initial = 0.0
-
-        for agent_state in arena.agent_states.values():
-            initial = agent_state.initial_balance
-            if initial <= 0:
-                continue
-
-            equity = agent_state.get_equity(current_price)
-            weighted = equity - initial
-            total_weighted_return += weighted
-            total_initial += initial
-
-        return total_weighted_return / total_initial if total_initial > 0 else 0.0
-
     def _calculate_fitness_for_population(
         self,
         population: Population,
         arena: ArenaState,
         current_price: float,
-        market_avg_return: float = 0.0,
     ) -> np.ndarray:
         """计算单个种群在单个竞技场中的适应度
 
-        使用相对收益适应度：Agent 收益率 - 市场平均收益率
-        做市商：0.5 * 相对收益率 + 0.5 * maker_volume 排名归一化
-        庄家：0.5 * 相对收益率 + 0.5 * volatility_contribution 排名归一化
+        计算每个 Agent 的实际收益率作为适应度。
 
         Args:
             population: 种群
             arena: 竞技场状态
             current_price: 当前价格
-            market_avg_return: 市场平均收益率
 
         Returns:
             适应度数组
@@ -3523,8 +3424,8 @@ class ParallelArenaTrainer:
         if n == 0:
             return np.zeros(0, dtype=np.float32)
 
-        # 1. 计算所有 Agent 的相对收益率
-        relative_returns = np.zeros(n, dtype=np.float32)
+        # 计算所有 Agent 的实际收益率
+        fitnesses = np.zeros(n, dtype=np.float32)
         for idx, agent in enumerate(population.agents):
             agent_state = arena.agent_states.get(agent.agent_id)
             if agent_state is None:
@@ -3534,63 +3435,11 @@ class ParallelArenaTrainer:
             initial = agent_state.initial_balance
 
             if initial > 0:
-                agent_return = (equity - initial) / initial
-                relative_returns[idx] = agent_return - market_avg_return
+                fitnesses[idx] = (equity - initial) / initial
             else:
-                relative_returns[idx] = 0.0
+                fitnesses[idx] = 0.0
 
-        # 2. 根据种群类型计算最终适应度
-        if population.agent_type == AgentType.MARKET_MAKER:
-            # 做市商：0.5 * 相对收益率 + 0.5 * maker_volume 排名归一化
-            maker_volumes = np.array(
-                [
-                    (
-                        arena.agent_states[agent.agent_id].maker_volume
-                        if agent.agent_id in arena.agent_states
-                        else 0
-                    )
-                    for agent in population.agents
-                ],
-                dtype=np.float32,
-            )
-
-            # 排名归一化到 [0, 1]
-            volume_ranks = np.argsort(np.argsort(maker_volumes))
-            if n > 1:
-                volume_rank_normalized = volume_ranks / (n - 1)
-            else:
-                volume_rank_normalized = np.zeros(n, dtype=np.float32)
-
-            fitness_arr = 0.5 * relative_returns + 0.5 * volume_rank_normalized
-
-        elif population.agent_type == AgentType.WHALE:
-            # 庄家：0.5 * 相对收益率 + 0.5 * volatility_contribution 排名归一化
-            volatility_contributions = np.array(
-                [
-                    (
-                        arena.agent_states[agent.agent_id].volatility_contribution
-                        if agent.agent_id in arena.agent_states
-                        else 0.0
-                    )
-                    for agent in population.agents
-                ],
-                dtype=np.float32,
-            )
-
-            # 排名归一化到 [0, 1]
-            volatility_ranks = np.argsort(np.argsort(volatility_contributions))
-            if n > 1:
-                volatility_rank_normalized = volatility_ranks / (n - 1)
-            else:
-                volatility_rank_normalized = np.zeros(n, dtype=np.float32)
-
-            fitness_arr = 0.5 * relative_returns + 0.5 * volatility_rank_normalized
-
-        else:
-            # 散户、高级散户：纯相对收益率
-            fitness_arr = relative_returns
-
-        return fitness_arr
+        return fitnesses
 
     def _collect_fitness_all_arenas(
         self,
@@ -3787,7 +3636,6 @@ class ParallelArenaTrainer:
 
             # 同步 species 数据到主进程（关键修复！）
             # 即使延迟反序列化 genome，也需要先反序列化并同步 species
-            # 否则 _collect_species_fitness_stats 会返回空数据
             old_genomes = list(population.neat_pop.population.values())
             keys, fitnesses, metadata, nodes, conns = genome_data
             population.neat_pop.population = _deserialize_genomes_numpy(
@@ -4183,6 +4031,127 @@ class ParallelArenaTrainer:
 
         self._is_setup = False
         self.logger.info("多竞技场并行推理训练器已停止")
+
+    def setup_for_testing(
+        self, populations_data: dict[AgentType, list[bytes]]
+    ) -> None:
+        """测试模式初始化：从 genome 数据创建种群
+
+        不创建进化 Worker 池，仅用于评估适应度。
+
+        Args:
+            populations_data: 各物种的序列化基因组列表字典
+        """
+        import pickle
+        import neat
+        from src.bio.agents.base import Agent
+        from src.bio.brain.brain import Brain
+        from src.bio.agents.retail import RetailAgent
+        from src.bio.agents.retail_pro import RetailProAgent
+        from src.bio.agents.whale import WhaleAgent
+        from src.bio.agents.market_maker import MarketMakerAgent
+        from src.training.population import Population, SubPopulationManager
+
+        _AGENT_CLASSES: dict[AgentType, type] = {
+            AgentType.RETAIL: RetailAgent,
+            AgentType.RETAIL_PRO: RetailProAgent,
+            AgentType.WHALE: WhaleAgent,
+            AgentType.MARKET_MAKER: MarketMakerAgent,
+        }
+        _AGENT_ID_OFFSET: dict[AgentType, int] = {
+            AgentType.RETAIL: 0,
+            AgentType.RETAIL_PRO: 1_000_000,
+            AgentType.WHALE: 2_000_000,
+            AgentType.MARKET_MAKER: 3_000_000,
+        }
+
+        # 加载 NEAT 配置
+        config_dir = Path(self.config.training.neat_config_path)
+        neat_configs: dict[AgentType, neat.Config] = {}
+        for agent_type in AgentType:
+            if agent_type == AgentType.MARKET_MAKER:
+                neat_config_path = config_dir / "neat_market_maker.cfg"
+            elif agent_type == AgentType.WHALE:
+                neat_config_path = config_dir / "neat_whale.cfg"
+            elif agent_type == AgentType.RETAIL_PRO:
+                neat_config_path = config_dir / "neat_retail_pro.cfg"
+            else:
+                neat_config_path = config_dir / "neat_retail.cfg"
+            neat_configs[agent_type] = neat.Config(
+                neat.DefaultGenome,
+                neat.DefaultReproduction,
+                neat.DefaultSpeciesSet,
+                neat.DefaultStagnation,
+                str(neat_config_path),
+            )
+
+        # 从 genome 数据创建种群
+        for agent_type in AgentType:
+            genome_data_list = populations_data.get(agent_type, [])
+            if not genome_data_list:
+                continue
+
+            # 反序列化所有 genome
+            genome_list: list[neat.DefaultGenome] = []
+            for gd in genome_data_list:
+                genome = pickle.loads(gd)
+                if isinstance(genome, neat.DefaultGenome):
+                    genome_list.append(genome)
+
+            if not genome_list:
+                continue
+
+            agent_config = self.config.agents[agent_type]
+            neat_config = neat_configs[agent_type]
+            agent_class = _AGENT_CLASSES[agent_type]
+            agent_id_offset = _AGENT_ID_OFFSET[agent_type]
+
+            # 创建 Agent 列表
+            agents: list[Agent] = []
+            for i in range(agent_config.count):
+                genome = genome_list[i % len(genome_list)]
+                brain = Brain.from_genome(genome, neat_config)
+                agent = agent_class(agent_id_offset + i, brain, agent_config)
+                agents.append(agent)
+
+            # 创建简化的 Population 对象
+            pop = Population.__new__(Population)
+            pop.agent_type = agent_type
+            pop.agent_config = agent_config
+            pop.generation = 0
+            pop.logger = get_logger("population")
+            pop._executor = None
+            pop._num_workers = 8
+            pop.neat_config = neat_config
+            pop.neat_pop = None
+            pop.agents = agents
+            pop.sub_population_id = None
+            pop._pending_genome_data = None
+            pop._genomes_dirty = False
+            pop._accumulated_fitness = {}
+            pop._accumulation_count = 0
+            pop.neat_config_path = str(neat_config_path)
+
+            self.populations[agent_type] = pop
+
+        # 创建竞技场状态
+        self._create_arena_states()
+
+        # 初始化网络缓存
+        self._init_network_caches()
+
+        # 构建 Agent 映射
+        self._build_agent_map()
+
+        # 刷新竞技场的 Agent 状态
+        self._refresh_agent_states()
+
+        # 不创建进化 Worker 池
+        self.evolution_worker_pool = None
+
+        # 创建 Execute Worker 池（如果条件允许）
+        if self._use_execute_workers:
+            self._create_execute_worker_pool()
 
     def __enter__(self) -> "ParallelArenaTrainer":
         """上下文管理器入口"""

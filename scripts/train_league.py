@@ -23,7 +23,6 @@ from src.core.log_engine import get_logger, setup_logging
 from src.training.arena import MultiArenaConfig
 from src.training.league import LeagueTrainingConfig
 from src.training.league.league_trainer import LeagueTrainer
-from src.config.config import AgentType
 
 
 def parse_args() -> argparse.Namespace:
@@ -192,17 +191,14 @@ def progress_callback(stats: dict) -> None:
     """训练进度回调函数"""
     from datetime import datetime
 
-    import numpy as np
-
     generation = stats.get("generation", 0)
     total_episodes = stats.get("total_episodes", 0)
     round_time = stats.get("total_time", 0.0)
-    species_fitness_stats = stats.get("species_fitness_stats", {})
     pool_sizes = stats.get("pool_sizes", {})
 
     current_time = datetime.now().strftime("%H:%M:%S")
 
-    # 第一行：基础信息
+    # 基础信息
     total_pool = sum(pool_sizes.values()) if pool_sizes else 0
     print(
         f"Gen {generation:4d} | {current_time} | "
@@ -210,29 +206,6 @@ def progress_callback(stats: dict) -> None:
         f"Time={round_time:.1f}s | "
         f"Pool={total_pool}"
     )
-
-    # 后续行：各物种的 species 适应度分布
-    type_order = [
-        AgentType.RETAIL,
-        AgentType.RETAIL_PRO,
-        AgentType.WHALE,
-        AgentType.MARKET_MAKER,
-    ]
-    for agent_type in type_order:
-        type_stats = species_fitness_stats.get(agent_type, {})
-        type_name = agent_type.value
-        species_count = type_stats.get("species_count", 0)
-        species_fitnesses = type_stats.get("species_avg_fitnesses", [])
-
-        if species_fitnesses:
-            arr = np.array(species_fitnesses)
-            mean_val = float(arr.mean())
-            std_val = float(arr.std())
-            print(
-                f"  {type_name}: species={species_count}, fitness={mean_val:.4f}±{std_val:.4f}"
-            )
-        else:
-            print(f"  {type_name}: species={species_count}, fitness=N/A")
 
 
 def main() -> None:

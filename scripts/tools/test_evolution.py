@@ -19,8 +19,11 @@
     # 指定测试参数
     python scripts/test_evolution.py --num-runs 5 --episode-length 2000
 
-    # 指定每次测试运行的 episode 数量（应与训练时的 evolution_interval 一致）
+    # 指定每次测试运行的 episode 数量
     python scripts/test_evolution.py --episodes-per-run 10
+
+    # 指定竞技场数量
+    python scripts/test_evolution.py --num-arenas 4
 """
 
 import argparse
@@ -282,6 +285,7 @@ def test_single_generation(
     num_runs: int,
     episode_length: int,
     episodes_per_run: int,
+    num_arenas: int,
     force: bool,
     verbose: bool = True,
 ) -> dict[str, Any] | None:
@@ -293,6 +297,7 @@ def test_single_generation(
         num_runs: 测试运行次数
         episode_length: 每次测试的 tick 数
         episodes_per_run: 每次测试运行的 episode 数量
+        num_arenas: 竞技场数量
         force: 是否强制重新运行
         verbose: 是否详细输出
 
@@ -305,24 +310,24 @@ def test_single_generation(
         print("=" * 64)
 
     if generation <= 1:
-        # 第 1 代没有上一代可以比较，只运行基准测试
         result = tester.run_baseline_test(
             generation=generation,
             num_runs=num_runs,
             episode_length=episode_length,
             episodes_per_run=episodes_per_run,
+            num_arenas=num_arenas,
             force=force,
         )
         if verbose:
             print_baseline_result(result)
             print("\n(跳过比较测试，因为是第 1 代，没有上一代可以比较)")
     else:
-        # 运行完整评估
         result = tester.evaluate_evolution_effectiveness(
             generation=generation,
             num_runs=num_runs,
             episode_length=episode_length,
             episodes_per_run=episodes_per_run,
+            num_arenas=num_arenas,
             force=force,
         )
         if verbose:
@@ -340,6 +345,7 @@ def test_all_pending_generations(
     num_runs: int,
     episode_length: int,
     episodes_per_run: int,
+    num_arenas: int,
     force: bool,
 ) -> None:
     """测试所有待测试的代
@@ -350,6 +356,7 @@ def test_all_pending_generations(
         num_runs: 测试运行次数
         episode_length: 每次测试的 tick 数
         episodes_per_run: 每次测试运行的 episode 数量
+        num_arenas: 竞技场数量
         force: 是否强制重新运行
     """
     total = len(pending_generations)
@@ -372,6 +379,7 @@ def test_all_pending_generations(
                 num_runs=num_runs,
                 episode_length=episode_length,
                 episodes_per_run=episodes_per_run,
+                num_arenas=num_arenas,
                 force=force,
                 verbose=True,
             )
@@ -422,7 +430,13 @@ def main() -> None:
         "--episodes-per-run",
         type=int,
         default=10,
-        help="每次测试运行的 episode 数量（默认: 10，应与训练时的 evolution_interval 一致）",
+        help="每次测试运行的 episode 数量（默认: 10）",
+    )
+    parser.add_argument(
+        "--num-arenas",
+        type=int,
+        default=2,
+        help="多竞技场数量（默认: 2）",
     )
     parser.add_argument(
         "--list",
@@ -439,7 +453,7 @@ def main() -> None:
         "--checkpoint-dir",
         type=str,
         default="checkpoints",
-        help="checkpoint 文件目录（默认: checkpoints）",
+        help="checkpoint 文件目录（默认: checkpoints，联盟训练: checkpoints/league_training/checkpoints）",
     )
     parser.add_argument(
         "--results-dir",
@@ -506,6 +520,7 @@ def main() -> None:
     else:
         print("鲶鱼机制: 已禁用")
     print(f"每次测试运行的 episode 数量: {args.episodes_per_run}")
+    print(f"竞技场数量: {args.num_arenas}")
 
     # 创建测试器
     tester = EvolutionTester(
@@ -527,6 +542,7 @@ def main() -> None:
             num_runs=args.num_runs,
             episode_length=args.episode_length,
             episodes_per_run=args.episodes_per_run,
+            num_arenas=args.num_arenas,
             force=args.force,
             verbose=True,
         )
@@ -554,6 +570,7 @@ def main() -> None:
             num_runs=args.num_runs,
             episode_length=args.episode_length,
             episodes_per_run=args.episodes_per_run,
+            num_arenas=args.num_arenas,
             force=args.force,
         )
 

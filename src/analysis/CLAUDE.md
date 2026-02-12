@@ -356,7 +356,7 @@ analyzer.analyze(
 
 ### EvolutionTester (evolution_tester.py)
 
-进化效果测试器，通过对比测试评估 NEAT 进化算法的有效性。使用多进程并行运行所有测试。
+进化效果测试器，通过对比测试评估 NEAT 进化算法的有效性。使用 `ParallelArenaTrainer` 多竞技场测试，通过 OpenMP 实现并行推理。
 
 ---
 
@@ -373,17 +373,19 @@ analyzer.analyze(
 
 **核心方法：**
 
-#### `create_agents_from_genome(agent_type, genome_data, count) -> list[Agent]`
-从单个 genome 复制创建完整种群（每个 Agent 有独立账户）。
+#### `_run_test_with_multi_arena(populations_data, num_arenas, episodes_per_run, test_type, run_idx) -> dict`
+使用多竞技场运行单次测试。创建 `ParallelArenaTrainer`，从 genome 数据初始化，运行 episodes 并收集适应度。
 
 参数：
-- `agent_type: AgentType` - Agent 类型
-- `genome_data: bytes` - 序列化的 genome 数据
-- `count: int` - 要创建的 Agent 数量
+- `populations_data: dict[AgentType, list[bytes]]` - 各物种的序列化基因组列表
+- `num_arenas: int` - 竞技场数量
+- `episodes_per_run: int` - episode 数量
+- `test_type: str` - 测试类型（"baseline" 或 "comparison"）
+- `run_idx: int` - 运行索引
 
-返回：Agent 列表
+返回：单次运行结果字典
 
-#### `run_baseline_test(generation, num_runs, episode_length, episodes_per_run, force) -> dict`
+#### `run_baseline_test(generation, num_runs, episode_length, episodes_per_run, num_arenas, force) -> dict`
 基准测试：使用第 N 代 4 个物种的全部基因组竞技。
 
 参数：
@@ -391,6 +393,7 @@ analyzer.analyze(
 - `num_runs: int` - 运行次数（默认 3）
 - `episode_length: int` - 每个 episode 的 tick 数量（默认 1000）
 - `episodes_per_run: int` - 每次运行的 episode 数量（默认 10）
+- `num_arenas: int` - 竞技场数量（默认 2）
 - `force: bool` - 是否强制重新运行（默认 False）
 
 返回格式：
@@ -402,7 +405,7 @@ analyzer.analyze(
     "episodes_per_run": int,
     "species_summary": {
         AgentType: {
-            "avg_fitness": float,      # 平均适应度（不同物种计算方式不同）
+            "avg_fitness": float,
             "std_fitness": float,
             "avg_survival_rate": float,
             "std_survival_rate": float,
@@ -414,9 +417,7 @@ analyzer.analyze(
 ```
 
 **适应度计算方式：**
-- 散户/高级散户：适应度 = 收益率 = equity / initial_balance
-- 做市商：适应度 = 0.5 × 收益率 + 0.5 × maker_volume 排名归一化
-- 庄家：适应度 = 0.5 × 收益率 + 0.5 × volatility_contribution 排名归一化
+- 所有物种统一使用实际收益率 = (equity - initial) / initial
 
 #### `run_comparison_test(target_generation, base_generation, target_species, ...) -> dict`
 比较测试：第 N 代某物种 + 第 N-1 代其他物种。
@@ -428,18 +429,20 @@ analyzer.analyze(
 - `num_runs: int` - 运行次数（默认 3）
 - `episode_length: int` - 每个 episode 的 tick 数量（默认 1000）
 - `episodes_per_run: int` - 每次运行的 episode 数量（默认 10）
+- `num_arenas: int` - 竞技场数量（默认 2）
 - `force: bool` - 是否强制重新运行（默认 False）
 
 返回格式同基准测试，额外包含 `base_generation` 和 `target_species` 字段。
 
-#### `evaluate_evolution_effectiveness(generation, num_runs, episode_length, episodes_per_run, force) -> dict`
-评估进化有效性（并行运行所有测试）。
+#### `evaluate_evolution_effectiveness(generation, num_runs, episode_length, episodes_per_run, num_arenas, force) -> dict`
+评估进化有效性（串行运行各场景测试，PAT 通过 OpenMP 实现并行推理）。
 
 参数：
 - `generation: int` - 要评估的代数（N）
 - `num_runs: int` - 每个测试的运行次数（默认 3）
 - `episode_length: int` - 每个 episode 的 tick 数量（默认 1000）
 - `episodes_per_run: int` - 每次运行的 episode 数量（默认 10）
+- `num_arenas: int` - 竞技场数量（默认 2）
 - `force: bool` - 是否强制重新运行（默认 False）
 
 返回格式：
@@ -466,40 +469,30 @@ analyzer.analyze(
 }
 ```
 
-**并行测试架构：**
+**测试架构：**
 
-使用 `concurrent.futures.ProcessPoolExecutor` 实现真正并行：
+使用 `ParallelArenaTrainer` 多竞技场测试：
 - 评估一代需要：1 个基准测试 + 4 个比较测试 = 5 个场景
-- 每个场景运行 num_runs 次 = 共 5 * num_runs 个任务
-- 进程池大小 = CPU 核心数
+- 每个场景串行运行 num_runs 次，每次通过 PAT 使用多竞技场并行推理
+- 通过 `setup_for_testing(populations_data)` 初始化测试模式（不创建进化 Worker 池）
 
-Worker 函数 `_run_single_test_worker(params)` 在独立进程中执行：
-1. 创建 Trainer
-2. 从 genome_data 创建各物种的 Agent 种群
-3. 初始化鲶鱼（如果 config.catfish.enabled=True）
-4. 运行多个 episode（由 episodes_per_run 参数控制，默认 10）
-   - 每个 episode 前重置 Agent 和市场状态
-   - 鲶鱼爆仓不结束 episode，物种淘汰到 1/4 时结束
-5. 每个 episode 结束时调用 `population.evaluate()` 计算各物种的适应度
-6. 汇总多个 episode 的平均适应度和存活率并返回结果
+测试流程（每次运行）：
+1. 创建 `ParallelArenaTrainer` 并调用 `setup_for_testing()` 初始化
+2. 循环运行 episodes_per_run 个 episode：
+   - 调用 `_reset_all_arenas()` 和 `_init_market_all_arenas()` 重置状态
+   - 逐 tick 执行 `run_tick_all_arenas()`（批量推理 + 执行）
+   - 调用 `_collect_episode_fitness()` 收集跨竞技场的适应度（累加值除以竞技场数量）
+3. 汇总多个 episode 的平均适应度和存活率
+4. 调用 `trainer.stop()` 清理资源
+
+**存活率判断：**
+- 使用适应度阈值判断：fitness > -0.99 视为存活
+- 全部爆仓时 equity 接近 0，fitness = (0 - initial) / initial 接近 -1
 
 **鲶鱼机制：**
 - 测试默认启用鲶鱼，可通过 `--no-catfish` 参数禁用
 - 鲶鱼的作用是打破"不交易"僵局，增加市场波动
-- **测试模式下鲶鱼爆仓不结束 episode**（与训练模式不同）
-- episode 结束条件：tick 达到上限 或 任一物种淘汰到 1/4
-- 没有鲶鱼时，进化后的 Agent 可能学会"不交易"策略，导致收益率为 0
-
-**评估指标：**
-
-```python
-return_rate = (final_equity - initial_balance) / initial_balance
-```
-
-收集数据：
-- `avg_return_rate`: 平均收益率
-- `survival_rate`: 存活率
-- `position_distribution`: 持仓分布（long/short/flat）
+- episode 结束条件由 PAT 的 `run_tick_all_arenas()` 控制
 
 **结果缓存：**
 
@@ -528,6 +521,9 @@ python scripts/tools/test_evolution.py --force
 # 指定测试参数
 python scripts/tools/test_evolution.py --num-runs 5 --episode-length 2000 --episodes-per-run 10
 
+# 指定竞技场数量
+python scripts/tools/test_evolution.py --num-arenas 4
+
 # 禁用鲶鱼机制
 python scripts/tools/test_evolution.py --no-catfish
 ```
@@ -539,10 +535,11 @@ python scripts/tools/test_evolution.py --no-catfish
 | `--generation` | None | 只测试指定代（不指定则测试所有未完成的代） |
 | `--num-runs` | 3 | 测试运行次数 |
 | `--episode-length` | 1000 | 每次测试的 tick 数 |
-| `--episodes-per-run` | 10 | 每次测试运行的 episode 数量（应与训练时的 evolution_interval 一致） |
+| `--episodes-per-run` | 10 | 每次测试运行的 episode 数量 |
+| `--num-arenas` | 2 | 多竞技场数量 |
 | `--list` | - | 列出所有代及其测试状态 |
 | `--force` | - | 强制重新运行（忽略已完成的测试结果） |
-| `--checkpoint-dir` | checkpoints | checkpoint 文件目录 |
+| `--checkpoint-dir` | checkpoints | checkpoint 文件目录（联盟训练: checkpoints/league_training/checkpoints） |
 | `--results-dir` | checkpoints/test_results | 测试结果保存目录 |
 | `--catfish` | True | 启用鲶鱼机制 |
 | `--no-catfish` | - | 禁用鲶鱼机制 |
@@ -572,12 +569,9 @@ python scripts/tools/test_evolution.py --no-catfish
 
 **关键依赖：**
 
-- `src.training.trainer.Trainer` - 训练器
-- `src.training.population.Population` - 种群管理
-- `src.bio.brain.brain.Brain` - 神经网络
-- `src.bio.agents.*` - 各类型 Agent
-- `src.market.matching.matching_engine.MatchingEngine` - 撮合引擎
-- `src.market.adl.adl_manager.ADLManager` - ADL 管理器
+- `src.training.arena.ParallelArenaTrainer` - 多竞技场并行推理训练器
+- `src.training.arena.MultiArenaConfig` - 多竞技场配置
+- `src.training.population.SubPopulationManager` - 子种群管理器
 - `src.analysis.checkpoint_loader.CheckpointLoader` - Checkpoint 加载器
 
 ---
@@ -660,21 +654,15 @@ for agent_type, genome_list in genomes.items():
 - 自动检测 gzip 压缩（通过 magic bytes 0x1f 0x8b）
 - 统一接口加载不同格式的 checkpoint
 
-### 多进程并行测试
+### 多竞技场并行测试
 
-- 使用 `ProcessPoolExecutor` 实现真正并行
-- 每个 worker 进程独立运行完整 episode
-- 自动汇总多次运行的平均结果
+- 使用 `ParallelArenaTrainer` + OpenMP 实现并行推理
+- 各场景串行运行，PAT 内部通过多竞技场实现样本并行
+- `_collect_episode_fitness()` 返回跨竞技场的累加值，需除以竞技场数量得到平均适应度
 
 ### 适应度计算
 
-不同物种使用不同的适应度函数：
-
-| 物种 | 适应度计算 |
-|------|-----------|
-| 散户/高级散户 | 收益率 = equity / initial_balance |
-| 做市商 | 0.5 × 收益率 + 0.5 × maker_volume 排名归一化 |
-| 庄家 | 0.5 × 收益率 + 0.5 × volatility_contribution 排名归一化 |
+所有物种统一使用实际收益率：`fitness = (equity - initial) / initial`
 
 ### 结果缓存机制
 
