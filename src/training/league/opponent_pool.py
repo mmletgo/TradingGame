@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import shutil
 from datetime import datetime, timezone
@@ -43,25 +44,44 @@ class OpponentPool:
         self._prob_cache: np.ndarray | None = None
         self._entry_ids_cache: list[str] | None = None
         self._cache_version: int = 0
+        self._last_cached_generation: int = -1
 
     def _invalidate_cache(self) -> None:
         """失效缓存"""
         self._prob_cache = None
         self._entry_ids_cache = None
 
-    def _rebuild_cache_if_needed(self) -> None:
-        """按需重建缓存"""
+    def _rebuild_cache_if_needed(self, current_generation: int) -> None:
+        """按需重建 recency 权重缓存
+
+        使用指数衰减公式：weight = exp(-lambda * (current_gen - source_gen) / milestone_interval)
+
+        Args:
+            current_generation: 当前代数，用于计算与 source_generation 的差值
+        """
         entries = self._index.get("entries", [])
         current_version = len(entries)
 
-        if self._prob_cache is None or self._cache_version != current_version:
+        if (
+            self._prob_cache is None
+            or self._cache_version != current_version
+            or self._last_cached_generation != current_generation
+        ):
             self._entry_ids_cache = [e["entry_id"] for e in entries]
+            decay_lambda: float = self.config.recency_decay_lambda
+            milestone_interval: int = self.config.milestone_interval
             weights = np.array([
-                float(max(e.get("source_generation", 1), 1))
+                math.exp(
+                    -decay_lambda
+                    * max(0, current_generation - e.get("source_generation", 0))
+                    / milestone_interval
+                )
                 for e in entries
             ], dtype=np.float64)
-            self._prob_cache = weights / weights.sum() if len(weights) > 0 else None
+            total = weights.sum()
+            self._prob_cache = weights / total if total > 0 else None
             self._cache_version = current_version
+            self._last_cached_generation = current_generation
 
     def _create_empty_index(self) -> dict[str, Any]:
         """创建空索引"""
@@ -221,14 +241,16 @@ class OpponentPool:
         self,
         n: int,
         strategy: str,
-        target_type: AgentType | None = None,  # 不再使用，保持接口兼容
+        target_type: AgentType | None = None,
+        current_generation: int = 0,
     ) -> list[str]:
         """采样对手
 
         Args:
             n: 采样数量
-            strategy: 采样策略 ('uniform', 'recency', 'diverse')
-            target_type: 不再使用，保持接口兼容
+            strategy: 采样策略 ('uniform', 'recency', 'diverse', 'pfsp')
+            target_type: 目标物种类型（PFSP 策略需要）
+            current_generation: 当前代数，用于 recency 衰减计算
 
         Returns:
             采样的条目 ID 列表
@@ -243,12 +265,14 @@ class OpponentPool:
         if strategy == 'uniform':
             return self._sample_uniform(entries, n)
         elif strategy == 'recency':
-            return self._sample_recency_weighted(entries, n)
+            return self._sample_recency_weighted(entries, n, current_generation)
         elif strategy == 'diverse':
             return self._sample_diverse(entries, n)
+        elif strategy == 'pfsp':
+            return self._sample_pfsp(entries, n, target_type, current_generation)
         else:
             # 默认使用时间加权
-            return self._sample_recency_weighted(entries, n)
+            return self._sample_recency_weighted(entries, n, current_generation)
 
     def _sample_uniform(self, entries: list[dict[str, Any]], n: int) -> list[str]:
         """均匀随机采样"""
@@ -259,13 +283,14 @@ class OpponentPool:
         self,
         entries: list[dict[str, Any]],
         n: int,
+        current_generation: int = 0,
     ) -> list[str]:
         """时间加权采样：优先选择更新的历史对手
 
-        使用 source_generation 作为权重，代数越新权重越高。
+        使用指数衰减权重，代数越新权重越高。
         使用缓存避免每次采样重复计算权重。
         """
-        self._rebuild_cache_if_needed()
+        self._rebuild_cache_if_needed(current_generation)
         if self._prob_cache is None or self._entry_ids_cache is None or len(self._entry_ids_cache) == 0:
             return []
         sampled = np.random.choice(
@@ -290,6 +315,263 @@ class OpponentPool:
             sampled.append(sorted_entries[idx]["entry_id"])
 
         return sampled
+
+    def update_entry_win_rate(
+        self,
+        entry_id: str,
+        target_type: AgentType,
+        outcome: float,
+        ema_alpha: float = 0.3,
+    ) -> None:
+        """更新指定条目对特定目标类型的胜率（EMA 平滑）
+
+        Args:
+            entry_id: 条目 ID
+            target_type: 目标物种类型（即 Main Agent 的类型）
+            outcome: 本次对局结果（0.0~1.0）
+            ema_alpha: EMA 平滑因子，越大越重视近期结果
+        """
+        key: str = f"vs_{target_type.value}"
+        for entry_meta in self._index["entries"]:
+            if entry_meta["entry_id"] != entry_id:
+                continue
+
+            # 更新 win_rates
+            win_rates: dict[str, float | None] = entry_meta.get("win_rates", {})
+            if win_rates is None:
+                win_rates = {}
+            old_win_rate = win_rates.get(key)
+            if old_win_rate is None:
+                win_rates[key] = outcome
+            else:
+                win_rates[key] = (1 - ema_alpha) * old_win_rate + ema_alpha * outcome
+            entry_meta["win_rates"] = win_rates
+
+            # 更新 match_counts
+            match_counts: dict[str, int] = entry_meta.get("match_counts", {})
+            if match_counts is None:
+                match_counts = {}
+            match_counts[key] = match_counts.get(key, 0) + 1
+            entry_meta["match_counts"] = match_counts
+
+            break
+
+        self._invalidate_cache()
+
+    def _compute_weights(
+        self,
+        entries: list[dict[str, Any]],
+        strategy: str,
+        target_type: AgentType | None,
+        current_generation: int,
+    ) -> np.ndarray:
+        """统一计算各策略的采样权重
+
+        Args:
+            entries: 条目元数据列表
+            strategy: 采样策略
+            target_type: 目标物种类型（PFSP 需要）
+            current_generation: 当前代数
+
+        Returns:
+            归一化前的权重数组（长度与 entries 相同）
+        """
+        n_entries: int = len(entries)
+        if n_entries == 0:
+            return np.array([], dtype=np.float64)
+
+        if strategy == 'uniform':
+            return np.ones(n_entries, dtype=np.float64)
+
+        decay_lambda: float = self.config.recency_decay_lambda
+        milestone_interval: int = self.config.milestone_interval
+
+        if strategy == 'recency':
+            weights = np.array([
+                math.exp(
+                    -decay_lambda
+                    * max(0, current_generation - e.get("source_generation", 0))
+                    / milestone_interval
+                )
+                for e in entries
+            ], dtype=np.float64)
+            return weights
+
+        if strategy == 'pfsp':
+            if target_type is None:
+                # 退化为 recency 权重
+                return self._compute_weights(entries, 'recency', None, current_generation)
+
+            pfsp_exponent: float = self.config.pfsp_exponent
+            explore_bonus_coeff: float = self.config.pfsp_explore_bonus
+            key: str = f"vs_{target_type.value}"
+
+            weights = np.empty(n_entries, dtype=np.float64)
+            for i, e in enumerate(entries):
+                # Recency factor
+                delta_gen: int = max(0, current_generation - e.get("source_generation", 0))
+                recency_factor: float = math.exp(
+                    -decay_lambda * delta_gen / milestone_interval
+                )
+
+                # Win rate factor + exploration bonus
+                win_rates: dict[str, float | None] | None = e.get("win_rates")
+                win_rate: float | None = None
+                if win_rates is not None:
+                    win_rate = win_rates.get(key)
+
+                if win_rate is None:
+                    f_win: float = 1.0
+                    exploration_bonus: float = explore_bonus_coeff
+                else:
+                    f_win = (1.0 - win_rate) ** pfsp_exponent
+                    match_counts: dict[str, int] | None = e.get("match_counts")
+                    count: int = 0
+                    if match_counts is not None:
+                        count = match_counts.get(key, 0)
+                    exploration_bonus = max(1.0, explore_bonus_coeff / math.sqrt(count + 1))
+
+                weights[i] = f_win * recency_factor * exploration_bonus
+
+            return weights
+
+        # diverse 策略：返回均匀权重（batch 模式下特殊处理在 sample_opponents_batch 中）
+        return np.ones(n_entries, dtype=np.float64)
+
+    def _sample_pfsp(
+        self,
+        entries: list[dict[str, Any]],
+        n: int,
+        target_type: AgentType | None,
+        current_generation: int,
+    ) -> list[str]:
+        """PFSP 采样策略：优先选择难以击败且较新的对手
+
+        公式：p(opponent) ∝ f(win_rate) × recency_factor × exploration_bonus
+          - f(win_rate) = (1 - win_rate)^p
+          - recency_factor = exp(-λ × (current_gen - source_gen) / milestone_interval)
+          - exploration_bonus = max(1.0, bonus / sqrt(match_count + 1))
+
+        Args:
+            entries: 条目元数据列表
+            n: 采样数量
+            target_type: 目标物种类型
+            current_generation: 当前代数
+
+        Returns:
+            采样的条目 ID 列表
+        """
+        if target_type is None:
+            return self._sample_recency_weighted(entries, n, current_generation)
+
+        weights = self._compute_weights(entries, 'pfsp', target_type, current_generation)
+        total: float = float(weights.sum())
+
+        entry_ids: list[str] = [e["entry_id"] for e in entries]
+
+        if total == 0:
+            # 所有权重为 0，退化为均匀采样
+            return self._sample_uniform(entries, n)
+
+        probs: np.ndarray = weights / total
+        sampled = np.random.choice(
+            entry_ids,
+            size=min(n, len(entry_ids)),
+            replace=False,
+            p=probs,
+        )
+        return list(sampled)
+
+    def sample_opponents_batch(
+        self,
+        n: int,
+        strategy: str,
+        target_type: AgentType | None = None,
+        current_generation: int = 0,
+    ) -> list[str]:
+        """批量采样 n 个不重复的对手（用于 n 个泛化竞技场）
+
+        保证多样性：如果对手池 >= n，无放回采样；
+        如果对手池 < n，每个对手至少出现 floor(n/pool_size) 次，
+        剩余按策略权重无放回采样，最后随机打乱。
+
+        Args:
+            n: 需要的对手数量
+            strategy: 采样策略
+            target_type: 目标物种类型（PFSP 需要）
+            current_generation: 当前代数
+
+        Returns:
+            长度为 n 的 entry_id 列表
+        """
+        entries: list[dict[str, Any]] = self._index.get("entries", [])
+        if not entries:
+            return []
+
+        pool_size: int = len(entries)
+        entry_ids: list[str] = [e["entry_id"] for e in entries]
+
+        # diverse 策略特殊处理：按适应度排序后均匀间隔选取
+        if strategy == 'diverse':
+            sorted_entries = sorted(entries, key=lambda e: e.get("avg_fitness", 0))
+            sorted_ids: list[str] = [e["entry_id"] for e in sorted_entries]
+            if pool_size >= n:
+                step: float = pool_size / n
+                result: list[str] = []
+                for i in range(n):
+                    idx: int = min(int(i * step), pool_size - 1)
+                    result.append(sorted_ids[idx])
+                return result
+            else:
+                # pool_size < n: 每个至少出现 n // pool_size 次
+                base_count: int = n // pool_size
+                remainder: int = n % pool_size
+                result = sorted_ids * base_count
+                # 剩余用均匀间隔选取
+                step = pool_size / remainder if remainder > 0 else 1.0
+                for i in range(remainder):
+                    idx = min(int(i * step), pool_size - 1)
+                    result.append(sorted_ids[idx])
+                random.shuffle(result)
+                return result
+
+        # 其他策略：使用统一权重计算
+        weights: np.ndarray = self._compute_weights(
+            entries, strategy, target_type, current_generation
+        )
+        total: float = float(weights.sum())
+
+        if total == 0:
+            # 所有权重为 0，使用均匀权重
+            weights = np.ones(pool_size, dtype=np.float64)
+            total = float(weights.sum())
+
+        probs: np.ndarray = weights / total
+
+        if pool_size >= n:
+            sampled = np.random.choice(
+                entry_ids,
+                size=n,
+                replace=False,
+                p=probs,
+            )
+            return list(sampled)
+        else:
+            # pool_size < n: 每个对手至少出现 n // pool_size 次
+            base_count = n // pool_size
+            remainder = n % pool_size
+            result = entry_ids * base_count
+            if remainder > 0:
+                # 剩余按权重无放回采样
+                extra = np.random.choice(
+                    entry_ids,
+                    size=remainder,
+                    replace=False,
+                    p=probs,
+                )
+                result.extend(list(extra))
+            random.shuffle(result)
+            return result
 
     def cleanup(self, current_generation: int) -> list[str]:
         """清理对手池，保持在最大大小限制内

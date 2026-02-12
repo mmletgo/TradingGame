@@ -58,7 +58,12 @@ class ArenaAllocator:
         self.config = config
         self.num_arenas = num_arenas
 
-    def allocate(self, pool_manager: OpponentPoolManager, frozen_types: set[AgentType] | None = None) -> ArenaAllocation:
+    def allocate(
+        self,
+        pool_manager: OpponentPoolManager,
+        frozen_types: set[AgentType] | None = None,
+        current_generation: int = 0,
+    ) -> ArenaAllocation:
         """分配竞技场
 
         分配策略：
@@ -69,6 +74,7 @@ class ArenaAllocator:
         Args:
             pool_manager: 对手池管理器
             frozen_types: 已冻结的物种集合
+            current_generation: 当前代数
 
         Returns:
             竞技场分配方案
@@ -97,12 +103,13 @@ class ArenaAllocator:
 
         # 2. 泛化测试竞技场：按类型轮流
         for agent_type in AgentType:
-            for _ in range(self.config.num_generalization_arenas_per_type):
-                if arena_id >= self.num_arenas:
-                    break
+            n_gen_arenas = self.config.num_generalization_arenas_per_type
 
-                # 冻结物种不需要泛化测试，改为额外的 baseline 竞技场
-                if frozen_types and agent_type in frozen_types:
+            # 冻结物种不需要泛化测试，改为额外的 baseline 竞技场
+            if frozen_types and agent_type in frozen_types:
+                for _ in range(n_gen_arenas):
+                    if arena_id >= self.num_arenas:
+                        break
                     assignment = ArenaAssignment(
                         arena_id=arena_id,
                         purpose='baseline',
@@ -114,21 +121,25 @@ class ArenaAllocator:
                     assignments.append(assignment)
                     baseline_ids.append(arena_id)
                     arena_id += 1
-                    continue
+                continue
 
-                # 采样历史对手
-                historical = pool_manager.sample_opponents_for_arena(
-                    target_type=agent_type,
-                    strategy=self.config.sampling_strategy,
-                )
+            # 批量采样历史对手（保证多样性）
+            batch_opponents = pool_manager.sample_opponents_batch_for_type(
+                target_type=agent_type,
+                n_arenas=n_gen_arenas,
+                strategy=self.config.sampling_strategy,
+                current_generation=current_generation,
+            )
+
+            for i, historical in enumerate(batch_opponents):
+                if arena_id >= self.num_arenas:
+                    break
 
                 agent_sources: dict[AgentType, AgentSourceConfig] = {}
                 for t in AgentType:
                     if t == agent_type:
-                        # 目标类型使用当前代 Main
                         agent_sources[t] = AgentSourceConfig(source='current')
                     else:
-                        # 其他类型使用历史版本
                         entry_id = historical.get(t)
                         if entry_id:
                             agent_sources[t] = AgentSourceConfig(
@@ -136,7 +147,6 @@ class ArenaAllocator:
                                 entry_id=entry_id,
                             )
                         else:
-                            # 如果没有历史对手，使用当前代
                             agent_sources[t] = AgentSourceConfig(source='current')
 
                 assignment = ArenaAssignment(

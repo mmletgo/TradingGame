@@ -47,7 +47,11 @@ src/training/league/
 | `milestone_interval` | 50 | 里程碑保存间隔（代数） |
 | `num_baseline_arenas` | 16 | 基准竞技场数量 |
 | `num_generalization_arenas_per_type` | 12 | 每类型泛化测试竞技场数量 |
-| `sampling_strategy` | `recency` | 采样策略：uniform/recency/diverse |
+| `sampling_strategy` | `pfsp` | 采样策略：uniform/recency/diverse/pfsp |
+| `recency_decay_lambda` | 2.0 | 指数衰减速率，越大衰减越快 |
+| `pfsp_exponent` | 2.0 | 败率加权指数，越大越集中于难对手 |
+| `pfsp_explore_bonus` | 2.0 | 未交战对手的探索奖励系数 |
+| `pfsp_win_rate_ema_alpha` | 0.3 | 胜率 EMA 平滑因子，越大越重视近期 |
 | `generalization_advantage_window` | 20 | 泛化优势比历史窗口大小 |
 | `convergence_threshold` | 0.01 | 收敛判断阈值 |
 | `convergence_generations` | 10 | 连续满足收敛条件的代数 |
@@ -145,13 +149,31 @@ entry_dir/
 
 主要方法：
 - `add_entry(entry)`：添加对手条目
-- `sample_opponents(n, strategy, target_type)`：采样对手
+- `sample_opponents(n, strategy, target_type, current_generation)`：采样对手
+- `sample_opponents_batch(n, strategy, target_type, current_generation)`：批量采样 n 个不重复对手（用于多个泛化竞技场）
+- `update_entry_win_rate(entry_id, target_type, outcome, ema_alpha)`：更新条目胜率（EMA 平滑）
 - `cleanup(current_generation)`：清理旧条目
 
 采样策略：
 - **uniform**：均匀随机采样
-- **recency**（默认）：时间加权采样，权重 = 代数，越新的对手采样概率越高
+- **recency**：指数衰减时间加权采样，`weight = exp(-λ × Δgen / milestone_interval)`，越新的对手权重越高
 - **diverse**：多样性采样，均匀间隔选择不同适应度的对手
+- **pfsp**（默认）：Prioritized Fictitious Self-Play 采样，综合败率加权、指数衰减 recency 和探索奖励
+  - `p(opponent) ∝ f(win_rate) × recency_factor × exploration_bonus`
+  - `f(win_rate) = (1 - win_rate)^p`（败率越高权重越大）
+  - `recency_factor = exp(-λ × Δgen / milestone_interval)`
+  - `exploration_bonus = max(1.0, bonus / sqrt(match_count + 1))`（未交战对手高权重）
+
+**胜率跟踪**：
+- `win_rates` 和 `match_counts` 存储在 `pool_index.json` 的每个条目中
+- key 格式为 `vs_{AgentType.value}`（如 `vs_RETAIL`）
+- 更新方式：EMA 平滑，`win_rate = (1 - α) × old + α × outcome`
+- outcome 定义：目标物种在泛化竞技场中的平均适应度 > 0 即为"赢"（1.0）
+
+**批量采样**：
+- 12 个泛化竞技场改为一次性批量采样，避免重复选中同一对手
+- 对手池 >= N 时：无放回采样 N 个不同对手
+- 对手池 < N 时：每个对手至少出现 `N // pool_size` 次，剩余按策略权重补足
 
 ### OpponentPoolManager (opponent_pool_manager.py)
 
@@ -159,7 +181,9 @@ entry_dir/
 
 主要方法：
 - `add_snapshot(generation, populations, source, add_reason)`：批量保存快照
-- `sample_opponents_for_arena(target_type, strategy)`：为训练采样对手
+- `sample_opponents_for_arena(target_type, strategy, current_generation)`：为训练采样对手
+- `sample_opponents_batch_for_type(target_type, n_arenas, strategy, current_generation)`：批量采样保证多样性
+- `update_win_rates_from_round(allocation, arena_fitnesses, ema_alpha)`：从一轮训练结果批量更新所有对手胜率
 - `cleanup_all(current_generation)`：清理所有类型的旧条目
 
 ### MultiGenerationNetworkCache (multi_gen_cache.py)
@@ -179,7 +203,7 @@ entry_dir/
 - **generalization_test**：某类型 Main vs 其他类型历史版本
 
 主要方法：
-- `allocate(pool_manager, frozen_types=None)`：有历史对手时使用，分配完整的竞技场方案。冻结物种的泛化竞技场转为额外的 baseline 竞技场。
+- `allocate(pool_manager, frozen_types=None, current_generation=0)`：有历史对手时使用，分配完整的竞技场方案。冻结物种的泛化竞技场转为额外的 baseline 竞技场。泛化竞技场使用批量采样保证对手多样性。
 - `allocate_no_historical()`：无历史对手时使用，全部分配为基准竞技场
 
 分配结果数据结构：
@@ -230,10 +254,12 @@ class GeneralizationAdvantageStats:
 主要流程：
 ```python
 def run_round(self):
-    # 1. 分配竞技场（冻结物种的泛化竞技场转为 baseline）
+    # 1. 分配竞技场（冻结物种的泛化竞技场转为 baseline，传入 current_generation 用于 PFSP 采样）
     frozen_types = {t for t, s in self._freeze_states.items() if s.is_frozen}
     if self.pool_manager.has_any_historical_opponents():
-        self._current_allocation = self.arena_allocator.allocate(self.pool_manager, frozen_types)
+        self._current_allocation = self.arena_allocator.allocate(
+            self.pool_manager, frozen_types, current_generation=self.generation
+        )
     else:
         self._current_allocation = self.arena_allocator.allocate_no_historical()
 
@@ -246,14 +272,20 @@ def run_round(self):
     # 4. 汇总适应度并进化（冻结物种不参与进化）
     self._evolve_populations()
 
-    # 5. 检查冻结/解冻
+    # 5. 计算泛化优势比
+    self._compute_and_log_generalization_advantage()
+
+    # 6. 更新历史对手胜率（EMA 平滑，用于 PFSP 采样）
+    self.pool_manager.update_win_rates_from_round(allocation, arena_fitnesses, ema_alpha)
+
+    # 7. 检查冻结/解冻
     self._check_freeze_thaw(round_stats)
 
-    # 6. 检查里程碑保存
+    # 8. 检查里程碑保存
     if generation % milestone_interval == 0:
         self._save_milestone()
 
-    # 7. 清理对手池
+    # 9. 清理对手池
     self.pool_manager.cleanup_all()
 ```
 

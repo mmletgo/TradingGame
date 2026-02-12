@@ -29,7 +29,13 @@ class LeagueTrainingConfig:
     generalization_weight: float = 0.8  # 泛化测试竞技场权重
 
     # 采样策略
-    sampling_strategy: Literal['uniform', 'recency', 'diverse'] = 'recency'
+    sampling_strategy: Literal['uniform', 'recency', 'diverse', 'pfsp'] = 'pfsp'
+
+    # PFSP 采样配置
+    recency_decay_lambda: float = 2.0        # 指数衰减速率，越大衰减越快
+    pfsp_exponent: float = 2.0               # 败率加权指数，越大越集中于难对手
+    pfsp_explore_bonus: float = 2.0          # 未交战对手的探索奖励系数
+    pfsp_win_rate_ema_alpha: float = 0.3     # 胜率 EMA 平滑因子，越大越重视近期
 
     # 对手池注入条件
     elite_fitness_threshold: float = 0.05  # 平均适应度超过历史最高 5% 时注入

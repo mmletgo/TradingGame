@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -10,6 +10,9 @@ from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.opponent_entry import OpponentEntry, OpponentMetadata
 from src.training.league.opponent_pool import OpponentPool
+
+if TYPE_CHECKING:
+    from src.training.league.arena_allocator import ArenaAllocation
 
 
 class OpponentPoolManager:
@@ -110,12 +113,14 @@ class OpponentPoolManager:
         self,
         target_type: AgentType,
         strategy: str | None = None,
+        current_generation: int = 0,
     ) -> dict[AgentType, str | None]:
         """为某个类型的训练采样其他三种类型的对手
 
         Args:
             target_type: 目标类型（当前要训练的类型）
             strategy: 采样策略，None 使用配置默认值
+            current_generation: 当前代数
 
         Returns:
             {AgentType: entry_id}，包含所有四种类型
@@ -133,7 +138,7 @@ class OpponentPoolManager:
             else:
                 # 其他类型从对手池采样
                 pool = self.pools[agent_type]
-                sampled = pool.sample_opponents(1, strategy, target_type)
+                sampled = pool.sample_opponents(1, strategy, target_type, current_generation)
                 result[agent_type] = sampled[0] if sampled else None
 
         return result
@@ -142,12 +147,14 @@ class OpponentPoolManager:
         self,
         strategy: str | None = None,
         target_type: AgentType | None = None,
+        current_generation: int = 0,
     ) -> dict[AgentType, str | None]:
         """采样所有类型的历史对手
 
         Args:
             strategy: 采样策略
             target_type: 目标类型（用于 PFSP）
+            current_generation: 当前代数
 
         Returns:
             {AgentType: entry_id}
@@ -159,7 +166,7 @@ class OpponentPoolManager:
 
         for agent_type in AgentType:
             pool = self.pools[agent_type]
-            sampled = pool.sample_opponents(1, strategy, target_type)
+            sampled = pool.sample_opponents(1, strategy, target_type, current_generation)
             result[agent_type] = sampled[0] if sampled else None
 
         return result
@@ -233,3 +240,96 @@ class OpponentPoolManager:
             条目对象
         """
         return self.pools[agent_type].get_entry(entry_id, load_networks)
+
+    def update_win_rates_from_round(
+        self,
+        allocation: ArenaAllocation,
+        arena_fitnesses: dict[int, dict[AgentType, np.ndarray]],
+        ema_alpha: float = 0.3,
+    ) -> None:
+        """从一轮训练结果更新所有对手的胜率
+
+        Args:
+            allocation: 竞技场分配方案
+            arena_fitnesses: {arena_id: {AgentType: fitness_array}}
+            ema_alpha: EMA 平滑因子
+        """
+        for assignment in allocation.assignments:
+            if assignment.purpose != 'generalization_test':
+                continue
+            target_type = assignment.target_type
+            if target_type is None:
+                continue
+            arena_id = assignment.arena_id
+            if arena_id not in arena_fitnesses:
+                continue
+
+            # 获取目标类型在这个竞技场的适应度
+            target_fitness = arena_fitnesses[arena_id].get(target_type)
+            if target_fitness is None:
+                continue
+
+            # 计算 outcome: 目标物种平均适应度 > 0 为赢
+            outcome = 1.0 if float(np.mean(target_fitness)) > 0 else 0.0
+
+            # 更新每个历史对手的胜率
+            for agent_type, source_config in assignment.agent_sources.items():
+                if source_config.source == 'historical' and source_config.entry_id:
+                    pool = self.pools[agent_type]
+                    pool.update_entry_win_rate(
+                        entry_id=source_config.entry_id,
+                        target_type=target_type,
+                        outcome=outcome,
+                        ema_alpha=ema_alpha,
+                    )
+
+    def sample_opponents_batch_for_type(
+        self,
+        target_type: AgentType,
+        n_arenas: int,
+        strategy: str | None = None,
+        current_generation: int = 0,
+    ) -> list[dict[AgentType, str | None]]:
+        """为目标类型的多个泛化竞技场批量采样对手
+
+        保证各竞技场间对手不重复（如果对手池足够大）。
+
+        Args:
+            target_type: 目标物种类型
+            n_arenas: 竞技场数量
+            strategy: 采样策略
+            current_generation: 当前代数
+
+        Returns:
+            长度为 n_arenas 的列表，每个元素是 {AgentType: entry_id | None}
+        """
+        if strategy is None:
+            strategy = self.config.sampling_strategy
+
+        # 对每种非目标类型批量采样
+        batch_by_type: dict[AgentType, list[str]] = {}
+        for agent_type in AgentType:
+            if agent_type == target_type:
+                continue
+            pool = self.pools[agent_type]
+            sampled = pool.sample_opponents_batch(
+                n_arenas, strategy, target_type, current_generation
+            )
+            batch_by_type[agent_type] = sampled
+
+        # 组装结果
+        results: list[dict[AgentType, str | None]] = []
+        for i in range(n_arenas):
+            arena_opponents: dict[AgentType, str | None] = {}
+            for agent_type in AgentType:
+                if agent_type == target_type:
+                    arena_opponents[agent_type] = None
+                else:
+                    sampled_list = batch_by_type.get(agent_type, [])
+                    if i < len(sampled_list):
+                        arena_opponents[agent_type] = sampled_list[i]
+                    else:
+                        arena_opponents[agent_type] = None
+            results.append(arena_opponents)
+
+        return results

@@ -182,7 +182,8 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self.pool_manager.has_any_historical_opponents():
             frozen_types = {t for t, s in self._freeze_states.items() if s.is_frozen}
             self._current_allocation = self.arena_allocator.allocate(
-                self.pool_manager, frozen_types if frozen_types else None
+                self.pool_manager, frozen_types if frozen_types else None,
+                current_generation=self.generation,
             )
         else:
             # 对手池为空时，使用默认分配
@@ -204,6 +205,19 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 计算泛化优势比
         self._compute_and_log_generalization_advantage(round_stats, has_historical)
+
+        # 更新历史对手胜率
+        if has_historical and self._current_allocation is not None:
+            self.pool_manager.update_win_rates_from_round(
+                allocation=self._current_allocation,
+                arena_fitnesses=self._current_round_arena_fitnesses,
+                ema_alpha=self.league_config.pfsp_win_rate_ema_alpha,
+            )
+            self.pool_manager.save_all()
+
+        # 清空适应度数据（释放内存）
+        self._current_round_arena_fitnesses.clear()
+        gc.collect(0)
 
         # 检查冻结/解冻
         if self.league_config.freeze_on_convergence:
@@ -304,12 +318,6 @@ class LeagueTrainer(ParallelArenaTrainer):
             round_stats['pop_converged_by_type'] = None
             round_stats['elite_converged_by_type'] = None
             round_stats['first_convergence_generation'] = None
-
-        # 清空（释放内存）
-        self._current_round_arena_fitnesses.clear()
-
-        # 【内存泄漏修复】强制释放中间计算的 numpy 数组
-        gc.collect(0)
 
     def _check_freeze_thaw(self, round_stats: dict[str, Any]) -> None:
         """检查并执行冻结/解冻逻辑

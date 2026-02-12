@@ -81,9 +81,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sampling-strategy",
         type=str,
-        choices=["uniform", "recency", "diverse"],
-        default="recency",
-        help="对手采样策略（默认 recency）",
+        choices=["uniform", "recency", "diverse", "pfsp"],
+        default="pfsp",
+        help="对手采样策略（默认 pfsp）",
     )
 
     # 检查点配置
