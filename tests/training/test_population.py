@@ -26,6 +26,7 @@ class TestPopulationCreateAgents:
         """每个测试方法前的设置"""
         # 创建 Population 实例（不调用 __init__，直接设置属性）
         self.population = object.__new__(Population)
+        self.population.sub_population_id = None
         self.population.neat_config = MagicMock()
         self.population.agent_config = AgentConfig(
             count=10,
@@ -427,7 +428,7 @@ class TestPopulationEvaluate:
     def test_evaluate_single_agent(self):
         """测试单个 Agent 评估"""
         # 创建一个 Agent: balance=10000, quantity=0, initial_balance=10000
-        # 适应度 = (10000 + 0) / 10000 = 1.0
+        # 适应度 = (10000 - 10000) / 10000 = 0.0
         agent = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -441,14 +442,14 @@ class TestPopulationEvaluate:
 
         assert len(result) == 1
         assert result[0][0] is agent
-        assert result[0][1] == pytest.approx(1.0)
+        assert result[0][1] == pytest.approx(0.0)
 
     def test_evaluate_sorted_by_fitness_descending(self):
         """测试按适应度从高到低排序"""
         # Agent 1: balance=10000, quantity=10, avg_price=90, current_price=100
         # 未实现盈亏 = (100 - 90) * 10 = 100
         # 净值 = 10000 + 100 = 10100
-        # 适应度 = 10100 / 10000 = 1.01
+        # 适应度 = (10100 - 10000) / 10000 = 0.01
         agent1 = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -458,7 +459,7 @@ class TestPopulationEvaluate:
         )
 
         # Agent 2: balance=15000, quantity=0, avg_price=0
-        # 适应度 = 15000 / 10000 = 1.5
+        # 适应度 = (15000 - 10000) / 10000 = 0.5
         agent2 = self._create_mock_agent(
             agent_id=2,
             balance=15000.0,
@@ -470,7 +471,7 @@ class TestPopulationEvaluate:
         # Agent 3: balance=5000, quantity=-10, avg_price=110, current_price=100
         # 未实现盈亏 = (100 - 110) * (-10) = 100
         # 净值 = 5000 + 100 = 5100
-        # 适应度 = 5100 / 10000 = 0.51
+        # 适应度 = (5100 - 10000) / 10000 = -0.49
         agent3 = self._create_mock_agent(
             agent_id=3,
             balance=5000.0,
@@ -483,20 +484,20 @@ class TestPopulationEvaluate:
 
         result = self.population.evaluate(100.0)
 
-        # 验证排序: agent2 (1.5) > agent1 (1.01) > agent3 (0.51)
+        # 验证排序: agent2 (0.5) > agent1 (0.01) > agent3 (-0.49)
         assert len(result) == 3
         assert result[0][0] is agent2
-        assert result[0][1] == pytest.approx(1.5)
+        assert result[0][1] == pytest.approx(0.5)
         assert result[1][0] is agent1
-        assert result[1][1] == pytest.approx(1.01)
+        assert result[1][1] == pytest.approx(0.01)
         assert result[2][0] is agent3
-        assert result[2][1] == pytest.approx(0.51)
+        assert result[2][1] == pytest.approx(-0.49)
 
     def test_evaluate_with_unrealized_pnl(self):
         """测试带未实现盈亏的评估"""
         # 多头盈利: balance=10000, quantity=100, avg_price=90, current_price=100
         # 未实现盈亏 = (100 - 90) * 100 = 1000
-        # 适应度 = (10000 + 1000) / 10000 = 1.1
+        # 适应度 = (10000 + 1000 - 10000) / 10000 = 0.1
         agent_long_profit = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -507,7 +508,7 @@ class TestPopulationEvaluate:
 
         # 多头亏损: balance=10000, quantity=100, avg_price=110, current_price=100
         # 未实现盈亏 = (100 - 110) * 100 = -1000
-        # 适应度 = (10000 - 1000) / 10000 = 0.9
+        # 适应度 = (10000 - 1000 - 10000) / 10000 = -0.1
         agent_long_loss = self._create_mock_agent(
             agent_id=2,
             balance=10000.0,
@@ -518,7 +519,7 @@ class TestPopulationEvaluate:
 
         # 空头盈利: balance=10000, quantity=-100, avg_price=110, current_price=100
         # 未实现盈亏 = (100 - 110) * (-100) = 1000
-        # 适应度 = (10000 + 1000) / 10000 = 1.1
+        # 适应度 = (10000 + 1000 - 10000) / 10000 = 0.1
         agent_short_profit = self._create_mock_agent(
             agent_id=3,
             balance=10000.0,
@@ -529,7 +530,7 @@ class TestPopulationEvaluate:
 
         # 空头亏损: balance=10000, quantity=-100, avg_price=90, current_price=100
         # 未实现盈亏 = (100 - 90) * (-100) = -1000
-        # 适应度 = (10000 - 1000) / 10000 = 0.9
+        # 适应度 = (10000 - 1000 - 10000) / 10000 = -0.1
         agent_short_loss = self._create_mock_agent(
             agent_id=4,
             balance=10000.0,
@@ -549,11 +550,11 @@ class TestPopulationEvaluate:
 
         # 验证适应度计算正确
         assert len(result) == 4
-        # 盈利的在前（适应度 1.1），亏损的在后（适应度 0.9）
-        assert result[0][1] == pytest.approx(1.1)
-        assert result[1][1] == pytest.approx(1.1)
-        assert result[2][1] == pytest.approx(0.9)
-        assert result[3][1] == pytest.approx(0.9)
+        # 盈利的在前（适应度 0.1），亏损的在后（适应度 -0.1）
+        assert result[0][1] == pytest.approx(0.1)
+        assert result[1][1] == pytest.approx(0.1)
+        assert result[2][1] == pytest.approx(-0.1)
+        assert result[3][1] == pytest.approx(-0.1)
 
     def test_evaluate_returns_float_fitness(self):
         """测试返回的适应度是 Python float 而非 numpy 类型"""
@@ -783,9 +784,9 @@ class TestPopulationEvolve:
 
         # 验证 genome.fitness 被设置（应该不再是 None）
         # evolve 方法中会调用 genome.fitness = agent.get_fitness(current_price)
-        # 由于 Agent 使用真实的 account，fitness 应该被设置为 1.0（初始净值/初始余额）
-        assert mock_genome1.fitness == pytest.approx(1.0)
-        assert mock_genome2.fitness == pytest.approx(1.0)
+        # 由于 Agent 使用真实的 account，fitness 应该被设置为 0.0（(初始净值 - 初始余额)/初始余额）
+        assert mock_genome1.fitness == pytest.approx(0.0)
+        assert mock_genome2.fitness == pytest.approx(0.0)
 
         # 验证 brain.get_genome 被调用（用于获取 genome 并设置 fitness）
         mock_brain1.get_genome.assert_called()

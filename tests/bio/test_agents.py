@@ -26,6 +26,9 @@ def create_mock_market_state(mid_price: float = 100.0, tick_size: float = 0.1) -
         ask_data=np.zeros(200, dtype=np.float32),
         trade_prices=np.zeros(100, dtype=np.float32),
         trade_quantities=np.zeros(100, dtype=np.float32),
+        tick_history_prices=np.zeros(100, dtype=np.float32),
+        tick_history_volumes=np.zeros(100, dtype=np.float32),
+        tick_history_amounts=np.zeros(100, dtype=np.float32),
     )
 
 
@@ -182,6 +185,9 @@ class TestAgentObserve:
             ask_data=np.array([-0.1, 10.0] * 100, dtype=np.float32),  # 100档卖盘
             trade_prices=trade_prices,
             trade_quantities=trade_quantities,
+            tick_history_prices=np.zeros(100, dtype=np.float32),
+            tick_history_volumes=np.zeros(100, dtype=np.float32),
+            tick_history_amounts=np.zeros(100, dtype=np.float32),
         )
 
         # 设置一些持仓
@@ -192,8 +198,8 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单
-        expected_length = 200 + 200 + 200 + 4 + 3
+        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
+        expected_length = 200 + 200 + 200 + 4 + 3 + 300
         assert len(inputs) == expected_length
 
         # 验证成交数据（价格在前100个，数量在后100个）
@@ -242,8 +248,8 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度（固定长度）
-        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单
-        expected_length = 200 + 200 + 200 + 4 + 3
+        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
+        expected_length = 200 + 200 + 200 + 4 + 3 + 300
         assert len(inputs) == expected_length
 
         # 验证持仓状态（在末尾附近）
@@ -292,7 +298,8 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        expected_length = 200 + 200 + 200 + 4 + 3
+        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
+        expected_length = 200 + 200 + 200 + 4 + 3 + 300
         assert len(inputs) == expected_length
 
         # 验证持仓数据（在持仓部分）
@@ -312,7 +319,7 @@ class TestRetailProAgentDecide:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：HOLD (index 0) 值最大，9 个输出
-        mock_brain.forward.return_value = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        mock_brain.forward.return_value = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -352,8 +359,8 @@ class TestRetailProAgentDecide:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：PLACE_BID (index 1) 值最大
-        # 价格偏移 -0.5（低于中间价），数量比例 0.0（较小数量）
-        mock_brain.forward.return_value = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0]
+        # outputs[6]=价格偏移 -0.5（低于中间价），outputs[7]=数量比例 0.0（较小数量）
+        mock_brain.forward.return_value = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -388,8 +395,8 @@ class TestRetailProAgentDecide:
         # 验证参数包含 price 和 quantity
         assert "price" in params
         assert "quantity" in params
-        # 价格偏移 = -0.5 * 100 * 0.1 = -5.0，所以价格 = 100 - 5 = 95
-        assert params["price"] == 95.0
+        # 价格偏移 = -0.5 * 100 * 0.01 = -0.5，所以价格 = 100 - 0.5 = 99.5
+        assert params["price"] == 99.5
         # 数量应大于 0
         assert params["quantity"] > 0
 
@@ -398,8 +405,8 @@ class TestRetailProAgentDecide:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：PLACE_ASK (index 2) 值最大
-        # 价格偏移 0.5（高于中间价），数量比例 0.0（较小数量）
-        mock_brain.forward.return_value = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0]
+        # outputs[6]=价格偏移 0.5（高于中间价），outputs[7]=数量比例 0.0（较小数量）
+        mock_brain.forward.return_value = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -434,8 +441,8 @@ class TestRetailProAgentDecide:
         # 验证参数包含 price 和 quantity
         assert "price" in params
         assert "quantity" in params
-        # 价格偏移 = 0.5 * 100 * 0.1 = 5.0，所以价格 = 100 + 5 = 105
-        assert params["price"] == 105.0
+        # 价格偏移 = 0.5 * 100 * 0.01 = 0.5，所以价格 = 100 + 0.5 = 100.5
+        assert params["price"] == 100.5
         # 数量应大于 0
         assert params["quantity"] > 0
 
@@ -444,7 +451,7 @@ class TestRetailProAgentDecide:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：CANCEL (index 3) 值最大
-        mock_brain.forward.return_value = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -484,7 +491,7 @@ class TestRetailProAgentDecide:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：MARKET_BUY (index 4) 值最大
-        mock_brain.forward.return_value = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -526,7 +533,7 @@ class TestRetailProAgentDecide:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：MARKET_SELL (index 5) 值最大，数量比例 0.0
-        mock_brain.forward.return_value = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -563,52 +570,12 @@ class TestRetailProAgentDecide:
         # 数量应大于 0
         assert params["quantity"] > 0
 
-    def test_decide_clear_position_action(self):
-        """测试 CLEAR_POSITION 动作决策"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：CLEAR_POSITION (index 6) 值最大
-        mock_brain.forward.return_value = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建 RetailProAgent
-        agent = RetailProAgent(
-            agent_id=1,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 创建订单簿
-        from src.market.orderbook.orderbook import OrderBook
-        orderbook = OrderBook(tick_size=0.01)
-        orderbook.last_price = 100.0
-
-        # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
-
-        # 调用 decide
-        action, params = agent.decide(market_state, orderbook)
-
-        # 验证动作类型
-        assert action == ActionType.CLEAR_POSITION
-        # CLEAR_POSITION 动作无参数（由调用方处理）
-        assert params == {}
-
     def test_decide_insufficient_outputs_error(self):
         """测试神经网络输出维度不足时抛出异常"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：只有 3 个值，少于 9 个
-        mock_brain.forward.return_value = [0.1, 0.2, 0.3]
+        # 设置神经网络输出：只有 3 个值，少于 8 个
+        mock_brain.forward.return_value = np.array([0.1, 0.2, 0.3])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -647,7 +614,7 @@ class TestRetailProAgentDecide:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：MARKET_SELL (index 5) 值最大，数量比例 0.0
-        mock_brain.forward.return_value = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -685,17 +652,17 @@ class TestRetailProAgentDecide:
         assert action == ActionType.MARKET_SELL
         # 验证参数包含 quantity
         assert "quantity" in params
-        # 数量比例 = 0.1 + (0.0 + 1) * 0.45 = 0.55
-        # 卖出数量 = 100.0 * 0.55 = 55.0（浮点数精度允许误差）
-        assert abs(params["quantity"] - 55.0) < 0.01
+        # 数量比例 = (0.0 + 1) * 0.5 = 0.5
+        # 卖出数量 = max(1, int(100.0 * 0.5)) = 50
+        assert params["quantity"] == 50
 
     def test_decide_without_best_price(self):
         """测试订单簿为空时的决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
         # 设置神经网络输出：PLACE_BID (index 1) 值最大
-        # 价格偏移 -0.5（低于中间价），数量比例 0.0（较小数量）
-        mock_brain.forward.return_value = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0]
+        # outputs[6]=价格偏移 -0.5（低于中间价），outputs[7]=数量比例 0.0（较小数量）
+        mock_brain.forward.return_value = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -730,8 +697,8 @@ class TestRetailProAgentDecide:
         # 验证参数包含 price 和 quantity
         assert "price" in params
         assert "quantity" in params
-        # 价格偏移 = -0.5 * 100 * 0.1 = -5.0，所以价格 = 100 - 5 = 95
-        assert params["price"] == 95.0
+        # 价格偏移 = -0.5 * 100 * 0.01 = -0.5，所以价格 = 100 - 0.5 = 99.5
+        assert params["price"] == 99.5
 
 
 def create_mock_matching_engine() -> MagicMock:
@@ -908,126 +875,6 @@ class TestAgentExecuteAction:
         assert order.order_type == OrderType.MARKET
         assert order.price == 0.0
         assert order.quantity == 25
-        # 返回空成交列表
-        assert trades == []
-
-    def test_execute_clear_position_long(self):
-        """测试清仓（多仓）"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 设置多仓持仓
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 100, 100.0)
-
-        # 执行清仓
-        action = ActionType.CLEAR_POSITION
-        params: dict = {}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证调用了 process_order（市价卖出）
-        mock_engine.process_order.assert_called_once()
-        order = mock_engine.process_order.call_args[0][0]
-        assert order.agent_id == 1
-        assert order.side == OrderSide.SELL
-        assert order.order_type == OrderType.MARKET
-        assert order.quantity == 100
-        # 返回空成交列表
-        assert trades == []
-
-    def test_execute_clear_position_short(self):
-        """测试清仓（空仓）"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 设置空仓持仓
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.SELL, 50, 100.0)
-
-        # 执行清仓
-        action = ActionType.CLEAR_POSITION
-        params: dict = {}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证调用了 process_order（市价买入）
-        mock_engine.process_order.assert_called_once()
-        order = mock_engine.process_order.call_args[0][0]
-        assert order.agent_id == 1
-        assert order.side == OrderSide.BUY
-        assert order.order_type == OrderType.MARKET
-        assert order.quantity == 50
-        # 返回空成交列表
-        assert trades == []
-
-    def test_execute_clear_position_no_position(self):
-        """测试清仓（无持仓）"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10000,
-            initial_balance=10000.0,
-            leverage=100.0,
-            maintenance_margin_rate=0.005,
-            maker_fee_rate=0.0002,
-            taker_fee_rate=0.0005,
-        )
-
-        # 创建 Agent
-        agent = Agent(
-            agent_id=1,
-            agent_type=AgentType.RETAIL,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 执行清仓（无持仓）
-        action = ActionType.CLEAR_POSITION
-        params: dict = {}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证没有调用 process_order
-        mock_engine.process_order.assert_not_called()
         # 返回空成交列表
         assert trades == []
 
@@ -1437,8 +1284,8 @@ class TestRetailAgentGetActionSpace:
             ActionType.MARKET_SELL,
         ]
 
-    def test_get_action_space_excludes_clear_position(self):
-        """测试动作空间不包含 CLEAR_POSITION（做市商专用）"""
+    def test_get_action_space_has_exactly_6_actions(self):
+        """测试动作空间恰好包含 6 种动作"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -1462,8 +1309,8 @@ class TestRetailAgentGetActionSpace:
         # 获取动作空间
         action_space = agent.get_action_space()
 
-        # 验证不包含 CLEAR_POSITION
-        assert ActionType.CLEAR_POSITION not in action_space
+        # 验证恰好 6 种动作
+        assert len(action_space) == 6
 
 
 class TestRetailAgentExecuteAction:
@@ -1714,15 +1561,14 @@ class TestWhaleAgentGetActionSpace:
         # 获取动作空间
         action_space = agent.get_action_space()
 
-        # 验证返回 7 种动作（与散户相同，包含 CLEAR_POSITION）
-        assert len(action_space) == 7
+        # 验证返回 6 种动作（与散户相同）
+        assert len(action_space) == 6
         assert ActionType.HOLD in action_space
         assert ActionType.PLACE_BID in action_space
         assert ActionType.PLACE_ASK in action_space
         assert ActionType.CANCEL in action_space
         assert ActionType.MARKET_BUY in action_space
         assert ActionType.MARKET_SELL in action_space
-        assert ActionType.CLEAR_POSITION in action_space
 
         # 验证动作顺序
         assert action_space == [
@@ -1732,7 +1578,6 @@ class TestWhaleAgentGetActionSpace:
             ActionType.CANCEL,
             ActionType.MARKET_BUY,
             ActionType.MARKET_SELL,
-            ActionType.CLEAR_POSITION,
         ]
 
     def test_get_action_space_includes_hold(self):
@@ -1790,34 +1635,6 @@ class TestWhaleAgentGetActionSpace:
 
         # 验证包含 CANCEL
         assert ActionType.CANCEL in action_space
-
-    def test_get_action_space_includes_clear_position(self):
-        """测试庄家动作空间包含 CLEAR_POSITION"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 获取动作空间
-        action_space = agent.get_action_space()
-
-        # 验证包含 CLEAR_POSITION
-        assert ActionType.CLEAR_POSITION in action_space
 
 
 class TestWhaleAgentExecuteAction:
@@ -2076,16 +1893,9 @@ class TestMarketMakerAgentGetActionSpace:
         # 获取动作空间
         action_space = agent.get_action_space()
 
-        # 验证返回 2 种动作：双边挂单和清仓
-        assert len(action_space) == 2
-        assert ActionType.QUOTE in action_space
-        assert ActionType.CLEAR_POSITION in action_space
-
-        # 验证动作顺序
-        assert action_space == [
-            ActionType.QUOTE,
-            ActionType.CLEAR_POSITION,
-        ]
+        # 做市商不使用动作选择，返回空列表
+        assert len(action_space) == 0
+        assert action_space == []
 
     def test_get_action_space_excludes_single_side_actions(self):
         """测试做市商动作空间不包含单边动作"""
@@ -2147,8 +1957,8 @@ class TestMarketMakerAgentExecuteAction:
             config=config,
         )
 
-        # 执行双边挂单
-        action = ActionType.QUOTE
+        # 执行双边挂单（execute_action 忽略 action 参数，始终执行双边挂单）
+        action = ActionType.HOLD
         params = {
             "bid_orders": [
                 {"price": 99.5, "quantity": 10},
@@ -2200,8 +2010,8 @@ class TestMarketMakerAgentExecuteAction:
         agent.bid_order_ids = [1001, 1002]
         agent.ask_order_ids = [2001, 2002, 2003]
 
-        # 执行双边挂单
-        action = ActionType.QUOTE
+        # 执行双边挂单（execute_action 忽略 action 参数，始终执行双边挂单）
+        action = ActionType.HOLD
         params = {
             "bid_orders": [{"price": 99.3, "quantity": 20}],
             "ask_orders": [{"price": 100.8, "quantity": 25}],
@@ -2226,100 +2036,23 @@ class TestMarketMakerAgentExecuteAction:
         # 返回空成交列表
         assert trades == []
 
-    def test_execute_clear_position_with_long_position(self):
-        """测试清仓（多仓）"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建做市商 Agent 配置
-        config = AgentConfig(
-            count=100,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建做市商 Agent
-        agent = MarketMakerAgent(
-            agent_id=10011,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 设置已有挂单和多仓
-        agent.bid_order_ids = [1001, 1002]
-        agent.ask_order_ids = [2001]
-        from src.market.orderbook.order import OrderSide
-        agent.account.position.update(OrderSide.BUY, 100, 100.0)
-
-        # 执行清仓
-        action = ActionType.CLEAR_POSITION
-        params: dict = {}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证调用了 cancel_order 撤销所有挂单
-        assert mock_engine.cancel_order.call_count == 3  # 撤掉所有挂单
-
-        # 验证调用了 process_order（市价卖单）
-        mock_engine.process_order.assert_called_once()
-        order = mock_engine.process_order.call_args[0][0]
-        assert order.side == OrderSide.SELL
-        assert order.order_type == OrderType.MARKET
-        assert order.quantity == 100
-
-        # 验证挂单列表被清空
-        assert len(agent.bid_order_ids) == 0
-        assert len(agent.ask_order_ids) == 0
-        # 返回空成交列表
-        assert trades == []
-
-    def test_execute_clear_position_with_no_position(self):
-        """测试清仓（无持仓）"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建做市商 Agent 配置
-        config = AgentConfig(
-            count=100,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建做市商 Agent
-        agent = MarketMakerAgent(
-            agent_id=10011,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 执行清仓（无持仓）
-        action = ActionType.CLEAR_POSITION
-        params: dict = {}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证没有调用 process_order（无持仓不发布市价单）
-        mock_engine.process_order.assert_not_called()
-        # 返回空成交列表
-        assert trades == []
 
 
 class TestMarketMakerAgentDecide:
     """测试 MarketMakerAgent.decide"""
 
     def test_decide_quote_action(self):
-        """测试决策 QUOTE 动作"""
-        # 创建 mock Brain，设置神经网络输出
+        """测试做市商决策返回 HOLD 动作和双边订单"""
+        # 创建 mock Brain，设置神经网络输出（41 个值）
         mock_brain = MagicMock(spec=Brain)
-        # 输出[0]=1.0 (QUOTE), 输出[1]=0.0 (CLEAR_POSITION)
-        # 输出[2-21]=0.0 (价格偏移和数量比例)
-        mock_brain.forward.return_value = [1.0, 0.0] + [0.0] * 20
+        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights + 1 total ratio
+        mock_brain.forward.return_value = (
+            [0.0] * 10 +   # bid price offsets
+            [0.5] * 10 +   # bid quantity weights (positive = reasonable)
+            [0.0] * 10 +   # ask price offsets
+            [0.5] * 10 +   # ask quantity weights
+            [0.0]           # total ratio
+        )
 
         # 创建做市商 Agent 配置
         config = AgentConfig(
@@ -2348,13 +2081,13 @@ class TestMarketMakerAgentDecide:
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
 
-        # 验证返回了 QUOTE 动作
-        assert action == ActionType.QUOTE
+        # 做市商 decide 始终返回 HOLD
+        assert action == ActionType.HOLD
         assert "bid_orders" in params
         assert "ask_orders" in params
-        # 验证订单数量（5个买单和5个卖单）
-        assert len(params["bid_orders"]) == 5
-        assert len(params["ask_orders"]) == 5
+        # 验证有买单和卖单
+        assert len(params["bid_orders"]) > 0
+        assert len(params["ask_orders"]) > 0
 
         # 验证所有买单价格低于 mid_price
         mid_price = market_state.mid_price
@@ -2367,49 +2100,11 @@ class TestMarketMakerAgentDecide:
             assert order["price"] > mid_price
             assert order["quantity"] > 0
 
-    def test_decide_clear_position_action(self):
-        """测试决策 CLEAR_POSITION 动作"""
-        # 创建 mock Brain，设置神经网络输出
-        mock_brain = MagicMock(spec=Brain)
-        # 输出[0]=0.0 (QUOTE), 输出[1]=1.0 (CLEAR_POSITION)
-        mock_brain.forward.return_value = [0.0, 1.0] + [0.0] * 20
-
-        # 创建做市商 Agent 配置
-        config = AgentConfig(
-            count=100,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建做市商 Agent
-        agent = MarketMakerAgent(
-            agent_id=10011,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 创建订单簿
-        orderbook = OrderBook(tick_size=0.01)
-        orderbook.last_price = 100.0
-
-        # 创建市场状态
-        market_state = create_mock_market_state(mid_price=100.0, tick_size=0.01)
-
-        # 调用 decide
-        action, params = agent.decide(market_state, orderbook)
-
-        # 验证返回了 CLEAR_POSITION 动作
-        assert action == ActionType.CLEAR_POSITION
-        assert params == {}
-
     def test_decide_insufficient_outputs_error(self):
         """测试神经网络输出维度不足时抛出异常"""
         # 创建 mock Brain，设置输出维度不足
         mock_brain = MagicMock(spec=Brain)
-        mock_brain.forward.return_value = [0.0] * 10  # 只有 10 个输出，需要 22 个
+        mock_brain.forward.return_value = np.array([0.0] * 10)  # 只有 10 个输出，需要 41 个
 
         # 创建做市商 Agent 配置
         config = AgentConfig(
@@ -2441,27 +2136,21 @@ class TestMarketMakerAgentDecide:
             assert False, "应该抛出 ValueError"
         except ValueError as e:
             assert "神经网络输出维度不足" in str(e)
-            assert "22" in str(e)
+            assert "41" in str(e)
             assert "10" in str(e)
 
     def test_decide_generates_orders_at_different_prices(self):
         """测试生成的订单在不同价位"""
-        # 创建 mock Brain，设置不同的价格偏移
+        # 创建 mock Brain，设置不同的价格偏移（41 个值）
         mock_brain = MagicMock(spec=Brain)
-        # 输出: QUOTE=1.0, CLEAR=0.0
-        # 买单价格偏移: -0.8, -0.6, -0.4, -0.2, 0.0
-        # 买单数量: 全部 0.0
-        # 卖单价格偏移: 0.0, 0.2, 0.4, 0.6, 0.8
-        # 卖单数量: 全部 0.0
-        outputs = [1.0, 0.0]  # 动作得分
-        # 买单价格偏移
-        outputs.extend([-0.8, -0.6, -0.4, -0.2, 0.0])
-        # 买单数量
-        outputs.extend([0.0, 0.0, 0.0, 0.0, 0.0])
-        # 卖单价格偏移
-        outputs.extend([0.0, 0.2, 0.4, 0.6, 0.8])
-        # 卖单数量
-        outputs.extend([0.0, 0.0, 0.0, 0.0, 0.0])
+        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights + 1 total ratio
+        outputs = (
+            [-0.8, -0.6, -0.4, -0.2, 0.0, -0.8, -0.6, -0.4, -0.2, 0.0] +  # 10 bid price offsets
+            [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5] +           # 10 bid qty weights
+            [0.0, 0.2, 0.4, 0.6, 0.8, 0.0, 0.2, 0.4, 0.6, 0.8] +           # 10 ask price offsets
+            [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5] +           # 10 ask qty weights
+            [0.0]                                                              # total ratio
+        )
         mock_brain.forward.return_value = outputs
 
         # 创建做市商 Agent 配置
@@ -2491,40 +2180,32 @@ class TestMarketMakerAgentDecide:
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
 
-        # 验证返回了 QUOTE 动作
-        assert action == ActionType.QUOTE
+        # 做市商 decide 始终返回 HOLD
+        assert action == ActionType.HOLD
+
+        # 验证有买单和卖单
+        assert len(params["bid_orders"]) > 0
+        assert len(params["ask_orders"]) > 0
 
         # 提取价格
         bid_prices = [o["price"] for o in params["bid_orders"]]
         ask_prices = [o["price"] for o in params["ask_orders"]]
 
-        # 买单价格应递减（从高到低，第一个最接近 mid_price）
-        assert bid_prices == sorted(bid_prices, reverse=True)
-
-        # 卖单价格应递增（从低到高，第一个最接近 mid_price）
-        assert ask_prices == sorted(ask_prices)
-
         # 所有买单价格应低于所有卖单价格
         assert max(bid_prices) < min(ask_prices)
 
     def test_decide_normalizes_quantity_ratios(self):
-        """测试数量比例归一化（10个订单的总比例不超过1.0）"""
-        # 创建 mock Brain，设置所有数量权重为最大值
+        """测试数量比例归一化（20个订单的总比例不超过1.0）"""
+        # 创建 mock Brain，设置所有数量权重为最大值（41 个值）
         mock_brain = MagicMock(spec=Brain)
-        # 输出: QUOTE=1.0, CLEAR=0.0
-        # 买单价格偏移: 全部 0.0
-        # 买单数量权重: 全部 1.0（最大值）
-        # 卖单价格偏移: 全部 0.0
-        # 卖单数量权重: 全部 1.0（最大值）
-        outputs = [1.0, 0.0]  # 动作得分
-        # 买单价格偏移
-        outputs.extend([0.0, 0.0, 0.0, 0.0, 0.0])
-        # 买单数量权重（全部 1.0）
-        outputs.extend([1.0, 1.0, 1.0, 1.0, 1.0])
-        # 卖单价格偏移
-        outputs.extend([0.0, 0.0, 0.0, 0.0, 0.0])
-        # 卖单数量权重（全部 1.0）
-        outputs.extend([1.0, 1.0, 1.0, 1.0, 1.0])
+        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights + 1 total ratio
+        outputs = (
+            [0.0] * 10 +   # bid price offsets
+            [1.0] * 10 +   # bid qty weights (all max)
+            [0.0] * 10 +   # ask price offsets
+            [1.0] * 10 +   # ask qty weights (all max)
+            [0.0]           # total ratio
+        )
         mock_brain.forward.return_value = outputs
 
         # 创建做市商 Agent 配置
@@ -2554,12 +2235,14 @@ class TestMarketMakerAgentDecide:
         # 调用 decide
         action, params = agent.decide(market_state, orderbook)
 
-        # 验证返回了 QUOTE 动作
-        assert action == ActionType.QUOTE
+        # 做市商 decide 始终返回 HOLD
+        assert action == ActionType.HOLD
 
-        # 验证有 10 个订单（5买+5卖）
-        assert len(params["bid_orders"]) == 5
-        assert len(params["ask_orders"]) == 5
+        # 验证有买单和卖单（最多每边10个）
+        assert len(params["bid_orders"]) > 0
+        assert len(params["ask_orders"]) > 0
+        assert len(params["bid_orders"]) <= 10
+        assert len(params["ask_orders"]) <= 10
 
         # 计算总价值
         mid_price = market_state.mid_price

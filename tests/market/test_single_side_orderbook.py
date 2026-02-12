@@ -25,7 +25,7 @@ def create_test_agent(agent_class, agent_id: int = 0):
     mock_brain = MagicMock()
 
     # 设置 mock 返回值
-    mock_brain.forward.return_value = [0, 0, 0, 0, 0, 0, 1, 0.0, 0.0]  # 7个动作得分 + 价格偏移 + 数量比例
+    mock_brain.forward.return_value = np.array([0, 0, 0, 0, 0, 0, 0.0, 0.0], dtype=np.float64)  # 6个动作得分 + 价格偏移 + 数量比例
 
     # 创建 Agent 配置（注意：参数名与现有测试保持一致）
     config = AgentConfig(
@@ -61,6 +61,9 @@ def create_market_state_with_only_bids():
         ask_data=ask_data,
         trade_prices=np.zeros(100, dtype=np.float32),
         trade_quantities=np.zeros(100, dtype=np.float32),
+        tick_history_prices=np.zeros(100, dtype=np.float32),
+        tick_history_volumes=np.zeros(100, dtype=np.float32),
+        tick_history_amounts=np.zeros(100, dtype=np.float32),
     )
 
 
@@ -84,6 +87,9 @@ def create_market_state_with_only_asks():
         ask_data=ask_data,
         trade_prices=np.zeros(100, dtype=np.float32),
         trade_quantities=np.zeros(100, dtype=np.float32),
+        tick_history_prices=np.zeros(100, dtype=np.float32),
+        tick_history_volumes=np.zeros(100, dtype=np.float32),
+        tick_history_amounts=np.zeros(100, dtype=np.float32),
     )
 
 
@@ -96,6 +102,9 @@ def create_market_state_empty():
         ask_data=np.zeros(200, dtype=np.float32),
         trade_prices=np.zeros(100, dtype=np.float32),
         trade_quantities=np.zeros(100, dtype=np.float32),
+        tick_history_prices=np.zeros(100, dtype=np.float32),
+        tick_history_volumes=np.zeros(100, dtype=np.float32),
+        tick_history_amounts=np.zeros(100, dtype=np.float32),
     )
 
 
@@ -112,7 +121,7 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度
-        assert inputs.shape == (67,), f"期望输入维度67，实际{inputs.shape}"
+        assert inputs.shape == (127,), f"期望输入维度127，实际{inputs.shape}"
 
         # 验证买盘数据被正确填充（前20个值）
         assert inputs[0] != 0.0, "买盘价格应该被填充"
@@ -138,7 +147,7 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度
-        assert inputs.shape == (67,), f"期望输入维度67，实际{inputs.shape}"
+        assert inputs.shape == (127,), f"期望输入维度127，实际{inputs.shape}"
 
         # 验证买盘数据为空（前20个值）
         assert np.all(inputs[0:20] == 0.0), "买盘数据应该全为0"
@@ -164,7 +173,7 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度
-        assert inputs.shape == (67,), f"期望输入维度67，实际{inputs.shape}"
+        assert inputs.shape == (127,), f"期望输入维度127，实际{inputs.shape}"
 
         # 验证买卖盘数据都为空
         assert np.all(inputs[0:40] == 0.0), "买卖盘数据应该全为0"
@@ -186,7 +195,7 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度（高级散户使用完整的607维输入）
-        assert inputs.shape == (607,), f"期望输入维度607，实际{inputs.shape}"
+        assert inputs.shape == (907,), f"期望输入维度907，实际{inputs.shape}"
 
         # 验证买盘数据被正确填充
         assert inputs[0] != 0.0, "买盘价格应该被填充"
@@ -209,7 +218,7 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度（庄家使用完整的607维输入）
-        assert inputs.shape == (607,), f"期望输入维度607，实际{inputs.shape}"
+        assert inputs.shape == (907,), f"期望输入维度907，实际{inputs.shape}"
 
         # 验证买盘数据为空
         assert np.all(inputs[0:200] == 0.0), "买盘数据应该全为0"
@@ -233,8 +242,8 @@ class TestSingleSideOrderbook:
             inputs = agent.observe(market_state, orderbook)
             outputs = agent.brain.forward(inputs)
 
-            # 验证输出维度（9个值：7个动作 + 价格偏移 + 数量比例）
-            assert len(outputs) == 9, f"期望输出维度9，实际{len(outputs)}"
+            # 验证输出维度（8个值：6个动作 + 价格偏移 + 数量比例）
+            assert len(outputs) == 8, f"期望输出维度8，实际{len(outputs)}"
 
             # 验证输出都是数值（不是 NaN 或 Inf）
             assert np.all(np.isfinite(outputs)), "神经网络输出包含 NaN 或 Inf"
@@ -251,6 +260,9 @@ class TestSingleSideOrderbook:
             ask_data=np.zeros(200, dtype=np.float32),
             trade_prices=np.zeros(100, dtype=np.float32),
             trade_quantities=np.zeros(100, dtype=np.float32),
+            tick_history_prices=np.zeros(100, dtype=np.float32),
+            tick_history_volumes=np.zeros(100, dtype=np.float32),
+            tick_history_amounts=np.zeros(100, dtype=np.float32),
         )
         orderbook = OrderBook(tick_size=0.01)
 

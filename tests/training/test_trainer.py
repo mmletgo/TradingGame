@@ -19,7 +19,30 @@ from src.config.config import (
     MarketConfig,
     TrainingConfig,
 )
+from src.training.population import SubPopulationManager
 from src.training.trainer import Trainer
+
+
+def _mock_sub_pop_init(
+    self: SubPopulationManager,
+    config: Config,
+    agent_type: AgentType,
+    sub_count: int = 10,
+) -> None:
+    """SubPopulationManager 的 mock __init__，设置最小属性以通过 setup()"""
+    self.agent_type = agent_type
+    self.sub_population_count = sub_count
+    total_count = config.agents[agent_type].count
+    self.agents_per_sub = total_count // sub_count
+    self._pending_genome_data = None
+    self._genomes_dirty = False
+    self.logger = MagicMock()
+    # 创建一个 mock 子种群以支持 agent_config property
+    mock_sub_pop = MagicMock()
+    mock_sub_pop.agents = []
+    mock_sub_pop.agent_config = config.agents[agent_type]
+    mock_sub_pop.generation = 0
+    self.sub_populations = [mock_sub_pop]
 
 
 @pytest.fixture
@@ -44,7 +67,7 @@ def mock_config() -> Config:
     training = TrainingConfig(
         episode_length=10,  # 测试时使用较短的 episode
         checkpoint_interval=5,
-        neat_config_path="config/neat_config.txt",
+        neat_config_path="config",
     )
 
     demo = DemoConfig(
@@ -121,7 +144,11 @@ class TestTrainerInit:
 class TestTrainerSetup:
     """测试 Trainer.setup"""
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_setup_creates_populations(
@@ -129,11 +156,16 @@ class TestTrainerSetup:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """setup 创建四种群"""
         mock_get_logger.return_value = MagicMock()
-        mock_population_class.return_value = MagicMock()
+        mock_pop_instance = MagicMock()
+        mock_pop_instance.agents = []
+        mock_population_class.return_value = mock_pop_instance
         mock_engine_instance = MagicMock()
         mock_engine_instance._orderbook = MagicMock()
         mock_matching_engine_class.return_value = mock_engine_instance
@@ -141,18 +173,31 @@ class TestTrainerSetup:
         trainer = Trainer(mock_config)
         trainer.setup()
 
-        # 验证创建了四个种群
-        assert mock_population_class.call_count == 4
+        # 验证 Population 被直接调用了 2 次（RETAIL_PRO 和 WHALE）
+        assert mock_population_class.call_count == 2
 
-        # 验证每个种群类型都被创建
-        call_args_list = mock_population_class.call_args_list
-        agent_types_called = [call_args[0][0] for call_args in call_args_list]
-        assert AgentType.RETAIL in agent_types_called
-        assert AgentType.RETAIL_PRO in agent_types_called
-        assert AgentType.WHALE in agent_types_called
-        assert AgentType.MARKET_MAKER in agent_types_called
+        # 验证 Population 直接创建的种群类型
+        pop_call_args_list = mock_population_class.call_args_list
+        pop_agent_types = [call_args[0][0] for call_args in pop_call_args_list]
+        assert AgentType.RETAIL_PRO in pop_agent_types
+        assert AgentType.WHALE in pop_agent_types
 
+        # 验证四个种群都已创建（2 个 SubPopulationManager + 2 个 Population）
+        assert len(trainer.populations) == 4
+        assert AgentType.RETAIL in trainer.populations
+        assert AgentType.RETAIL_PRO in trainer.populations
+        assert AgentType.WHALE in trainer.populations
+        assert AgentType.MARKET_MAKER in trainer.populations
+
+        # 验证 RETAIL 和 MARKET_MAKER 是 SubPopulationManager 实例
+        assert isinstance(trainer.populations[AgentType.RETAIL], SubPopulationManager)
+        assert isinstance(trainer.populations[AgentType.MARKET_MAKER], SubPopulationManager)
+
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_setup_creates_matching_engine(
@@ -160,11 +205,16 @@ class TestTrainerSetup:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """setup 创建撮合引擎"""
         mock_get_logger.return_value = MagicMock()
-        mock_population_class.return_value = MagicMock()
+        mock_pop_instance = MagicMock()
+        mock_pop_instance.agents = []
+        mock_population_class.return_value = mock_pop_instance
         mock_engine_instance = MagicMock()
         mock_engine_instance._orderbook = MagicMock()
         mock_matching_engine_class.return_value = mock_engine_instance
@@ -263,7 +313,11 @@ class TestTrainerRunTick:
         # tick 不应该增加
         assert trainer.tick == original_tick
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_run_tick_increments_tick(
@@ -271,6 +325,9 @@ class TestTrainerRunTick:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """run_tick 增加 tick 计数"""
@@ -317,7 +374,12 @@ class TestTrainerRunEpisode:
         # episode 不应该增加
         assert trainer.episode == original_episode
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
+    @patch("src.training.trainer.Trainer.run_tick")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_run_episode_increments_episode(
@@ -325,6 +387,10 @@ class TestTrainerRunEpisode:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_run_tick: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """run_episode 增加 episode 计数"""
@@ -355,7 +421,12 @@ class TestTrainerRunEpisode:
 
         assert trainer.episode == initial_episode + 1
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
+    @patch("src.training.trainer.Trainer.run_tick")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_run_episode_resets_agents(
@@ -363,6 +434,10 @@ class TestTrainerRunEpisode:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_run_tick: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """run_episode 重置所有 Agent"""
@@ -391,10 +466,18 @@ class TestTrainerRunEpisode:
         trainer.run_episode()
 
         # 验证种群的 reset_agents 被调用（每个种群调用一次，共 4 个种群）
-        # 由于使用相同的 mock，所以会被调用 4 次
-        assert mock_population.reset_agents.call_count == 4
+        # Population mock 的 reset_agents 有 call_count
+        # SubPopulationManager 的 reset_agents 是真实方法，需要单独验证
+        pop_reset_count = mock_population.reset_agents.call_count
+        # SubPopulationManager 有 2 个实例（RETAIL, MARKET_MAKER），验证它们也被调用
+        # 总共应该调用 4 次（2 次 Population + 2 次 SubPopulationManager）
+        assert pop_reset_count == 2  # RETAIL_PRO 和 WHALE 各调用一次
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_run_episode_stops_when_paused(
@@ -402,6 +485,9 @@ class TestTrainerRunEpisode:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """run_episode 在暂停时停止执行 tick"""
@@ -434,7 +520,11 @@ class TestTrainerRunEpisode:
 class TestTrainerTrain:
     """测试 train 主循环"""
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_train_sets_is_running(
@@ -442,6 +532,9 @@ class TestTrainerTrain:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """train 设置 is_running 标志"""
@@ -469,7 +562,12 @@ class TestTrainerTrain:
         # 训练结束后 is_running 应该为 False
         assert trainer.is_running is False
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
+    @patch("src.training.trainer.Trainer.run_tick")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_train_calls_state_callback(
@@ -477,6 +575,10 @@ class TestTrainerTrain:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_run_tick: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """train 调用状态回调函数"""
@@ -512,7 +614,12 @@ class TestTrainerTrain:
         # 验证回调被调用了 2 次
         assert len(callback_states) == 2
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
+    @patch("src.training.trainer.Trainer.run_tick")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_train_stops_when_stopped(
@@ -520,6 +627,10 @@ class TestTrainerTrain:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_run_tick: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """train 在 stop() 被调用后停止"""
@@ -632,7 +743,11 @@ class TestTrainerCheckpoint:
             # 验证目录已创建
             assert checkpoint_path.parent.exists()
 
+    @patch("src.training.trainer.MultiPopulationWorkerPool")
+    @patch("src.training.trainer.Trainer._init_network_caches")
+    @patch("src.training.trainer.Trainer._init_market")
     @patch("src.training.trainer.get_logger")
+    @patch.object(SubPopulationManager, "__init__", _mock_sub_pop_init)
     @patch("src.training.trainer.Population")
     @patch("src.training.trainer.MatchingEngine")
     def test_load_checkpoint_restores_state(
@@ -640,6 +755,9 @@ class TestTrainerCheckpoint:
         mock_matching_engine_class: MagicMock,
         mock_population_class: MagicMock,
         mock_get_logger: MagicMock,
+        mock_init_market: MagicMock,
+        mock_init_network_caches: MagicMock,
+        mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
         """load_checkpoint 恢复状态"""
