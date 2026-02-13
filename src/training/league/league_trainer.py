@@ -503,7 +503,10 @@ class LeagueTrainer(ParallelArenaTrainer):
             if hasattr(pop_or_manager, 'sub_populations'):
                 # SubPopulationManager
                 for i, sub_pop in enumerate(pop_or_manager.sub_populations):
-                    if hasattr(sub_pop, 'neat_pop'):
+                    # 优先使用 pending 数据
+                    if getattr(sub_pop, '_genomes_dirty', False) and getattr(sub_pop, '_pending_genome_data', None) is not None:
+                        genome_data[i] = sub_pop._pending_genome_data
+                    elif hasattr(sub_pop, 'neat_pop'):
                         genomes = sub_pop.neat_pop.population
                         genome_data[i] = _serialize_genomes_numpy(genomes)
                 sub_pop_counts[agent_type] = len(pop_or_manager.sub_populations)
@@ -511,8 +514,10 @@ class LeagueTrainer(ParallelArenaTrainer):
                     len(sp.agents) for sp in pop_or_manager.sub_populations
                 )
             else:
-                # 单个 Population
-                if hasattr(pop_or_manager, 'neat_pop'):
+                # 单个 Population - 优先使用 pending 数据
+                if getattr(pop_or_manager, '_genomes_dirty', False) and getattr(pop_or_manager, '_pending_genome_data', None) is not None:
+                    genome_data[0] = pop_or_manager._pending_genome_data
+                elif hasattr(pop_or_manager, 'neat_pop'):
                     genomes = pop_or_manager.neat_pop.population
                     genome_data[0] = _serialize_genomes_numpy(genomes)
                 sub_pop_counts[agent_type] = 1

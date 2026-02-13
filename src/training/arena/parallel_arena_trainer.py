@@ -765,8 +765,7 @@ class ParallelArenaTrainer:
         del arena_fitnesses
         del episode_counts
 
-        # 3. 应用到基因组
-        self._apply_fitness_to_genomes(avg_fitness)
+        # 3. 跳过应用到基因组（genome 对象延迟反序列化，fitness 值通过 avg_fitness 直接传递给进化 Worker）
 
         # 4. 执行 NEAT 进化
         evolve_start = time.perf_counter()
@@ -3610,7 +3609,6 @@ class ParallelArenaTrainer:
                         species_data,
                         deserialize_genomes,
                     )
-                    gc.collect(0)  # 每个种群更新后清理年轻代
             else:
                 if sub_pop_id == 0:
                     self._update_single_population(
@@ -3620,7 +3618,9 @@ class ParallelArenaTrainer:
                         species_data,
                         deserialize_genomes,
                     )
-                    gc.collect(0)  # 每个种群更新后清理年轻代
+
+        # 所有种群更新完成后统一清理
+        gc.collect(0)
 
     def _update_single_population(
         self,
@@ -3789,21 +3789,8 @@ class ParallelArenaTrainer:
         Args:
             path: 检查点文件路径
         """
-        # 同步待反序列化的基因组数据（延迟反序列化）
-        for population in self.populations.values():
-            if isinstance(population, SubPopulationManager):
-                for sub_pop in population.sub_populations:
-                    sub_pop.sync_genomes_from_pending()
-            else:
-                population.sync_genomes_from_pending()
-
-        # 清理 NEAT 历史数据以减少内存占用
-        for population in self.populations.values():
-            if isinstance(population, SubPopulationManager):
-                for sub_pop in population.sub_populations:
-                    sub_pop._cleanup_neat_history()
-            else:
-                population._cleanup_neat_history()
+        # 注意：不再调用 sync_genomes_from_pending()
+        # 如果有 pending 数据，直接使用；否则从 neat_pop 序列化
 
         checkpoint_data: dict[str, Any] = {
             "checkpoint_version": 2,  # 新版本标识，用于区分精简格式
@@ -3819,9 +3806,15 @@ class ParallelArenaTrainer:
                     "sub_populations": [],
                 }
                 for sub_pop in population.sub_populations:
-                    # 只序列化核心数据：基因组 + species 映射
-                    genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
-                    species_data = _serialize_species_data(sub_pop.neat_pop.species)
+                    # 优先使用 pending 数据（跳过反序列化→序列化往返）
+                    if sub_pop._genomes_dirty and sub_pop._pending_genome_data is not None:
+                        genome_data = sub_pop._pending_genome_data
+                        species_data = sub_pop._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+                    else:
+                        # 需要先清理 NEAT 历史数据
+                        sub_pop._cleanup_neat_history()
+                        genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
+                        species_data = _serialize_species_data(sub_pop.neat_pop.species)
                     sub_pop_data = {
                         "generation": sub_pop.generation,
                         "genome_data": genome_data,
@@ -3830,9 +3823,14 @@ class ParallelArenaTrainer:
                     pop_data["sub_populations"].append(sub_pop_data)
                 checkpoint_data["populations"][agent_type] = pop_data
             else:
-                # 只序列化核心数据：基因组 + species 映射
-                genome_data = _serialize_genomes_numpy(population.neat_pop.population)
-                species_data = _serialize_species_data(population.neat_pop.species)
+                # 优先使用 pending 数据
+                if population._genomes_dirty and population._pending_genome_data is not None:
+                    genome_data = population._pending_genome_data
+                    species_data = population._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+                else:
+                    population._cleanup_neat_history()
+                    genome_data = _serialize_genomes_numpy(population.neat_pop.population)
+                    species_data = _serialize_species_data(population.neat_pop.species)
                 checkpoint_data["populations"][agent_type] = {
                     "generation": population.generation,
                     "genome_data": genome_data,
