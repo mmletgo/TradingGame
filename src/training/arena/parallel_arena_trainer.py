@@ -182,6 +182,15 @@ class ParallelArenaTrainer:
         # 奇数数量趋势鲶鱼的方向平衡开关（交替多/空以避免系统性偏差）
         self._catfish_balance_bias_to_buy: bool = True
 
+        # Phase 1 并行化：per-arena 缓冲区和 RNG
+        self._per_arena_buffers: list[dict[str, np.ndarray]] = []
+        self._per_arena_rng: list[random.Random] = []
+        self._phase1_executor: Any = None  # ThreadPoolExecutor
+
+        # 预构建的 per-arena per-type 分组缓存
+        # {arena_idx: {agent_type: (states_list, network_indices_array)}}
+        self._arena_type_groups: dict[int, dict[AgentType, tuple[list[AgentAccountState], np.ndarray]]] = {}
+
     def setup(self) -> None:
         """初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池
 
@@ -219,6 +228,28 @@ class ParallelArenaTrainer:
         # 注意：Execute Worker 池依赖 arena_states，所以必须在创建竞技场状态之后
         if self._use_execute_workers:
             self._create_execute_worker_pool()
+
+        # 7. 初始化 Phase 1 并行化资源
+        self._per_arena_buffers = [
+            {
+                "bid_data": np.zeros(200, dtype=np.float32),
+                "ask_data": np.zeros(200, dtype=np.float32),
+                "trade_prices": np.zeros(100, dtype=np.float32),
+                "trade_quantities": np.zeros(100, dtype=np.float32),
+                "tick_prices": np.zeros(100, dtype=np.float32),
+                "tick_volumes": np.zeros(100, dtype=np.float32),
+                "tick_amounts": np.zeros(100, dtype=np.float32),
+            }
+            for _ in range(self.multi_config.num_arenas)
+        ]
+        self._per_arena_rng = [
+            random.Random(42 + i) for i in range(self.multi_config.num_arenas)
+        ]
+        # Phase 1 线程池（复用，避免每 tick 创建/销毁）
+        from concurrent.futures import ThreadPoolExecutor
+        self._phase1_executor = ThreadPoolExecutor(
+            max_workers=self.multi_config.num_arenas
+        )
 
         self._is_setup = True
         self.logger.info(
@@ -381,6 +412,29 @@ class ParallelArenaTrainer:
         if type_map is None:
             return -1
         return type_map.get(agent_id, -1)
+
+    def _build_arena_type_groups(self) -> None:
+        """构建 per-arena per-type Agent 分组缓存
+
+        在 episode 开始时调用。Agent 类型和网络索引在 episode 内不变，
+        唯一变化的是强平状态。每个 tick 只需用强平掩码过滤即可。
+        """
+        self._arena_type_groups.clear()
+        for arena_idx, arena in enumerate(self.arena_states):
+            type_groups: dict[AgentType, tuple[list[AgentAccountState], list[int]]] = {}
+            for state in arena.agent_states.values():
+                net_idx = self._get_network_index(state.agent_type, state.agent_id)
+                if net_idx < 0:
+                    continue
+                if state.agent_type not in type_groups:
+                    type_groups[state.agent_type] = ([], [])
+                type_groups[state.agent_type][0].append(state)
+                type_groups[state.agent_type][1].append(net_idx)
+            # 转为 numpy
+            final_groups: dict[AgentType, tuple[list[AgentAccountState], np.ndarray]] = {}
+            for at, (states_list, idx_list) in type_groups.items():
+                final_groups[at] = (states_list, np.array(idx_list, dtype=np.int32))
+            self._arena_type_groups[arena_idx] = final_groups
 
     def _prepare_batch_data_vectorized(
         self, arena: ArenaState, mid_price: float
@@ -956,6 +1010,9 @@ class ParallelArenaTrainer:
                 catfish_ids=catfish_ids,
             )
 
+        # 构建 Arena 类型分组缓存（用于优化 _batch_inference_all_arenas_direct）
+        self._build_arena_type_groups()
+
     def _prepare_mm_init_orders(
         self,
     ) -> dict[int, list[tuple[int, list[dict[str, float]], list[dict[str, float]]]]]:
@@ -1108,7 +1165,7 @@ class ParallelArenaTrainer:
                 self._execute_mm_action_in_arena(arena, agent_state, params)
 
     def _compute_market_state_for_arena(
-        self, arena: ArenaState
+        self, arena: ArenaState, arena_idx: int = 0
     ) -> NormalizedMarketState:
         """计算单个竞技场的归一化市场状态
 
@@ -1154,14 +1211,15 @@ class ParallelArenaTrainer:
         else:
             bid_depth, ask_depth = orderbook.get_depth_numpy(levels=100)
 
-        # 获取并清零缓冲区
-        bid_data = self._market_state_buffers["bid_data"]
-        ask_data = self._market_state_buffers["ask_data"]
-        trade_prices = self._market_state_buffers["trade_prices"]
-        trade_quantities = self._market_state_buffers["trade_quantities"]
-        tick_prices_normalized = self._market_state_buffers["tick_prices"]
-        tick_volumes_normalized = self._market_state_buffers["tick_volumes"]
-        tick_amounts_normalized = self._market_state_buffers["tick_amounts"]
+        # 获取并清零缓冲区（使用 per-arena 缓冲区以支持并行）
+        buffers = self._per_arena_buffers[arena_idx] if self._per_arena_buffers else self._market_state_buffers
+        bid_data = buffers["bid_data"]
+        ask_data = buffers["ask_data"]
+        trade_prices = buffers["trade_prices"]
+        trade_quantities = buffers["trade_quantities"]
+        tick_prices_normalized = buffers["tick_prices"]
+        tick_volumes_normalized = buffers["tick_volumes"]
+        tick_amounts_normalized = buffers["tick_amounts"]
 
         bid_data.fill(0)
         ask_data.fill(0)
@@ -1234,6 +1292,60 @@ class ParallelArenaTrainer:
             tick_history_amounts=tick_amounts_normalized.copy(),
         )
 
+    def _build_arena_commands(
+        self,
+        all_decisions: dict[
+            int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]
+        ],
+        catfish_decisions_map: dict[int, list[CatfishDecision]] | None = None,
+    ) -> dict[int, Any]:
+        """构建各竞技场的执行命令数据
+
+        从推理结果构建 ArenaExecuteData。
+
+        Args:
+            all_decisions: 各竞技场的决策数据
+            catfish_decisions_map: 各竞技场的鲶鱼决策
+
+        Returns:
+            arena_commands: {arena_id: ArenaExecuteData}
+        """
+        from .execute_worker import ArenaExecuteData
+
+        arena_commands: dict[int, ArenaExecuteData] = {}
+
+        for arena_idx, _decisions in all_decisions.items():
+            arena = self.arena_states[arena_idx]
+
+            # 收集需要强平的 Agent
+            liquidated_agents: list[tuple[int, int, bool]] = []
+            for state in arena.agent_states.values():
+                if state.is_liquidated and state.agent_id in arena.eliminating_agents:
+                    is_mm = state.agent_type == AgentType.MARKET_MAKER
+                    liquidated_agents.append(
+                        (state.agent_id, state.position_quantity, is_mm)
+                    )
+
+            decisions_array = self._build_decisions_array_from_cache(arena_idx)
+            mm_decisions_array = self._build_mm_decisions_array_from_cache(arena_idx)
+
+            catfish_decisions = (
+                catfish_decisions_map.get(arena_idx, [])
+                if catfish_decisions_map
+                else []
+            )
+
+            arena_commands[arena_idx] = ArenaExecuteData(
+                liquidated_agents=liquidated_agents,
+                decisions=[],
+                mm_decisions=[],
+                decisions_array=decisions_array,
+                mm_decisions_array=mm_decisions_array,
+                catfish_decisions=catfish_decisions,
+            )
+
+        return arena_commands
+
     def _execute_with_worker_pool(
         self,
         all_decisions: dict[
@@ -1252,43 +1364,7 @@ class ParallelArenaTrainer:
         Returns:
             各竞技场的执行结果
         """
-        from .execute_worker import ArenaExecuteData
-
-        arena_commands: dict[int, ArenaExecuteData] = {}
-
-        for arena_idx, _decisions in all_decisions.items():
-            arena = self.arena_states[arena_idx]
-
-            # 收集需要强平的 Agent
-            liquidated_agents: list[tuple[int, int, bool]] = []
-            for state in arena.agent_states.values():
-                if state.is_liquidated and state.agent_id in arena.eliminating_agents:
-                    is_mm = state.agent_type == AgentType.MARKET_MAKER
-                    liquidated_agents.append(
-                        (state.agent_id, state.position_quantity, is_mm)
-                    )
-
-            # P3 优化：直接从缓存构建数组，跳过 list 格式转换
-            decisions_array = self._build_decisions_array_from_cache(arena_idx)
-            mm_decisions_array = self._build_mm_decisions_array_from_cache(arena_idx)
-
-            # 获取该竞技场的鲶鱼决策
-            catfish_decisions = (
-                catfish_decisions_map.get(arena_idx, [])
-                if catfish_decisions_map
-                else []
-            )
-
-            arena_commands[arena_idx] = ArenaExecuteData(
-                liquidated_agents=liquidated_agents,
-                decisions=[],  # 使用 decisions_array
-                mm_decisions=[],  # 使用 mm_decisions_array
-                decisions_array=decisions_array,
-                mm_decisions_array=mm_decisions_array,
-                catfish_decisions=catfish_decisions,
-            )
-
-        # 调用 Worker 池执行
+        arena_commands = self._build_arena_commands(all_decisions, catfish_decisions_map)
         assert self._execute_worker_pool is not None
         return self._execute_worker_pool.execute_all(arena_commands)
 
@@ -1378,131 +1454,213 @@ class ParallelArenaTrainer:
         )
         return full_array
 
+    def _process_single_arena_result(
+        self,
+        arena_id: int,
+        result: Any,
+    ) -> list[Trade]:
+        """处理单个竞技场的 Worker 执行结果
+
+        Args:
+            arena_id: 竞技场 ID
+            result: ArenaExecuteResult
+
+        Returns:
+            成交列表
+        """
+        arena = self.arena_states[arena_id]
+        tick_trades: list[Trade] = []
+        self._worker_depth_cache[arena_id] = (
+            result.bid_depth,
+            result.ask_depth,
+            result.last_price,
+            result.mid_price,
+        )
+
+        # 处理成交
+        for trade_tuple in result.trades:
+            (
+                trade_id,
+                price,
+                qty,
+                buyer_id,
+                seller_id,
+                buyer_fee,
+                seller_fee,
+                is_buyer_taker,
+            ) = trade_tuple
+
+            trade = Trade(
+                trade_id=trade_id,
+                price=price,
+                quantity=qty,
+                buyer_id=buyer_id,
+                seller_id=seller_id,
+                buyer_fee=buyer_fee,
+                seller_fee=seller_fee,
+                is_buyer_taker=is_buyer_taker,
+            )
+            tick_trades.append(trade)
+            arena.recent_trades.append(trade)
+
+            # 更新 taker 账户
+            taker_id = buyer_id if is_buyer_taker else seller_id
+            taker_state = arena.agent_states.get(taker_id)
+            if taker_state is not None and not taker_state.is_liquidated:
+                fee = buyer_fee if is_buyer_taker else seller_fee
+                taker_state.on_trade(
+                    price, qty, is_buyer_taker, fee, is_maker=False
+                )
+                arena.sync_state_to_array(taker_id)
+
+            # 更新 maker 账户
+            maker_id = seller_id if is_buyer_taker else buyer_id
+            maker_state = arena.agent_states.get(maker_id)
+            if maker_state is not None and not maker_state.is_liquidated:
+                maker_fee = seller_fee if is_buyer_taker else buyer_fee
+                maker_state.on_trade(
+                    price, qty, not is_buyer_taker, maker_fee, is_maker=True
+                )
+                arena.sync_state_to_array(maker_id)
+
+        # 更新非做市商挂单 ID
+        for agent_id, pending_id in result.pending_updates.items():
+            agent_state = arena.agent_states.get(agent_id)
+            if agent_state is not None:
+                agent_state.pending_order_id = pending_id
+
+        # 更新做市商挂单 ID
+        for agent_id, (bid_ids, ask_ids) in result.mm_order_updates.items():
+            agent_state = arena.agent_states.get(agent_id)
+            if agent_state is not None:
+                agent_state.bid_order_ids = list(bid_ids)
+                agent_state.ask_order_ids = list(ask_ids)
+
+        # 处理鲶鱼成交结果
+        for catfish_result in result.catfish_results:
+            catfish_state = arena.catfish_states.get(catfish_result.catfish_id)
+            if catfish_state is None:
+                continue
+            for trade_tuple in catfish_result.trades:
+                (
+                    _trade_id,
+                    price,
+                    qty,
+                    buyer_id,
+                    seller_id,
+                    _buyer_fee,
+                    _seller_fee,
+                    is_buyer_taker,
+                ) = trade_tuple
+                is_buyer = catfish_result.catfish_id == buyer_id
+                catfish_state.on_trade(price, qty, is_buyer)
+
+        # 同步价格
+        arena.smooth_mid_price = result.mid_price
+
+        if arena.eliminating_agents:
+            cleared_ids = [
+                agent_id
+                for agent_id in arena.eliminating_agents
+                if arena.agent_states.get(agent_id)
+                and arena.agent_states[agent_id].position_quantity == 0
+            ]
+            for agent_id in cleared_ids:
+                arena.eliminating_agents.discard(agent_id)
+
+        return tick_trades
+
     def _process_worker_results(
         self,
         results: dict[int, Any],
     ) -> dict[int, list[Trade]]:
         """处理 Worker 返回的执行结果
 
-        更新各竞技场的 AgentAccountState，包括：
-        - 根据成交更新账户余额和持仓
-        - 更新挂单 ID
-
         Args:
             results: 各竞技场的执行结果
 
         Returns:
-            各竞技场的成交列表（用于后续统计）
+            各竞技场的成交列表
         """
         arena_tick_trades: dict[int, list[Trade]] = {}
-
         for arena_id, result in results.items():
-            arena = self.arena_states[arena_id]
-            tick_trades: list[Trade] = []
-            self._worker_depth_cache[arena_id] = (
-                result.bid_depth,
-                result.ask_depth,
-                result.last_price,
-                result.mid_price,
-            )
-
-            # 处理成交
-            for trade_tuple in result.trades:
-                (
-                    trade_id,
-                    price,
-                    qty,
-                    buyer_id,
-                    seller_id,
-                    buyer_fee,
-                    seller_fee,
-                    is_buyer_taker,
-                ) = trade_tuple
-
-                # 创建 Trade 对象用于统计
-                trade = Trade(
-                    trade_id=trade_id,
-                    price=price,
-                    quantity=qty,
-                    buyer_id=buyer_id,
-                    seller_id=seller_id,
-                    buyer_fee=buyer_fee,
-                    seller_fee=seller_fee,
-                    is_buyer_taker=is_buyer_taker,
-                )
-                tick_trades.append(trade)
-                arena.recent_trades.append(trade)
-
-                # 更新 taker 账户
-                taker_id = buyer_id if is_buyer_taker else seller_id
-                taker_state = arena.agent_states.get(taker_id)
-                if taker_state is not None and not taker_state.is_liquidated:
-                    fee = buyer_fee if is_buyer_taker else seller_fee
-                    taker_state.on_trade(
-                        price, qty, is_buyer_taker, fee, is_maker=False
-                    )
-                    arena.sync_state_to_array(taker_id)
-
-                # 更新 maker 账户
-                maker_id = seller_id if is_buyer_taker else buyer_id
-                maker_state = arena.agent_states.get(maker_id)
-                if maker_state is not None and not maker_state.is_liquidated:
-                    maker_fee = seller_fee if is_buyer_taker else buyer_fee
-                    maker_state.on_trade(
-                        price, qty, not is_buyer_taker, maker_fee, is_maker=True
-                    )
-                    arena.sync_state_to_array(maker_id)
-
-            # 更新非做市商挂单 ID
-            for agent_id, pending_id in result.pending_updates.items():
-                agent_state = arena.agent_states.get(agent_id)
-                if agent_state is not None:
-                    agent_state.pending_order_id = pending_id
-
-            # 更新做市商挂单 ID
-            for agent_id, (bid_ids, ask_ids) in result.mm_order_updates.items():
-                agent_state = arena.agent_states.get(agent_id)
-                if agent_state is not None:
-                    agent_state.bid_order_ids = list(bid_ids)
-                    agent_state.ask_order_ids = list(ask_ids)
-
-            # 处理鲶鱼成交结果
-            for catfish_result in result.catfish_results:
-                catfish_state = arena.catfish_states.get(catfish_result.catfish_id)
-                if catfish_state is None:
-                    continue
-                # 更新鲶鱼账户（成交已在 trades 中包含，这里只更新鲶鱼状态）
-                for trade_tuple in catfish_result.trades:
-                    (
-                        _trade_id,
-                        price,
-                        qty,
-                        buyer_id,
-                        seller_id,
-                        _buyer_fee,
-                        _seller_fee,
-                        is_buyer_taker,
-                    ) = trade_tuple
-                    is_buyer = catfish_result.catfish_id == buyer_id
-                    catfish_state.on_trade(price, qty, is_buyer)
-                    # maker 账户更新已在上面的 trades 处理中完成
-
-            # 同步价格
-            arena.smooth_mid_price = result.mid_price
-
-            if arena.eliminating_agents:
-                cleared_ids = [
-                    agent_id
-                    for agent_id in arena.eliminating_agents
-                    if arena.agent_states.get(agent_id)
-                    and arena.agent_states[agent_id].position_quantity == 0
-                ]
-                for agent_id in cleared_ids:
-                    arena.eliminating_agents.discard(agent_id)
-
-            arena_tick_trades[arena_id] = tick_trades
-
+            arena_tick_trades[arena_id] = self._process_single_arena_result(arena_id, result)
         return arena_tick_trades
+
+    def _prepare_arena_for_tick(self, arena_idx: int) -> tuple[
+        NormalizedMarketState,
+        list[AgentAccountState],
+        list[CatfishDecision],
+    ]:
+        """准备单个竞技场的 tick 数据（线程安全）
+
+        将 Phase 1 的所有准备工作打包为一个方法，
+        支持多线程并行执行（numpy 操作释放 GIL）。
+
+        Args:
+            arena_idx: 竞技场索引
+
+        Returns:
+            (market_state, active_states, catfish_decisions)
+        """
+        arena = self.arena_states[arena_idx]
+
+        # 跳过已结束的竞技场
+        if arena.end_reason is not None:
+            return self._compute_market_state_for_arena(arena, arena_idx), [], []
+
+        arena.tick += 1
+
+        # Tick 1: 只记录做市商初始挂单后的状态
+        if arena.tick == 1:
+            actual_price = arena.smooth_mid_price
+            if arena.arena_id in self._worker_depth_cache:
+                _, _, last_price, mid_price = self._worker_depth_cache[arena.arena_id]
+                if last_price > 0:
+                    actual_price = last_price
+                elif mid_price > 0:
+                    actual_price = mid_price
+
+            current_price = arena.smooth_mid_price
+            arena.price_history.append(current_price)
+            arena.tick_history_prices.append(current_price)
+            arena.tick_history_volumes.append(0.0)
+            arena.tick_history_amounts.append(0.0)
+            if actual_price > arena.episode_high_price:
+                arena.episode_high_price = actual_price
+            if actual_price < arena.episode_low_price:
+                arena.episode_low_price = actual_price
+            return self._compute_market_state_for_arena(arena, arena_idx), [], []
+
+        # 获取当前价格
+        current_price = (
+            arena.smooth_mid_price
+            if arena.smooth_mid_price > 0
+            else arena.matching_engine._orderbook.last_price
+        )
+
+        # 强平检查
+        self._handle_liquidations_for_arena(arena, current_price)
+
+        # 鲶鱼决策
+        catfish_decisions: list[CatfishDecision] = []
+        if self._execute_worker_pool is not None:
+            catfish_decisions = self._compute_catfish_decisions(arena)
+
+        # 计算市场状态
+        market_state = self._compute_market_state_for_arena(arena, arena_idx)
+
+        # 收集活跃 Agent 状态
+        active_states: list[AgentAccountState] = [
+            state
+            for state in arena.agent_states.values()
+            if not state.is_liquidated
+        ]
+
+        # 使用 per-arena RNG 打乱（线程安全）
+        self._per_arena_rng[arena_idx].shuffle(active_states)
+
+        return market_state, active_states, catfish_decisions
 
     def run_tick_all_arenas(self) -> bool:
         """并行执行所有竞技场的一个 tick
@@ -1510,87 +1668,89 @@ class ParallelArenaTrainer:
         Returns:
             bool: 是否所有竞技场都应该继续运行
         """
-        # 阶段1: 准备（串行）- 强平检查、计算市场状态
-        arena_market_states: list[NormalizedMarketState] = []
-        arena_active_agents: list[list[AgentAccountState]] = []
+        # 阶段1: 准备 - 强平检查、计算市场状态
+        num_arenas = len(self.arena_states)
+        arena_market_states: list[NormalizedMarketState | None] = [None] * num_arenas
+        arena_active_agents: list[list[AgentAccountState]] = [[] for _ in range(num_arenas)]
         arena_catfish_trades: list[list[Trade]] = [[] for _ in self.arena_states]
         catfish_decisions_map: dict[int, list[CatfishDecision]] = {}
 
-        for arena_idx, arena in enumerate(self.arena_states):
-            # 跳过已结束的竞技场
-            if arena.end_reason is not None:
-                arena_market_states.append(self._compute_market_state_for_arena(arena))
-                arena_active_agents.append([])
-                continue
+        # Worker 池模式且多竞技场时，Phase 1 并行执行
+        if self._execute_worker_pool is not None and num_arenas > 1 and self._phase1_executor is not None:
+            from concurrent.futures import as_completed
+            futures = {
+                self._phase1_executor.submit(self._prepare_arena_for_tick, idx): idx
+                for idx in range(num_arenas)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                market_state, active, catfish_decs = future.result()
+                arena_market_states[idx] = market_state
+                arena_active_agents[idx] = active
+                if catfish_decs:
+                    catfish_decisions_map[idx] = catfish_decs
+        else:
+            # 串行回退（单竞技场或串行模式）
+            for arena_idx, arena in enumerate(self.arena_states):
+                if arena.end_reason is not None:
+                    arena_market_states[arena_idx] = self._compute_market_state_for_arena(arena, arena_idx)
+                    arena_active_agents[arena_idx] = []
+                    continue
 
-            arena.tick += 1
+                arena.tick += 1
 
-            # Tick 1: 只记录做市商初始挂单后的状态
-            if arena.tick == 1:
-                # 从 Worker 缓存获取实际价格用于价格统计
-                actual_price = arena.smooth_mid_price
-                if arena.arena_id in self._worker_depth_cache:
-                    _, _, last_price, mid_price = self._worker_depth_cache[
-                        arena.arena_id
-                    ]
-                    if last_price > 0:
-                        actual_price = last_price
-                    elif mid_price > 0:
-                        actual_price = mid_price
+                if arena.tick == 1:
+                    actual_price = arena.smooth_mid_price
+                    if arena.arena_id in self._worker_depth_cache:
+                        _, _, last_price, mid_price = self._worker_depth_cache[arena.arena_id]
+                        if last_price > 0:
+                            actual_price = last_price
+                        elif mid_price > 0:
+                            actual_price = mid_price
+                    current_price = arena.smooth_mid_price
+                    arena.price_history.append(current_price)
+                    arena.tick_history_prices.append(current_price)
+                    arena.tick_history_volumes.append(0.0)
+                    arena.tick_history_amounts.append(0.0)
+                    if actual_price > arena.episode_high_price:
+                        arena.episode_high_price = actual_price
+                    if actual_price < arena.episode_low_price:
+                        arena.episode_low_price = actual_price
+                    arena_market_states[arena_idx] = self._compute_market_state_for_arena(arena, arena_idx)
+                    arena_active_agents[arena_idx] = []
+                    continue
 
-                current_price = arena.smooth_mid_price
-                arena.price_history.append(current_price)
-                arena.tick_history_prices.append(current_price)
-                arena.tick_history_volumes.append(0.0)
-                arena.tick_history_amounts.append(0.0)
-                # 使用实际价格更新 high/low 统计
-                if actual_price > arena.episode_high_price:
-                    arena.episode_high_price = actual_price
-                if actual_price < arena.episode_low_price:
-                    arena.episode_low_price = actual_price
-                arena_market_states.append(self._compute_market_state_for_arena(arena))
-                arena_active_agents.append([])
-                continue
-
-            # 获取当前价格
-            current_price = (
-                arena.smooth_mid_price
-                if arena.smooth_mid_price > 0
-                else arena.matching_engine._orderbook.last_price
-            )
-
-            # 强平检查
-            self._handle_liquidations_for_arena(arena, current_price)
-
-            # 鲶鱼决策
-            if self._execute_worker_pool is not None:
-                # Worker 池模式：只计算决策，不执行（由 Worker 执行）
-                catfish_decisions_map[arena_idx] = self._compute_catfish_decisions(
-                    arena
+                current_price = (
+                    arena.smooth_mid_price
+                    if arena.smooth_mid_price > 0
+                    else arena.matching_engine._orderbook.last_price
                 )
-                arena_catfish_trades[arena_idx] = []  # 成交在 Worker 中处理
-            else:
-                # 串行模式：直接执行鲶鱼行动
-                arena_catfish_trades[arena_idx] = self._catfish_action_for_arena(arena)
 
-            # 计算市场状态
-            market_state = self._compute_market_state_for_arena(arena)
-            arena_market_states.append(market_state)
+                self._handle_liquidations_for_arena(arena, current_price)
 
-            # 直接收集活跃的 Agent 状态（无需创建 adapter）
-            active_states: list[AgentAccountState] = [
-                state
-                for state in arena.agent_states.values()
-                if not state.is_liquidated
-            ]
+                if self._execute_worker_pool is not None:
+                    catfish_decisions_map[arena_idx] = self._compute_catfish_decisions(arena)
+                    arena_catfish_trades[arena_idx] = []
+                else:
+                    arena_catfish_trades[arena_idx] = self._catfish_action_for_arena(arena)
 
-            # 随机打乱执行顺序（原地打乱，O(n) 时间）
-            random.shuffle(active_states)
-            arena_active_agents.append(active_states)
+                market_state = self._compute_market_state_for_arena(arena, arena_idx)
+                arena_market_states[arena_idx] = market_state
+
+                active_states: list[AgentAccountState] = [
+                    state
+                    for state in arena.agent_states.values()
+                    if not state.is_liquidated
+                ]
+                random.shuffle(active_states)
+                arena_active_agents[arena_idx] = active_states
+
+        # 类型转换（并行模式使用 Optional 列表）
+        arena_market_states_typed: list[NormalizedMarketState] = arena_market_states  # type: ignore[assignment]
 
         # 阶段2: 批量推理（并行）- 合并所有竞技场的推理（使用 direct 方法）
         all_decisions = self._batch_inference_all_arenas_direct(
-            arena_market_states, arena_active_agents
+            arena_market_states_typed, arena_active_agents
         )
 
         # 阶段3: 执行
@@ -1608,12 +1768,41 @@ class ParallelArenaTrainer:
             }
 
             if filtered_decisions:
-                # 使用 Worker 池执行（包含鲶鱼决策）
-                results = self._execute_with_worker_pool(
-                    filtered_decisions,
-                    catfish_decisions_map,
-                )
-                arena_tick_trades = self._process_worker_results(results)
+                arena_tick_trades: dict[int, list[Trade]] = {}
+
+                # 检查是否支持增量处理（共享内存版 Worker 池）
+                _pool = self._execute_worker_pool
+                if hasattr(_pool, 'submit_all') and hasattr(_pool, 'poll_result'):
+                    # 增量处理：submit 后逐个 poll 结果并立即处理
+                    arena_commands = self._build_arena_commands(
+                        filtered_decisions, catfish_decisions_map
+                    )
+                    pending_arenas = set(_pool.submit_all(arena_commands))
+
+                    idle_loops = 0
+                    while pending_arenas:
+                        progress = False
+                        for arena_id in list(pending_arenas):
+                            result = _pool.poll_result(arena_id)
+                            if result is not None:
+                                tick_trades = self._process_single_arena_result(arena_id, result)
+                                arena_tick_trades[arena_id] = tick_trades
+                                pending_arenas.discard(arena_id)
+                                progress = True
+
+                        if not progress:
+                            idle_loops += 1
+                            if idle_loops >= 1000:
+                                time.sleep(0.0001)  # 100us
+                        else:
+                            idle_loops = 0
+                else:
+                    # 回退：批量执行 + 批量处理
+                    results = self._execute_with_worker_pool(
+                        filtered_decisions,
+                        catfish_decisions_map,
+                    )
+                    arena_tick_trades = self._process_worker_results(results)
 
                 # 后处理：记录价格历史、检查提前结束条件
                 for arena_idx in filtered_decisions.keys():
@@ -2107,23 +2296,38 @@ class ParallelArenaTrainer:
             return results
 
         # 按 AgentType 分组收集数据（跨所有竞技场）
-        # 格式: {agent_type: {arena_idx: [(state, network_idx), ...]}}
+        # 使用预构建的分组缓存，仅过滤已强平的 Agent
         type_arena_data: dict[
             AgentType, dict[int, list[tuple[AgentAccountState, int]]]
         ] = {}
 
-        for arena_idx, states in enumerate(arena_active_states):
-            for state in states:
-                agent_type = state.agent_type
-
-                network_idx = self._get_network_index(agent_type, state.agent_id)
-                if network_idx < 0:
+        if self._arena_type_groups:
+            # 使用缓存分组（快速路径）
+            for arena_idx, states in enumerate(arena_active_states):
+                if not states:
                     continue
-
-                # 使用 setdefault 减少 if 检查
-                type_arena_data.setdefault(agent_type, {}).setdefault(
-                    arena_idx, []
-                ).append((state, network_idx))
+                arena_groups = self._arena_type_groups.get(arena_idx)
+                if arena_groups is None:
+                    continue
+                for agent_type, (all_states, all_net_indices) in arena_groups.items():
+                    active: list[tuple[AgentAccountState, int]] = [
+                        (s, int(ni))
+                        for s, ni in zip(all_states, all_net_indices)
+                        if not s.is_liquidated
+                    ]
+                    if active:
+                        type_arena_data.setdefault(agent_type, {})[arena_idx] = active
+        else:
+            # 回退：动态构建分组
+            for arena_idx, states in enumerate(arena_active_states):
+                for state in states:
+                    agent_type = state.agent_type
+                    network_idx = self._get_network_index(agent_type, state.agent_id)
+                    if network_idx < 0:
+                        continue
+                    type_arena_data.setdefault(agent_type, {}).setdefault(
+                        arena_idx, []
+                    ).append((state, network_idx))
 
         # 对每种类型使用 decide_multi_arena_direct 进行批量推理
         for agent_type, arena_data in type_arena_data.items():
@@ -4073,6 +4277,11 @@ class ParallelArenaTrainer:
         if self.evolution_worker_pool is not None:
             self.evolution_worker_pool.shutdown()
             self.evolution_worker_pool = None
+
+        # 关闭 Phase 1 线程池
+        if self._phase1_executor is not None:
+            self._phase1_executor.shutdown(wait=False)
+            self._phase1_executor = None
 
         # 关闭种群的线程池
         for population in self.populations.values():
