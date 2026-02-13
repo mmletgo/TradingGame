@@ -491,6 +491,86 @@ cdef void _extract_networks_to_batch(list networks, BatchNetworkData* batch_data
         output_offset += num_outputs_i
 
 
+
+cdef void _fill_batch_data_from_numpy(
+    BatchNetworkData* batch_data,
+    # header 信息
+    int[:] h_num_inputs,
+    int[:] h_num_outputs,
+    int[:] h_num_nodes,
+    int[:] h_n_connections,
+    int num_networks,
+    # 节点数据（packed，float32/int32）
+    float[:] all_biases,
+    float[:] all_responses,
+    int[:] all_act_types,
+    # 连接数据（packed）
+    int[:] all_conn_indptr,
+    int[:] all_conn_sources,
+    float[:] all_conn_weights,
+    # 输出索引
+    int[:] all_output_indices,
+    int[:] h_n_output_keys,
+) noexcept:
+    """从 packed numpy 数组直接填充 BatchNetworkData C 结构
+    
+    跳过 Python 对象创建，直接使用 typed memoryview 读取数据。
+    """
+    cdef int i, j
+    cdef int node_offset = 0
+    cdef int conn_offset = 0
+    cdef int output_offset = 0
+    cdef int src_node_offset = 0
+    cdef int src_conn_offset = 0
+    cdef int src_indptr_offset = 0
+    cdef int src_output_offset = 0
+    cdef int num_nodes_i, num_conns_i, num_outputs_i, num_inputs_i
+    
+    for i in range(num_networks):
+        num_inputs_i = h_num_inputs[i]
+        num_outputs_i = h_num_outputs[i]
+        num_nodes_i = h_num_nodes[i]
+        num_conns_i = h_n_connections[i]
+        
+        # 元信息
+        batch_data.num_inputs_arr[i] = num_inputs_i
+        batch_data.num_outputs_arr[i] = num_outputs_i
+        batch_data.num_nodes_arr[i] = num_nodes_i
+        batch_data.node_offsets[i] = node_offset
+        batch_data.conn_offsets[i] = conn_offset
+        batch_data.output_idx_offsets[i] = output_offset
+        
+        # 节点数据 (float32 -> double, int32 -> int)
+        for j in range(num_nodes_i):
+            batch_data.biases[node_offset + j] = <double>all_biases[src_node_offset + j]
+            batch_data.responses[node_offset + j] = <double>all_responses[src_node_offset + j]
+            batch_data.act_types[node_offset + j] = all_act_types[src_node_offset + j]
+        
+        # 连接 indptr (需要加 conn_offset)
+        for j in range(num_nodes_i + 1):
+            batch_data.conn_indptr[node_offset + j] = all_conn_indptr[src_indptr_offset + j] + conn_offset
+        
+        # 连接 sources 和 weights
+        for j in range(num_conns_i):
+            batch_data.conn_sources[conn_offset + j] = all_conn_sources[src_conn_offset + j]
+            batch_data.conn_weights[conn_offset + j] = <double>all_conn_weights[src_conn_offset + j]
+        
+        # 输出索引
+        for j in range(h_n_output_keys[i]):
+            batch_data.output_indices[output_offset + j] = all_output_indices[src_output_offset + j]
+        
+        # 更新 batch 偏移量
+        node_offset += num_nodes_i
+        conn_offset += num_conns_i
+        output_offset += h_n_output_keys[i]
+        
+        # 更新源数据偏移量
+        src_node_offset += num_nodes_i
+        src_conn_offset += num_conns_i
+        src_indptr_offset += num_nodes_i + 1
+        src_output_offset += h_n_output_keys[i]
+
+
 cdef void _extract_agents_to_batch(list agents, BatchAgentState* batch_data, double mid_price):
     """从 Agent 列表提取状态到批量结构
 
@@ -2137,6 +2217,116 @@ cdef class BatchNetworkCache:
         if self.inputs_array.shape[0] != num_networks:
             self.inputs_array = np.zeros((num_networks, self.input_dim), dtype=np.float64)
             self.outputs_array = np.zeros((num_networks, self.output_dim), dtype=np.float64)
+
+    def update_networks_from_numpy(
+        self,
+        headers_arr,
+        all_input_keys,
+        all_output_keys,
+        all_node_ids,
+        all_biases,
+        all_responses,
+        all_act_types,
+        all_conn_indptr,
+        all_conn_sources,
+        all_conn_weights,
+        all_output_indices,
+    ):
+        """从 packed numpy 数组直接更新网络缓存
+        
+        跳过 Python 对象创建（FastFeedForwardNetwork），直接从 packed numpy 
+        数组填充 BatchNetworkData C 结构。
+        
+        Args:
+            headers_arr: 结构化数组，包含每个网络的元信息
+            all_input_keys .. all_output_indices: 与 _pack_network_params_numpy 返回格式一致
+        """
+        cdef int num_networks = len(headers_arr)
+        if num_networks == 0:
+            return
+            
+        # 强制清除 id 缓存，确保下次调用会执行更新
+        self.network_ids = []
+        self.num_networks = num_networks
+        
+        # 从 headers 提取元信息
+        cdef np.ndarray[int, ndim=1] h_num_inputs = np.ascontiguousarray(
+            headers_arr['num_inputs'], dtype=np.intc)
+        cdef np.ndarray[int, ndim=1] h_num_outputs = np.ascontiguousarray(
+            headers_arr['num_outputs'], dtype=np.intc)
+        cdef np.ndarray[int, ndim=1] h_num_nodes = np.ascontiguousarray(
+            headers_arr['num_nodes'], dtype=np.intc)
+        cdef np.ndarray[int, ndim=1] h_n_connections = np.ascontiguousarray(
+            headers_arr['n_connections'], dtype=np.intc)
+        cdef np.ndarray[int, ndim=1] h_n_output_keys = np.ascontiguousarray(
+            headers_arr['n_output_keys'], dtype=np.intc)
+        
+        # 计算 max_nodes, max_connections
+        cdef int max_nodes = 0
+        cdef int max_connections = 0
+        cdef int i
+        for i in range(num_networks):
+            if h_num_nodes[i] > max_nodes:
+                max_nodes = h_num_nodes[i]
+            if h_n_connections[i] > max_connections:
+                max_connections = h_n_connections[i]
+        
+        self.max_nodes = max_nodes
+        self.max_connections = max_connections
+        
+        # 释放旧的网络数据和线程缓冲区
+        if self.network_data != NULL:
+            free_batch_network_data(self.network_data)
+        if self.thread_buffers != NULL:
+            free_thread_buffers(self.thread_buffers, self.num_threads)
+        
+        # 分配新的网络数据结构
+        self.network_data = alloc_batch_network_data(
+            num_networks, max_nodes, max_connections,
+            self.input_dim, self.output_dim
+        )
+        
+        # 分配线程本地缓冲区
+        self.thread_buffers = alloc_thread_buffers(
+            self.num_threads, max_nodes + self.input_dim,
+            self.input_dim, self.output_dim
+        )
+        
+        # 准备 typed memoryview
+        cdef float[:] biases_view = np.ascontiguousarray(all_biases, dtype=np.float32)
+        cdef float[:] responses_view = np.ascontiguousarray(all_responses, dtype=np.float32)
+        cdef int[:] act_types_view = np.ascontiguousarray(all_act_types, dtype=np.intc)
+        cdef int[:] conn_indptr_view = np.ascontiguousarray(all_conn_indptr, dtype=np.intc)
+        cdef int[:] conn_sources_view = np.ascontiguousarray(all_conn_sources, dtype=np.intc)
+        cdef float[:] conn_weights_view = np.ascontiguousarray(all_conn_weights, dtype=np.float32)
+        cdef int[:] output_indices_view = np.ascontiguousarray(all_output_indices, dtype=np.intc)
+        
+        # 直接填充 C 结构
+        _fill_batch_data_from_numpy(
+            self.network_data,
+            h_num_inputs, h_num_outputs, h_num_nodes, h_n_connections,
+            num_networks,
+            biases_view, responses_view, act_types_view,
+            conn_indptr_view, conn_sources_view, conn_weights_view,
+            output_indices_view, h_n_output_keys,
+        )
+        
+        # 如果 Agent 数量变化，重新分配相关结构
+        if self.agent_state == NULL or self.agent_state.num_agents != num_networks:
+            if self.agent_state != NULL:
+                free_batch_agent_state(self.agent_state)
+            self.agent_state = alloc_batch_agent_state(num_networks)
+        
+        # 重新分配结果数组
+        if self.results != NULL:
+            free(self.results)
+        self.results = <DecisionResult*>calloc(num_networks, sizeof(DecisionResult))
+        
+        # 重新分配 NumPy 数组（如果大小变化）
+        if self.inputs_array.shape[0] != num_networks:
+            self.inputs_array = np.zeros((num_networks, self.input_dim), dtype=np.float64)
+            self.outputs_array = np.zeros((num_networks, self.output_dim), dtype=np.float64)
+
 
     def decide(self, list agents, market_state) -> list:
         """执行批量决策（使用缓存的网络数据）
