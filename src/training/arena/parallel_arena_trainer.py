@@ -50,6 +50,7 @@ from src.training.population import (
     SubPopulationManager,
     WorkerConfig,
     _apply_species_data_to_population,
+    _concat_network_params_numpy,
     _deserialize_genomes_numpy,
     _serialize_genomes_numpy,
     _serialize_species_data,
@@ -556,19 +557,32 @@ class ParallelArenaTrainer:
         )
 
     def _update_network_caches(self) -> None:
-        """更新网络数据缓存（进化后调用）"""
+        """更新网络数据缓存（进化后调用）
+        
+        优先使用 _cached_network_params_data（packed numpy 数组）直接填充 C 结构，
+        跳过 Python 对象创建。回退时使用原有的 Python 对象路径。
+        """
         if self.network_caches is None:
             return
 
         for agent_type, population in self.populations.items():
             cache = self.network_caches.get(agent_type)
-            if cache is None or not population.agents:
+            if cache is None:
                 continue
 
-            networks = [agent.brain.network for agent in population.agents]
-            cache.update_networks(networks)
-            networks.clear()
-            del networks
+            cached = getattr(population, '_cached_network_params_data', None)
+            if cached is not None:
+                # Phase 2: 直接从 packed numpy 数组更新 C 结构
+                cache.update_networks_from_numpy(*cached)
+                population._cached_network_params_data = None
+            else:
+                # 回退：使用原有方式（从 Python 对象提取）
+                if not population.agents:
+                    continue
+                networks = [agent.brain.network for agent in population.agents]
+                cache.update_networks(networks)
+                networks.clear()
+                del networks
 
     def _create_evolution_worker_pool(self) -> None:
         """创建进化 Worker 池
@@ -3590,6 +3604,9 @@ class ParallelArenaTrainer:
             evolution_results: 进化结果字典，包含 (genome_data, network_params_data, species_data)
             deserialize_genomes: 是否反序列化基因组（默认 False，延迟反序列化）
         """
+        # 按 agent_type 收集 network_params_data 用于批量缓存更新
+        network_params_by_type: dict[AgentType, list[tuple[np.ndarray, ...]]] = {}
+
         for (agent_type, sub_pop_id), (
             genome_data,
             network_params_data,
@@ -3598,6 +3615,11 @@ class ParallelArenaTrainer:
             population = self.populations.get(agent_type)
             if population is None:
                 continue
+
+            # 收集 network_params_data
+            if agent_type not in network_params_by_type:
+                network_params_by_type[agent_type] = []
+            network_params_by_type[agent_type].append(network_params_data)
 
             if isinstance(population, SubPopulationManager):
                 if sub_pop_id < len(population.sub_populations):
@@ -3618,6 +3640,13 @@ class ParallelArenaTrainer:
                         species_data,
                         deserialize_genomes,
                     )
+
+        # 拼接并缓存到 population 对象上，供 _update_network_caches 使用
+        for agent_type, params_list in network_params_by_type.items():
+            population = self.populations.get(agent_type)
+            if population is not None:
+                population._cached_network_params_data = _concat_network_params_numpy(params_list)
+        del network_params_by_type
 
         # 所有种群更新完成后统一清理
         gc.collect(0)
@@ -3690,14 +3719,8 @@ class ParallelArenaTrainer:
             del old_to_clean
             del new_genomes
         else:
-            # 延迟反序列化：只更新网络参数（不更新 genome 引用）
-            for idx, params in enumerate(params_list):
-                if idx < len(population.agents):
-                    population.agents[idx].brain.update_network_only(params)
-            # 释放 params_list
-            for p in params_list:
-                p.clear()
-            params_list.clear()
+            # Phase 2: 完全跳过网络参数解包和 Brain 更新
+            # BatchNetworkCache 会直接从 packed numpy 数组更新
             del params_list
 
             # 仅存储 pending 数据，不反序列化

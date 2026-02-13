@@ -707,6 +707,26 @@ def _unpack_network_params_numpy(
     return params_list
 
 
+def _concat_network_params_numpy(
+    params_list: list[tuple[np.ndarray, ...]],
+) -> tuple[np.ndarray, ...]:
+    """将多个子种群的 network_params_data 拼接为一个
+    
+    用于将 SubPopulationManager 下多个子种群的 packed numpy 数组
+    合并成一个完整的 packed numpy 数组，供 BatchNetworkCache.update_networks_from_numpy 使用。
+    
+    Args:
+        params_list: 多个子种群的 network_params_data 元组列表，
+                     每个元组包含 11 个 numpy 数组
+    
+    Returns:
+        拼接后的 11 个 numpy 数组的元组
+    """
+    if len(params_list) == 1:
+        return params_list[0]
+    return tuple(np.concatenate([p[i] for p in params_list]) for i in range(len(params_list[0])))
+
+
 # =============================================
 # 持久 Worker 进程相关函数
 # =============================================
