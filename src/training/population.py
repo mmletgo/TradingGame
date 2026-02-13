@@ -1577,6 +1577,7 @@ class Population:
     sub_population_id: int | None  # 子种群ID（仅散户使用）
     _pending_genome_data: tuple[np.ndarray, ...] | None  # 待反序列化的基因组数据
     _genomes_dirty: bool  # 标记基因组是否需要同步
+    _pending_species_data: tuple[np.ndarray, np.ndarray] | None  # 待恢复的species数据
 
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取实例级别线程池"""
@@ -1614,6 +1615,7 @@ class Population:
         # 延迟反序列化支持
         self._pending_genome_data: tuple[np.ndarray, ...] | None = None
         self._genomes_dirty: bool = False
+        self._pending_species_data: tuple[np.ndarray, np.ndarray] | None = None
 
         # 根据 Agent 类型选择 NEAT 配置文件
         # 散户使用 67 个输入（10档订单簿 + 10笔成交），庄家使用 607 个输入，做市商使用 634 个输入
@@ -2587,6 +2589,14 @@ class Population:
         self._cleanup_genome_internals(old_to_clean)
 
         # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
+        # 恢复 species 数据
+        if self._pending_species_data is not None:
+            species_genome_ids, species_species_ids = self._pending_species_data
+            _apply_species_data_to_population(
+                self.neat_pop, species_genome_ids, species_species_ids, self.generation
+            )
+            self._pending_species_data = None
+
 
         # 更新 Agent Brain 的 genome 引用
         new_genomes = list(self.neat_pop.population.items())
@@ -2595,6 +2605,7 @@ class Population:
                 self.agents[idx].brain.genome = genome
 
         self._pending_genome_data = None
+        self._pending_species_data = None
         self._genomes_dirty = False
 
     def accumulate_fitness(

@@ -3694,57 +3694,16 @@ class ParallelArenaTrainer:
             for idx, params in enumerate(params_list):
                 if idx < len(population.agents):
                     population.agents[idx].brain.update_network_only(params)
-
-            # 存储待反序列化数据（用于保存检查点时）
-            population._pending_genome_data = genome_data
-            population._genomes_dirty = True
-
-            # 同步 species 数据到主进程（关键修复！）
-            # 即使延迟反序列化 genome，也需要先反序列化并同步 species
-            old_genomes = list(population.neat_pop.population.values())
-            keys, fitnesses, metadata, nodes, conns = genome_data
-            population.neat_pop.population = _deserialize_genomes_numpy(
-                keys,
-                fitnesses,
-                metadata,
-                nodes,
-                conns,
-                population.neat_config.genome_config,
-            )
-
-            # 清理旧的 genome 对象
-            new_genome_ids = set(population.neat_pop.population.keys())
-            old_to_clean = [g for g in old_genomes if g.key not in new_genome_ids]
-            population._cleanup_genome_internals(old_to_clean)
-
-            # 应用 species 数据
-            species_genome_ids, species_species_ids = species_data
-            _apply_species_data_to_population(
-                population.neat_pop,
-                species_genome_ids,
-                species_species_ids,
-                population.generation,
-            )
-
-            # 更新 Agent 的 genome 引用
-            new_genomes = list(population.neat_pop.population.items())
-            for idx, (_gid, genome) in enumerate(new_genomes):
-                if idx < len(population.agents):
-                    population.agents[idx].brain.genome = genome
-
-            # 标记数据已同步，不需要再延迟反序列化
-            population._pending_genome_data = None
-            population._genomes_dirty = False
-            # 释放中间变量
+            # 释放 params_list
             for p in params_list:
                 p.clear()
             params_list.clear()
             del params_list
-            del old_genomes
-            del old_to_clean
-            del new_genomes
 
-            # 注：NEAT 历史数据清理已移至 save_checkpoint 时统一执行
+            # 仅存储 pending 数据，不反序列化
+            population._pending_genome_data = genome_data
+            population._pending_species_data = species_data
+            population._genomes_dirty = True
 
     def _refresh_agent_states(self, force: bool = False) -> None:
         """刷新所有竞技场的 Agent 账户状态
@@ -4192,6 +4151,7 @@ class ParallelArenaTrainer:
             pop.agents = agents
             pop.sub_population_id = None
             pop._pending_genome_data = None
+            pop._pending_species_data = None
             pop._genomes_dirty = False
             pop._accumulated_fitness = {}
             pop._accumulation_count = 0
