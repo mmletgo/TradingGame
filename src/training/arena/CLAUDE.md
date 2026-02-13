@@ -256,8 +256,12 @@ class ParallelArenaTrainer:
 | `_create_execute_worker_pool()` | 创建 Execute Worker 池 |
 | `_collect_fee_rates()` | 收集所有 Agent 的费率 |
 | `_prepare_mm_init_orders()` | 准备做市商初始化订单 |
-| `_execute_with_worker_pool()` | 使用 Worker 池执行决策 |
-| `_process_worker_results()` | 处理 Worker 返回的执行结果 |
+| `_build_arena_commands()` | 从推理结果构建 ArenaExecuteData 命令数据（从 `_execute_with_worker_pool` 提取） |
+| `_execute_with_worker_pool()` | 使用 Worker 池执行决策（委托 `_build_arena_commands` + `execute_all`） |
+| `_process_single_arena_result()` | 处理单个竞技场的 Worker 执行结果（支持增量处理） |
+| `_process_worker_results()` | 处理 Worker 返回的执行结果（委托 `_process_single_arena_result`） |
+| `_prepare_arena_for_tick()` | 准备单个竞技场的 tick 数据（线程安全，支持 Phase 1 并行化） |
+| `_build_arena_type_groups()` | 构建 per-arena per-type Agent 分组缓存（episode 开始时调用） |
 | `train(num_rounds, checkpoint_callback, progress_callback)` | 主训练循环 |
 | `save_checkpoint(path)` | 保存检查点（当 `_genomes_dirty=True` 时直接使用 pending 数据保存，跳过 `sync_genomes_from_pending` → `_serialize_genomes_numpy` 往返） |
 | `load_checkpoint(path)` | 加载检查点 |
@@ -306,21 +310,37 @@ fitness = α × pnl + β × avg_spread_score + γ × norm_volume + δ × surviva
 
 **tick 执行流程（run_tick_all_arenas）：**
 ```python
-# 阶段1: 准备（串行）
-for arena in arena_states:
-    handle_liquidations(arena)  # 强平检查
-    catfish_action(arena)       # 鲶鱼行动（在 Agent 之前）
-    market_state = compute_market_state(arena)
-    active_agents = get_active_agents(arena)
+# 阶段1: 准备（并行/串行）
+# Worker 池模式且多竞技场时，Phase 1 使用 ThreadPoolExecutor 并行执行
+# 每个竞技场使用 per-arena 缓冲区和 RNG（线程安全）
+if worker_pool and num_arenas > 1:
+    # 并行：每个竞技场在独立线程中执行 _prepare_arena_for_tick()
+    futures = executor.submit(_prepare_arena_for_tick, idx) for each arena
+else:
+    # 串行回退
+    for arena in arena_states:
+        handle_liquidations(arena)
+        catfish_action(arena)
+        market_state = compute_market_state(arena, arena_idx)
+        active_agents = get_active_agents(arena)
 
 # 阶段2: 批量推理（并行）- 一次性推理所有竞技场的所有 Agent
+# 使用 _arena_type_groups 缓存加速分组（仅过滤已强平 Agent）
 all_decisions = _batch_inference_all_arenas(market_states, active_agents)
 
 # 阶段3: 执行
 if _execute_worker_pool is not None:
-    # 使用 Worker 池并行执行
-    results = _execute_with_worker_pool(all_decisions)
-    _process_worker_results(results)
+    if pool supports submit_all/poll_result (SharedMemory):
+        # 增量处理：submit 后逐个 poll 并立即处理结果
+        arena_commands = _build_arena_commands(decisions)
+        pool.submit_all(arena_commands)
+        while pending:
+            result = pool.poll_result(arena_id)
+            _process_single_arena_result(arena_id, result)
+    else:
+        # 批量执行 + 批量处理
+        results = _execute_with_worker_pool(all_decisions)
+        _process_worker_results(results)
 else:
     # 串行执行
     for arena in arena_states:
@@ -534,6 +554,8 @@ class AtomicActionType(IntEnum):
 | `reset_all(initial_price, fee_rates)` | 重置所有竞技场的订单簿 |
 | `init_market_makers(mm_init_orders)` | 初始化做市商挂单 |
 | `execute_all(arena_commands)` | 执行所有竞技场的决策 |
+| `submit_all(arena_commands)` | 仅发送命令到共享内存，不等待结果，返回提交的 arena_id 列表 |
+| `poll_result(arena_id)` | 非阻塞检查单个竞技场结果，完成则返回 ArenaExecuteResult 并重置状态，否则返回 None |
 | `get_all_depths()` | 获取所有竞技场的订单簿深度 |
 | `shutdown()` | 关闭所有 Worker 并清理共享内存 |
 
@@ -577,6 +599,14 @@ Result Region (RESULT_REGION_SIZE bytes per arena):
 | `get_command_view(arena_id)` | 获取指定竞技场的命令视图 |
 | `get_result_view(arena_id)` | 获取指定竞技场的结果视图 |
 | `close()` | 关闭并释放共享内存 |
+
+**ShmSynchronizer 方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `wait_all_done(arena_ids, timeout_ms, poll_interval_us)` | 阻塞等待所有竞技场完成 |
+| `check_done(arena_id)` | 非阻塞检查单个竞技场是否完成，返回 bool |
+| `reset_all_status(arena_ids)` | 重置所有竞技场的命令和结果状态为 IDLE |
 
 ## 使用示例
 
@@ -669,6 +699,23 @@ with pool:
 - 将执行阶段分布到多个 Worker 进程
 - 每个 Worker 维护独立的订单簿
 - 原子动作随机打乱执行，避免流动性枯竭
+
+### Phase 1 跨竞技场并行（tick 级优化）
+- Worker 池模式且多竞技场时，Phase 1（强平检查、鲶鱼决策、市场状态计算）使用 ThreadPoolExecutor 并行执行
+- 每个竞技场使用独立的 per-arena 缓冲区（`_per_arena_buffers`）和 RNG（`_per_arena_rng`），保证线程安全
+- NumPy 操作释放 GIL，实现真正的并行加速
+- `_prepare_arena_for_tick()` 方法封装单个竞技场的 tick 准备工作
+
+### 增量 Worker 结果处理（tick 级优化）
+- 共享内存版 Worker 池（`ArenaExecuteWorkerPoolShm`）支持 `submit_all` + `poll_result` 增量处理
+- 不再等待所有竞技场完成后批量处理，而是逐个 poll 并立即处理已完成的竞技场结果
+- `_process_single_arena_result()` 处理单个竞技场结果，`_build_arena_commands()` 构建命令数据
+- 减少 Phase 3 的整体延迟
+
+### Agent 类型分组缓存（tick 级优化）
+- `_arena_type_groups` 在 episode 开始时预构建 per-arena per-type 的 Agent 分组
+- Agent 类型和网络索引在 episode 内不变，每个 tick 只需过滤已强平 Agent
+- 避免每个 tick 重复执行 `_get_network_index()` 查找和 `setdefault()` 构建
 
 ### 延迟反序列化 + 直接 numpy→C 管线
 - 进化后跳过 genome 反序列化和中间 Python 网络对象创建，直接从 packed numpy 数组填充 BatchNetworkData C 结构

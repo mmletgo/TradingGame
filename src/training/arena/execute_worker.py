@@ -1852,6 +1852,74 @@ class ArenaExecuteWorkerPoolShm:
 
         return results
 
+    def submit_all(
+        self,
+        arena_commands: dict[int, ArenaExecuteData],
+    ) -> list[int]:
+        """仅发送命令到共享内存，不等待结果
+
+        用于增量结果处理：先 submit_all 发送所有命令，
+        然后用 poll_result 逐个检查和处理结果。
+
+        Args:
+            arena_commands: 各竞技场的执行数据
+
+        Returns:
+            提交的 arena_id 列表
+        """
+        from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
+
+        if not self._started:
+            self.start()
+
+        # 写入命令到共享内存（与 execute_all 的写入逻辑相同）
+        for arena_id, execute_data in arena_commands.items():
+            cmd_view = self._ipc.get_command_view(arena_id)
+            cmd_view.set_liquidated(execute_data.liquidated_agents)
+
+            # 优先使用数组格式（零拷贝优化）
+            if execute_data.decisions_array is not None:
+                cmd_view.set_decisions_array(execute_data.decisions_array)
+            else:
+                cmd_view.set_decisions(execute_data.decisions)
+
+            cmd_view.set_mm_decisions(execute_data.mm_decisions)
+
+            # 设置鲶鱼决策
+            if execute_data.catfish_decisions:
+                cmd_view.set_catfish_decisions(execute_data.catfish_decisions)
+
+            cmd_view.cmd_type = CommandType.EXECUTE
+            cmd_view.status = CommandStatus.PENDING
+
+        return list(arena_commands.keys())
+
+    def poll_result(self, arena_id: int) -> ArenaExecuteResult | None:
+        """非阻塞检查单个竞技场的结果
+
+        如果该竞技场已完成，返回结果并重置状态。
+        如果未完成，返回 None。
+
+        Args:
+            arena_id: 竞技场 ID
+
+        Returns:
+            ArenaExecuteResult 如果已完成，否则 None
+        """
+        if not self._sync.check_done(arena_id):
+            return None
+
+        # 读取结果
+        result_view = self._ipc.get_result_view(arena_id)
+        result = _read_result_from_shm(arena_id, result_view)
+
+        # 重置该竞技场的状态
+        cmd_view = self._ipc.get_command_view(arena_id)
+        cmd_view.status = 0  # CommandStatus.IDLE
+        result_view.status = 0  # CommandStatus.IDLE
+
+        return result
+
     def get_all_depths(
         self,
     ) -> dict[int, tuple[NDArray[np.float64], NDArray[np.float64], float, float]]:

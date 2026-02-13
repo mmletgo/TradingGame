@@ -1000,6 +1000,18 @@ class ShmSynchronizer:
 
         return True
 
+    def check_done(self, arena_id: int) -> bool:
+        """检查单个竞技场是否完成（非阻塞）
+
+        Args:
+            arena_id: 竞技场 ID
+
+        Returns:
+            True 如果该竞技场已完成
+        """
+        result_view = self._ipc.get_result_view(arena_id)
+        return result_view.status == CommandStatus.DONE
+
     def reset_all_status(self, arena_ids: list[int]) -> None:
         """重置所有竞技场的状态
 
