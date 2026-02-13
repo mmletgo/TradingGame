@@ -3605,7 +3605,8 @@ class ParallelArenaTrainer:
             deserialize_genomes: 是否反序列化基因组（默认 False，延迟反序列化）
         """
         # 按 agent_type 收集 network_params_data 用于批量缓存更新
-        network_params_by_type: dict[AgentType, list[tuple[np.ndarray, ...]]] = {}
+        # 使用 (sub_pop_id, data) 元组确保按子种群顺序拼接
+        network_params_by_type: dict[AgentType, list[tuple[int, tuple[np.ndarray, ...]]]] = {}
 
         for (agent_type, sub_pop_id), (
             genome_data,
@@ -3616,10 +3617,10 @@ class ParallelArenaTrainer:
             if population is None:
                 continue
 
-            # 收集 network_params_data
+            # 收集 network_params_data（带 sub_pop_id 用于排序）
             if agent_type not in network_params_by_type:
                 network_params_by_type[agent_type] = []
-            network_params_by_type[agent_type].append(network_params_data)
+            network_params_by_type[agent_type].append((sub_pop_id, network_params_data))
 
             if isinstance(population, SubPopulationManager):
                 if sub_pop_id < len(population.sub_populations):
@@ -3642,10 +3643,13 @@ class ParallelArenaTrainer:
                     )
 
         # 拼接并缓存到 population 对象上，供 _update_network_caches 使用
-        for agent_type, params_list in network_params_by_type.items():
+        for agent_type, id_params_list in network_params_by_type.items():
             population = self.populations.get(agent_type)
             if population is not None:
-                population._cached_network_params_data = _concat_network_params_numpy(params_list)
+                # 按 sub_pop_id 排序确保拼接顺序与 agent 索引一致
+                id_params_list.sort(key=lambda x: x[0])
+                sorted_params = [data for _, data in id_params_list]
+                population._cached_network_params_data = _concat_network_params_numpy(sorted_params)
         del network_params_by_type
 
         # 所有种群更新完成后统一清理

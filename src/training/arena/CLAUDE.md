@@ -259,9 +259,12 @@ class ParallelArenaTrainer:
 | `_execute_with_worker_pool()` | 使用 Worker 池执行决策 |
 | `_process_worker_results()` | 处理 Worker 返回的执行结果 |
 | `train(num_rounds, checkpoint_callback, progress_callback)` | 主训练循环 |
-| `save_checkpoint(path)` | 保存检查点 |
+| `save_checkpoint(path)` | 保存检查点（当 `_genomes_dirty=True` 时直接使用 pending 数据保存，跳过 `sync_genomes_from_pending` → `_serialize_genomes_numpy` 往返） |
 | `load_checkpoint(path)` | 加载检查点 |
 | `stop()` | 停止训练并清理资源（包括关闭 Execute Worker 池） |
+| `_update_network_caches()` | 更新网络缓存：优先使用 `_cached_network_params_data`（packed numpy 数组）调用 `BatchNetworkCache.update_networks_from_numpy()` 直接填充 C 结构，跳过中间 Python 对象创建。回退路径：从 `agent.brain.network` 提取 |
+| `_update_populations_from_evolution()` | 进化后更新种群：按 agent_type 聚合子种群的 network_params_data（带 sub_pop_id 排序保证顺序正确），使用 `_concat_network_params_numpy` 拼接后缓存到 `population._cached_network_params_data`，GC 从循环内移到循环外统一执行 |
+| `_update_single_population()` | 更新单个种群：`deserialize_genomes=False` 时跳过全部反序列化，仅存储 pending 数据（`_pending_genome_data`、`_pending_species_data`），不再更新 `agent.brain.network`（训练路径使用 BatchNetworkCache 独立于 brain.network） |
 | `setup_for_testing(populations_data)` | 测试模式初始化：从 genome 数据创建种群，不创建进化 Worker 池 |
 | `_balance_catfish_directions()` | 强制平衡趋势创造者鲶鱼的方向 |
 | `_check_liquidations_vectorized(arena, current_price)` | 向量化强平检查（使用 NumPy 批量计算保证金率） |
@@ -666,6 +669,10 @@ with pool:
 - 将执行阶段分布到多个 Worker 进程
 - 每个 Worker 维护独立的订单簿
 - 原子动作随机打乱执行，避免流动性枯竭
+
+### 延迟反序列化 + 直接 numpy→C 管线
+- 进化后跳过 genome 反序列化和中间 Python 网络对象创建，直接从 packed numpy 数组填充 BatchNetworkData C 结构
+- Update 阶段从 ~71s 降至 ~5-8s
 
 ### 共享内存 IPC
 - 零拷贝进程间通信

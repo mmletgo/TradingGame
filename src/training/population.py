@@ -1598,6 +1598,7 @@ class Population:
     _pending_genome_data: tuple[np.ndarray, ...] | None  # 待反序列化的基因组数据
     _genomes_dirty: bool  # 标记基因组是否需要同步
     _pending_species_data: tuple[np.ndarray, np.ndarray] | None  # 待恢复的species数据
+    _cached_network_params_data: tuple[np.ndarray, ...] | None  # 缓存的网络参数（供 update_networks_from_numpy 使用）
 
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取实例级别线程池"""
@@ -1636,6 +1637,7 @@ class Population:
         self._pending_genome_data: tuple[np.ndarray, ...] | None = None
         self._genomes_dirty: bool = False
         self._pending_species_data: tuple[np.ndarray, np.ndarray] | None = None
+        self._cached_network_params_data: tuple[np.ndarray, ...] | None = None
 
         # 根据 Agent 类型选择 NEAT 配置文件
         # 散户使用 67 个输入（10档订单簿 + 10笔成交），庄家使用 607 个输入，做市商使用 634 个输入
@@ -2691,6 +2693,7 @@ class SubPopulationManager:
     logger: logging.Logger
     _pending_genome_data: list[tuple[np.ndarray, ...]] | None
     _genomes_dirty: bool
+    _cached_network_params_data: tuple[np.ndarray, ...] | None
 
     def __init__(
         self,
@@ -2744,6 +2747,7 @@ class SubPopulationManager:
         # 延迟反序列化相关
         self._pending_genome_data = None
         self._genomes_dirty = False
+        self._cached_network_params_data: tuple[np.ndarray, ...] | None = None
 
         self.logger.info(
             f"创建 {agent_type.value} 子种群管理器: {sub_count} 个子种群，每个 {self.agents_per_sub} 个Agent"

@@ -103,7 +103,11 @@ Numba JIT 加速的高频数学函数模块。
 - `_cleanup_neat_history()` - 清理 NEAT 种群中的历史数据
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
 - `_cleanup_genome_internals(genomes)` - 清理基因组内部数据
-- `sync_genomes_from_pending()` - 从待处理数据同步基因组（延迟反序列化）
+- `sync_genomes_from_pending()` - 从待处理数据同步基因组（延迟反序列化），同时恢复 `_pending_species_data` 中的 species 数据
+
+**缓存与延迟反序列化属性：**
+- `_cached_network_params_data: tuple[np.ndarray, ...] | None` - 缓存的 packed numpy 网络参数数据，供 `BatchNetworkCache.update_networks_from_numpy` 直接填充 C 结构使用
+- `_pending_species_data: tuple[np.ndarray, np.ndarray] | None` - 待恢复的 species 数据，与 `_pending_genome_data` 配合实现延迟反序列化
 
 **多核并行化：**
 - 使用实例级别 ThreadPoolExecutor（8个worker）
@@ -134,12 +138,16 @@ Numba JIT 加速的高频数学函数模块。
 - `sub_population_count: int` - 子种群数量（默认10）
 - `agents_per_sub: int` - 每个子种群的Agent数量
 - `agents` - 所有子种群Agent的合并视图
+- `_cached_network_params_data: tuple[np.ndarray, ...] | None` - 缓存的拼接后网络参数数据
 
 **主要方法：**
 - `reset_agents()` - 重置所有子种群的Agent
 - `evaluate(current_price)` - 评估所有Agent适应度（统一使用实际收益率）
 - `evolve(current_price)` - 进化所有子种群（串行）
 - `get_all_genomes()` - 获取所有子种群的基因组
+
+**辅助函数：**
+- `_concat_network_params_numpy(params_list)` - 将多个子种群的 network_params_data 拼接为一个，当只有一个元素时直接返回，避免拷贝
 
 ### WorkerConfig (population.py)
 
@@ -380,6 +388,7 @@ class AtomicAction:
 
 **缓存类方法：**
 - `update_networks(networks)` - 从 Python 网络对象提取数据到 C 结构
+- `update_networks_from_numpy(*packed_arrays)` - 直接从 packed numpy 数组填充 C 结构，跳过中间 Python 对象创建（FastFeedForwardNetwork），性能从 ~40s 降至 ~2-5s
 - `decide(inputs, orderbooks, mid_prices)` - 使用缓存数据执行批量决策
 - `decide_multi_arena_direct(states, markets, indices, return_array)` - 跨竞技场批量推理
 - `is_valid()` - 检查缓存是否有效
