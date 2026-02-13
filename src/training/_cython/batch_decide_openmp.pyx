@@ -2245,8 +2245,8 @@ cdef class BatchNetworkCache:
         if num_networks == 0:
             return
             
-        # 强制清除 id 缓存，确保下次调用会执行更新
-        self.network_ids = []
+        # 设置 network_ids 为有效的索引列表，确保 is_valid() 返回 True
+        self.network_ids = list(range(num_networks))
         self.num_networks = num_networks
         
         # 从 headers 提取元信息

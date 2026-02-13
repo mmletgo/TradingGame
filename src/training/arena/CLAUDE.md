@@ -264,7 +264,7 @@ class ParallelArenaTrainer:
 | `stop()` | 停止训练并清理资源（包括关闭 Execute Worker 池） |
 | `_update_network_caches()` | 更新网络缓存：优先使用 `_cached_network_params_data`（packed numpy 数组）调用 `BatchNetworkCache.update_networks_from_numpy()` 直接填充 C 结构，跳过中间 Python 对象创建。回退路径：从 `agent.brain.network` 提取 |
 | `_update_populations_from_evolution()` | 进化后更新种群：按 agent_type 聚合子种群的 network_params_data（带 sub_pop_id 排序保证顺序正确），使用 `_concat_network_params_numpy` 拼接后缓存到 `population._cached_network_params_data`，GC 从循环内移到循环外统一执行 |
-| `_update_single_population()` | 更新单个种群：`deserialize_genomes=False` 时跳过全部反序列化，仅存储 pending 数据（`_pending_genome_data`、`_pending_species_data`），不再更新 `agent.brain.network`（训练路径使用 BatchNetworkCache 独立于 brain.network） |
+| `_update_single_population()` | 更新单个种群：`deserialize_genomes=False` 时跳过基因组反序列化，仅存储 pending 数据（`_pending_genome_data`、`_pending_species_data`），但仍通过 `brain.update_network_only()` 更新 Agent 的网络（MM 初始化的 `_prepare_mm_init_orders` 依赖 `agent.brain.forward()`） |
 | `setup_for_testing(populations_data)` | 测试模式初始化：从 genome 数据创建种群，不创建进化 Worker 池 |
 | `_balance_catfish_directions()` | 强制平衡趋势创造者鲶鱼的方向 |
 | `_check_liquidations_vectorized(arena, current_price)` | 向量化强平检查（使用 NumPy 批量计算保证金率） |

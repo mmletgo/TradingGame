@@ -3720,8 +3720,14 @@ class ParallelArenaTrainer:
             del old_to_clean
             del new_genomes
         else:
-            # Phase 2: 完全跳过网络参数解包和 Brain 更新
-            # BatchNetworkCache 会直接从 packed numpy 数组更新
+            # Phase 2: 跳过基因组反序列化，但仍更新 Brain 网络
+            # 确保 agent.brain.forward() 使用最新网络（MM 初始化依赖此路径）
+            for idx in range(min(len(population.agents), len(params_list))):
+                population.agents[idx].brain.update_network_only(params_list[idx])
+            # 释放中间变量
+            for p in params_list:
+                p.clear()
+            params_list.clear()
             del params_list
 
             # 仅存储 pending 数据，不反序列化
