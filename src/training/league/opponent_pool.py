@@ -473,10 +473,16 @@ class OpponentPool:
             # 所有权重为 0，退化为均匀采样
             return self._sample_uniform(entries, n)
 
+        sample_size: int = min(n, len(entry_ids))
+        non_zero_count: int = int(np.count_nonzero(weights))
+        if non_zero_count < sample_size:
+            weights = np.ones(len(entry_ids), dtype=np.float64)
+            total = float(weights.sum())
+
         probs: np.ndarray = weights / total
         sampled = np.random.choice(
             entry_ids,
-            size=min(n, len(entry_ids)),
+            size=sample_size,
             replace=False,
             p=probs,
         )
@@ -543,6 +549,13 @@ class OpponentPool:
 
         if total == 0:
             # 所有权重为 0，使用均匀权重
+            weights = np.ones(pool_size, dtype=np.float64)
+            total = float(weights.sum())
+
+        # 非零权重不足以无放回采样时，回退到均匀权重
+        sample_needed: int = n if pool_size >= n else (n % pool_size)
+        non_zero_count: int = int(np.count_nonzero(weights))
+        if non_zero_count < sample_needed:
             weights = np.ones(pool_size, dtype=np.float64)
             total = float(weights.sum())
 

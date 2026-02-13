@@ -769,9 +769,7 @@ class ParallelArenaTrainer:
         stats["arena_run_time"] = time.perf_counter() - arena_start
 
         # 2. 汇总适应度
-        aggregate_start = time.perf_counter()
         avg_fitness = self._collect_fitness_all_arenas(arena_fitnesses, episode_counts)
-        stats["aggregate_time"] = time.perf_counter() - aggregate_start
 
         # 【内存泄漏修复】汇总后清理 arena_fitnesses（包含多个 episode 的适应度数据）
         # 先保存 episode 总数，再删除 episode_counts
@@ -851,7 +849,6 @@ class ParallelArenaTrainer:
         self.logger.info(
             f"训练轮次 {self.generation} 完成: "
             f"arena_run={stats['arena_run_time']:.2f}s, "
-            f"aggregate={stats['aggregate_time']:.2f}s, "
             f"evolve={stats['evolve_time']:.2f}s, "
             f"update={stats['update_time']:.2f}s, "
             f"total={stats['total_time']:.2f}s"
