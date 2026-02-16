@@ -70,7 +70,7 @@ PANEL_WIDTH: int = 1360           # 面板总宽度
 EQUITY_PLOT_HEIGHT: int = 140     # 每个资产图表高度
 PRICE_PLOT_HEIGHT: int = 140      # 价格图表高度
 VIOLIN_PLOT_HEIGHT: int = 120     # 小提琴图高度
-VIOLIN_PLOT_WIDTH: int = 340      # 每个小提琴图宽度（2个并排）
+VIOLIN_PLOT_WIDTH: int = 420      # 每个小提琴图宽度（3个并排）
 KDE_POINTS: int = 50              # KDE曲线采样点数
 ```
 
@@ -98,6 +98,11 @@ def update_equity(
         population_stats: 各种群统计信息（PopulationStats对象）
     """
 
+def update_noise_trader_violin(self, noise_trader_data: list[Any]) -> None:
+    """更新噪声交易者小提琴图
+    Args:
+        noise_trader_data: 噪声交易者信息列表（NoiseTraderInfo对象列表）
+    """
 ```
 
 **布局结构：**
@@ -116,10 +121,10 @@ def update_equity(
 │ 种群统计（水平排列）                                  │
 │ 高级散户: ...  做市商: ...                           │
 ├─────────────────────────────────────────────────────┤
-│ 小提琴图区域 (120px高, 2个并排)                      │
-│ ┌────────┐ ┌────────┐                              │
-│ │高级散户│ │做市商  │                                │
-│ └────────┘ └────────┘                              │
+│ 小提琴图区域 (120px高, 3个并排)                      │
+│ ┌────────┐ ┌────────┐ ┌────────┐                  │
+│ │高级散户│ │做市商  │ │噪声交易者│                  │
+│ └────────┘ └────────┘ └────────┘                  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -128,6 +133,7 @@ def update_equity(
 |------|------|-----|
 | 高级散户 | 蓝色 | (100, 150, 255) |
 | 做市商 | 紫色 | (200, 100, 255) |
+| 噪声交易者 | 橙色 | (255, 165, 0) |
 
 **小提琴图实现细节：**
 - 使用纯 NumPy 实现高斯核密度估计（KDE）
@@ -140,7 +146,8 @@ def update_equity(
 - 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`
 - 资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
 - 统计文本：`stat_{agent_type}`
-- 小提琴图：`violin_plot_{agent_type}`, `violin_area_{agent_type}`, `violin_median_{agent_type}`, `violin_q1_{agent_type}`, `violin_q3_{agent_type}`
+- Agent小提琴图：`violin_plot_{agent_type}`, `violin_area_{agent_type}`, `violin_median_{agent_type}`, `violin_q1_{agent_type}`, `violin_q3_{agent_type}`
+- 噪声交易者小提琴图：`violin_plot_noise_trader`, `violin_area_noise_trader`, `violin_median_noise_trader`, `violin_q1_noise_trader`, `violin_q3_noise_trader`
 
 ---
 

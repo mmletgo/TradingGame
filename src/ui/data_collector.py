@@ -275,15 +275,23 @@ class UIDataCollector:
         if not noise_traders:
             return noise_trader_data
 
+        # 动态扩展历史缓冲区以匹配实际噪声交易者数量
+        current_count = len(self.noise_trader_equity_history)
+        needed_count = len(noise_traders)
+        if needed_count > current_count:
+            for _ in range(needed_count - current_count):
+                self.noise_trader_equity_history.append(deque(maxlen=self.history_length))
+
         # 收集每个噪声交易者的数据
         for i, trader_obj in enumerate(noise_traders):
             name = type(trader_obj).__name__
 
             equity = trader_obj.account.get_equity(current_price)
-            position_qty = trader_obj.account.position.quantity
+            position_qty = trader_obj.account.position_qty
             position_value = abs(position_qty) * current_price
             initial_balance = trader_obj.account.initial_balance
-            is_liquidated = trader_obj.is_liquidated
+            # 噪声交易者拥有无限资金，永远不会被强平
+            is_liquidated = False
 
             noise_trader_data.append(
                 NoiseTraderInfo(
@@ -297,8 +305,7 @@ class UIDataCollector:
             )
 
             # 记录净值历史
-            if i < len(self.noise_trader_equity_history):
-                self.noise_trader_equity_history[i].append(equity)
+            self.noise_trader_equity_history[i].append(equity)
 
         return noise_trader_data
 

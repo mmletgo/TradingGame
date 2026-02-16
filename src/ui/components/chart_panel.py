@@ -47,6 +47,10 @@ VERTICAL_LAYOUT: list[AgentType] = [
     AgentType.MARKET_MAKER,
 ]
 
+# 噪声交易者颜色配置（橙色）
+NOISE_TRADER_COLOR: tuple[int, int, int] = (255, 165, 0)
+NOISE_TRADER_NAME: str = "噪声交易者"
+
 
 class ChartPanel:
     """图表面板
@@ -59,7 +63,7 @@ class ChartPanel:
     EQUITY_PLOT_HEIGHT: int = 140  # 每个资产图表高度
     PRICE_PLOT_HEIGHT: int = 140  # 价格图表高度
     VIOLIN_PLOT_HEIGHT: int = 120  # 小提琴图高度
-    VIOLIN_PLOT_WIDTH: int = 340  # 每个小提琴图宽度
+    VIOLIN_PLOT_WIDTH: int = 420  # 每个小提琴图宽度（3个并排）
     KDE_POINTS: int = 50  # KDE曲线采样点数
 
     def __init__(self) -> None:
@@ -230,8 +234,9 @@ class ChartPanel:
             return f"{num:.0f}"
 
     def _create_violin_plots(self) -> None:
-        """创建4个并排的小提琴图"""
+        """创建3个并排的小提琴图（高级散户、做市商、噪声交易者）"""
         with dpg.group(horizontal=True):
+            # Agent 类型小提琴图
             for agent_type in VERTICAL_LAYOUT:
                 name = POPULATION_NAMES.get(agent_type, agent_type.value)
                 tag_prefix = agent_type.value
@@ -280,8 +285,54 @@ class ChartPanel:
                         tag=f"violin_q3_{tag_prefix}",
                     )
 
+            # 噪声交易者小提琴图
+            with dpg.plot(
+                label=NOISE_TRADER_NAME,
+                height=self.VIOLIN_PLOT_HEIGHT,
+                width=self.VIOLIN_PLOT_WIDTH,
+                tag="violin_plot_noise_trader",
+                no_mouse_pos=True,
+            ):
+                dpg.add_plot_axis(
+                    dpg.mvXAxis, label="PnL", tag="violin_x_axis_noise_trader"
+                )
+                dpg.add_plot_axis(
+                    dpg.mvYAxis, label="", tag="violin_y_axis_noise_trader"
+                )
+
+                # 小提琴形状（Area Series）
+                dpg.add_area_series(
+                    [],
+                    [],
+                    parent="violin_y_axis_noise_trader",
+                    tag="violin_area_noise_trader",
+                )
+
+                # 中位数线
+                dpg.add_line_series(
+                    [],
+                    [],
+                    parent="violin_y_axis_noise_trader",
+                    tag="violin_median_noise_trader",
+                )
+
+                # 四分位线（Q1和Q3）
+                dpg.add_line_series(
+                    [],
+                    [],
+                    parent="violin_y_axis_noise_trader",
+                    tag="violin_q1_noise_trader",
+                )
+                dpg.add_line_series(
+                    [],
+                    [],
+                    parent="violin_y_axis_noise_trader",
+                    tag="violin_q3_noise_trader",
+                )
+
         # 设置小提琴图主题
         self._setup_violin_themes()
+        self._setup_noise_trader_violin_theme()
 
     def _setup_violin_themes(self) -> None:
         """设置小提琴图颜色主题"""
@@ -324,6 +375,47 @@ class ChartPanel:
                     )
             dpg.bind_item_theme(f"violin_q1_{tag_prefix}", quartile_theme)
             dpg.bind_item_theme(f"violin_q3_{tag_prefix}", quartile_theme)
+
+    def _setup_noise_trader_violin_theme(self) -> None:
+        """设置噪声交易者小提琴图颜色主题"""
+        color = NOISE_TRADER_COLOR
+        tag_prefix = "noise_trader"
+
+        # 小提琴形状主题（半透明填充）
+        with dpg.theme() as area_theme:
+            with dpg.theme_component(dpg.mvAreaSeries):
+                dpg.add_theme_color(
+                    dpg.mvPlotCol_Fill,
+                    (*color, 100),
+                    category=dpg.mvThemeCat_Plots,
+                )
+                dpg.add_theme_color(
+                    dpg.mvPlotCol_Line,
+                    (*color, 200),
+                    category=dpg.mvThemeCat_Plots,
+                )
+        dpg.bind_item_theme(f"violin_area_{tag_prefix}", area_theme)
+
+        # 中位数线主题（白色粗线）
+        with dpg.theme() as median_theme:
+            with dpg.theme_component(dpg.mvLineSeries):
+                dpg.add_theme_color(
+                    dpg.mvPlotCol_Line,
+                    (255, 255, 255, 255),
+                    category=dpg.mvThemeCat_Plots,
+                )
+        dpg.bind_item_theme(f"violin_median_{tag_prefix}", median_theme)
+
+        # 四分位线主题（灰色细线）
+        with dpg.theme() as quartile_theme:
+            with dpg.theme_component(dpg.mvLineSeries):
+                dpg.add_theme_color(
+                    dpg.mvPlotCol_Line,
+                    (180, 180, 180, 200),
+                    category=dpg.mvThemeCat_Plots,
+                )
+        dpg.bind_item_theme(f"violin_q1_{tag_prefix}", quartile_theme)
+        dpg.bind_item_theme(f"violin_q3_{tag_prefix}", quartile_theme)
 
     def _gaussian_kde(
         self, data: np.ndarray, x_grid: np.ndarray, bandwidth: float | None = None
@@ -435,4 +527,81 @@ class ChartPanel:
         # 调整坐标轴范围
         dpg.set_axis_limits(f"violin_x_axis_{tag_prefix}", x_min, x_max)
         dpg.set_axis_limits(f"violin_y_axis_{tag_prefix}", -0.6, 0.6)
+
+    def update_noise_trader_violin(self, noise_trader_data: list[Any]) -> None:
+        """更新噪声交易者小提琴图
+
+        Args:
+            noise_trader_data: 噪声交易者信息列表（NoiseTraderInfo对象列表）
+        """
+        if not noise_trader_data:
+            # 清空小提琴图
+            dpg.set_value("violin_area_noise_trader", [[], []])
+            dpg.set_value("violin_median_noise_trader", [[], []])
+            dpg.set_value("violin_q1_noise_trader", [[], []])
+            dpg.set_value("violin_q3_noise_trader", [[], []])
+            return
+
+        # 提取所有噪声交易者的净值
+        equities = [nt.equity - nt.initial_balance for nt in noise_trader_data]
+
+        # 数据不足时清空图表
+        if len(equities) < 2:
+            dpg.set_value("violin_area_noise_trader", [[], []])
+            dpg.set_value("violin_median_noise_trader", [[], []])
+            dpg.set_value("violin_q1_noise_trader", [[], []])
+            dpg.set_value("violin_q3_noise_trader", [[], []])
+            return
+
+        data = np.array(equities)
+
+        # 计算统计量
+        median = float(np.median(data))
+        q1 = float(np.percentile(data, 25))
+        q3 = float(np.percentile(data, 75))
+        data_min = float(np.min(data))
+        data_max = float(np.max(data))
+
+        # 扩展数据范围
+        data_range = data_max - data_min
+        margin = data_range * 0.1 if data_range > 0 else 1.0
+        x_min = data_min - margin
+        x_max = data_max + margin
+
+        # 创建评估网格
+        x_grid = np.linspace(x_min, x_max, self.KDE_POINTS)
+
+        # 计算KDE
+        density = self._gaussian_kde(data, x_grid)
+
+        # 归一化密度到 [-0.5, 0.5]
+        max_density = np.max(density)
+        if max_density > 0:
+            normalized_density = density / max_density * 0.4
+        else:
+            normalized_density = density
+
+        # 创建小提琴形状（上半部分 + 下半部分，形成闭合路径）
+        upper_y = normalized_density.tolist()
+        lower_y = (-normalized_density[::-1]).tolist()
+
+        upper_x = x_grid.tolist()
+        lower_x = x_grid[::-1].tolist()
+
+        violin_x = upper_x + lower_x
+        violin_y = upper_y + lower_y
+
+        # 更新小提琴形状
+        dpg.set_value("violin_area_noise_trader", [violin_x, violin_y])
+
+        # 更新中位数线（水平线在y=0）
+        dpg.set_value("violin_median_noise_trader", [[median, median], [-0.3, 0.3]])
+
+        # 更新四分位线
+        dpg.set_value("violin_q1_noise_trader", [[q1, q1], [-0.2, 0.2]])
+        dpg.set_value("violin_q3_noise_trader", [[q3, q3], [-0.2, 0.2]])
+
+        # 调整坐标轴范围
+        dpg.set_axis_limits("violin_x_axis_noise_trader", x_min, x_max)
+        dpg.set_axis_limits("violin_y_axis_noise_trader", -0.6, 0.6)
 
