@@ -256,6 +256,7 @@ Result Region:
 - **Agent 类型分组缓存**：episode 级预构建，tick 级仅过滤
 - **延迟反序列化 + numpy->C 管线**：跳过中间 Python 对象
 - **共享内存 IPC**：零拷贝、无锁轮询
+- **做市商初始化批量推理复用**：Episode 开始时所有竞技场状态相同，`_prepare_mm_init_orders` 只对一个竞技场进行一次 BatchNetworkCache 批量推理，将结果复用到所有 64 个竞技场，避免 64x400=25600 次串行 forward() 调用
 
 ## 依赖关系
 

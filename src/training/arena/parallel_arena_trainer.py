@@ -11,6 +11,7 @@
 
 import gc
 import gzip
+import os
 import pickle
 import random
 import time
@@ -242,9 +243,11 @@ class ParallelArenaTrainer:
             random.Random(42 + i) for i in range(self.multi_config.num_arenas)
         ]
         # Phase 1 线程池（复用，避免每 tick 创建/销毁）
+        # 线程数上限为物理核心数（逻辑线程数 / 2），避免过多线程争抢 CPU
         from concurrent.futures import ThreadPoolExecutor
+        _cpu_count: int = os.cpu_count() or 16
         self._phase1_executor = ThreadPoolExecutor(
-            max_workers=self.multi_config.num_arenas
+            max_workers=min(self.multi_config.num_arenas, _cpu_count // 2)
         )
 
         self._is_setup = True
@@ -602,7 +605,8 @@ class ParallelArenaTrainer:
         - ArenaExecuteWorkerPool（Queue 版，兼容性更好）
         """
         arena_ids = [arena.arena_id for arena in self.arena_states]
-        num_workers = min(self.multi_config.num_arenas, 32)  # 最多 32 个 Worker
+        # 动态计算 Worker 数量：基于 CPU 物理核心数（逻辑线程数 / 3），保留核心给主进程和 OpenMP
+        num_workers = min(self.multi_config.num_arenas, max(4, (os.cpu_count() or 16) // 3))
 
         if self.multi_config.use_shared_memory_ipc:
             from .execute_worker import ArenaExecuteWorkerPoolShm
@@ -901,6 +905,8 @@ class ParallelArenaTrainer:
         """准备所有竞技场的做市商初始化订单
 
         为每个竞技场的每个做市商准备初始挂单数据。
+        优化：所有竞技场在 episode 开始时状态完全相同，因此只需对一个竞技场
+        进行一次批量推理，然后将结果复用到所有竞技场。
 
         Returns:
             各竞技场的做市商初始化数据，格式:
@@ -916,8 +922,100 @@ class ParallelArenaTrainer:
 
         mm_agents = list(mm_population.agents)
 
+        # 尝试批量推理优化：所有竞技场初始状态相同，只需推理一次
+        mm_cache = (
+            self.network_caches.get(AgentType.MARKET_MAKER)
+            if self.network_caches
+            else None
+        )
+        if mm_cache is not None and mm_cache.is_valid() and self.arena_states:
+            # 使用第一个竞技场计算市场状态（所有竞技场状态相同）
+            arena0: ArenaState = self.arena_states[0]
+            market_state: NormalizedMarketState = (
+                self._compute_market_state_for_arena(arena0, 0)
+            )
+            mid_price: float = market_state.mid_price
+            tick_size: float = (
+                market_state.tick_size if market_state.tick_size > 0 else 0.01
+            )
+
+            # 准备批量推理参数
+            all_states: list[AgentAccountState] = [
+                arena0.agent_states[agent.agent_id]
+                for agent in mm_agents
+                if agent.agent_id in arena0.agent_states
+            ]
+            network_indices: list[int] = [
+                self._get_network_index(AgentType.MARKET_MAKER, agent.agent_id)
+                for agent in mm_agents
+                if agent.agent_id in arena0.agent_states
+            ]
+
+            # 批量推理（单竞技场，所有 MM Agent）
+            try:
+                raw_results: dict[int, np.ndarray] = (
+                    mm_cache.decide_multi_arena_direct(
+                        [all_states],
+                        [market_state],
+                        [network_indices],
+                        return_array=True,
+                    )
+                )
+                mm_array: np.ndarray | None = raw_results.get(0)
+
+                if mm_array is not None and len(mm_array) > 0:
+                    self.logger.debug("使用批量推理初始化做市商")
+
+                    # 解析批量推理结果为订单格式
+                    arena_orders: list[
+                        tuple[
+                            int,
+                            list[dict[str, float]],
+                            list[dict[str, float]],
+                        ]
+                    ] = []
+                    for i, agent in enumerate(mm_agents):
+                        if i >= len(mm_array):
+                            break
+
+                        num_bid: int = int(mm_array[i, 0])
+                        num_ask: int = int(mm_array[i, 1])
+
+                        bid_orders: list[dict[str, float]] = []
+                        for j in range(num_bid):
+                            price: float = float(mm_array[i, 2 + j])
+                            qty: float = float(mm_array[i, 12 + j])
+                            if qty > 0:
+                                bid_orders.append(
+                                    {"price": price, "quantity": qty}
+                                )
+
+                        ask_orders: list[dict[str, float]] = []
+                        for j in range(num_ask):
+                            price = float(mm_array[i, 22 + j])
+                            qty = float(mm_array[i, 32 + j])
+                            if qty > 0:
+                                ask_orders.append(
+                                    {"price": price, "quantity": qty}
+                                )
+
+                        arena_orders.append(
+                            (agent.agent_id, bid_orders, ask_orders)
+                        )
+
+                    # 所有竞技场复用相同的初始化订单
+                    for arena in self.arena_states:
+                        mm_init_orders[arena.arena_id] = arena_orders
+
+                    return mm_init_orders
+            except Exception as e:
+                self.logger.warning(
+                    f"做市商批量初始化失败，回退到串行模式: {e}"
+                )
+
+        # 回退：原来的串行逻辑
         for arena in self.arena_states:
-            arena_orders: list[
+            arena_orders_fallback: list[
                 tuple[int, list[dict[str, float]], list[dict[str, float]]]
             ] = []
             orderbook = arena.matching_engine._orderbook
@@ -943,11 +1041,17 @@ class ParallelArenaTrainer:
                     agent_state, np.array(outputs), mid_price, tick_size
                 )
 
-                bid_orders = params.get("bid_orders", [])
-                ask_orders = params.get("ask_orders", [])
-                arena_orders.append((agent.agent_id, bid_orders, ask_orders))
+                bid_orders_fallback: list[dict[str, float]] = params.get(
+                    "bid_orders", []
+                )
+                ask_orders_fallback: list[dict[str, float]] = params.get(
+                    "ask_orders", []
+                )
+                arena_orders_fallback.append(
+                    (agent.agent_id, bid_orders_fallback, ask_orders_fallback)
+                )
 
-            mm_init_orders[arena.arena_id] = arena_orders
+            mm_init_orders[arena.arena_id] = arena_orders_fallback
 
         return mm_init_orders
 

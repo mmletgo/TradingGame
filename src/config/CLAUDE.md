@@ -159,7 +159,7 @@ retail_pro_config = AgentConfig(
 | enable_parallel_evolution | bool | True | 是否启用并行进化 |
 | enable_parallel_decision | bool | True | 是否启用并行决策 |
 | enable_parallel_creation | bool | True | 是否启用并行创建 |
-| openmp_threads | int | 12 | OpenMP 并行线程数（Cython 神经网络推理） |
+| openmp_threads | int | 16 | OpenMP 并行线程数（Cython 神经网络推理，建议设为物理核心数） |
 | random_seed | int \| None | None | 随机种子（None 表示不固定） |
 | retail_pro_sub_population_count | int | 12 | 高级散户子种群数量 |
 | evolution_interval | int | 10 | 每多少个 episode 进化一次 |
@@ -192,7 +192,7 @@ retail_pro_config = AgentConfig(
   - `enable_parallel_creation`：启用并行创建 Agent
 
 - **openmp_threads**：Cython 神经网络推理的 OpenMP 线程数
-  - 经基准测试，8-12 线程为最优值
+  - 默认 16，建议设为物理核心数
   - 过多线程反而更慢（线程调度开销、内存带宽瓶颈）
 
 - **random_seed**：随机种子
@@ -589,7 +589,7 @@ config = Config(
   - 建议 `CPU 核心数 - 2`
 
 - **openmp_threads**：
-  - 经基准测试，8-12 线程为最优值
+  - 默认 16，建议设为物理核心数
   - 过多线程反而更慢
 
 ### 噪声交易者参数调优
