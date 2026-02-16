@@ -13,8 +13,9 @@ class LeagueTrainingConfig:
 
     # 对手池配置
     pool_dir: str = "checkpoints/league_training/opponent_pools"
-    max_pool_size_per_type: int = 20  # 每种类型最多保留20个历史版本
-    milestone_interval: int = 50  # 每50代保存里程碑
+    checkpoint_dir: str = "checkpoints/league_training/checkpoints"  # 检查点存储目录
+    max_pool_size_per_type: int = 100  # 每种类型最多保留100个历史版本
+    milestone_interval: int = 1  # 每1代保存里程碑
 
     # 竞技场运行配置
     num_arenas: int = 64  # 同时运行的竞技场数量
@@ -37,10 +38,6 @@ class LeagueTrainingConfig:
     pfsp_exponent: float = 2.0  # 败率加权指数，越大越集中于难对手
     pfsp_explore_bonus: float = 2.0  # 未交战对手的探索奖励系数
     pfsp_win_rate_ema_alpha: float = 0.3  # 胜率 EMA 平滑因子，越大越重视近期
-
-    # 对手池注入条件
-    elite_fitness_threshold: float = 0.05  # 平均适应度超过历史最高 5% 时注入
-    diversity_threshold: float = 0.3  # 与现有对手差异阈值
 
     # 泛化优势比配置
     generalization_advantage_window: int = 20  # 历史窗口大小
