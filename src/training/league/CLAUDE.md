@@ -287,7 +287,7 @@ def run_round(self):
     # 7. 检查冻结/解冻
     self._check_freeze_thaw(round_stats)
 
-    # 8. 检查里程碑保存（每代都保存）
+    # 8. 检查里程碑保存（每代都保存，数据收集在主线程，I/O 异步执行）
     if generation > 0:
         self._save_milestone()
 
@@ -549,7 +549,7 @@ network_data: dict[int, tuple] | None      # 延迟加载
 ### LeagueTrainer 清理
 
 - `_current_round_arena_fitnesses` 清空后调用 `gc.collect(0)`
-- `_save_milestone()` 保存后删除 `genome_data_map` 等临时变量；当 `_pending_genome_data` 存在时直接使用 pending 数据保存，跳过序列化/反序列化往返
+- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行（`_milestone_thread`），避免阻塞训练主循环；下次调用前、`save_checkpoint()` 和 `stop()` 时会等待上一次异步保存完成；当 `_pending_genome_data` 存在时直接使用 pending 数据保存，跳过序列化/反序列化往返
 - `save_checkpoint()` 完成后显式 `del checkpoint_data` + `gc.collect(0)`
 - 每代执行轻量级 NEAT 历史清理（`_cleanup_neat_history_light`）
 - 每 5 代清理所有种群的 NEAT 历史数据（完整版）+ 对手池内存缓存

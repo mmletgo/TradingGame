@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gc
 import pickle
+import threading
 
 import numpy as np
 from ctypes import CDLL, c_int
@@ -79,6 +80,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._freeze_states: dict[AgentType, SpeciesFreezeState] = {
             agent_type: SpeciesFreezeState() for agent_type in AgentType
         }
+
+        # 里程碑异步保存
+        self._milestone_thread: threading.Thread | None = None
 
     def setup(self) -> None:
         """初始化
@@ -483,13 +487,21 @@ class LeagueTrainer(ParallelArenaTrainer):
         self.logger.info("\n".join(lines))
 
     def _save_milestone(self) -> None:
-        """保存里程碑到对手池"""
+        """保存里程碑到对手池（异步）
+
+        数据收集在主线程完成（访问 populations），
+        实际 I/O 操作在后台线程执行。
+        """
         if self.pool_manager is None:
             return
 
+        # 等待上一次异步保存完成
+        if self._milestone_thread is not None and self._milestone_thread.is_alive():
+            self._milestone_thread.join()
+
         self.logger.info(f"保存里程碑: 第 {self.generation} 代")
 
-        # 收集所有类型的 Main Agents 基因组数据
+        # === 数据收集（主线程，快速） ===
         genome_data_map: dict[AgentType, dict[int, tuple]] = {}
         fitness_map: dict[AgentType, float] = {}
         agent_counts: dict[AgentType, int] = {}
@@ -537,23 +549,32 @@ class LeagueTrainer(ParallelArenaTrainer):
             ]
             fitness_map[agent_type] = sum(fitnesses) / len(fitnesses) if fitnesses else 0.0
 
-        # 保存到对手池
-        self.pool_manager.add_snapshot(
-            generation=self.generation,
-            genome_data_map=genome_data_map,
-            network_data_map=None,  # 暂不保存网络参数
-            fitness_map=fitness_map,
-            source='main_agents',
-            add_reason='milestone',
-            sub_population_counts=sub_pop_counts,
-            agent_counts=agent_counts,
-        )
+        # === 异步 I/O（后台线程） ===
+        generation = self.generation
+        pool_manager = self.pool_manager
 
-        # 【内存泄漏修复】保存后显式删除临时数据，释放序列化的 numpy 数组
-        del genome_data_map
-        del fitness_map
-        del agent_counts
-        del sub_pop_counts
+        def _do_save() -> None:
+            try:
+                pool_manager.add_snapshot(
+                    generation=generation,
+                    genome_data_map=genome_data_map,
+                    network_data_map=None,
+                    fitness_map=fitness_map,
+                    source='main_agents',
+                    add_reason='milestone',
+                    sub_population_counts=sub_pop_counts,
+                    agent_counts=agent_counts,
+                )
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
+        self._milestone_thread = threading.Thread(
+            target=_do_save,
+            daemon=True,
+            name=f"milestone_save_gen{generation}",
+        )
+        self._milestone_thread.start()
 
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
@@ -564,6 +585,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         Args:
             path: 检查点文件路径
         """
+        # 等待异步里程碑保存完成（避免与检查点保存冲突）
+        if self._milestone_thread is not None and self._milestone_thread.is_alive():
+            self._milestone_thread.join()
+
         # 内联父类序列化逻辑，直接构建 checkpoint_data
         checkpoint_data: dict[str, Any] = {
             "checkpoint_version": 2,
@@ -682,6 +707,11 @@ class LeagueTrainer(ParallelArenaTrainer):
 
     def stop(self) -> None:
         """停止训练并清理资源"""
+        # 等待异步里程碑保存完成
+        if self._milestone_thread is not None and self._milestone_thread.is_alive():
+            self.logger.info("等待里程碑保存完成...")
+            self._milestone_thread.join(timeout=30.0)
+
         # 保存对手池索引
         if self.pool_manager:
             self.pool_manager.save_all()

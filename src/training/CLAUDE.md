@@ -399,8 +399,7 @@ class AtomicAction:
 - 加速比：约 5.1x
 
 **OpenMP 线程数配置：**
-- 通过 `TrainingConfig.openmp_threads` 配置（默认 8）
-- 8 线程为最优值（2.3x 加速）
+- 通过 `TrainingConfig.openmp_threads` 配置（默认 16，建议设为物理核心数）
 
 ---
 
