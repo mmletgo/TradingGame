@@ -641,7 +641,7 @@ class ParallelArenaTrainer:
             self.logger.info("首次进化：基因组已同步到 Worker 池")
 
         evolution_results = self.evolution_worker_pool.evolve_all_parallel(
-            fitness_map, sync_genomes=False
+            fitness_map, lite=True
         )
         self._worker_pool_synced = True
         stats["evolve_time"] = time.perf_counter() - evolve_start
@@ -829,7 +829,7 @@ class ParallelArenaTrainer:
         evolution_results: dict[
             tuple[AgentType, int],
             tuple[
-                tuple[np.ndarray, ...],
+                tuple[np.ndarray, ...] | None,
                 tuple[np.ndarray, ...],
                 tuple[np.ndarray, np.ndarray],
             ],
@@ -840,6 +840,7 @@ class ParallelArenaTrainer:
 
         Args:
             evolution_results: 进化结果字典，包含 (genome_data, network_params_data, species_data)
+                genome_data 在 lite 模式下为 None
             deserialize_genomes: 是否反序列化基因组（默认 False，延迟反序列化）
         """
         # 按 agent_type 收集 network_params_data 用于批量缓存更新
@@ -860,25 +861,42 @@ class ParallelArenaTrainer:
                 network_params_by_type[agent_type] = []
             network_params_by_type[agent_type].append((sub_pop_id, network_params_data))
 
-            if isinstance(population, SubPopulationManager):
-                if sub_pop_id < len(population.sub_populations):
-                    sub_pop = population.sub_populations[sub_pop_id]
-                    self._update_single_population(
-                        sub_pop,
-                        genome_data,
-                        network_params_data,
-                        species_data,
-                        deserialize_genomes,
-                    )
+            if genome_data is None:
+                # Lite 模式：genome_data 为 None，跳过 _update_single_population
+                # 仅更新 generation 和标记 dirty
+                if isinstance(population, SubPopulationManager):
+                    if sub_pop_id < len(population.sub_populations):
+                        sub_pop = population.sub_populations[sub_pop_id]
+                        sub_pop.generation += 1
+                        sub_pop._genomes_dirty = True
+                        sub_pop._pending_genome_data = None
+                        sub_pop._pending_species_data = species_data
+                else:
+                    if sub_pop_id == 0:
+                        population.generation += 1
+                        population._genomes_dirty = True
+                        population._pending_genome_data = None
+                        population._pending_species_data = species_data
             else:
-                if sub_pop_id == 0:
-                    self._update_single_population(
-                        population,
-                        genome_data,
-                        network_params_data,
-                        species_data,
-                        deserialize_genomes,
-                    )
+                if isinstance(population, SubPopulationManager):
+                    if sub_pop_id < len(population.sub_populations):
+                        sub_pop = population.sub_populations[sub_pop_id]
+                        self._update_single_population(
+                            sub_pop,
+                            genome_data,
+                            network_params_data,
+                            species_data,
+                            deserialize_genomes,
+                        )
+                else:
+                    if sub_pop_id == 0:
+                        self._update_single_population(
+                            population,
+                            genome_data,
+                            network_params_data,
+                            species_data,
+                            deserialize_genomes,
+                        )
 
         # 拼接并缓存到 population 对象上，供 _update_network_caches 使用
         for agent_type, id_params_list in network_params_by_type.items():
@@ -896,7 +914,7 @@ class ParallelArenaTrainer:
     def _update_single_population(
         self,
         population: Population,
-        genome_data: tuple[np.ndarray, ...],
+        genome_data: tuple[np.ndarray, ...] | None,
         network_params_data: tuple[np.ndarray, ...],
         species_data: tuple[np.ndarray, np.ndarray],
         deserialize_genomes: bool = False,
@@ -905,7 +923,7 @@ class ParallelArenaTrainer:
 
         Args:
             population: 种群对象
-            genome_data: 基因组数据元组
+            genome_data: 基因组数据元组（lite 模式下可为 None）
             network_params_data: 网络参数数据元组
             species_data: species 数据元组 (genome_ids, species_ids)
             deserialize_genomes: 是否反序列化基因组（默认 False，延迟反序列化）
@@ -913,11 +931,12 @@ class ParallelArenaTrainer:
         # 增加代数
         population.generation += 1
 
-        # 解包网络参数
-        params_list = _unpack_network_params_numpy(*network_params_data)
-
         if deserialize_genomes:
+            # 解包网络参数
+            params_list = _unpack_network_params_numpy(*network_params_data)
+
             # 完整反序列化：重建 NEAT 种群
+            assert genome_data is not None, "deserialize_genomes=True 时 genome_data 不能为 None"
             old_genomes = list(population.neat_pop.population.values())
 
             keys, fitnesses, metadata, nodes, conns = genome_data
@@ -961,17 +980,8 @@ class ParallelArenaTrainer:
             del old_to_clean
             del new_genomes
         else:
-            # Phase 2: 跳过基因组反序列化，但仍更新 Brain 网络
-            # 确保 agent.brain.forward() 使用最新网络（MM 初始化依赖此路径）
-            for idx in range(min(len(population.agents), len(params_list))):
-                population.agents[idx].brain.update_network_only(params_list[idx])
-            # 释放中间变量
-            for p in params_list:
-                p.clear()
-            params_list.clear()
-            del params_list
-
-            # 仅存储 pending 数据，不反序列化
+            # 并行竞技场模式：跳过 brain 更新
+            # ArenaWorker 使用 BatchNetworkCache 推理，主进程不调用 brain.forward()
             population._pending_genome_data = genome_data
             population._pending_species_data = species_data
             population._genomes_dirty = True
@@ -1068,8 +1078,37 @@ class ParallelArenaTrainer:
         Args:
             path: 检查点文件路径
         """
-        # 注意：不再调用 sync_genomes_from_pending()
-        # 如果有 pending 数据，直接使用；否则从 neat_pop 序列化
+        # Sync genomes from workers if needed (lite 模式下 genome_data 为 None)
+        if self.evolution_worker_pool is not None:
+            needs_sync: bool = False
+            for agent_type, population in self.populations.items():
+                if isinstance(population, SubPopulationManager):
+                    for sub_pop in population.sub_populations:
+                        if sub_pop._genomes_dirty and sub_pop._pending_genome_data is None:
+                            needs_sync = True
+                            break
+                else:
+                    if population._genomes_dirty and population._pending_genome_data is None:
+                        needs_sync = True
+                if needs_sync:
+                    break
+
+            if needs_sync:
+                self.logger.info("Checkpoint 保存前同步基因组数据...")
+                genomes_map = self.evolution_worker_pool.sync_genomes_from_workers()
+                # Apply synced genomes to populations
+                for (agent_type, sub_pop_id), genome_data in genomes_map.items():
+                    population = self.populations.get(agent_type)
+                    if population is None:
+                        continue
+                    if isinstance(population, SubPopulationManager):
+                        if sub_pop_id < len(population.sub_populations):
+                            sub_pop = population.sub_populations[sub_pop_id]
+                            sub_pop._pending_genome_data = genome_data
+                    else:
+                        if sub_pop_id == 0:
+                            population._pending_genome_data = genome_data
+                del genomes_map
 
         checkpoint_data: dict[str, Any] = {
             "checkpoint_version": 2,  # 新版本标识，用于区分精简格式

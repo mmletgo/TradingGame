@@ -5,6 +5,7 @@
 
 import ctypes
 import gc
+import time
 import logging
 import traceback
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -707,6 +708,141 @@ def _unpack_network_params_numpy(
     return params_list
 
 
+
+def _extract_and_pack_all_network_params(
+    population: dict[int, "neat.DefaultGenome"],
+    config: "neat.Config",
+) -> tuple[np.ndarray, ...]:
+    """从种群中提取所有网络参数并直接打包为 NumPy 数组
+
+    合并 _extract_network_params_from_genome + _pack_network_params_numpy 的逻辑，
+    避免创建 N 个中间 dict 对象。
+
+    Two-pass approach:
+    - Pass 1: Create networks, get params, count sizes
+    - Pass 2: Fill pre-allocated arrays and clean up immediately
+
+    Args:
+        population: NEAT 种群（genome_id -> genome 映射）
+        config: NEAT 配置
+
+    Returns:
+        与 _pack_network_params_numpy 相同格式的元组:
+        (headers, all_input_keys, all_output_keys, all_node_ids,
+         all_biases, all_responses, all_act_types,
+         all_conn_indptr, all_conn_sources, all_conn_weights,
+         all_output_indices)
+    """
+    from neat.nn import FastFeedForwardNetwork
+
+    genome_list = list(population.values())
+    n_networks = len(genome_list)
+
+    # Pass 1: Extract params and count sizes
+    headers = np.empty(n_networks, dtype=_NETWORK_PARAM_HEADER_DTYPE)
+
+    total_input_keys: int = 0
+    total_output_keys: int = 0
+    total_node_ids: int = 0
+    total_connections: int = 0
+    total_conn_indptr: int = 0
+
+    # Store extracted params temporarily
+    all_params: list[dict[str, np.ndarray | int]] = []
+
+    for i, genome in enumerate(genome_list):
+        network = FastFeedForwardNetwork.create(genome, config)
+        params = network.get_params()
+
+        # Clean up network immediately
+        if hasattr(network, 'node_evals'):
+            network.node_evals = None  # type: ignore[assignment]
+        if hasattr(network, 'values'):
+            network.values = None  # type: ignore[assignment]
+        if hasattr(network, 'input_nodes'):
+            network.input_nodes = None  # type: ignore[assignment]
+        if hasattr(network, 'output_nodes'):
+            network.output_nodes = None  # type: ignore[assignment]
+        del network
+
+        n_input_keys = len(params['input_keys'])
+        n_output_keys = len(params['output_keys'])
+        n_node_ids = len(params['node_ids'])
+        n_connections = len(params['conn_weights'])
+
+        headers[i]['num_inputs'] = params['num_inputs']
+        headers[i]['num_outputs'] = params['num_outputs']
+        headers[i]['num_nodes'] = params['num_nodes']
+        headers[i]['n_input_keys'] = n_input_keys
+        headers[i]['n_output_keys'] = n_output_keys
+        headers[i]['n_node_ids'] = n_node_ids
+        headers[i]['n_connections'] = n_connections
+
+        total_input_keys += n_input_keys
+        total_output_keys += n_output_keys
+        total_node_ids += n_node_ids
+        total_connections += n_connections
+        total_conn_indptr += params['num_nodes'] + 1
+
+        all_params.append(params)
+
+    # Allocate arrays
+    all_input_keys_arr = np.empty(total_input_keys, dtype=np.int32)
+    all_output_keys_arr = np.empty(total_output_keys, dtype=np.int32)
+    all_node_ids_arr = np.empty(total_node_ids, dtype=np.int32)
+    all_biases_arr = np.empty(total_node_ids, dtype=np.float32)
+    all_responses_arr = np.empty(total_node_ids, dtype=np.float32)
+    all_act_types_arr = np.empty(total_node_ids, dtype=np.int32)
+    all_conn_indptr_arr = np.empty(total_conn_indptr, dtype=np.int32)
+    all_conn_sources_arr = np.empty(total_connections, dtype=np.int32)
+    all_conn_weights_arr = np.empty(total_connections, dtype=np.float32)
+    all_output_indices_arr = np.empty(total_output_keys, dtype=np.int32)
+
+    # Pass 2: Fill arrays and clean up params immediately
+    ik_off: int = 0
+    ok_off: int = 0
+    nid_off: int = 0
+    ci_off: int = 0
+    c_off: int = 0
+
+    for params in all_params:
+        nik = len(params['input_keys'])
+        nok = len(params['output_keys'])
+        nnid = len(params['node_ids'])
+        nc = len(params['conn_weights'])
+        nci = params['num_nodes'] + 1
+
+        all_input_keys_arr[ik_off:ik_off + nik] = params['input_keys']
+        all_output_keys_arr[ok_off:ok_off + nok] = params['output_keys']
+        all_node_ids_arr[nid_off:nid_off + nnid] = params['node_ids']
+        all_biases_arr[nid_off:nid_off + nnid] = params['biases']
+        all_responses_arr[nid_off:nid_off + nnid] = params['responses']
+        all_act_types_arr[nid_off:nid_off + nnid] = params['act_types']
+        all_conn_indptr_arr[ci_off:ci_off + nci] = params['conn_indptr']
+        all_conn_sources_arr[c_off:c_off + nc] = params['conn_sources']
+        all_conn_weights_arr[c_off:c_off + nc] = params['conn_weights']
+        all_output_indices_arr[ok_off:ok_off + nok] = params['output_indices']
+
+        ik_off += nik
+        ok_off += nok
+        nid_off += nnid
+        ci_off += nci
+        c_off += nc
+
+        # Clean up params dict immediately
+        params.clear()
+
+    all_params.clear()
+    del all_params
+
+    return (
+        headers, all_input_keys_arr, all_output_keys_arr, all_node_ids_arr,
+        all_biases_arr, all_responses_arr, all_act_types_arr,
+        all_conn_indptr_arr, all_conn_sources_arr, all_conn_weights_arr,
+        all_output_indices_arr,
+    )
+
+
 def _concat_network_params_numpy(
     params_list: list[tuple[np.ndarray, ...]],
 ) -> tuple[np.ndarray, ...]:
@@ -1150,10 +1286,10 @@ class MultiPopulationWorkerPool:
     def evolve_all_parallel(
         self,
         fitness_map: dict[tuple["AgentType", int], np.ndarray],
-        sync_genomes: bool = False,
+        lite: bool = True,
     ) -> dict[
         tuple["AgentType", int],
-        tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]
+        tuple[tuple[np.ndarray, ...] | None, tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]
     ]:
         """同时进化所有 Worker 的种群
 
@@ -1162,15 +1298,18 @@ class MultiPopulationWorkerPool:
 
         Args:
             fitness_map: 字典，key 为 (agent_type, sub_pop_id)，value 为适应度数组
-            sync_genomes: 是否在结果中包含基因组数据（默认 False）
+            lite: 是否使用轻量模式（跳过基因组序列化，默认 True）
 
         Returns:
             字典，key 为 (agent_type, sub_pop_id)，
             value 为 (genome_data, network_params_data, species_data) 元组
-            其中 species_data = (genome_ids, species_ids)
+            其中 genome_data 在 lite 模式下为 None
+            species_data = (genome_ids, species_ids)
         """
+        logger = get_logger("training")
+
         # 1. 同时向所有 Worker 发送进化命令（非阻塞）
-        cmd = "evolve_return_params" if not sync_genomes else "evolve_return_params"
+        cmd = "evolve_return_params_lite" if lite else "evolve_return_params"
         for worker_id, fitnesses in fitness_map.items():
             if worker_id in self.cmd_queues:
                 self.cmd_queues[worker_id].put((cmd, fitnesses))
@@ -1178,21 +1317,70 @@ class MultiPopulationWorkerPool:
         # 2. 收集所有结果
         results: dict[
             tuple["AgentType", int],
-            tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]
+            tuple[tuple[np.ndarray, ...] | None, tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]
         ] = {}
         expected_count = len(fitness_map)
 
+        t_collect_start = time.perf_counter()
+        t_first_result: float | None = None
+        t_last_result: float = 0.0
+
         for _ in range(expected_count):
             worker_id, result = self.result_queue.get()
-            if result[0] == "success_params":
-                # result = ("success_params", genome_data, network_params_data, species_data)
-                # species_data = (genome_ids, species_ids)
+            t_now = time.perf_counter()
+            if t_first_result is None:
+                t_first_result = t_now
+            t_last_result = t_now
+
+            if result[0] in ("success_params", "success_params_lite"):
+                # result = ("success_params[_lite]", genome_data|None, network_params_data, species_data, timing)
+                genome_data = result[1]  # None for lite
+                network_params_data = result[2]
                 species_data = result[3] if len(result) > 3 else (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
-                results[worker_id] = (result[1], result[2], species_data)
+                results[worker_id] = (genome_data, network_params_data, species_data)
+
+                # Log worker timing data
+                if len(result) > 4 and result[4] is not None:
+                    worker_timing: dict[str, float] = result[4]
+                    timing_parts = [f"{k}={v:.3f}s" for k, v in worker_timing.items()]
+                    logger.debug(
+                        f"Worker {worker_id} timing: {', '.join(timing_parts)}"
+                    )
             elif result[0] == "error":
                 raise RuntimeError(f"Worker {worker_id} evolve failed: {result[1]}")
             else:
                 raise RuntimeError(f"Worker {worker_id} unexpected result: {result}")
+
+        # Log collection timing
+        t_total = time.perf_counter() - t_collect_start
+        t_spread = t_last_result - (t_first_result or t_last_result)
+        logger.debug(
+            f"evolve_all_parallel collect: total={t_total:.3f}s, "
+            f"first_to_last_spread={t_spread:.3f}s, workers={expected_count}"
+        )
+
+        return results
+
+    def sync_genomes_from_workers(
+        self,
+    ) -> dict[tuple["AgentType", int], tuple[np.ndarray, ...]]:
+        """从所有 Worker 同步基因组数据（用于 checkpoint 保存）
+
+        向每个 Worker 发送 sync_genomes 命令并收集序列化后的基因组数据。
+
+        Returns:
+            字典，key 为 (agent_type, sub_pop_id)，value 为序列化的基因组数据元组
+        """
+        for worker_id, cmd_queue in self.cmd_queues.items():
+            cmd_queue.put(("sync_genomes", None))
+
+        results: dict[tuple["AgentType", int], tuple[np.ndarray, ...]] = {}
+        for _ in range(len(self.cmd_queues)):
+            worker_id, result = self.result_queue.get()
+            if result[0] == "genomes":
+                results[worker_id] = result[1]
+            else:
+                raise RuntimeError(f"Worker {worker_id} sync_genomes failed: {result}")
 
         return results
 
@@ -1467,6 +1655,7 @@ def _multi_worker_process_main(
             # args: np.ndarray of fitnesses (shape: pop_size,)
             # 返回 genome 数据 + 网络参数 + species 数据，减少主进程重建网络的开销
             fitnesses = args
+            timing: dict[str, float] = {}
 
             # 更新适应度
             for i, (gid, genome) in enumerate(neat_pop.population.items()):
@@ -1477,44 +1666,105 @@ def _multi_worker_process_main(
             def eval_genomes_params(genomes: list, config: Any) -> None:
                 pass  # 适应度已设置
 
+            t0 = time.perf_counter()
             try:
                 neat_pop.run(eval_genomes_params, n=1)
                 generation += 1
             except Exception as e:
                 result_queue.put((worker_id, ("error", str(e))))
                 continue
+            timing['neat_run'] = time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             # 【关键修复】清理 NEAT 历史数据，防止内存泄漏
             _cleanup_worker_neat_history(neat_pop)
+            timing['cleanup'] = time.perf_counter() - t0
 
             # 1. 序列化基因组数据（NumPy 格式）
+            t0 = time.perf_counter()
             genome_data = _serialize_genomes_numpy(neat_pop.population)
+            timing['serialize_genomes'] = time.perf_counter() - t0
 
-            # 2. 提取所有网络参数
-            params_list = []
-            for gid, genome in neat_pop.population.items():
-                params = _extract_network_params_from_genome(genome, neat_config)
-                params_list.append(params)
+            # 2. 提取所有网络参数并直接打包（合并 extract + pack）
+            t0 = time.perf_counter()
+            network_params_data = _extract_and_pack_all_network_params(
+                neat_pop.population, neat_config
+            )
+            timing['extract_pack_params'] = time.perf_counter() - t0
 
-            # 3. 打包网络参数（NumPy 格式）
-            network_params_data = _pack_network_params_numpy(params_list)
-
-            # 4. 序列化 species 数据（genome_id -> species_id 映射）
+            # 3. 序列化 species 数据（genome_id -> species_id 映射）
+            t0 = time.perf_counter()
             species_data = _serialize_species_data(neat_pop.species)
+            timing['serialize_species'] = time.perf_counter() - t0
 
-            # 5. 返回三者
-            result_queue.put((worker_id, ("success_params", genome_data, network_params_data, species_data)))
+            # 4. 返回结果（含 timing）
+            t0 = time.perf_counter()
+            result_queue.put((worker_id, ("success_params", genome_data, network_params_data, species_data, timing)))
+            timing['queue_put'] = time.perf_counter() - t0
 
             # 【内存泄漏修复】发送后立即删除大型数据，避免占用内存直到下一次循环
             del genome_data
-            # 清理 params_list 中的每个字典内容（包含多个 NumPy 数组）
-            for params in params_list:
-                params.clear()
-            del params_list
             del network_params_data
             del species_data
-            del fitnesses  # 也删除输入的适应度数组
+            del fitnesses
             # 显式触发年轻代 GC
+            gc.collect(0)
+
+        elif cmd == "evolve_return_params_lite":
+            # 轻量版：跳过基因组序列化，仅返回网络参数 + species 数据
+            fitnesses = args
+            timing_lite: dict[str, float] = {}
+
+            # 更新适应度
+            for i, (gid, genome) in enumerate(neat_pop.population.items()):
+                if i < len(fitnesses):
+                    genome.fitness = float(fitnesses[i])
+
+            # 执行进化
+            def eval_genomes_lite(genomes: list, config: Any) -> None:
+                pass  # 适应度已设置
+
+            t0 = time.perf_counter()
+            try:
+                neat_pop.run(eval_genomes_lite, n=1)
+                generation += 1
+            except Exception as e:
+                result_queue.put((worker_id, ("error", str(e))))
+                continue
+            timing_lite['neat_run'] = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            _cleanup_worker_neat_history(neat_pop)
+            timing_lite['cleanup'] = time.perf_counter() - t0
+
+            # Skip genome serialization!
+
+            # 提取所有网络参数并直接打包
+            t0 = time.perf_counter()
+            network_params_data = _extract_and_pack_all_network_params(
+                neat_pop.population, neat_config
+            )
+            timing_lite['extract_pack_params'] = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            species_data = _serialize_species_data(neat_pop.species)
+            timing_lite['serialize_species'] = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            result_queue.put((worker_id, ("success_params_lite", None, network_params_data, species_data, timing_lite)))
+            timing_lite['queue_put'] = time.perf_counter() - t0
+
+            # 【内存泄漏修复】发送后立即删除大型数据
+            del network_params_data
+            del species_data
+            del fitnesses
+            gc.collect(0)
+
+        elif cmd == "sync_genomes":
+            # 主进程请求基因组数据（用于 checkpoint 保存）
+            genome_data = _serialize_genomes_numpy(neat_pop.population)
+            result_queue.put((worker_id, ("genomes", genome_data)))
+            del genome_data
             gc.collect(0)
 
 
