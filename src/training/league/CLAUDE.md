@@ -43,8 +43,9 @@ src/training/league/
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `pool_dir` | `checkpoints/league_training/opponent_pools` | 对手池存储目录 |
+| `checkpoint_dir` | `checkpoints/league_training/checkpoints` | 检查点存储目录 |
 | `max_pool_size_per_type` | 20 | 每种类型最多保存的历史版本数 |
-| `milestone_interval` | 50 | 里程碑保存间隔（代数） |
+| `milestone_interval` | 50 | 里程碑保存间隔（代数），CLI 默认 1（每代保存） |
 | `num_baseline_arenas` | 16 | 基准竞技场数量 |
 | `num_generalization_arenas_per_type` | 24 | 每类型泛化测试竞技场数量 |
 | `sampling_strategy` | `pfsp` | 采样策略：uniform/recency/diverse/pfsp |
@@ -152,7 +153,7 @@ entry_dir/
 - `sample_opponents(n, strategy, target_type, current_generation)`：采样对手
 - `sample_opponents_batch(n, strategy, target_type, current_generation)`：批量采样 n 个不重复对手（用于多个泛化竞技场）
 - `update_entry_win_rate(entry_id, target_type, outcome, ema_alpha)`：更新条目胜率（EMA 平滑）
-- `cleanup(current_generation)`：清理旧条目
+- `cleanup(current_generation)`：清理旧条目（优先删非里程碑，不够时删最旧的里程碑）
 
 采样策略：
 - **uniform**：均匀随机采样
@@ -281,8 +282,8 @@ def run_round(self):
     # 7. 检查冻结/解冻
     self._check_freeze_thaw(round_stats)
 
-    # 8. 检查里程碑保存
-    if generation % milestone_interval == 0:
+    # 8. 检查里程碑保存（每代都保存）
+    if generation > 0:
         self._save_milestone()
 
     # 9. 清理对手池
@@ -295,6 +296,11 @@ def run_round(self):
 - `_reevaluate_frozen_species(agent_type, round_stats)` - 复评单个冻结物种，比较 baseline 适应度下降比例
 
 **冻结状态**：`_freeze_states: dict[AgentType, SpeciesFreezeState]`，随检查点持久化。
+
+**检查点系统**：
+- `save_checkpoint()`：内联父类序列化逻辑 + league 数据，一次性 plain pickle 写出（不使用 gzip），路径使用 `league_config.checkpoint_dir`
+- `load_checkpoint()`：父类 `load_checkpoint` 已有 magic bytes 检测（兼容 gzip 和 plain pickle），league 数据使用 plain pickle 读取
+- `train()` 中每代都调用 `checkpoint_callback`（不再使用 `checkpoint_interval` 条件）
 
 ## 竞技场分配方案
 
@@ -431,7 +437,7 @@ INFO - 所有物种已冻结，训练完成
 
 | 来源 | 注入条件 |
 |------|---------|
-| Main Agents | 里程碑间隔（每 50 代） |
+| Main Agents | 每代保存里程碑（CLI 默认 `--milestone-interval 1`） |
 
 ## 存储结构
 
@@ -449,7 +455,7 @@ checkpoints/league_training/
 │       ├── pool_index.json
 │       └── ...
 └── checkpoints/
-    └── gen_100.pkl
+    └── gen_00100.pkl
 ```
 
 ## 使用方法

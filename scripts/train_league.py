@@ -75,8 +75,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--milestone-interval",
         type=int,
-        default=10,
-        help="里程碑保存间隔（默认每 10 代）",
+        default=1,
+        help="里程碑保存间隔（默认每 1 代）",
     )
     parser.add_argument(
         "--sampling-strategy",
@@ -88,16 +88,10 @@ def parse_args() -> argparse.Namespace:
 
     # 检查点配置
     parser.add_argument(
-        "--checkpoint-dir",
-        type=str,
-        default="checkpoints/league_training",
-        help="检查点目录（默认 checkpoints/league_training）",
-    )
-    parser.add_argument(
         "--checkpoint-interval",
         type=int,
-        default=10,
-        help="检查点保存间隔（默认每 10 代）",
+        default=1,
+        help="检查点保存间隔（默认每 1 代）",
     )
 
     # 其他
@@ -124,10 +118,10 @@ def find_latest_checkpoint(checkpoint_dir: Path) -> Path | None:
     if not checkpoint_dir.exists():
         return None
 
-    # 支持的检查点格式：gen_00100.pkl.gz, gen_00100.pkl
+    # 支持的检查点格式：gen_00100.pkl
     checkpoint_files: list[tuple[int, Path]] = []
 
-    for pattern in ["gen_*.pkl.gz", "gen_*.pkl"]:
+    for pattern in ["gen_*.pkl"]:
         for f in checkpoint_dir.glob(pattern):
             # 从文件名提取代数
             match = re.search(r"gen_(\d+)", f.name)
@@ -225,7 +219,6 @@ def main() -> None:
 
     # 联盟训练配置
     league_config = LeagueTrainingConfig(
-        pool_dir=f"{args.checkpoint_dir}/opponent_pools",
         milestone_interval=args.milestone_interval,
         sampling_strategy=args.sampling_strategy,
         num_arenas=args.num_arenas,
@@ -240,10 +233,10 @@ def main() -> None:
     logger.info(f"每竞技场 episode 数: {args.episodes_per_arena}")
     logger.info(f"Episode 长度: {args.episode_length} ticks")
     logger.info(f"采样策略: {args.sampling_strategy}")
-    logger.info(f"检查点目录: {args.checkpoint_dir}")
+    logger.info(f"检查点目录: {league_config.checkpoint_dir}")
 
     # 确保检查点目录存在
-    checkpoint_dir = Path(args.checkpoint_dir)
+    checkpoint_dir = Path(league_config.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # 创建训练器
@@ -274,7 +267,7 @@ def main() -> None:
 
         # 定义检查点回调
         def checkpoint_callback(generation: int) -> None:
-            checkpoint_path = checkpoint_dir / f"gen_{generation:05d}.pkl.gz"
+            checkpoint_path = checkpoint_dir / f"gen_{generation:05d}.pkl"
             trainer.save_checkpoint(str(checkpoint_path))
             logger.info(f"保存检查点: {checkpoint_path}")
 

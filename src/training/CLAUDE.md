@@ -130,6 +130,8 @@ Numba JIT 加速的高频数学函数模块。
 - 减少单个 NEAT 种群的规模，优化进化性能
 - 每个子种群独立进化，共享市场环境
 - 清理时间显著减少（从~5s降至~0.04s）
+- 使用 `defer_agent_creation=True` 避免 Agent 双重创建（先设置 sub_population_id 再创建）
+- 使用 `dataclasses.replace()` 替代 `deepcopy(config)` 创建子种群配置
 
 **主要属性：**
 - `sub_populations: list[Population]` - 子种群列表
@@ -298,6 +300,7 @@ class AtomicAction:
 ## 训练流程
 
 ### 1. 初始化阶段 (`setup`)
+- 预计算 Worker 配置并在后台线程启动 Worker 池创建（与后续步骤并行）
 - 创建两个种群（高级散户/做市商）
 - 创建噪声交易者（100个）
 - 创建撮合引擎和 ADL 管理器
@@ -305,6 +308,7 @@ class AtomicAction:
 - 构建 Agent 映射表和执行顺序
 - 初始化 EMA 平滑价格
 - 做市商建立初始流动性
+- 等待后台 Worker 池创建完成
 
 ### 2. Episode 循环 (`run_episode`)
 - 重置所有 Agent 账户

@@ -627,6 +627,15 @@ class OpponentPool:
             self.remove_entry(entry["entry_id"])
             removed.append(entry["entry_id"])
 
+        # 非里程碑不够删时，从里程碑中删除最旧的
+        if len(removed) < to_remove_count:
+            milestones.sort(key=lambda e: e.get("created_at", ""))
+            for entry in milestones:
+                if len(removed) >= to_remove_count:
+                    break
+                self.remove_entry(entry["entry_id"])
+                removed.append(entry["entry_id"])
+
         return removed
 
     def get_pool_size(self) -> int:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import gc
-import gzip
 import pickle
 
 import numpy as np
@@ -19,7 +18,7 @@ from src.training.league.config import LeagueTrainingConfig
 from src.training.league.league_fitness import LeagueFitnessAggregator, GeneralizationAdvantageStats
 from src.training.league.multi_gen_cache import MultiGenerationNetworkCache
 from src.training.league.opponent_pool_manager import OpponentPoolManager
-from src.training.population import SubPopulationManager, _serialize_genomes_numpy
+from src.training.population import SubPopulationManager, _serialize_genomes_numpy, _serialize_species_data
 
 
 @dataclass
@@ -224,7 +223,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             self._check_freeze_thaw(round_stats)
 
         # 5. 检查里程碑保存
-        if self.generation > 0 and self.generation % self.league_config.milestone_interval == 0:
+        if self.generation > 0:
             self._save_milestone()
 
         # 6. 清理对手池
@@ -559,25 +558,54 @@ class LeagueTrainer(ParallelArenaTrainer):
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
 
-        保存内容：
-        - 父类检查点数据
-        - 对手池索引
-        - 统计信息
+        直接构建完整 checkpoint_data（内联父类序列化逻辑 + league 数据），
+        一次性 plain pickle 写出，避免临时文件和 gzip 开销。
 
         Args:
             path: 检查点文件路径
         """
-        # 获取父类检查点数据
-        # 临时调用父类保存，然后修改
-        parent_path = path + ".parent.tmp"
-        super().save_checkpoint(parent_path)
+        # 内联父类序列化逻辑，直接构建 checkpoint_data
+        checkpoint_data: dict[str, Any] = {
+            "checkpoint_version": 2,
+            "generation": self.generation,
+            "populations": {},
+        }
 
-        # 加载父类数据
-        with gzip.open(parent_path, 'rb') as f:
-            checkpoint_data = pickle.load(f)
-
-        # 删除临时文件
-        Path(parent_path).unlink()
+        for agent_type, population in self.populations.items():
+            if isinstance(population, SubPopulationManager):
+                pop_data: dict[str, Any] = {
+                    "is_sub_population_manager": True,
+                    "sub_population_count": population.sub_population_count,
+                    "sub_populations": [],
+                }
+                for sub_pop in population.sub_populations:
+                    if sub_pop._genomes_dirty and sub_pop._pending_genome_data is not None:
+                        genome_data = sub_pop._pending_genome_data
+                        species_data = sub_pop._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+                    else:
+                        sub_pop._cleanup_neat_history()
+                        genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
+                        species_data = _serialize_species_data(sub_pop.neat_pop.species)
+                    sub_pop_data = {
+                        "generation": sub_pop.generation,
+                        "genome_data": genome_data,
+                        "species_data": species_data,
+                    }
+                    pop_data["sub_populations"].append(sub_pop_data)
+                checkpoint_data["populations"][agent_type] = pop_data
+            else:
+                if population._genomes_dirty and population._pending_genome_data is not None:
+                    genome_data = population._pending_genome_data
+                    species_data = population._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+                else:
+                    population._cleanup_neat_history()
+                    genome_data = _serialize_genomes_numpy(population.neat_pop.population)
+                    species_data = _serialize_species_data(population.neat_pop.species)
+                checkpoint_data["populations"][agent_type] = {
+                    "generation": population.generation,
+                    "genome_data": genome_data,
+                    "species_data": species_data,
+                }
 
         # 添加联盟训练数据
         checkpoint_data['league_training'] = {
@@ -596,8 +624,11 @@ class LeagueTrainer(ParallelArenaTrainer):
             },
         }
 
-        # 保存
-        with gzip.open(path, 'wb') as f:
+        # plain pickle 写出
+        checkpoint_path = Path(path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(checkpoint_path, 'wb') as f:
             pickle.dump(checkpoint_data, f)
 
         # 【内存泄漏修复】显式释放大型 checkpoint_data
@@ -616,11 +647,11 @@ class LeagueTrainer(ParallelArenaTrainer):
         Args:
             path: 检查点文件路径
         """
-        # 加载父类检查点
+        # 加载父类检查点（父类已有 magic bytes 检测，支持 plain pickle 和 gzip）
         super().load_checkpoint(path)
 
-        # 加载联盟训练数据
-        with gzip.open(path, 'rb') as f:
+        # 加载联盟训练数据（plain pickle）
+        with open(path, 'rb') as f:
             checkpoint_data = pickle.load(f)
 
         if 'league_training' in checkpoint_data:
@@ -694,7 +725,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                 if stats.get('all_species_frozen', False):
                     self.logger.info("所有物种已冻结，训练完成")
                     # 执行回调（round_count 会在下面自然递增）
-                    if checkpoint_callback and self.generation % self.config.training.checkpoint_interval == 0:
+                    if checkpoint_callback:
                         checkpoint_callback(self.generation)
                     if progress_callback:
                         progress_callback(stats)
@@ -703,7 +734,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                 round_count += 1
 
                 # 检查点回调
-                if checkpoint_callback and self.generation % self.config.training.checkpoint_interval == 0:
+                if checkpoint_callback:
                     checkpoint_callback(self.generation)
 
                 # 进度回调

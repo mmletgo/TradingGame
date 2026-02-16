@@ -147,7 +147,7 @@ UI控制器，管理训练线程与UI线程的交互。
 
 **训练模式流程：**
 1. 按episode循环运行
-2. 每个episode开始前重置Agent账户和市场状态
+2. 每个episode开始前重置Agent账户、噪声交易者状态和市场状态
 3. 运行tick循环，按采样率采集数据
 4. 检查暂停/停止事件
 5. 每个tick后检查`trainer._should_end_episode_early()`
@@ -156,7 +156,7 @@ UI控制器，管理训练线程与UI线程的交互。
 
 **演示模式流程：**
 1. 无限循环运行episode
-2. 每个episode开始前重置Agent账户和市场状态
+2. 每个episode开始前重置Agent账户、噪声交易者状态和市场状态
 3. 运行tick循环，每tick都采集数据
 4. 检查暂停/停止事件
 5. 使用`_check_demo_end_condition()`检查结束条件（仅物种淘汰，不检查订单簿单边）

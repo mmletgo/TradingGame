@@ -52,8 +52,8 @@ def create_default_config(
         AgentType.RETAIL_PRO: AgentConfig(
             count=2400,
             initial_balance=20000.0,  # 2万
-            leverage=1.0,
-            maintenance_margin_rate=0.5,  # 50%
+            leverage=10.0,
+            maintenance_margin_rate=0.05,  # 5%
             maker_fee_rate=0.0002,  # 万2
             taker_fee_rate=0.0005,  # 万5
         ),
