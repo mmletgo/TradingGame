@@ -17,7 +17,8 @@
 
 - `__init__.py` - 模块导出
 - `arena_state.py` - 竞技场状态类（AgentAccountState、NoiseTraderAccountState、ArenaState）
-- `execute_worker.py` - Execute Worker 池（并行化 Execute 阶段）
+- `arena_worker.py` - Arena Worker 进程池架构（Worker 独立运行完整 tick 循环，消除 tick 级 IPC）
+- `execute_worker.py` - Execute Worker 池（并行化 Execute 阶段，tick 级 IPC 模式）
 - `fitness_aggregator.py` - 适应度汇总器
 - `parallel_arena_trainer.py` - 多竞技场并行推理训练器
 - `shared_memory_ipc.py` - 共享内存 IPC 机制（零拷贝优化）
@@ -225,6 +226,91 @@ class ArenaExecuteResult:
 2. 收集原子动作（噪声交易者市价单、做市商挂单、非做市商订单）
 3. 随机打乱并执行
 4. 构建返回结果（聚合噪声交易者成交）
+
+### ArenaWorkerPool / arena_worker_main (arena_worker.py)
+
+Arena Worker 进程池架构。每个 Worker 进程独立运行若干竞技场的完整 tick 循环，消除 tick 级 IPC 同步开销。Worker 内部持有独立的 BatchNetworkCache、ArenaState、MatchingEngine。
+
+**数据类定义：**
+
+```python
+@dataclass
+class AgentInfo:
+    agent_id: int
+    agent_type: AgentType
+    sub_pop_id: int
+    network_index: int        # 在 BatchNetworkCache 中的索引
+    initial_balance: float
+    leverage: float
+    maintenance_margin_rate: float
+    maker_fee_rate: float
+    taker_fee_rate: float
+
+@dataclass
+class EpisodeResult:
+    worker_id: int
+    accumulated_fitness: dict[tuple[AgentType, int], NDArray[np.float32]]
+    per_arena_fitness: dict[int, dict[AgentType, NDArray[np.float32]]]
+    arena_stats: dict[int, ArenaEpisodeStats]
+```
+
+**通信协议：**
+
+| 命令 | 方向 | 描述 |
+|------|------|------|
+| `update_networks` | 主进程 -> Worker | 进化后发送新网络参数 |
+| `run_episode` | 主进程 -> Worker | Worker 独立运行 episodes 并返回适应度 |
+| `shutdown` | 主进程 -> Worker | 关闭 Worker |
+
+**ArenaWorkerPool 主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `start()` | 启动所有 Worker 进程 |
+| `update_networks(network_params)` | 发送新网络参数给所有 Worker |
+| `run_episodes(num_episodes, episode_length)` | 所有 Worker 独立运行 episodes |
+| `shutdown()` | 关闭所有 Worker |
+
+**Worker 内部 Episode 执行流程：**
+
+```
+_run_episode_local()
+├─ 1. 重置所有竞技场 (_reset_arena)
+├─ 2. MM 初始化 (_init_mm_all_arenas，所有竞技场复用同一推理结果)
+├─ 3. Tick 循环
+│   ├─ Tick 1: 仅记录初始状态
+│   └─ Tick 2+:
+│       ├─ handle_liquidations() - 三阶段强平（撤单→市价平仓→ADL）
+│       ├─ compute_noise_trader_decisions() - 噪声交易者决策
+│       ├─ compute_market_state() - 归一化市场状态（直接用本地 orderbook）
+│       ├─ 批量推理（per-arena 独立，OMP_THREADS=1）
+│       ├─ execute_tick_local() - 原子动作模式本地执行
+│       ├─ 记录价格/tick 历史
+│       └─ check_early_end() - 检查提前结束
+└─ 4. _collect_fitness_all_arenas() - 收集适应度
+```
+
+**模块级核心函数（从 ParallelArenaTrainer 提取）：**
+
+| 函数 | 描述 |
+|------|------|
+| `check_liquidations_vectorized()` | 向量化强平检查 |
+| `handle_liquidations()` | 三阶段强平处理 |
+| `cancel_agent_orders()` | 撤销 Agent 挂单 |
+| `execute_liquidation()` | 强平市价平仓 |
+| `execute_adl()` | ADL 自动减仓 |
+| `update_trade_accounts()` | 更新成交账户状态 |
+| `compute_noise_trader_decisions()` | 噪声交易者决策 |
+| `compute_market_state()` | 归一化市场状态计算 |
+| `check_early_end()` | 检查 Episode 提前结束 |
+| `aggregate_tick_trades()` | 聚合 tick 成交量/额 |
+| `update_episode_price_stats_from_trades()` | 更新价格统计 |
+| `execute_tick_local()` | 本地原子动作执行 |
+
+**与 execute_worker.py 的区别：**
+
+- execute_worker.py: tick 级 IPC，每个 tick 主进程发送命令、Worker 执行、返回结果
+- arena_worker.py: episode 级 IPC，Worker 独立运行完整 episode，仅在进化时同步网络参数
 
 ### SharedMemoryIPC (shared_memory_ipc.py)
 
