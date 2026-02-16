@@ -176,6 +176,59 @@ cdef BatchNetworkData* alloc_batch_network_data(
     return data
 
 
+cdef BatchNetworkData* alloc_batch_network_data_exact(
+    int num_networks,
+    int max_nodes, int max_connections,
+    int max_inputs, int max_outputs,
+    int total_nodes, int total_connections, int total_outputs
+) noexcept:
+    """分配批量网络数据结构（精确分配）
+
+    与 alloc_batch_network_data 不同，使用实际的总节点数/连接数/输出数分配，
+    而非 max * num_networks，避免 outlier 网络导致的过度分配。
+    """
+    cdef BatchNetworkData* data = <BatchNetworkData*>malloc(sizeof(BatchNetworkData))
+    if data == NULL:
+        return NULL
+
+    data.num_networks = num_networks
+    data.max_nodes = max_nodes
+    data.max_connections = max_connections
+    data.max_inputs = max_inputs
+    data.max_outputs = max_outputs
+
+    # 分配元信息数组
+    data.num_inputs_arr = <int*>calloc(num_networks, sizeof(int))
+    data.num_outputs_arr = <int*>calloc(num_networks, sizeof(int))
+    data.num_nodes_arr = <int*>calloc(num_networks, sizeof(int))
+    data.node_offsets = <int*>calloc(num_networks, sizeof(int))
+    data.conn_offsets = <int*>calloc(num_networks, sizeof(int))
+    data.output_idx_offsets = <int*>calloc(num_networks, sizeof(int))
+
+    # 分配扁平化数组（使用实际总量而非 max * num_networks）
+    data.biases = <double*>calloc(total_nodes, sizeof(double))
+    data.responses = <double*>calloc(total_nodes, sizeof(double))
+    data.act_types = <int*>calloc(total_nodes, sizeof(int))
+
+    data.conn_indptr = <int*>calloc(total_nodes + num_networks, sizeof(int))
+    data.conn_sources = <int*>calloc(total_connections, sizeof(int))
+    data.conn_weights = <double*>calloc(total_connections, sizeof(double))
+
+    data.output_indices = <int*>calloc(total_outputs, sizeof(int))
+
+    # 检查分配是否成功
+    if (data.num_inputs_arr == NULL or data.num_outputs_arr == NULL or
+        data.num_nodes_arr == NULL or data.node_offsets == NULL or
+        data.conn_offsets == NULL or data.output_idx_offsets == NULL or
+        data.biases == NULL or data.responses == NULL or data.act_types == NULL or
+        data.conn_indptr == NULL or data.conn_sources == NULL or
+        data.conn_weights == NULL or data.output_indices == NULL):
+        free_batch_network_data(data)
+        return NULL
+
+    return data
+
+
 cdef void free_batch_network_data(BatchNetworkData* data) noexcept:
     """释放批量网络数据结构"""
     if data == NULL:
@@ -1054,6 +1107,8 @@ cdef void _forward_single(
         node_sum = 0.0
         for j in range(start, end):
             src_idx = networks.conn_sources[j]
+            if src_idx < 0 or src_idx >= num_inputs + num_nodes:
+                continue
             node_sum += values_buffer[src_idx] * networks.conn_weights[j]
 
         # 应用偏置、响应和激活函数
@@ -1062,7 +1117,11 @@ cdef void _forward_single(
 
     # 3. 提取输出
     for i in range(num_outputs):
-        output_data[i] = values_buffer[networks.output_indices[output_offset + i]]
+        src_idx = networks.output_indices[output_offset + i]
+        if src_idx >= 0 and src_idx < num_inputs + num_nodes:
+            output_data[i] = values_buffer[src_idx]
+        else:
+            output_data[i] = 0.0
 
 
 cdef void batch_forward_nogil(
@@ -2143,36 +2202,62 @@ cdef class BatchNetworkCache:
         cdef np.ndarray[int, ndim=1] h_n_output_keys = np.ascontiguousarray(
             headers_arr['n_output_keys'], dtype=np.intc)
         
-        # 计算 max_nodes, max_connections
+        # 计算 max_nodes, max_connections 和精确总量
         cdef int max_nodes = 0
         cdef int max_connections = 0
+        cdef int total_nodes = 0
+        cdef int total_connections = 0
+        cdef int total_outputs = 0
         cdef int i
         for i in range(num_networks):
             if h_num_nodes[i] > max_nodes:
                 max_nodes = h_num_nodes[i]
             if h_n_connections[i] > max_connections:
                 max_connections = h_n_connections[i]
-        
+            total_nodes += h_num_nodes[i]
+            total_connections += h_n_connections[i]
+            total_outputs += h_n_output_keys[i]
+
         self.max_nodes = max_nodes
         self.max_connections = max_connections
-        
+
+        # 分配新的网络数据结构（精确分配）
+        cdef BatchNetworkData* new_network_data = alloc_batch_network_data_exact(
+            num_networks, max_nodes, max_connections,
+            self.input_dim, self.output_dim,
+            total_nodes, total_connections, total_outputs
+        )
+        if new_network_data == NULL:
+            import logging
+            logging.getLogger("batch_decide").error(
+                f"alloc_batch_network_data_exact 失败: "
+                f"num_networks={num_networks}, total_nodes={total_nodes}, "
+                f"total_connections={total_connections}, total_outputs={total_outputs}"
+            )
+            return
+
+        # 分配线程本地缓冲区
+        cdef ThreadLocalBuffer* new_thread_buffers = alloc_thread_buffers(
+            self.num_threads, max_nodes + self.input_dim,
+            self.input_dim, self.output_dim
+        )
+        if new_thread_buffers == NULL:
+            import logging
+            logging.getLogger("batch_decide").error(
+                f"alloc_thread_buffers 失败: "
+                f"num_threads={self.num_threads}, buffer_size={max_nodes + self.input_dim}"
+            )
+            free_batch_network_data(new_network_data)
+            return
+
         # 释放旧的网络数据和线程缓冲区
         if self.network_data != NULL:
             free_batch_network_data(self.network_data)
         if self.thread_buffers != NULL:
             free_thread_buffers(self.thread_buffers, self.num_threads)
-        
-        # 分配新的网络数据结构
-        self.network_data = alloc_batch_network_data(
-            num_networks, max_nodes, max_connections,
-            self.input_dim, self.output_dim
-        )
-        
-        # 分配线程本地缓冲区
-        self.thread_buffers = alloc_thread_buffers(
-            self.num_threads, max_nodes + self.input_dim,
-            self.input_dim, self.output_dim
-        )
+
+        self.network_data = new_network_data
+        self.thread_buffers = new_thread_buffers
         
         # 准备 typed memoryview
         cdef float[:] biases_view = np.ascontiguousarray(all_biases, dtype=np.float32)

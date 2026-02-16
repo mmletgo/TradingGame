@@ -121,91 +121,68 @@ class MultiGenerationNetworkCache:
         """
         try:
             from src.training._cython.batch_decide_openmp import BatchNetworkCache
-            from src.training.population import _unpack_network_params_numpy
+            from src.training.population import _concat_network_params_numpy
 
-            # 合并所有子种群的网络参数
-            all_params_list: list[dict] = []
+            # cdef 常量无法从 Python 层导入，与 trainer.py/parallel_arena_trainer.py 保持一致
+            CACHE_TYPE_FULL = 1
+            CACHE_TYPE_MARKET_MAKER = 2
 
-            for sub_pop_id in sorted(network_data.keys()):
-                params_tuple = network_data[sub_pop_id]
-                # 解包网络参数
-                params_list = _unpack_network_params_numpy(*params_tuple)
-                all_params_list.extend(params_list)
+            # 合并所有子种群的 packed numpy 参数
+            params_list: list[tuple] = [
+                network_data[sub_pop_id]
+                for sub_pop_id in sorted(network_data.keys())
+            ]
+            merged_params = _concat_network_params_numpy(params_list)
+
+            # headers_arr 是第一个元素
+            headers_arr = merged_params[0]
+            num_networks = len(headers_arr)
+            if num_networks == 0:
+                return None
+
+            # 确定 cache_type
+            if agent_type == AgentType.MARKET_MAKER:
+                cache_type = CACHE_TYPE_MARKET_MAKER
+            else:
+                cache_type = CACHE_TYPE_FULL
+
+            # 获取 OpenMP 线程数
+            num_threads = self.config.training.openmp_threads
 
             # 创建缓存
-            cache = BatchNetworkCache(agent_type)
+            cache = BatchNetworkCache(num_networks, cache_type, num_threads)
 
-            # 需要从参数列表创建网络对象
-            # 这里假设有一个辅助函数来完成这个工作
-            # 实际实现中可能需要调整
-            networks = self._create_networks_from_params(agent_type, all_params_list)
-            cache.update_networks(networks)
+            # 使用 update_networks_from_numpy 填充数据
+            # merged_params = (headers, input_keys, output_keys, node_ids,
+            #                  biases, responses, act_types,
+            #                  conn_indptr, conn_sources, conn_weights, output_indices)
+            cache.update_networks_from_numpy(
+                merged_params[0],   # headers_arr
+                merged_params[1],   # all_input_keys
+                merged_params[2],   # all_output_keys
+                merged_params[3],   # all_node_ids
+                merged_params[4],   # all_biases
+                merged_params[5],   # all_responses
+                merged_params[6],   # all_act_types
+                merged_params[7],   # all_conn_indptr
+                merged_params[8],   # all_conn_sources
+                merged_params[9],   # all_conn_weights
+                merged_params[10],  # all_output_indices
+            )
 
-            # 【内存泄漏修复】清理中间变量
-            del all_params_list
-            # 清理网络列表（cache 已持有引用）
-            self._clear_networks(networks)
-            del networks
+            # 清理中间变量
+            del params_list, merged_params
 
             return cache
 
         except ImportError:
             return None
         except Exception:
+            import logging
+            logging.getLogger("multi_gen_cache").exception(
+                f"创建 {agent_type} 历史缓存失败"
+            )
             return None
-
-    def _create_networks_from_params(
-        self,
-        agent_type: AgentType,
-        params_list: list[dict],
-    ) -> list[Any]:
-        """从参数列表创建网络对象
-
-        Args:
-            agent_type: Agent 类型
-            params_list: 网络参数字典列表
-
-        Returns:
-            网络对象列表
-        """
-        try:
-            from neat.nn import FastFeedForwardNetwork
-
-            networks: list[Any] = []
-            for params in params_list:
-                # 从参数创建 FastFeedForwardNetwork
-                network = FastFeedForwardNetwork.from_params(
-                    params['num_inputs'],
-                    params['num_outputs'],
-                    params['node_ids'],
-                    params['biases'],
-                    params['responses'],
-                    params['act_types'],
-                    params['conn_indptr'],
-                    params['conn_sources'],
-                    params['conn_weights'],
-                    params['output_indices'],
-                )
-                networks.append(network)
-
-            return networks
-
-        except ImportError:
-            return []
-        except Exception:
-            return []
-
-    def _clear_networks(self, networks: list[Any]) -> None:
-        """清理网络列表中的网络对象
-
-        【内存泄漏修复】在 cache.update_networks 后，原始 networks 列表
-        不再需要，但网络对象可能持有大量内存。此方法清理列表但不删除
-        网络对象本身（因为 cache 可能持有引用）。
-
-        Args:
-            networks: 网络对象列表
-        """
-        networks.clear()
 
     def get_cache(
         self,

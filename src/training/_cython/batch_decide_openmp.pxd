@@ -104,6 +104,11 @@ cdef struct MarketMakerOrdersResult:
 cdef BatchNetworkData* alloc_batch_network_data(int num_networks, int max_nodes,
                                                  int max_connections, int max_inputs,
                                                  int max_outputs) noexcept
+cdef BatchNetworkData* alloc_batch_network_data_exact(int num_networks, int max_nodes,
+                                                       int max_connections, int max_inputs,
+                                                       int max_outputs, int total_nodes,
+                                                       int total_connections,
+                                                       int total_outputs) noexcept
 cdef void free_batch_network_data(BatchNetworkData* data) noexcept
 
 cdef BatchAgentState* alloc_batch_agent_state(int num_agents) noexcept
