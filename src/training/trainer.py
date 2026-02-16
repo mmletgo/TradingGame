@@ -1173,7 +1173,7 @@ class Trainer:
 
             results = self._unified_worker_pool.evolve_all_parallel(
                 fitness_map,
-                sync_genomes=False,
+                lite=True,
             )
             self._worker_pool_synced = True
 
