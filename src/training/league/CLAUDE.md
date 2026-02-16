@@ -46,7 +46,7 @@ src/training/league/
 | `max_pool_size_per_type` | 20 | 每种类型最多保存的历史版本数 |
 | `milestone_interval` | 50 | 里程碑保存间隔（代数） |
 | `num_baseline_arenas` | 16 | 基准竞技场数量 |
-| `num_generalization_arenas_per_type` | 12 | 每类型泛化测试竞技场数量 |
+| `num_generalization_arenas_per_type` | 24 | 每类型泛化测试竞技场数量 |
 | `sampling_strategy` | `pfsp` | 采样策略：uniform/recency/diverse/pfsp |
 | `recency_decay_lambda` | 2.0 | 指数衰减速率，越大衰减越快 |
 | `pfsp_exponent` | 2.0 | 败率加权指数，越大越集中于难对手 |
@@ -298,17 +298,17 @@ def run_round(self):
 
 ## 竞技场分配方案
 
-默认 40 个独立竞技场，每个竞技场运行 1 个 episode：
+默认 64 个独立竞技场，每个竞技场运行 1 个 episode：
 
 | 竞技场范围 | 数量 | 用途 |
 |-----------|------|------|
 | Arena 0-15 | 16 | 基准对战（全当前代） |
-| Arena 16-27 | 12 | 高级散户泛化测试 |
-| Arena 28-39 | 12 | 做市商泛化测试 |
+| Arena 16-39 | 24 | 高级散户泛化测试 |
+| Arena 40-63 | 24 | 做市商泛化测试 |
 
-总计：16 + 12×2 = 40 个竞技场
+总计：16 + 24×2 = 64 个竞技场
 
-**冻结物种的竞技场重分配**：冻结物种的泛化竞技场转为额外的 baseline 竞技场。例如 MARKET_MAKER 冻结后：16+12=28 个 baseline，12 个泛化（RETAIL_PRO）。
+**冻结物种的竞技场重分配**：冻结物种的泛化竞技场转为额外的 baseline 竞技场。例如 MARKET_MAKER 冻结后：16+24=40 个 baseline，24 个泛化（RETAIL_PRO）。
 
 ## 适应度计算
 
@@ -317,11 +317,16 @@ def run_round(self):
 ```python
 高级散户 Main 适应度 = 加权平均 {
     基准竞技场(Arena 0-15) × 权重 1.0,
-    高级散户泛化测试竞技场(Arena 16-27) × 权重 0.8
+    高级散户泛化测试竞技场(Arena 16-39) × 权重 0.8
 }
 ```
 
-总权重 = 16×1.0 + 12×0.8 = 25.6
+总权重 = 16×1.0 + 24×0.8 = 35.2
+
+**权重分布分析**：
+- 总权重 = 16 × 1.0 + 24 × 0.8 × 2 = 16 + 38.4 = 54.4
+- 基准占比: 16/54.4 ≈ 29%
+- 泛化占比: 38.4/54.4 ≈ 71%
 
 ## 泛化优势比（Generalization Advantage）
 
