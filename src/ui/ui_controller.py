@@ -137,6 +137,10 @@ class UIController:
                 self.trainer._pop_liquidated_counts.clear()  # 重置淘汰计数
                 self.data_collector.reset()
 
+                # 重置噪声交易者
+                for nt in self.trainer.noise_traders:
+                    nt.reset()
+
                 # 运行ticks
                 episode_length = self.trainer.config.training.episode_length
                 for _ in range(episode_length):
@@ -227,6 +231,10 @@ class UIController:
                 self.trainer.tick = 0
                 self.trainer._pop_liquidated_counts.clear()  # 重置淘汰计数
                 self.data_collector.reset()
+
+                # 重置噪声交易者
+                for nt in self.trainer.noise_traders:
+                    nt.reset()
 
                 # 运行ticks（受速度控制）
                 episode_length = self.trainer.config.training.episode_length

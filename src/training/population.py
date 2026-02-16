@@ -1613,7 +1613,7 @@ class Population:
             self._executor.shutdown(wait=True)
             self._executor = None
 
-    def __init__(self, agent_type: AgentType, config: Config) -> None:
+    def __init__(self, agent_type: AgentType, config: Config, defer_agent_creation: bool = False) -> None:
         """创建种群
 
         初始化 NEAT 种群，创建初始 Agent 列表。
@@ -1621,6 +1621,7 @@ class Population:
         Args:
             agent_type: Agent 类型（高级散户/做市商）
             config: 全局配置对象
+            defer_agent_creation: 是否延迟创建 Agent（用于子种群管理器避免重复创建）
         """
         self.agent_type = agent_type
         self.agent_config = config.agents[agent_type]
@@ -1667,8 +1668,11 @@ class Population:
         self.neat_pop = neat.Population(self.neat_config)
 
         # 获取初始基因组并创建 Agent
-        genomes = list(self.neat_pop.population.items())
-        self.agents = self.create_agents(genomes)
+        if defer_agent_creation:
+            self.agents = []
+        else:
+            genomes = list(self.neat_pop.population.items())
+            self.agents = self.create_agents(genomes)
 
         self.logger.info(
             f"创建 {agent_type.value} 种群，初始 Agent 数量: {len(self.agents)}"
@@ -2714,14 +2718,13 @@ class SubPopulationManager:
             # 创建子种群专用配置
             sub_config = self._create_sub_config(config, i)
 
-            # 创建Population，设置子种群ID
-            pop = Population(agent_type, sub_config)
+            # 创建Population，设置子种群ID（延迟创建Agent避免重复创建）
+            pop = Population(agent_type, sub_config, defer_agent_creation=True)
             # 子种群 ID 用于 Agent ID 计算
             # 实际 ID 偏移 = base_id_offset + sub_population_id * _SUB_POPULATION_OFFSET
             pop.sub_population_id = i
 
-            # 重新创建agents（因为需要正确的ID偏移）
-            # 注意：Population.__init__已经创建了agents，这里需要重新创建以应用正确的ID
+            # 创建agents（使用正确的ID偏移）
             genomes = list(pop.neat_pop.population.items())
             pop.agents = pop.create_agents(genomes)
 
@@ -2746,10 +2749,11 @@ class SubPopulationManager:
         Returns:
             子种群专用配置（修改了对应类型的count）
         """
-        from copy import deepcopy
-        sub_config = deepcopy(config)
-        sub_config.agents[self.agent_type].count = self.agents_per_sub
-        return sub_config
+        from dataclasses import replace
+        sub_agent_config = replace(config.agents[self.agent_type], count=self.agents_per_sub)
+        new_agents = dict(config.agents)
+        new_agents[self.agent_type] = sub_agent_config
+        return replace(config, agents=new_agents)
 
     @property
     def agents(self) -> list[Agent]:

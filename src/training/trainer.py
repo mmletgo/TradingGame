@@ -545,6 +545,38 @@ class Trainer:
             checkpoint: 可选的检查点数据，如果提供则直接从检查点恢复种群
                        而不是创建全新种群（避免不必要的内存分配）
         """
+        # --- Worker 池预计算并后台启动 ---
+        import threading
+        config_dir = self.config.training.neat_config_path
+        worker_configs: list[WorkerConfig] = []
+
+        # 预计算 Worker 配置（无需依赖 SubPopulationManager 实例）
+        rp_sub_count = self.config.training.retail_pro_sub_population_count
+        rp_agents_per_sub = self.config.agents[AgentType.RETAIL_PRO].count // rp_sub_count
+        for i in range(rp_sub_count):
+            worker_configs.append(WorkerConfig(
+                AgentType.RETAIL_PRO, i, f"{config_dir}/neat_retail_pro.cfg",
+                rp_agents_per_sub
+            ))
+
+        mm_sub_count = 4  # 做市商固定4个子种群
+        mm_agents_per_sub = self.config.agents[AgentType.MARKET_MAKER].count // mm_sub_count
+        for i in range(mm_sub_count):
+            worker_configs.append(WorkerConfig(
+                AgentType.MARKET_MAKER, i, f"{config_dir}/neat_market_maker.cfg",
+                mm_agents_per_sub
+            ))
+
+        # 在后台线程中启动 Worker 池（multiprocessing.Process.start() 释放 GIL）
+        _worker_pool_result: list[MultiPopulationWorkerPool] = []
+
+        def _create_worker_pool() -> None:
+            pool = MultiPopulationWorkerPool(config_dir, worker_configs)
+            _worker_pool_result.append(pool)
+
+        worker_pool_thread = threading.Thread(target=_create_worker_pool, daemon=True)
+        worker_pool_thread.start()
+
         # 创建两种群
         if checkpoint is not None and "populations" in checkpoint:
             # 直接从检查点恢复，不创建全新 Agent
@@ -598,29 +630,9 @@ class Trainer:
         # 初始化网络数据缓存（OpenMP 优化）
         self._init_network_caches()
 
-        # 创建统一的 Worker 池（16个Worker：RETAIL_PRO 12 + MARKET_MAKER 4）
-        config_dir = self.config.training.neat_config_path
-        worker_configs: list[WorkerConfig] = []
-
-        # RETAIL_PRO: 12 Workers（子种群）
-        retail_pro_pop = self.populations[AgentType.RETAIL_PRO]
-        if isinstance(retail_pro_pop, SubPopulationManager):
-            for i in range(retail_pro_pop.sub_population_count):
-                worker_configs.append(WorkerConfig(
-                    AgentType.RETAIL_PRO, i, f"{config_dir}/neat_retail_pro.cfg",
-                    retail_pro_pop.agents_per_sub
-                ))
-
-        # MARKET_MAKER: 4 Workers
-        mm_pop = self.populations[AgentType.MARKET_MAKER]
-        if isinstance(mm_pop, SubPopulationManager):
-            for i in range(mm_pop.sub_population_count):
-                worker_configs.append(WorkerConfig(
-                    AgentType.MARKET_MAKER, i, f"{config_dir}/neat_market_maker.cfg",
-                    mm_pop.agents_per_sub
-                ))
-
-        self._unified_worker_pool = MultiPopulationWorkerPool(config_dir, worker_configs)
+        # 等待后台 Worker 池创建完成
+        worker_pool_thread.join()
+        self._unified_worker_pool = _worker_pool_result[0]
         self._worker_pool_synced = False
         self.logger.info(
             f"统一多种群 Worker 池已创建: {len(worker_configs)} 个 Worker"
