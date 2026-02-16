@@ -195,6 +195,11 @@ entry_dir/
 - `current_caches`：当前代网络缓存
 - `historical_caches`：历史代网络缓存（LRU 淘汰）
 
+历史缓存创建流程：
+- `_create_cache_from_network_data` 使用 `_concat_network_params_numpy` 合并子种群参数
+- 通过 `BatchNetworkCache(num_networks, cache_type, num_threads)` 正确构造缓存
+- 使用 `update_networks_from_numpy` 直接填充 C 结构，不创建中间 Python 网络对象
+
 ### ArenaAllocator (arena_allocator.py)
 
 竞技场分配器，将竞技场按训练目的分配。

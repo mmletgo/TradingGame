@@ -1673,10 +1673,9 @@ class Population:
         else:
             genomes = list(self.neat_pop.population.items())
             self.agents = self.create_agents(genomes)
-
-        self.logger.info(
-            f"创建 {agent_type.value} 种群，初始 Agent 数量: {len(self.agents)}"
-        )
+            self.logger.info(
+                f"创建 {agent_type.value} 种群，初始 Agent 数量: {len(self.agents)}"
+            )
 
         # 适应度累积存储
         self._accumulated_fitness: dict[int, float] = {}  # genome_id -> 累积适应度

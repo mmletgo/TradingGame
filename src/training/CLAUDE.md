@@ -387,7 +387,7 @@ class AtomicAction:
 
 **缓存类方法：**
 - `update_networks(networks)` - 从 Python 网络对象提取数据到 C 结构
-- `update_networks_from_numpy(*packed_arrays)` - 直接从 packed numpy 数组填充 C 结构，跳过中间 Python 对象创建（FastFeedForwardNetwork），性能从 ~40s 降至 ~2-5s
+- `update_networks_from_numpy(*packed_arrays)` - 直接从 packed numpy 数组填充 C 结构，跳过中间 Python 对象创建（FastFeedForwardNetwork），性能从 ~40s 降至 ~2-5s。使用 `alloc_batch_network_data_exact` 精确分配内存（按实际总量而非 max × num_networks），分配失败时保留旧数据并记录错误
 - `decide(inputs, orderbooks, mid_prices)` - 使用缓存数据执行批量决策
 - `decide_multi_arena_direct(states, markets, indices, return_array)` - 跨竞技场批量推理
 - `is_valid()` - 检查缓存是否有效
