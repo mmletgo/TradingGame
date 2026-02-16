@@ -140,7 +140,7 @@ class ArenaState:
 | `_aggregate_worker_fitness()` | 汇总所有 Worker 的 fitness 结果 |
 | `_build_episode_stats_from_results()` | 从 Worker 结果构建 episode 统计信息 |
 | `setup_for_testing(populations_data)` | 测试模式初始化（不使用 ArenaWorkerPool） |
-| `save_checkpoint(path)` / `load_checkpoint(path)` | 检查点管理 |
+| `save_checkpoint(path)` / `load_checkpoint(path)` | 检查点管理（保存前自动从 Worker 同步基因组数据） |
 | `stop()` | 停止训练并清理资源（关闭 ArenaWorkerPool + 进化 Worker 池） |
 
 **训练轮次流程（run_round）：**
@@ -151,8 +151,8 @@ class ArenaState:
    ├─ _on_arena_fitness_collected() - League 训练钩子
    └─ episode_callback() - 回调
 2. _collect_fitness_all_arenas() - 跨 episode 平均 fitness
-3. NEAT 进化（与原来完全相同）
-4. _update_populations_from_evolution() - 更新种群
+3. NEAT 进化（lite 模式：跳过基因组序列化，仅返回网络参数和 species 数据）
+4. _update_populations_from_evolution() - 更新种群（跳过 brain 更新，仅缓存网络参数）
 5. _update_network_caches() - 更新主进程网络缓存
 6. _refresh_agent_states() - 刷新 Agent 状态
 7. _sync_networks_to_workers() - 同步新网络到 Workers
@@ -326,6 +326,10 @@ Result Region:
 - **Episode 级并行**：Worker 进程独立运行完整 episode，消除 tick 级 IPC 同步开销
 - **向量化强平检查**：Worker 内部使用 NumPy 批量计算保证金率
 - **并行进化**：RETAIL_PRO 12 子种群 + MARKET_MAKER 4 子种群并行进化
+- **Lite 进化模式**：Worker 跳过基因组序列化，仅在 checkpoint 保存时按需同步
+- **跳过 brain 更新**：并行竞技场模式下主进程不更新 Agent brain（ArenaWorker 使用 BatchNetworkCache）
+- **合并 extract+pack**：网络参数提取和打包合并为 `_extract_and_pack_all_network_params`，减少中间对象
+- **优化拓扑计算**：使用 `fast_feed_forward_layers_optimized`（邻接表），大网络加速显著
 - **延迟反序列化 + numpy->C 管线**：跳过中间 Python 对象
 - **做市商初始化批量推理复用**：Worker 内部 Episode 开始时所有竞技场状态相同，只对一个竞技场进行一次 BatchNetworkCache 批量推理，将结果复用到所有竞技场
 - **Worker 内部 OpenMP 推理**：每个 Worker 使用独立的 BatchNetworkCache 进行 per-arena 批量推理

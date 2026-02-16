@@ -148,6 +148,7 @@ Numba JIT 加速的高频数学函数模块。
 
 **辅助函数：**
 - `_concat_network_params_numpy(params_list)` - 将多个子种群的 network_params_data 拼接为一个，当只有一个元素时直接返回，避免拷贝
+- `_extract_and_pack_all_network_params(population, config)` - 合并网络参数提取和打包，避免创建 N 个中间 dict 对象（Worker 进程中使用）
 
 ### WorkerConfig (population.py)
 
@@ -169,9 +170,13 @@ Worker 配置数据类。
 - 支持一次性发送/收集所有进化结果（真正并行）
 
 **主要方法：**
-- `evolve_all_parallel(fitness_map, sync_genomes)` - 同时进化所有 Worker 的种群
+- `evolve_all_parallel(fitness_map, lite=True)` - 同时进化所有 Worker 的种群
   - 参数 `fitness_map: dict[(AgentType, int), np.ndarray]` - 每个 Worker 的适应度数组
-  - 返回 `dict[(AgentType, int), (genome_data, network_params_data)]`
+  - 参数 `lite: bool` - 轻量模式（跳过基因组序列化，默认 True）
+  - 返回 `dict[(AgentType, int), (genome_data|None, network_params_data, species_data)]`
+  - lite 模式下 genome_data 为 None，节省序列化+IPC 开销
+  - Worker 返回各阶段计时数据，主进程记录首尾结果到达时间差
+- `sync_genomes_from_workers()` - 从所有 Worker 同步基因组数据（checkpoint 保存时按需调用）
 - `set_genomes(genomes_map)` - 同步基因组到所有 Worker
 - `shutdown()` - 关闭所有 Worker
 
@@ -428,7 +433,7 @@ class AtomicAction:
 - `_update_populations_from_evolution` 中每个种群更新后调用 `gc.collect(0)` 清理年轻代
 
 **4. Worker 进程内存清理**
-- 在 `evolve`、`evolve_return_params` 和 `set_genomes` 命令处理后调用
+- 在 `evolve`、`evolve_return_params`、`evolve_return_params_lite` 和 `set_genomes` 命令处理后调用
 - 完全清空 `ancestors` 字典
 - 完全清空 `stagnation.species_fitness` 字典
 - 限制 `fitness_history` 长度为 5
@@ -443,7 +448,8 @@ class AtomicAction:
 - `genome.nodes.clear()` 后置为空字典
 
 **7. 进化结果中间变量清理**
-- `_update_single_population` 中 `params_list`、`old_genomes`、`old_to_clean`、`new_genomes` 使用后立即释放
+- `_update_single_population` 中 `params_list`、`old_genomes`、`old_to_clean`、`new_genomes` 使用后立即释放（仅 `deserialize_genomes=True` 路径）
+- 并行竞技场模式下 `_update_single_population` 跳过 brain 更新（ArenaWorker 使用 BatchNetworkCache 推理）
 - `_apply_species_data_to_population` 中旧 `species.members` 在赋新值前显式 `clear()`
 
 **8. numpy view 引用链防护（neat-python）**
