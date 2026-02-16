@@ -59,7 +59,7 @@ from .arena_state import (
     ArenaState,
     NoiseTraderAccountState,
 )
-from .arena_worker import AgentInfo, ArenaWorkerPool, EpisodeResult, ArenaEpisodeStats
+from .arena_worker import AgentInfo, ArenaWorkerPool, EpisodeResult
 from .fitness_aggregator import FitnessAggregator
 
 # 缓存类型常量
@@ -519,6 +519,8 @@ class ParallelArenaTrainer:
                 except (AttributeError, Exception):
                     # export_networks_numpy 不可用，尝试从 agents 手动提取
                     try:
+                        if BatchNetworkCache is None:
+                            continue
                         networks = [agent.brain.network for agent in pop.agents]
                         # 创建临时 cache 来提取参数
                         if agent_type == AgentType.MARKET_MAKER:
@@ -1445,7 +1447,10 @@ class ParallelArenaTrainer:
             pop._genomes_dirty = False
             pop._accumulated_fitness = {}
             pop._accumulation_count = 0
-            pop.neat_config_path = str(neat_config_path)
+            if agent_type == AgentType.MARKET_MAKER:
+                pop.neat_config_path = str(config_dir / "neat_market_maker.cfg")
+            else:
+                pop.neat_config_path = str(config_dir / "neat_retail_pro.cfg")
 
             self.populations[agent_type] = pop
 

@@ -19,17 +19,27 @@ from .execute_worker import (
     NoiseTraderTradeResult,
     arena_execute_worker_shm,
 )
+from .arena_worker import (
+    AgentInfo,
+    ArenaEpisodeStats,
+    ArenaWorkerPool,
+    EpisodeResult,
+)
 from .fitness_aggregator import FitnessAggregator
 from .parallel_arena_trainer import MultiArenaConfig, ParallelArenaTrainer
 
 __all__ = [
     "AgentAccountState",
+    "AgentInfo",
     "AgentStateAdapter",
+    "ArenaEpisodeStats",
     "ArenaExecuteData",
     "ArenaExecuteResult",
     "ArenaExecuteWorkerPool",
     "ArenaExecuteWorkerPoolShm",
     "ArenaState",
+    "ArenaWorkerPool",
+    "EpisodeResult",
     "ExecuteCommand",
     "FitnessAggregator",
     "MultiArenaConfig",
