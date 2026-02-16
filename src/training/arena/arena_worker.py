@@ -190,7 +190,14 @@ def check_liquidations_vectorized(
     Returns:
         需要强平的 Agent ID 列表
     """
-    if arena._balances is None:
+    if (
+        arena._balances is None
+        or arena._is_liquidated_flags is None
+        or arena._position_avg_prices is None
+        or arena._position_quantities is None
+        or arena._maintenance_margins is None
+        or arena._idx_to_agent_id is None
+    ):
         return []
 
     # 活跃 Agent 掩码
