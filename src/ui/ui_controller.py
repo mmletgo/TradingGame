@@ -68,9 +68,7 @@ class UIController:
         self._is_demo_mode: bool = False
 
         # 演示模式特殊配置
-        self._demo_catfish_enabled: bool = False
         self._demo_end_callback: Callable[[dict], None] | None = None
-        self._original_catfish_list: list | None = None  # 保存原始鲶鱼列表用于恢复
 
     def start_training(self, episodes: int) -> None:
         """启动训练模式（后台线程）
@@ -180,14 +178,6 @@ class UIController:
             print(f"Training loop error: {e}")
             traceback.print_exc()
 
-    def set_demo_catfish_enabled(self, enabled: bool) -> None:
-        """设置演示模式下是否启用鲶鱼
-
-        Args:
-            enabled: True启用鲶鱼，False禁用鲶鱼
-        """
-        self._demo_catfish_enabled = enabled
-
     def set_demo_end_callback(
         self, callback: Callable[[dict], None] | None
     ) -> None:
@@ -199,7 +189,7 @@ class UIController:
         self._demo_end_callback = callback
 
     def _check_demo_end_condition(self) -> tuple[str, AgentType | None] | None:
-        """仅检查物种淘汰条件（演示模式专用，不检查订单簿单边和鲶鱼）
+        """仅检查物种淘汰条件（演示模式专用，不检查订单簿单边）
 
         Returns:
             如果满足结束条件返回 (原因, Agent类型)，否则返回 None
@@ -220,21 +210,9 @@ class UIController:
         每tick都采集数据，并受速度控制。
 
         演示模式特殊逻辑：
-        - 根据_demo_catfish_enabled控制是否启用鲶鱼
         - 使用_check_demo_end_condition检查结束条件（仅物种淘汰）
         - 结束时调用_demo_end_callback回调
         """
-        # 保存原始鲶鱼列表
-        self._original_catfish_list = (
-            self.trainer.catfish_list.copy()
-            if hasattr(self.trainer, "catfish_list")
-            else []
-        )
-
-        # 如果禁用鲶鱼，清空列表
-        if not self._demo_catfish_enabled and hasattr(self.trainer, "catfish_list"):
-            self.trainer.catfish_list = []
-
         try:
             while not self._stop_event.is_set():
                 # 运行一个episode
@@ -248,9 +226,6 @@ class UIController:
                 self.trainer._reset_market()
                 self.trainer.tick = 0
                 self.trainer._pop_liquidated_counts.clear()  # 重置淘汰计数
-                # 重置鲶鱼强平标志
-                if hasattr(self.trainer, "_catfish_liquidated"):
-                    self.trainer._catfish_liquidated = False
                 self.data_collector.reset()
 
                 # 运行ticks（受速度控制）
@@ -273,10 +248,6 @@ class UIController:
                     # 执行tick
                     self.trainer.run_tick()
 
-                    # 清除鲶鱼强平标志（演示模式下鲶鱼爆仓不结束 episode）
-                    if hasattr(self.trainer, "_catfish_liquidated"):
-                        self.trainer._catfish_liquidated = False
-
                     # 每tick都采集数据（演示模式）
                     self._collect_and_send_data()
 
@@ -295,13 +266,10 @@ class UIController:
                         }
                     )
                     break  # 退出演示循环
-        finally:
-            # 恢复原始鲶鱼列表
-            if (
-                self._original_catfish_list is not None
-                and hasattr(self.trainer, "catfish_list")
-            ):
-                self.trainer.catfish_list = self._original_catfish_list
+        except Exception as e:
+            import traceback
+            print(f"Demo loop error: {e}")
+            traceback.print_exc()
 
     def _collect_and_send_data(self) -> None:
         """采集数据并发送到队列

@@ -5,17 +5,13 @@
 """
 快速订单执行模块（Cython 加速）
 
-本模块实现非做市商（散户/高级散户/庄家）的批量订单执行逻辑，
+本模块实现非做市商（高级散户）的批量订单执行逻辑，
 使用 Cython 优化以减少 Python 对象开销。
 
 注意：不使用 OpenMP 并行，因为订单执行有顺序依赖。
 """
 
 from src.market.orderbook.order import Order, OrderSide, OrderType
-from src.config.config import AgentType
-
-# 庄家类型常量（字符串枚举）
-WHALE_TYPE = AgentType.WHALE
 
 # Action 类型常量
 DEF ACTION_HOLD = 0
@@ -35,7 +31,7 @@ cpdef list execute_non_mm_batch(
     """
     批量执行非做市商的订单决策
 
-    使用 Cython 优化的循环处理散户/高级散户/庄家的订单执行。
+    使用 Cython 优化的循环处理高级散户的订单执行。
     做市商不在此函数中处理。
 
     Args:
@@ -203,7 +199,6 @@ cpdef list execute_non_mm_batch_with_maker_update(
     与 execute_non_mm_batch 类似，但额外处理：
     - 更新 maker 账户
     - 记录到 tick_trades 列表
-    - 计算庄家波动性贡献
 
     Args:
         decisions: 决策列表，每个元素为 (agent, action, params)
@@ -250,10 +245,6 @@ cpdef list execute_non_mm_batch_with_maker_update(
     cdef object trade
     cdef long long agent_id  # 使用 64 位整数以支持 << 32 操作
     cdef int order_counter
-    cdef object agent_type_obj  # 枚举对象
-    cdef double pre_trade_price
-    cdef double post_trade_price
-    cdef double price_impact
     cdef int maker_id
     cdef object maker_agent
     cdef int action_int  # ActionType 枚举转换后的整数值
@@ -269,7 +260,6 @@ cpdef list execute_non_mm_batch_with_maker_update(
 
         account = agent.account
         agent_id = <long long>agent.agent_id  # 强制转换为 64 位整数
-        agent_type_obj = agent.agent_type  # 保持枚举对象
         trades = []
 
         # 将 ActionType 枚举转换为整数值（兼容枚举对象和整数）
@@ -277,11 +267,6 @@ cpdef list execute_non_mm_batch_with_maker_update(
             action_int = action.value
         else:
             action_int = <int>action
-
-        # 庄家：记录交易前价格
-        pre_trade_price = 0.0
-        if agent_type_obj is WHALE_TYPE:
-            pre_trade_price = orderbook.last_price
 
         # 根据动作类型执行
         if action_int == ACTION_CANCEL:
@@ -350,13 +335,6 @@ cpdef list execute_non_mm_batch_with_maker_update(
 
                 for trade in trades:
                     account.on_trade(trade, trade.is_buyer_taker)
-
-        # 庄家波动性贡献计算
-        if agent_type_obj is WHALE_TYPE and trades:
-            post_trade_price = orderbook.last_price
-            if pre_trade_price > 0.0 and post_trade_price > 0.0:
-                price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
-                account.volatility_contribution += price_impact
 
         # 记录成交、更新 maker 账户
         for trade in trades:
@@ -450,10 +428,6 @@ cpdef list execute_non_mm_batch_raw(
     cdef object trade
     cdef long long agent_id  # 使用 64 位整数以支持 << 32 操作
     cdef int order_counter
-    cdef object agent_type_obj  # 枚举对象
-    cdef double pre_trade_price
-    cdef double post_trade_price
-    cdef double price_impact
     cdef int maker_id
     cdef object maker_agent
 
@@ -480,13 +454,7 @@ cpdef list execute_non_mm_batch_raw(
         account = agent.account
         position = account.position
         agent_id = <long long>agent.agent_id  # 强制转换为 64 位整数
-        agent_type_obj = agent.agent_type  # 保持枚举对象
         trades = []
-
-        # 庄家：记录交易前价格
-        pre_trade_price = 0.0
-        if agent_type_obj is WHALE_TYPE:
-            pre_trade_price = orderbook.last_price
 
         # 根据动作类型执行
         if action_type_int == ACTION_CANCEL:
@@ -692,13 +660,6 @@ cpdef list execute_non_mm_batch_raw(
                     account.on_trade(trade, trade.is_buyer_taker)
 
         # HOLD 动作（action_type_int == 0）：不执行任何操作（跳过）
-
-        # 庄家波动性贡献计算
-        if agent_type_obj is WHALE_TYPE and trades:
-            post_trade_price = orderbook.last_price
-            if pre_trade_price > 0.0 and post_trade_price > 0.0:
-                price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
-                account.volatility_contribution += price_impact
 
         # 记录成交、更新 maker 账户
         for trade in trades:

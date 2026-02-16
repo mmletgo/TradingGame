@@ -46,9 +46,7 @@ from scripts.create_config import create_default_config
 
 # 物种中文名称映射
 AGENT_TYPE_NAMES: dict[str, str] = {
-    "retail": "散户",
     "retail_pro": "高级散户",
-    "whale": "庄家",
     "market_maker": "做市商",
 }
 
@@ -473,22 +471,7 @@ def main() -> None:
         default="logs",
         help="日志目录（默认: logs）",
     )
-    parser.add_argument(
-        "--catfish",
-        action="store_true",
-        default=True,
-        help="启用鲶鱼机制（默认: 启用）",
-    )
-    parser.add_argument(
-        "--no-catfish",
-        action="store_true",
-        help="禁用鲶鱼机制",
-    )
-
     args = parser.parse_args()
-
-    # 处理 catfish 参数
-    catfish_enabled = args.catfish and not args.no_catfish
 
     # 处理 --list 参数
     if args.list_generations:
@@ -512,13 +495,8 @@ def main() -> None:
         episode_length=args.episode_length,
         checkpoint_interval=0,
         config_dir=args.config_dir,
-        catfish_enabled=catfish_enabled,
     )
 
-    if catfish_enabled:
-        print("鲶鱼机制: 已启用")
-    else:
-        print("鲶鱼机制: 已禁用")
     print(f"每次测试运行的 episode 数量: {args.episodes_per_run}")
     print(f"竞技场数量: {args.num_arenas}")
 

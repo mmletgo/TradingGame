@@ -20,7 +20,6 @@ UI模块提供训练可视化的完整解决方案，包括数据采集、线程
 │             │  - 价格曲线               │               │
 │ - 深度图    │  - 种群资产曲线           │ - 成交记录    │
 │ - 盘口列表  │  - 小提琴图               │ (最近30笔)    │
-│             │  - 鲶鱼曲线               │               │
 └─────────────┴───────────────────────────┴───────────────┘
                         │
                         ▼
@@ -40,7 +39,7 @@ UI模块提供训练可视化的完整解决方案，包括数据采集、线程
               │  - 订单簿深度       │
               │  - 种群统计         │
               │  - 成交记录         │
-              │  - 鲶鱼数据         │
+              │  - 噪声交易者数据   │
               │  - 历史缓冲区       │
               └─────────────────────┘
                         │
@@ -80,7 +79,7 @@ UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 - `price_history: deque[float]` - 价格历史缓冲区（存储 orderbook.last_price，与盘口一致）
 - `equity_history: dict[AgentType, deque[float]]` - 各种群所有个体平均资产历史缓冲区
 - `alive_equity_history: dict[AgentType, deque[float]]` - 各种群存活个体平均资产历史缓冲区
-- `catfish_equity_history: list[deque[float]]` - 四只鲶鱼的净值历史缓冲区
+- `noise_trader_equity_history: list[deque[float]]` - 噪声交易者的净值历史缓冲区
 
 **方法：**
 - `collect_tick_data(trainer) -> UIDataSnapshot` - 收集当前tick数据快照
@@ -88,7 +87,7 @@ UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 
 **私有方法：**
 - `_compute_population_stats(population, current_price) -> PopulationStats` - 向量化计算种群统计（使用NumPy）
-- `_collect_catfish_data(trainer, current_price) -> list[CatfishInfo]` - 收集鲶鱼数据
+- `_collect_noise_trader_data(trainer, current_price) -> list[NoiseTraderInfo]` - 收集噪声交易者数据
 
 **价格处理说明：**
 - `last_price`: 使用 `orderbook.last_price`（tick 结束后的实际价格），用于价格图表显示，与盘口保持一致
@@ -114,9 +113,7 @@ UI控制器，管理训练线程与UI线程的交互。
 - `_is_demo_mode: bool` - 是否为演示模式
 - `_training_thread: Thread | None` - 训练/演示线程
 - `_tick_counter: int` - tick计数器（用于采样率控制）
-- `_demo_catfish_enabled: bool` - 演示模式下是否启用鲶鱼（默认False）
 - `_demo_end_callback: Callable[[dict], None] | None` - 演示结束时的回调函数
-- `_original_catfish_list: list | None` - 保存原始鲶鱼列表用于恢复
 
 **方法：**
 - `start_training(episodes: int) -> None` - 启动训练模式（后台线程，会进化）
@@ -130,7 +127,6 @@ UI控制器，管理训练线程与UI线程的交互。
 - `is_paused() -> bool` - 检查是否暂停
 - `get_speed() -> float` - 获取当前速度倍率
 - `is_demo_mode() -> bool` - 检查是否为演示模式
-- `set_demo_catfish_enabled(enabled: bool) -> None` - 设置演示模式下是否启用鲶鱼
 - `set_demo_end_callback(callback: Callable[[dict], None] | None) -> None` - 设置演示结束回调
 
 **私有方法：**
@@ -159,17 +155,14 @@ UI控制器，管理训练线程与UI线程的交互。
 7. 重建Agent映射和执行顺序
 
 **演示模式流程：**
-1. 保存原始鲶鱼列表，根据`_demo_catfish_enabled`决定是否清空鲶鱼
-2. 无限循环运行episode
-3. 每个episode开始前重置Agent账户、市场状态和鲶鱼强平标志
-4. 运行tick循环，每tick都采集数据
-5. 检查暂停/停止事件
-6. 每个tick后清除鲶鱼强平标志（演示模式下鲶鱼爆仓不结束episode）
-7. 使用`_check_demo_end_condition()`检查结束条件（仅物种淘汰，不检查订单簿单边和鲶鱼）
-8. 速度控制：`time.sleep(0.1 / speed_factor)`
-9. 满足结束条件时调用`_demo_end_callback`并退出演示循环
-10. 使用try-finally确保恢复原始鲶鱼列表
-11. 不进行进化，适合展示训练效果
+1. 无限循环运行episode
+2. 每个episode开始前重置Agent账户和市场状态
+3. 运行tick循环，每tick都采集数据
+4. 检查暂停/停止事件
+5. 使用`_check_demo_end_condition()`检查结束条件（仅物种淘汰，不检查订单簿单边）
+6. 速度控制：`time.sleep(0.1 / speed_factor)`
+7. 满足结束条件时调用`_demo_end_callback`并退出演示循环
+8. 不进行进化，适合展示训练效果
 
 ---
 
@@ -221,7 +214,6 @@ UI控制器，管理训练线程与UI线程的交互。
 **构造参数：**
 - `trainer: Trainer` - 已初始化的训练器
 - `checkpoint_path: str | None` - 检查点路径（可选），用于加载训练好的模型
-- `catfish_enabled: bool` - 是否启用鲶鱼机制（默认False）
 - `analyzer: DemoAnalyzer | None` - 演示分析器（可选），用于生成演示结束后的分析报告
 
 **属性：**
@@ -229,7 +221,6 @@ UI控制器，管理训练线程与UI线程的交互。
 - `episode_length: int` - 每个episode的tick数
 - `data_collector: UIDataCollector` - UI数据采集器
 - `controller: UIController` - UI控制器
-- `_catfish_enabled: bool` - 是否启用鲶鱼
 - `_analyzer: DemoAnalyzer | None` - 演示分析器
 - `orderbook_panel: OrderBookPanel | None` - 订单簿面板组件
 - `chart_panel: ChartPanel | None` - 图表面板组件
@@ -278,8 +269,8 @@ UI数据快照，每个tick的完整数据。
 - `price_history: list[float]` - 价格历史
 - `equity_history: dict[AgentType, list[float]]` - 所有个体平均资产历史
 - `alive_equity_history: dict[AgentType, list[float]]` - 存活个体平均资产历史
-- `catfish_data: list[CatfishInfo]` - 四只鲶鱼的当前数据
-- `catfish_equity_history: list[list[float]]` - 四只鲶鱼的净值历史
+- `noise_trader_data: list[NoiseTraderInfo]` - 噪声交易者的当前数据
+- `noise_trader_equity_history: list[list[float]]` - 噪声交易者的净值历史
 
 ### TradeInfo
 
@@ -291,12 +282,12 @@ UI数据快照，每个tick的完整数据。
 - `quantity: float` - 成交数量
 - `is_buyer_taker: bool` - True=买入（taker是买方），False=卖出（taker是卖方）
 
-### CatfishInfo
+### NoiseTraderInfo
 
-鲶鱼信息（UI展示用）。
+噪声交易者信息（UI展示用）。
 
 **字段：**
-- `name: str` - 鲶鱼类型名称（如 "TrendCreatorCatfish", "MeanReversionCatfish", "RandomTradingCatfish"）
+- `name: str` - 噪声交易者类型名称
 - `equity: float` - 净值
 - `position_qty: int` - 持仓数量（正数做多，负数做空，0为空仓）
 - `position_value: float` - 持仓市值 = abs(position_qty) * current_price
@@ -328,7 +319,7 @@ UI数据快照，每个tick的完整数据。
 | 组件 | 文件 | 功能 | 尺寸 |
 |------|------|------|------|
 | OrderBookPanel | orderbook_panel.py | 订单簿深度图 + 合并盘口列表 | 280px 宽 |
-| ChartPanel | chart_panel.py | 价格曲线 + 种群资产曲线 + 小提琴图 + 鲶鱼曲线 | 1360px 宽 |
+| ChartPanel | chart_panel.py | 价格曲线 + 种群资产曲线 + 小提琴图 | 1360px 宽 |
 | TradesPanel | trades_panel.py | 最近成交记录列表 | 280px 宽 |
 | ControlPanel | control_panel.py | 开始/暂停/停止按钮 + 状态显示 | 自适应宽度 |
 
@@ -339,7 +330,7 @@ UI数据快照，每个tick的完整数据。
 ### Trainer (src/training/trainer.py)
 - `trainer.tick: int` - 当前tick
 - `trainer.episode: int` - 当前episode
-- `trainer.populations: dict[AgentType, Population]` - 4个种群
+- `trainer.populations: dict[AgentType, Population]` - 2个种群（RETAIL_PRO, MARKET_MAKER）
 - `trainer.matching_engine._orderbook` - 订单簿
 - `trainer.recent_trades: deque[Trade]` - 最近100笔成交
 - `trainer.tick_start_price: float` - tick开始时的价格
@@ -347,8 +338,6 @@ UI数据快照，每个tick的完整数据。
 - `trainer._reset_market() -> None` - 重置市场状态
 - `trainer._pop_liquidated_counts: dict[AgentType, int]` - 种群淘汰计数
 - `trainer._pop_total_counts: dict[AgentType, int]` - 种群总数
-- `trainer.catfish_list: list` - 鲶鱼列表
-- `trainer._catfish_liquidated: bool` - 鲶鱼是否被强平
 - `trainer._register_all_agents() -> None` - 注册所有Agent
 - `trainer._build_agent_map() -> None` - 构建Agent映射
 - `trainer._build_execution_order() -> None` - 构建执行顺序
@@ -391,7 +380,7 @@ def on_tick(trainer: Trainer):
     snapshot = collector.collect_tick_data(trainer)
     # 使用snapshot更新UI...
     print(f"Tick {snapshot.tick}, Price: {snapshot.last_price}")
-    print(f"Retail avg equity: {snapshot.population_stats[AgentType.RETAIL].avg_equity}")
+    print(f"Retail Pro avg equity: {snapshot.population_stats[AgentType.RETAIL_PRO].avg_equity}")
 
 # 新episode开始时重置
 def on_episode_start():
@@ -472,11 +461,10 @@ config = Config(...)
 trainer = Trainer(config)
 trainer.setup()
 
-# 创建并运行演示UI（从检查点加载，禁用鲶鱼）
+# 创建并运行演示UI（从检查点加载）
 app = DemoUIApp(
     trainer,
     checkpoint_path="checkpoints/ep_100.pkl",
-    catfish_enabled=False
 )
 app.run()  # 阻塞直到窗口关闭
 ```
@@ -497,11 +485,10 @@ trainer.setup()
 # 创建分析器
 analyzer = DemoAnalyzer(output_dir="analysis_results")
 
-# 创建并运行演示UI（从检查点加载，启用鲶鱼，带分析器）
+# 创建并运行演示UI（从检查点加载，带分析器）
 app = DemoUIApp(
     trainer,
     checkpoint_path="checkpoints/ep_100.pkl",
-    catfish_enabled=True,
     analyzer=analyzer
 )
 app.run()  # 阻塞直到窗口关闭，演示结束后自动生成分析报告
@@ -552,9 +539,7 @@ UI模块会自动尝试加载系统中文字体，按以下顺序查找：
 | 进化 | 是 | 否 |
 | Episode数量 | 有限 | 无限（直到满足结束条件） |
 | 速度控制 | 不支持 | 支持（0.1x - 100x） |
-| 鲶鱼机制 | 跟随配置 | 可选启用/禁用 |
-| 结束条件 | 订单簿单边、物种淘汰、鲶鱼爆仓 | 仅物种淘汰 |
-| 鲶鱼爆仓 | 立即结束episode | 清除标志，继续episode |
+| 结束条件 | 订单簿单边、物种淘汰 | 仅物种淘汰 |
 | 检查点加载 | 不支持（从头训练） | 支持（加载已有模型） |
 | 分析报告 | 不生成 | 可选生成（DemoAnalyzer） |
 | 用途 | 训练新的NEAT模型 | 展示已有模型效果 |
@@ -567,5 +552,4 @@ UI模块会自动尝试加载系统中文字体，按以下顺序查找：
 2. **资源清理：** 窗口关闭时会自动调用`controller.stop()`，但建议在代码中显式处理
 3. **采样率：** 训练模式可设置`sample_rate > 1`减少UI更新频率，提升性能
 4. **演示结束：** 演示模式会在满足物种淘汰条件时自动退出，可通过回调函数自定义处理
-5. **鲶鱼恢复：** 演示模式会保存并恢复原始鲶鱼列表，避免影响trainer状态
-6. **分析器使用：** DemoAnalyzer需要matplotlib和seaborn依赖，首次使用请确认已安装
+5. **分析器使用：** DemoAnalyzer需要matplotlib和seaborn依赖，首次使用请确认已安装

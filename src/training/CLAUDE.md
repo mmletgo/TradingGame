@@ -20,7 +20,7 @@
 
 ### fast_execution 模块 (_cython/fast_execution.pyx)
 
-Cython 加速的非做市商批量订单执行模块，优化散户/高级散户/庄家的订单处理性能。
+Cython 加速的非做市商批量订单执行模块，优化高级散户的订单处理性能。
 
 **核心函数：**
 
@@ -29,7 +29,7 @@ Cython 加速的非做市商批量订单执行模块，优化散户/高级散户
   - 优化点：使用 C 类型变量、缓存方法引用、内联订单 ID 生成
 
 - `execute_non_mm_batch_with_maker_update(decisions, matching_engine, orderbook, recent_trades, agent_map, tick_trades) -> list`
-  - 批量执行订单（包含 maker 账户更新、tick_trades 记录、庄家波动性贡献计算）
+  - 批量执行订单（包含 maker 账户更新、tick_trades 记录）
 
 - `execute_non_mm_batch_raw(raw_decisions, matching_engine, orderbook, recent_trades, agent_map, tick_trades, mid_price) -> list`
   - 批量执行原始决策数据（内联数量计算逻辑，避免 Python 调用开销）
@@ -83,7 +83,7 @@ Numba JIT 加速的高频数学函数模块。
 
 | 种群类型 | 适应度公式 |
 |---------|-----------|
-| 非做市商物种 | (equity - initial) / initial |
+| 高级散户 | (equity - initial) / initial |
 | 做市商 | α × pnl + β × spread + γ × volume + δ × survival |
 
 **关键方法：**
@@ -115,18 +115,16 @@ Numba JIT 加速的高频数学函数模块。
 - 大批量并行调用 `Brain.from_genome`
 
 **Agent ID 偏移量：**
-- RETAIL: 0（子种群每 100K 偏移）
-- RETAIL_PRO: 1,000,000
-- WHALE: 2,000,000
-- MARKET_MAKER: 3,000,000（子种群每 100K 偏移）
+- RETAIL_PRO: 0（子种群每 100K 偏移）
+- MARKET_MAKER: 2,000,000（子种群每 100K 偏移）
 
 ### SubPopulationManager (population.py)
 
 通用子种群管理器，将种群拆分为多个独立子种群进行进化。
 
 **支持的种群类型：**
-- `AgentType.RETAIL` - 散户
-- `AgentType.MARKET_MAKER` - 做市商
+- `AgentType.RETAIL_PRO` - 高级散户（12子种群×200）
+- `AgentType.MARKET_MAKER` - 做市商（4子种群×100）
 
 **设计目标：**
 - 减少单个 NEAT 种群的规模，优化进化性能
@@ -135,7 +133,7 @@ Numba JIT 加速的高频数学函数模块。
 
 **主要属性：**
 - `sub_populations: list[Population]` - 子种群列表
-- `sub_population_count: int` - 子种群数量（默认10）
+- `sub_population_count: int` - 子种群数量
 - `agents_per_sub: int` - 每个子种群的Agent数量
 - `agents` - 所有子种群Agent的合并视图
 - `_cached_network_params_data: tuple[np.ndarray, ...] | None` - 缓存的拼接后网络参数数据
@@ -178,8 +176,8 @@ Worker 配置数据类。
 **使用示例：**
 ```python
 configs = [
-    WorkerConfig(AgentType.RETAIL, 0, "config/neat_retail.cfg", 1000),
-    WorkerConfig(AgentType.RETAIL, 1, "config/neat_retail.cfg", 1000),
+    WorkerConfig(AgentType.RETAIL_PRO, 0, "config/neat_retail_pro.cfg", 200),
+    WorkerConfig(AgentType.RETAIL_PRO, 1, "config/neat_retail_pro.cfg", 200),
     WorkerConfig(AgentType.MARKET_MAKER, 0, "config/neat_market_maker.cfg", 100),
 ]
 pool = MultiPopulationWorkerPool("config", configs)
@@ -194,7 +192,7 @@ pool.shutdown()
 管理整体训练流程，协调种群和撮合引擎。
 
 **主要职责：**
-- 初始化训练环境（创建种群、撮合引擎、ADL 管理器）
+- 初始化训练环境（创建种群、撮合引擎、ADL 管理器、噪声交易者）
 - 管理训练生命周期（tick、episode）
 - 处理成交和强平
 - 保存/加载检查点
@@ -205,14 +203,12 @@ pool.shutdown()
 - `_init_ema_price(initial_price)` - 初始化 EMA 平滑价格
 - `_update_ema_price(current_mid_price)` - 更新 EMA 平滑价格
 - `_aggregate_tick_trades(tick_trades)` - 聚合本 tick 的成交量和成交额
-- `_calculate_catfish_initial_balance()` - 计算鲶鱼初始资金
 - `_register_all_agents()` - 注册所有 Agent 的费率到撮合引擎
 - `_build_agent_map()` - 构建 Agent ID 到 Agent 对象的映射表
 - `_build_execution_order()` - 构建 Agent 执行顺序列表
 - `_cancel_agent_orders(agent)` - 撤销指定 Agent 的所有挂单
 - `_execute_liquidation_market_order(agent)` - 执行强平市价单
 - `_execute_adl(liquidated_agent, remaining_qty, current_price, is_long)` - 执行 ADL 自动减仓
-- `_check_catfish_liquidation()` - 检查鲶鱼强平
 - `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态
 - `run_tick()` - 执行单个 tick
@@ -284,13 +280,12 @@ class AtomicAction:
     price: float = 0.0
     quantity: int = 0
     is_market_maker: bool = False
-    is_catfish: bool = False
+    is_noise_trader: bool = False
     agent_ref: Any = None
 ```
 
 **动作收集规则：**
-- 吃单鲶鱼：direction != 0 时，收集一个市价单动作
-- 做市鲶鱼：direction == 0 时，收集撤旧单动作 + 新挂单动作
+- 噪声交易者：以概率决定是否行动，行动时收集一个市价单动作
 - 做市商：收集所有撤单动作 + 所有新挂单动作
 - 非做市商限价单：收集撤旧单动作（如有）+ 新挂单动作
 - 非做市商撤单：收集撤单动作
@@ -303,7 +298,8 @@ class AtomicAction:
 ## 训练流程
 
 ### 1. 初始化阶段 (`setup`)
-- 创建四个种群（散户/高级散户/庄家/做市商）
+- 创建两个种群（高级散户/做市商）
+- 创建噪声交易者（100个）
 - 创建撮合引擎和 ADL 管理器
 - 注册所有 Agent 的费率到撮合引擎
 - 构建 Agent 映射表和执行顺序
@@ -312,12 +308,11 @@ class AtomicAction:
 
 ### 2. Episode 循环 (`run_episode`)
 - 重置所有 Agent 账户
-- 重置鲶鱼状态和强平标志
+- 重置噪声交易者状态
 - 重置市场状态
 - 运行 episode_length 个 tick
 
 **提前结束条件：**
-- 鲶鱼被强平（立即结束 episode）
 - 任意种群存活少于初始值的 1/4
 - 订单簿只有单边挂单
 
@@ -345,6 +340,7 @@ class AtomicAction:
    - 向量化计算归一化市场状态
    - 随机打乱 Agent 执行顺序
    - Agent 决策
+   - 噪声交易者决策
    - 收集所有原子动作
    - 随机打乱原子动作顺序
    - 逐个执行原子动作
@@ -352,7 +348,6 @@ class AtomicAction:
 3. **Tick 结束**：
    - 记录当前价格到 `_price_history`
    - 记录 tick 历史数据
-   - 检查鲶鱼强平
 
 ---
 
@@ -371,7 +366,7 @@ class AtomicAction:
 
 **ADL（自动减仓）：**
 1. 获取最新价格
-2. 用最新价格计算候选清单（包含 Agent 和鲶鱼）
+2. 用最新价格计算候选清单（包含 Agent 和噪声交易者）
 3. 依次与候选对手方成交
 4. 更新候选清单的 position_qty
 5. 兜底处理：强制清零被淘汰者的仓位
@@ -462,15 +457,14 @@ class AtomicAction:
 - `src.market.adl` - ADL 管理器
 - `src.market.matching` - 撮合引擎
 - `src.market.orderbook` - 订单簿
+- `src.market.noise_trader` - 噪声交易者
 
 ---
 
 ## NEAT 配置
 
 不同 Agent 类型使用不同的 NEAT 配置文件：
-- `config/neat_retail.cfg` - 散户（127 个输入节点，8 个输出节点）
 - `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，8 个输出节点）
-- `config/neat_whale.cfg` - 庄家（907 个输入节点，8 个输出节点）
 - `config/neat_market_maker.cfg` - 做市商（934 个输入节点，41 个输出节点）
 
 **关键配置参数（防止种群灭绝）：**

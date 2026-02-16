@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from src.bio.agents.base import Agent
-    from src.market.catfish.catfish_base import CatfishBase
+    from src.market.noise_trader.noise_trader import NoiseTrader
 
 
 @dataclass
 class ADLCandidate:
     """ADL 候选者信息"""
 
-    participant: Union["Agent", "CatfishBase"]  # 支持 Agent 或鲶鱼
+    participant: Union["Agent", "NoiseTrader"]  # 支持 Agent 或噪声交易者
     position_qty: int  # 持仓数量（正=多头，负=空头）
     pnl_percent: float  # 盈亏百分比
     effective_leverage: float  # 有效杠杆
@@ -24,15 +24,15 @@ class ADLCandidate:
         from src.bio.agents.base import Agent
 
         if not isinstance(self.participant, Agent):
-            raise TypeError("This candidate is a Catfish, not an Agent")
+            raise TypeError("This candidate is a NoiseTrader, not an Agent")
         return self.participant
 
     @property
-    def is_catfish(self) -> bool:
-        """检查候选者是否为鲶鱼"""
-        from src.market.catfish.catfish_base import CatfishBase
+    def is_noise_trader(self) -> bool:
+        """检查候选者是否为噪声交易者"""
+        from src.market.noise_trader.noise_trader import NoiseTrader
 
-        return isinstance(self.participant, CatfishBase)
+        return isinstance(self.participant, NoiseTrader)
 
 
 class ADLManager:

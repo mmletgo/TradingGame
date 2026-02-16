@@ -9,7 +9,7 @@
 | 组件 | 文件 | 功能 | 尺寸 |
 |------|------|------|------|
 | OrderBookPanel | orderbook_panel.py | 订单簿深度图 + 合并盘口列表 | 280px 宽 |
-| ChartPanel | chart_panel.py | 价格曲线 + 种群资产曲线 + 小提琴图 + 鲶鱼曲线 | 1360px 宽 |
+| ChartPanel | chart_panel.py | 价格曲线 + 种群资产曲线 + 小提琴图 | 1360px 宽 |
 | TradesPanel | trades_panel.py | 最近成交记录列表 | 280px 宽 |
 | ControlPanel | control_panel.py | 开始/暂停/停止按钮 + 状态显示 | 自适应宽度 |
 
@@ -62,7 +62,7 @@ def update(self, bids: list[tuple[float, float]],
 
 ### ChartPanel
 
-图表面板，显示价格曲线、种群资产曲线、资产分布小提琴图和鲶鱼资金曲线。
+图表面板，显示价格曲线、种群资产曲线和资产分布小提琴图。
 
 **类常量配置：**
 ```python
@@ -70,9 +70,7 @@ PANEL_WIDTH: int = 1360           # 面板总宽度
 EQUITY_PLOT_HEIGHT: int = 140     # 每个资产图表高度
 PRICE_PLOT_HEIGHT: int = 140      # 价格图表高度
 VIOLIN_PLOT_HEIGHT: int = 120     # 小提琴图高度
-VIOLIN_PLOT_WIDTH: int = 340      # 每个小提琴图宽度（4个并排）
-CATFISH_PLOT_HEIGHT: int = 140    # 鲶鱼图表高度
-CATFISH_PLOT_WIDTH: int = 450     # 每个鲶鱼图表宽度（3个并排）
+VIOLIN_PLOT_WIDTH: int = 340      # 每个小提琴图宽度（2个并排）
 KDE_POINTS: int = 50              # KDE曲线采样点数
 ```
 
@@ -100,16 +98,6 @@ def update_equity(
         population_stats: 各种群统计信息（PopulationStats对象）
     """
 
-def update_catfish(
-    self,
-    catfish_data: list[Any],
-    catfish_equity_history: list[list[float]]
-) -> None:
-    """更新鲶鱼图表
-    Args:
-        catfish_data: 鲶鱼信息列表（CatfishInfo对象列表）
-        catfish_equity_history: 三只鲶鱼的净值历史
-    """
 ```
 
 **布局结构：**
@@ -119,44 +107,27 @@ def update_catfish(
 ├─────────────────────────────────────────────────────┤
 │ 种群存活个体平均资产曲线                              │
 │ ┌─────────────────────────────────────────────┐    │
-│ │ 散户存活个体平均资产图 (140px高)              │    │
-│ └─────────────────────────────────────────────┘    │
-│ ┌─────────────────────────────────────────────┐    │
 │ │ 高级散户存活个体平均资产图 (140px高)          │    │
-│ └─────────────────────────────────────────────┘    │
-│ ┌─────────────────────────────────────────────┐    │
-│ │ 庄家存活个体平均资产图 (140px高)              │    │
 │ └─────────────────────────────────────────────┘    │
 │ ┌─────────────────────────────────────────────┐    │
 │ │ 做市商存活个体平均资产图 (140px高)            │    │
 │ └─────────────────────────────────────────────┘    │
 ├─────────────────────────────────────────────────────┤
 │ 种群统计（水平排列）                                  │
-│ 散户: ...  高级散户: ...  庄家: ...  做市商: ...    │
+│ 高级散户: ...  做市商: ...                           │
 ├─────────────────────────────────────────────────────┤
-│ 小提琴图区域 (120px高, 4个并排)                      │
-│ ┌────┐ ┌────┐ ┌────┐ ┌────┐                       │
-│ │散户│ │高级│ │庄家│ │做市│                         │
-│ │    │ │散户│ │    │ │商  │                         │
-│ └────┘ └────┘ └────┘ └────┘                       │
-├─────────────────────────────────────────────────────┤
-│ 鲶鱼资金曲线 (140px高, 3个并排, 默认隐藏)            │
-│ ┌────────┐ ┌────────┐ ┌────────┐                   │
-│ │趋势追踪│ │周期摆动│ │逆势操作│                     │
-│ └────────┘ └────────┘ └────────┘                   │
+│ 小提琴图区域 (120px高, 2个并排)                      │
+│ ┌────────┐ ┌────────┐                              │
+│ │高级散户│ │做市商  │                                │
+│ └────────┘ └────────┘                              │
 └─────────────────────────────────────────────────────┘
 ```
 
 **颜色配置：**
 | 类型 | 颜色 | RGB |
 |------|------|-----|
-| 散户 | 绿色 | (100, 200, 100) |
 | 高级散户 | 蓝色 | (100, 150, 255) |
-| 庄家 | 粉红色 | (255, 100, 150) |
 | 做市商 | 紫色 | (200, 100, 255) |
-| 趋势追踪鲶鱼 | 橙色 | (255, 165, 0) |
-| 周期摆动鲶鱼 | 天蓝色 | (0, 191, 255) |
-| 逆势操作鲶鱼 | 粉色 | (255, 105, 180) |
 
 **小提琴图实现细节：**
 - 使用纯 NumPy 实现高斯核密度估计（KDE）
@@ -170,7 +141,6 @@ def update_catfish(
 - 资产图：`equity_plot_{agent_type}`, `equity_series_{agent_type}`, `equity_x_axis_{agent_type}`, `equity_y_axis_{agent_type}`
 - 统计文本：`stat_{agent_type}`
 - 小提琴图：`violin_plot_{agent_type}`, `violin_area_{agent_type}`, `violin_median_{agent_type}`, `violin_q1_{agent_type}`, `violin_q3_{agent_type}`
-- 鲶鱼图：`catfish_container`, `catfish_plot_{i}`, `catfish_series_{i}`, `catfish_x_axis_{i}`, `catfish_y_axis_{i}`, `catfish_title_{i}`, `catfish_position_{i}` (i=0,1,2)
 
 ---
 
@@ -280,7 +250,6 @@ def is_paused(self) -> bool:
 │             │  - 价格曲线               │               │
 │ - 深度图    │  - 资产曲线               │ - 成交记录    │
 │ - 盘口列表  │  - 小提琴图               │ (最近30笔)    │
-│             │  - 鲶鱼曲线               │               │
 └─────────────┴───────────────────────────┴───────────────┘
                         │
                         ▼
@@ -305,7 +274,6 @@ def is_paused(self) -> bool:
    - `OrderBookPanel.update(bids, asks)`
    - `ChartPanel.update_price(price_history)`
    - `ChartPanel.update_equity(...)`
-   - `ChartPanel.update_catfish(...)`
    - `TradesPanel.update(trades)`
    - `ControlPanel.update_status(...)`
 

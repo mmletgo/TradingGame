@@ -106,13 +106,6 @@ def main() -> None:
         help="日志目录（默认: logs）",
     )
     parser.add_argument(
-        "--catfish",
-        action="store_const",
-        const=True,
-        default=None,
-        help="启用鲶鱼机制（三种行为模式同时运行）。不指定时使用 create_config.py 中的默认值。",
-    )
-    parser.add_argument(
         "--evolution-interval",
         type=int,
         default=50,
@@ -141,26 +134,13 @@ def main() -> None:
     if args.resume:
         print(f"Resume From: {args.resume}")
 
-    # 创建配置（必须在打印 catfish 状态之前，以获取最终配置）
-    config_kwargs = {
-        "episode_length": args.episode_length,
-        "checkpoint_interval": args.checkpoint_interval,
-        "config_dir": args.config_dir,
-        "evolution_interval": args.evolution_interval,
-    }
-    # 只有在用户明确指定 --catfish 时才覆盖默认值
-    if args.catfish is not None:
-        config_kwargs["catfish_enabled"] = args.catfish
-
-    config = create_default_config(**config_kwargs)
-
-    # 打印 Catfish 状态（使用最终配置值）
-    if config.catfish is not None and config.catfish.enabled:
-        print(
-            f"Catfish: enabled (三种模式同时运行), action_probability={config.catfish.action_probability:.1%}"
-        )
-    else:
-        print("Catfish: disabled")
+    # 创建配置
+    config = create_default_config(
+        episode_length=args.episode_length,
+        checkpoint_interval=args.checkpoint_interval,
+        config_dir=args.config_dir,
+        evolution_interval=args.evolution_interval,
+    )
     print("=" * 60)
 
     # 创建训练器

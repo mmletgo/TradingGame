@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于 NEAT (NeuroEvolution of Augmenting Topologies) 算法的 AI 交易模拟竞技场。四种类型的 AI Agent（散户、高级散户、庄家、做市商）通过神经网络进化算法学习交易策略，在模拟订单簿市场中竞争。
+基于 NEAT (NeuroEvolution of Augmenting Topologies) 算法的 AI 交易模拟竞技场。两种类型的 AI Agent（高级散户、做市商）通过神经网络进化算法学习交易策略，在模拟订单簿市场中竞争。噪声交易者提供随机性流动性和布朗运动价格特征。
 
 ## 常用命令
 
@@ -25,7 +25,6 @@ pytest tests/training/test_population.py::TestPopulation::test_create_agents  # 
 ```bash
 python scripts/train_noui.py --episodes 100                    # 无UI高性能训练
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl    # 从检查点恢复
-python scripts/train_noui.py --episodes 100 --catfish          # 启用鲶鱼机制
 python scripts/train_ui.py                                      # 带UI训练
 ```
 
@@ -38,11 +37,9 @@ python scripts/train_league.py --resume checkpoints/league_training/checkpoints/
 ### 演示模式
 ```bash
 python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl           # 加载检查点
-python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --catfish # 启用鲶鱼
 ```
 
 **演示模式特点：**
-- 鲶鱼默认禁用，启用时鲶鱼爆仓不结束 episode
 - 结束条件：任意物种淘汰到只剩 1/4
 - 结束后自动生成分析图和终端摘要
 
@@ -54,26 +51,28 @@ python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl --catfish # 启用
 
 ```
 初始化阶段
-├─ 创建4个NEAT种群
+├─ 创建2个NEAT种群（高级散户、做市商）
+├─ 创建噪声交易者（100个）
 ├─ 从基因组创建Agent对象
 ├─ 创建撮合引擎
 └─ 做市商建立初始流动性（Tick 1）
 
 Episode循环（每episode N个tick）
 ├─ 重置所有Agent账户
+├─ 重置噪声交易者状态
 ├─ 重置市场状态和订单簿
 └─ Tick循环
     ├─ Tick 1: 仅做市商行动
     └─ Tick 2+:
         ├─ 强平检查（三阶段）
-        ├─ 鲶鱼行动（如启用）
+        ├─ 噪声交易者行动
         ├─ 计算归一化市场状态（所有Agent共用）
         ├─ 随机打乱Agent顺序
         ├─ 并行决策（神经网络推理）
         └─ 串行执行（订单提交）
 
 NEAT进化阶段
-├─ 计算适应度（非做市商基于PnL，做市商使用复合适应度）
+├─ 计算适应度（高级散户基于PnL，做市商使用复合适应度）
 ├─ 执行NEAT进化算法
 ├─ 清理历史数据防止内存泄漏
 └─ 从新基因组创建Agent
@@ -94,19 +93,19 @@ NEAT进化阶段
 - 亏损方：`排名 = PnL% / 有效杠杆`
 - 成交价格：使用当前市场价格（非破产价格）
 
-### 四种Agent类型
+### 两种Agent类型 + 噪声交易者
 
 | 类型 | 数量 | 初始资金 | 杠杆 | 订单簿深度 | 动作 |
 |------|------|----------|------|-----------|------|
-| 散户 | 10,000 | 2万 | 1.0x | 10档 | 挂单/撤单/吃单/不动 |
-| 高级散户 | 100 | 2万 | 1.0x | 100档 | 挂单/撤单/吃单/不动 |
-| 庄家 | 100 | 3M | 1.0x | 100档 | 挂单/撤单/吃单/不动 |
-| 做市商 | 400 | 10M | 1.0x | 100档 | 双边挂单（每边1-10单） |
+| 高级散户 | 2,400 (12子种群×200) | 2万 | 1.0x | 100档 | 挂单/撤单/吃单/不动 |
+| 做市商 | 400 (4子种群×100) | 10M | 1.0x | 100档 | 双边挂单（每边1-10单） |
+| 噪声交易者 | 100 | 1e18（无限资金） | - | - | 50%概率行动，市价单随机买卖 |
 
 **约束规则：**
-- 散户/高级散户/庄家：同时只能挂一单
+- 高级散户：同时只能挂一单
 - 做市商：每tick必须双边挂单，先撤旧单再挂新单
 - 所有操作在最新价 ±100 个最小变动单位内
+- 噪声交易者：不触发强平，零手续费，下单量服从对数正态分布
 
 ### 做市商复合适应度
 
@@ -130,31 +129,24 @@ mm_fitness = α × pnl + β × spread_score + γ × volume_score + δ × surviva
 
 权重可通过 `TrainingConfig` 的 `mm_fitness_*_weight` 参数配置。
 
-### 鲶鱼机制
+### 噪声交易者
 
-规则驱动的市场扰动器（不参与NEAT进化）：
+市场随机性提供者（不参与NEAT进化）：
 
-| 模式 | 行为 |
-|------|------|
-| 趋势创造者 | Episode开始随机选方向，持续该方向操作 |
-| 均值回归 | 价格偏离EMA时反向操作 |
-| 随机交易 | 随机买卖制造噪音 |
-
-**特殊规则：**
-- 初始资金 = (做市商杠杆后资金 - 其他物种杠杆后资金) / 3
-  - 做市商：400 × 10M × 1.0 = 4000M
-  - 其他物种：200M + 2M + 300M = 502M
-  - 每条鲶鱼：(4000M - 502M) / 3 ≈ 1166M
-- 手续费为0
-- 鲶鱼被强平 → Episode立即结束（训练模式）
+- 100个独立噪声交易者，各自每 tick 以 50% 概率行动
+- 行动时 50% 买 / 50% 卖，通过市价单撮合
+- 下单量：`max(1, int(lognormvariate(mu=3.0, sigma=1.0)))`
+- 无限资金（1e18），不触发强平检查
+- 手续费为 0
+- 可作为 ADL 对手方
 
 ### 手续费模型
 
 | 角色 | Maker费 | Taker费 |
 |------|---------|---------|
-| 散户/高级散户 | 万2 | 万5 |
-| 庄家/做市商 | -万1（返佣） | 万1 |
-| 鲶鱼 | 0 | 0 |
+| 高级散户 | 万2 | 万5 |
+| 做市商 | -万1（返佣） | 万1 |
+| 噪声交易者 | 0 | 0 |
 
 ---
 
@@ -171,10 +163,10 @@ src/
 │   ├── matching/   # 撮合引擎（价格优先、时间优先）
 │   ├── account/    # 账户管理（持仓、余额、保证金、强平）
 │   ├── adl/        # ADL自动减仓
-│   └── catfish/    # 鲶鱼模块
+│   └── noise_trader/ # 噪声交易者模块
 ├── bio/            # 生物系统
 │   ├── brain/      # NEAT神经网络封装
-│   └── agents/     # 四种Agent类型
+│   └── agents/     # 两种Agent类型（高级散户、做市商）
 ├── training/       # 训练引擎
 │   ├── population.py   # 种群管理
 │   ├── trainer.py      # 训练协调器
@@ -188,10 +180,8 @@ src/
 
 | 配置 | Agent类型 | 输入节点 | 输出节点 |
 |------|----------|----------|----------|
-| neat_retail.cfg | 散户 | 127 | 8 |
 | neat_retail_pro.cfg | 高级散户 | 907 | 8 |
-| neat_whale.cfg | 庄家 | 907 | 8 |
-| neat_market_maker.cfg | 做市商 | 964 | 41 |
+| neat_market_maker.cfg | 做市商 | 934 | 41 |
 
 ---
 
@@ -202,11 +192,11 @@ src/
 | 模块 | 文件 | 内容 |
 |------|------|------|
 | 市场引擎 | src/market/CLAUDE.md | 订单簿、撮合、账户、ADL |
-| Agent | src/bio/agents/CLAUDE.md | 四种Agent行为与输入输出 |
+| Agent | src/bio/agents/CLAUDE.md | 两种Agent行为与输入输出 |
 | 神经网络 | src/bio/brain/CLAUDE.md | NEAT封装与前向传播 |
 | 训练引擎 | src/training/CLAUDE.md | Episode循环、强平处理 |
 | 多竞技场 | src/training/arena/CLAUDE.md | 并行训练、适应度汇总 |
-| 鲶鱼 | src/market/catfish/CLAUDE.md | 三种模式详解 |
+| 噪声交易者 | src/market/noise_trader/CLAUDE.md | 噪声交易者机制详解 |
 | ADL | src/market/adl/CLAUDE.md | 自动减仓机制 |
 
 ---

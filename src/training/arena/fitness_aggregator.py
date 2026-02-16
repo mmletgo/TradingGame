@@ -46,8 +46,8 @@ class FitnessAggregator:
 
         Example:
             >>> arena_fitnesses = [
-            ...     {(AgentType.RETAIL, 0): np.array([10.0, 20.0, 30.0])},  # 累积值
-            ...     {(AgentType.RETAIL, 0): np.array([20.0, 30.0, 40.0])},  # 累积值
+            ...     {(AgentType.RETAIL_PRO, 0): np.array([10.0, 20.0, 30.0])},  # 累积值
+            ...     {(AgentType.RETAIL_PRO, 0): np.array([20.0, 30.0, 40.0])},  # 累积值
             ... ]
             >>> episode_counts = [10, 10]
             >>> # 结果：(10.0 + 20.0) / 20 = 1.5, (20.0 + 30.0) / 20 = 2.5, ...

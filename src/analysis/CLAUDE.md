@@ -102,9 +102,7 @@ Checkpoint 加载器，从主 checkpoint 文件加载所有基因组数据。
 #### `_extract_genomes_from_pop_data(pop_data: dict) -> list[bytes]`
 从种群数据提取全部基因组。
 
-支持两种格式：
-1. SubPopulationManager: `is_sub_population_manager=True`
-2. 普通 Population: 有 `neat_pop` 字段
+从种群数据中提取基因组，支持包含 `neat_pop` 字段的 Population 格式。
 
 #### `_extract_genomes_from_neat_pop(neat_pop) -> list[bytes]`
 从 neat.Population 对象提取基因组。
@@ -119,9 +117,7 @@ Checkpoint 加载器，从主 checkpoint 文件加载所有基因组数据。
     "tick": int,
     "episode": int,
     "populations": {
-        AgentType.RETAIL: {...},
         AgentType.RETAIL_PRO: {...},
-        AgentType.WHALE: {...},
         AgentType.MARKET_MAKER: {...},
     }
 }
@@ -137,19 +133,7 @@ Checkpoint 加载器，从主 checkpoint 文件加载所有基因组数据。
 
 **种群数据格式：**
 
-SubPopulationManager (RETAIL/MARKET_MAKER):
-```python
-{
-    "is_sub_population_manager": True,
-    "sub_population_count": int,
-    "sub_populations": [
-        {"neat_pop": neat.Population, "generation": int},
-        ...
-    ]
-}
-```
-
-普通 Population (RETAIL_PRO/WHALE):
+Population:
 ```python
 {
     "generation": int,
@@ -267,15 +251,13 @@ print(f"代数: {gen}")  # 输出: 50
 
 基本信息:
   Episode: 1 | Tick: 847
-  结束原因: 散户种群存活不足 1/4
+  结束原因: 高级散户种群存活不足 1/4
 
 价格统计:
   最终价格: 105.20 | 最高: 112.50 | 最低: 95.30
 
 种群统计:
-  散户      存活 2450/10000 (24.5%)  平均净值 485万  盈利/亏损 850/1600
   高级散户  存活 85/100 (85.0%)      平均净值 523万  盈利/亏损 60/25
-  庄家      存活 180/200 (90.0%)     平均净值 1.2亿  盈利/亏损 150/30
   做市商    存活 145/150 (96.7%)     平均净值 2.1亿  盈利/亏损 130/15
 
 分析图已保存到: analysis_output/demo_analysis_20260107_123456.png
@@ -285,9 +267,9 @@ print(f"代数: {gen}")  # 输出: 50
 #### `_generate_plots(data) -> str`
 生成分析图。
 
-使用 matplotlib 生成 2x4 子图布局：
-- 第一行：资产分布图 - 4 个子图（每种群一个），箱线图显示净值分布
-- 第二行：持仓分布图 - 4 个子图，条形图显示多头/空仓/空头数量分布
+使用 matplotlib 生成 2x2 子图布局：
+- 第一行：资产分布图 - 2 个子图（每种群一个），箱线图显示净值分布
+- 第二行：持仓分布图 - 2 个子图，条形图显示多头/空仓/空头数量分布
 
 返回保存的图片路径。
 
@@ -333,7 +315,7 @@ analyzer = DemoAnalyzer(output_dir="analysis_output")
 analyzer.analyze(
     trainer=trainer,
     end_reason="population_depleted",
-    end_agent_type=AgentType.RETAIL
+    end_agent_type=AgentType.RETAIL_PRO
 )
 ```
 
@@ -472,7 +454,7 @@ analyzer.analyze(
 **测试架构：**
 
 使用 `ParallelArenaTrainer` 多竞技场测试：
-- 评估一代需要：1 个基准测试 + 4 个比较测试 = 5 个场景
+- 评估一代需要：1 个基准测试 + 2 个比较测试 = 3 个场景
 - 每个场景串行运行 num_runs 次，每次通过 PAT 使用多竞技场并行推理
 - 通过 `setup_for_testing(populations_data)` 初始化测试模式（不创建进化 Worker 池）
 
@@ -488,11 +470,6 @@ analyzer.analyze(
 **存活率判断：**
 - 使用适应度阈值判断：fitness > -0.99 视为存活
 - 全部爆仓时 equity 接近 0，fitness = (0 - initial) / initial 接近 -1
-
-**鲶鱼机制：**
-- 测试默认启用鲶鱼，可通过 `--no-catfish` 参数禁用
-- 鲶鱼的作用是打破"不交易"僵局，增加市场波动
-- episode 结束条件由 PAT 的 `run_tick_all_arenas()` 控制
 
 **结果缓存：**
 
@@ -523,9 +500,6 @@ python scripts/tools/test_evolution.py --num-runs 5 --episode-length 2000 --epis
 
 # 指定竞技场数量
 python scripts/tools/test_evolution.py --num-arenas 4
-
-# 禁用鲶鱼机制
-python scripts/tools/test_evolution.py --no-catfish
 ```
 
 **命令行参数：**
@@ -541,8 +515,6 @@ python scripts/tools/test_evolution.py --no-catfish
 | `--force` | - | 强制重新运行（忽略已完成的测试结果） |
 | `--checkpoint-dir` | checkpoints | checkpoint 文件目录（联盟训练: checkpoints/league_training/checkpoints） |
 | `--results-dir` | checkpoints/test_results | 测试结果保存目录 |
-| `--catfish` | True | 启用鲶鱼机制 |
-| `--no-catfish` | - | 禁用鲶鱼机制 |
 
 **输出示例：**
 
@@ -552,18 +524,14 @@ python scripts/tools/test_evolution.py --no-catfish
 ============================================================
 
 基准测试（3 次运行）:
-  散户      平均适应度: +0.1234 (±0.0456)  存活率: 85.2%
   高级散户  平均适应度: +0.2345 (±0.0678)  存活率: 92.1%
-  庄家      平均适应度: +0.3456 (±0.0789)  存活率: 95.5%
   做市商    平均适应度: +0.4567 (±0.0890)  存活率: 98.3%
 
 比较测试（新物种 vs 第 9 代对手）:
-  散户      适应度: +0.1456 (基准: +0.1234)  变化: +18.0%  ↑ 有效
   高级散户  适应度: +0.2567 (基准: +0.2345)  变化: +9.5%   ↑ 有效
-  庄家      适应度: +0.3678 (基准: +0.3456)  变化: +6.4%   ↑ 有效
   做市商    适应度: +0.4789 (基准: +0.4567)  变化: +4.9%   ↑ 有效
 
-总结: 4/4 个物种进化有效
+总结: 2/2 个物种进化有效
 ============================================================
 ```
 
@@ -571,7 +539,6 @@ python scripts/tools/test_evolution.py --no-catfish
 
 - `src.training.arena.ParallelArenaTrainer` - 多竞技场并行推理训练器
 - `src.training.arena.MultiArenaConfig` - 多竞技场配置
-- `src.training.population.SubPopulationManager` - 子种群管理器
 - `src.analysis.checkpoint_loader.CheckpointLoader` - Checkpoint 加载器
 
 ---
@@ -608,9 +575,9 @@ python scripts/tools/test_evolution.py --list
 # ================================================================
 #   代数 |       保存时间       | 物种数 |       测试状态
 # ----------------------------------------------------------------
-#      1 | 2026-01-07 10:23:45 |      4 | ✓ 已完成
-#      2 | 2026-01-07 10:45:32 |      4 | ◐ 部分完成 (2/4)
-#     10 | 2026-01-07 15:30:15 |      4 | ○ 未测试
+#      1 | 2026-01-07 10:23:45 |      2 | ✓ 已完成
+#      2 | 2026-01-07 10:45:32 |      2 | ◐ 部分完成 (1/2)
+#     10 | 2026-01-07 15:30:15 |      2 | ○ 未测试
 # ================================================================
 # 共 3 代: 1 已完成, 2 待测试
 

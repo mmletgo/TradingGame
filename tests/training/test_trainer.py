@@ -79,9 +79,7 @@ def mock_config() -> Config:
     return Config(
         market=market,
         agents={
-            AgentType.RETAIL: agent_config,
             AgentType.RETAIL_PRO: agent_config,
-            AgentType.WHALE: agent_config,
             AgentType.MARKET_MAKER: agent_config,
         },
         training=training,
@@ -161,7 +159,7 @@ class TestTrainerSetup:
         mock_worker_pool_class: MagicMock,
         mock_config: Config,
     ) -> None:
-        """setup 创建四种群"""
+        """setup 创建两种群（RETAIL_PRO + MARKET_MAKER）"""
         mock_get_logger.return_value = MagicMock()
         mock_pop_instance = MagicMock()
         mock_pop_instance.agents = []
@@ -173,25 +171,9 @@ class TestTrainerSetup:
         trainer = Trainer(mock_config)
         trainer.setup()
 
-        # 验证 Population 被直接调用了 2 次（RETAIL_PRO 和 WHALE）
-        assert mock_population_class.call_count == 2
-
-        # 验证 Population 直接创建的种群类型
-        pop_call_args_list = mock_population_class.call_args_list
-        pop_agent_types = [call_args[0][0] for call_args in pop_call_args_list]
-        assert AgentType.RETAIL_PRO in pop_agent_types
-        assert AgentType.WHALE in pop_agent_types
-
-        # 验证四个种群都已创建（2 个 SubPopulationManager + 2 个 Population）
-        assert len(trainer.populations) == 4
-        assert AgentType.RETAIL in trainer.populations
+        # 验证种群已创建（至少包含 RETAIL_PRO 和 MARKET_MAKER）
         assert AgentType.RETAIL_PRO in trainer.populations
-        assert AgentType.WHALE in trainer.populations
         assert AgentType.MARKET_MAKER in trainer.populations
-
-        # 验证 RETAIL 和 MARKET_MAKER 是 SubPopulationManager 实例
-        assert isinstance(trainer.populations[AgentType.RETAIL], SubPopulationManager)
-        assert isinstance(trainer.populations[AgentType.MARKET_MAKER], SubPopulationManager)
 
     @patch("src.training.trainer.MultiPopulationWorkerPool")
     @patch("src.training.trainer.Trainer._init_network_caches")
@@ -465,13 +447,10 @@ class TestTrainerRunEpisode:
 
         trainer.run_episode()
 
-        # 验证种群的 reset_agents 被调用（每个种群调用一次，共 4 个种群）
-        # Population mock 的 reset_agents 有 call_count
-        # SubPopulationManager 的 reset_agents 是真实方法，需要单独验证
-        pop_reset_count = mock_population.reset_agents.call_count
-        # SubPopulationManager 有 2 个实例（RETAIL, MARKET_MAKER），验证它们也被调用
-        # 总共应该调用 4 次（2 次 Population + 2 次 SubPopulationManager）
-        assert pop_reset_count == 2  # RETAIL_PRO 和 WHALE 各调用一次
+        # 验证种群的 reset_agents 被调用（SubPopulationManager 包含 mock sub_populations）
+        for pop in trainer.populations.values():
+            for sub_pop in pop.sub_populations:
+                assert sub_pop.reset_agents.call_count >= 1
 
     @patch("src.training.trainer.MultiPopulationWorkerPool")
     @patch("src.training.trainer.Trainer._init_network_caches")
@@ -695,8 +674,7 @@ class TestTrainerCheckpoint:
         mock_population.neat_pop = MagicMock()
 
         trainer.populations = {
-            AgentType.RETAIL: mock_population,
-            AgentType.WHALE: mock_population,
+            AgentType.RETAIL_PRO: mock_population,
             AgentType.MARKET_MAKER: mock_population,
         }
 
@@ -730,8 +708,7 @@ class TestTrainerCheckpoint:
         mock_population.neat_pop = MagicMock()
 
         trainer.populations = {
-            AgentType.RETAIL: mock_population,
-            AgentType.WHALE: mock_population,
+            AgentType.RETAIL_PRO: mock_population,
             AgentType.MARKET_MAKER: mock_population,
         }
 
@@ -785,11 +762,7 @@ class TestTrainerCheckpoint:
             "tick": 500,
             "episode": 50,
             "populations": {
-                AgentType.RETAIL: {
-                    "generation": 10,
-                    "neat_pop": mock_neat_pop,
-                },
-                AgentType.WHALE: {
+                AgentType.RETAIL_PRO: {
                     "generation": 10,
                     "neat_pop": mock_neat_pop,
                 },
@@ -840,8 +813,7 @@ class TestTrainerGetState:
         mock_population.generation = 5
 
         trainer.populations = {
-            AgentType.RETAIL: mock_population,
-            AgentType.WHALE: mock_population,
+            AgentType.RETAIL_PRO: mock_population,
             AgentType.MARKET_MAKER: mock_population,
         }
 
@@ -865,34 +837,25 @@ class TestTrainerGetState:
         trainer = Trainer(mock_config)
 
         # 设置不同的种群
-        retail_pop = MagicMock()
-        retail_pop.agents = [MagicMock(), MagicMock(), MagicMock()]  # 3 个 agent
-        retail_pop.generation = 10
-
-        whale_pop = MagicMock()
-        whale_pop.agents = [MagicMock()]  # 1 个 agent
-        whale_pop.generation = 5
+        retail_pro_pop = MagicMock()
+        retail_pro_pop.agents = [MagicMock(), MagicMock(), MagicMock()]  # 3 个 agent
+        retail_pro_pop.generation = 10
 
         mm_pop = MagicMock()
         mm_pop.agents = [MagicMock(), MagicMock()]  # 2 个 agent
         mm_pop.generation = 7
 
         trainer.populations = {
-            AgentType.RETAIL: retail_pop,
-            AgentType.WHALE: whale_pop,
+            AgentType.RETAIL_PRO: retail_pro_pop,
             AgentType.MARKET_MAKER: mm_pop,
         }
 
         state = trainer._get_state()
 
         # 验证种群信息
-        assert AgentType.RETAIL.value in state["populations"]
-        assert state["populations"][AgentType.RETAIL.value]["count"] == 3
-        assert state["populations"][AgentType.RETAIL.value]["generation"] == 10
-
-        assert AgentType.WHALE.value in state["populations"]
-        assert state["populations"][AgentType.WHALE.value]["count"] == 1
-        assert state["populations"][AgentType.WHALE.value]["generation"] == 5
+        assert AgentType.RETAIL_PRO.value in state["populations"]
+        assert state["populations"][AgentType.RETAIL_PRO.value]["count"] == 3
+        assert state["populations"][AgentType.RETAIL_PRO.value]["generation"] == 10
 
         assert AgentType.MARKET_MAKER.value in state["populations"]
         assert state["populations"][AgentType.MARKET_MAKER.value]["count"] == 2

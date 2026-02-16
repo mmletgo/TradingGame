@@ -18,9 +18,7 @@ if TYPE_CHECKING:
 
 # 中文名称映射
 AGENT_TYPE_NAMES: dict[str, str] = {
-    "RETAIL": "散户",
     "RETAIL_PRO": "高级散户",
-    "WHALE": "庄家",
     "MARKET_MAKER": "做市商",
 }
 
@@ -266,9 +264,7 @@ class DemoAnalyzer:
 
         # 按照固定顺序输出
         agent_type_order = [
-            AgentType.RETAIL,
             AgentType.RETAIL_PRO,
-            AgentType.WHALE,
             AgentType.MARKET_MAKER,
         ]
 
@@ -335,8 +331,8 @@ class DemoAnalyzer:
             ]
             plt.rcParams["axes.unicode_minus"] = False
 
-        # 创建 2x4 子图布局
-        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+        # 创建 2x2 子图布局
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
         fig.suptitle(
             f"演示模式分析 - Episode {data['episode']}, Tick {data['tick']}",
             fontsize=14,
@@ -345,12 +341,10 @@ class DemoAnalyzer:
 
         # 种群顺序和颜色
         agent_type_order = [
-            AgentType.RETAIL,
             AgentType.RETAIL_PRO,
-            AgentType.WHALE,
             AgentType.MARKET_MAKER,
         ]
-        colors = ["#64C864", "#6496FF", "#FF6496", "#C864FF"]
+        colors = ["#6496FF", "#C864FF"]
 
         # 第一行：资产分布（箱线图）
         for idx, agent_type in enumerate(agent_type_order):

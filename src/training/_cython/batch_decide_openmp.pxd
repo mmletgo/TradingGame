@@ -254,7 +254,6 @@ cdef void batch_parse_market_maker_full_multi_market_nogil(
 # 缓存类型常量
 # ============================================================================
 
-cdef int CACHE_TYPE_RETAIL
 cdef int CACHE_TYPE_FULL
 cdef int CACHE_TYPE_MARKET_MAKER
 
@@ -288,7 +287,7 @@ cdef class BatchNetworkCache:
     # 网络 ID 列表（用于检测是否需要更新）
     cdef list network_ids
 
-    # 类型标识 (0=retail, 1=full, 2=market_maker)
+    # 类型标识 (1=full, 2=market_maker)
     cdef int cache_type
 
     # ========== 多竞技场预分配缓冲区 ==========

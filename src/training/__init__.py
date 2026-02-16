@@ -4,13 +4,13 @@
 """
 
 from src.training.checkpoint_loader import CheckpointLoader, CheckpointType
-from src.training.population import Population, RetailSubPopulationManager
+from src.training.population import Population, SubPopulationManager
 from src.training.trainer import Trainer
 
 __all__ = [
     "CheckpointLoader",
     "CheckpointType",
     "Population",
-    "RetailSubPopulationManager",
+    "SubPopulationManager",
     "Trainer",
 ]

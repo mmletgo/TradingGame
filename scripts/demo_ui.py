@@ -70,11 +70,6 @@ def main() -> None:
         help="日志目录（默认: logs）",
     )
     parser.add_argument(
-        "--catfish",
-        action="store_true",
-        help="启用鲶鱼（默认禁用）",
-    )
-    parser.add_argument(
         "--no-analyze",
         action="store_true",
         help="禁用演示结束后的分析",
@@ -111,7 +106,6 @@ def main() -> None:
         print(f"Checkpoint: {args.checkpoint}")
     else:
         print("Checkpoint: 未指定（使用随机初始化的Agent）")
-    print(f"鲶鱼: {'启用' if args.catfish else '禁用'}")
     print(f"分析: {'禁用' if args.no_analyze else '启用'}")
     if not args.no_analyze:
         print(f"分析输出目录: {args.analysis_output}")
@@ -168,7 +162,6 @@ def main() -> None:
     app = DemoUIApp(
         trainer,
         checkpoint_path=None,  # 已经加载了，不需要再加载
-        catfish_enabled=args.catfish,
         analyzer=analyzer,
     )
     print("启动演示UI...")

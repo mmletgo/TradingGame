@@ -38,7 +38,7 @@ def create_mock_agent(
     agent.agent_id = agent_id
     agent.is_liquidated = False
 
-    account = Account(agent_id, AgentType.RETAIL, config)
+    account = Account(agent_id, AgentType.RETAIL_PRO, config)
     account.balance = balance
     if position_qty != 0:
         side = OrderSide.BUY if position_qty > 0 else OrderSide.SELL
@@ -90,7 +90,7 @@ class TestAccountOnADLTrade:
 
     def test_long_position_adl(self, retail_config: AgentConfig):
         """测试多头被 ADL 减仓"""
-        account = Account(1, AgentType.RETAIL, retail_config)
+        account = Account(1, AgentType.RETAIL_PRO, retail_config)
         account.position.update(OrderSide.BUY.value, 100, 100.0)
         initial_balance = account.balance
 
@@ -104,7 +104,7 @@ class TestAccountOnADLTrade:
 
     def test_short_position_adl(self, retail_config: AgentConfig):
         """测试空头被 ADL 减仓"""
-        account = Account(1, AgentType.RETAIL, retail_config)
+        account = Account(1, AgentType.RETAIL_PRO, retail_config)
         account.position.update(OrderSide.SELL.value, 100, 100.0)
         initial_balance = account.balance
 
@@ -118,7 +118,7 @@ class TestAccountOnADLTrade:
 
     def test_position_cleared(self, retail_config: AgentConfig):
         """测试仓位完全清零"""
-        account = Account(1, AgentType.RETAIL, retail_config)
+        account = Account(1, AgentType.RETAIL_PRO, retail_config)
         account.position.update(OrderSide.BUY.value, 100, 100.0)
 
         account.on_adl_trade(100, 90.0, is_taker=True)

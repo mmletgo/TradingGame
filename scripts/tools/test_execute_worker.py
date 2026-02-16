@@ -21,7 +21,7 @@ def test_worker_pool_basic():
     from src.training.arena import ArenaExecuteWorkerPool, ArenaExecuteData
 
     config = create_default_config(
-        episode_length=100, checkpoint_interval=0, catfish_enabled=False
+        episode_length=100, checkpoint_interval=0
     )
 
     print("=" * 70)

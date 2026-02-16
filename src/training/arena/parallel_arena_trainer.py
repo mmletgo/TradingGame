@@ -35,11 +35,11 @@ if TYPE_CHECKING:
     from src.training._cython.batch_decide_openmp import BatchNetworkCache
 
 from src.bio.agents.base import ActionType, AgentType
-from src.config.config import CatfishMode, Config
+from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
-from src.market.catfish import create_all_catfish, create_catfish
 from src.market.market_state import NormalizedMarketState
+from src.market.noise_trader.noise_trader import NoiseTrader
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
@@ -62,18 +62,17 @@ from .arena_state import (
     AgentAccountState,
     AgentStateAdapter,
     ArenaState,
-    CatfishAccountState,
+    NoiseTraderAccountState,
     calculate_order_quantity_from_state,
     calculate_skew_factor_from_state,
 )
 from .execute_worker import (
-    CatfishDecision,
-    CatfishTradeResult,
+    NoiseTraderDecision,
+    NoiseTraderTradeResult,
 )
 from .fitness_aggregator import FitnessAggregator
 
 # 缓存类型常量
-CACHE_TYPE_RETAIL = 0
 CACHE_TYPE_FULL = 1
 CACHE_TYPE_MARKET_MAKER = 2
 
@@ -179,9 +178,6 @@ class ParallelArenaTrainer:
         self._worker_depth_cache: dict[
             int, tuple[np.ndarray, np.ndarray, float, float]
         ] = {}
-        # 奇数数量趋势鲶鱼的方向平衡开关（交替多/空以避免系统性偏差）
-        self._catfish_balance_bias_to_buy: bool = True
-
         # Phase 1 并行化：per-arena 缓冲区和 RNG
         self._per_arena_buffers: list[dict[str, np.ndarray]] = []
         self._per_arena_rng: list[random.Random] = []
@@ -224,7 +220,7 @@ class ParallelArenaTrainer:
         # 5. 构建 Agent 映射表
         self._build_agent_map()
 
-        # 6. 创建 Execute Worker 池（支持鲶鱼机制）
+        # 6. 创建 Execute Worker 池
         # 注意：Execute Worker 池依赖 arena_states，所以必须在创建竞技场状态之后
         if self._use_execute_workers:
             self._create_execute_worker_pool()
@@ -262,18 +258,10 @@ class ParallelArenaTrainer:
         """创建共享的种群（神经网络）"""
         self.logger.info("正在创建种群...")
 
-        # RETAIL: 10个子种群
-        self.populations[AgentType.RETAIL] = SubPopulationManager(
-            self.config, AgentType.RETAIL, sub_count=10
+        # RETAIL_PRO: 12个子种群
+        self.populations[AgentType.RETAIL_PRO] = SubPopulationManager(
+            self.config, AgentType.RETAIL_PRO, sub_count=12
         )
-
-        # RETAIL_PRO: 1个种群
-        self.populations[AgentType.RETAIL_PRO] = Population(
-            AgentType.RETAIL_PRO, self.config
-        )
-
-        # WHALE: 1个种群
-        self.populations[AgentType.WHALE] = Population(AgentType.WHALE, self.config)
 
         # MARKET_MAKER: 4个子种群
         self.populations[AgentType.MARKET_MAKER] = SubPopulationManager(
@@ -301,34 +289,16 @@ class ParallelArenaTrainer:
                     state = AgentAccountState.from_agent(agent)
                     agent_states[agent.agent_id] = state
 
-            # 创建鲶鱼状态
-            catfish_states: dict[int, CatfishAccountState] = {}
-            if self.config.catfish and self.config.catfish.enabled:
-                catfish_balance = self._calculate_catfish_initial_balance()
-                whale_config = self.config.agents[AgentType.WHALE]
-
-                if self.config.catfish.multi_mode:
-                    catfish_list = create_all_catfish(
-                        self.config.catfish,
-                        initial_balance=catfish_balance,
-                        leverage=whale_config.leverage,
-                        maintenance_margin_rate=whale_config.maintenance_margin_rate,
-                    )
-                else:
-                    catfish = create_catfish(
-                        -1,
-                        self.config.catfish,
-                        initial_balance=catfish_balance,
-                        leverage=whale_config.leverage,
-                        maintenance_margin_rate=whale_config.maintenance_margin_rate,
-                    )
-                    catfish_list = [catfish]
-
-                for catfish in catfish_list:
-                    state = CatfishAccountState.from_catfish(catfish)
-                    catfish_states[catfish.catfish_id] = state
-                    # 注册鲶鱼到撮合引擎
-                    matching_engine.register_agent(catfish.catfish_id, 0.0, 0.0)
+            # 创建噪声交易者状态
+            noise_trader_states: dict[int, NoiseTraderAccountState] = {}
+            noise_trader_config = self.config.noise_trader
+            for i in range(noise_trader_config.count):
+                trader_id = -(i + 1)  # 负数 ID: -1, -2, -3, ...
+                noise_trader = NoiseTrader(trader_id, noise_trader_config)
+                state = NoiseTraderAccountState.from_noise_trader(noise_trader)
+                noise_trader_states[trader_id] = state
+                # 注册噪声交易者到撮合引擎（手续费为 0）
+                matching_engine.register_agent(trader_id, 0.0, 0.0)
 
             # 注册所有 Agent 到撮合引擎
             for agent_type, population in self.populations.items():
@@ -346,7 +316,7 @@ class ParallelArenaTrainer:
                 matching_engine=matching_engine,
                 adl_manager=adl_manager,
                 agent_states=agent_states,
-                catfish_states=catfish_states,
+                noise_trader_states=noise_trader_states,
                 recent_trades=deque(maxlen=100),
                 price_history=deque([initial_price], maxlen=1000),
                 tick_history_prices=deque([initial_price], maxlen=100),
@@ -358,7 +328,6 @@ class ParallelArenaTrainer:
                 eliminating_agents=set(),
                 episode_high_price=initial_price,
                 episode_low_price=initial_price,
-                catfish_liquidated=False,
             )
 
             self.arena_states.append(arena_state)
@@ -508,65 +477,6 @@ class ParallelArenaTrainer:
             equities,
         )
 
-    def _calculate_catfish_initial_balance(self) -> float:
-        """计算每条鲶鱼的初始资金"""
-        agents_config = self.config.agents
-
-        mm_config = agents_config[AgentType.MARKET_MAKER]
-        mm_fund = mm_config.count * mm_config.initial_balance * mm_config.leverage
-
-        other_fund = 0.0
-        for agent_type in [AgentType.RETAIL, AgentType.RETAIL_PRO, AgentType.WHALE]:
-            cfg = agents_config[agent_type]
-            other_fund += cfg.count * cfg.initial_balance * cfg.leverage
-
-        if other_fund >= mm_fund:
-            raise ValueError(
-                f"鲶鱼资金配置错误：做市商杠杆后资金({mm_fund})必须大于"
-                f"其他物种杠杆后资金({other_fund})"
-            )
-
-        catfish_count = 3  # 趋势创造者、均值回归、随机交易
-        return (mm_fund - other_fund) / catfish_count
-
-    def _balance_catfish_directions(self) -> None:
-        """强制平衡趋势创造者鲶鱼的方向（跨所有竞技场）
-
-        收集所有竞技场的趋势创造者鲶鱼，随机分配一半为买方向，一半为卖方向。
-        这样可以确保无论有多少个竞技场，鲶鱼的买卖方向总是严格平衡的。
-        """
-        # 收集所有趋势创造者鲶鱼
-        trend_creators: list[CatfishAccountState] = []
-        for arena in self.arena_states:
-            for catfish_state in arena.catfish_states.values():
-                if catfish_state.catfish_mode == CatfishMode.TREND_CREATOR:
-                    trend_creators.append(catfish_state)
-
-        if not trend_creators:
-            return
-
-        # 随机打乱后分配方向
-        random.shuffle(trend_creators)
-        total = len(trend_creators)
-        buy_target = total // 2
-        sell_target = total // 2
-
-        # 奇数数量时，额外的 1 条鲶鱼在多/空之间轮换，避免长期偏向
-        if total % 2 == 1:
-            if self._catfish_balance_bias_to_buy:
-                buy_target += 1
-            else:
-                sell_target += 1
-            self._catfish_balance_bias_to_buy = not self._catfish_balance_bias_to_buy
-
-        for i, catfish in enumerate(trend_creators):
-            if i < buy_target:
-                catfish.current_direction = 1  # 买方向
-            else:
-                catfish.current_direction = -1  # 卖方向
-
-        self.logger.debug(f"鲶鱼方向已平衡: 买方向={buy_target}, 卖方向={sell_target}")
-
     def _init_network_caches(self) -> None:
         """初始化共享的网络数据缓存"""
         if not HAS_OPENMP_DECIDE:
@@ -585,9 +495,7 @@ class ParallelArenaTrainer:
                 continue
 
             # 确定缓存类型
-            if agent_type == AgentType.RETAIL:
-                cache_type = CACHE_TYPE_RETAIL
-            elif agent_type == AgentType.MARKET_MAKER:
+            if agent_type == AgentType.MARKET_MAKER:
                 cache_type = CACHE_TYPE_MARKET_MAKER
             else:
                 cache_type = CACHE_TYPE_FULL
@@ -650,43 +558,23 @@ class ParallelArenaTrainer:
         worker_configs: list[WorkerConfig] = []
 
         # 子种群数量硬编码（与 _create_populations 保持一致）
-        # RETAIL: 10 个子种群
+        # RETAIL_PRO: 12 个子种群
         # MARKET_MAKER: 4 个子种群
-        retail_sub_count = 10
+        retail_pro_sub_count = 12
         mm_sub_count = 4
 
-        # RETAIL Workers
-        retail_total = self.config.agents[AgentType.RETAIL].count
-        retail_per_sub = retail_total // retail_sub_count
-        for i in range(retail_sub_count):
+        # RETAIL_PRO Workers
+        retail_pro_total = self.config.agents[AgentType.RETAIL_PRO].count
+        retail_pro_per_sub = retail_pro_total // retail_pro_sub_count
+        for i in range(retail_pro_sub_count):
             worker_configs.append(
                 WorkerConfig(
-                    AgentType.RETAIL,
+                    AgentType.RETAIL_PRO,
                     i,
-                    f"{config_dir}/neat_retail.cfg",
-                    retail_per_sub,
+                    f"{config_dir}/neat_retail_pro.cfg",
+                    retail_pro_per_sub,
                 )
             )
-
-        # RETAIL_PRO Worker
-        worker_configs.append(
-            WorkerConfig(
-                AgentType.RETAIL_PRO,
-                0,
-                f"{config_dir}/neat_retail_pro.cfg",
-                self.config.agents[AgentType.RETAIL_PRO].count,
-            )
-        )
-
-        # WHALE Worker
-        worker_configs.append(
-            WorkerConfig(
-                AgentType.WHALE,
-                0,
-                f"{config_dir}/neat_whale.cfg",
-                self.config.agents[AgentType.WHALE].count,
-            )
-        )
 
         # MARKET_MAKER Workers
         mm_total = self.config.agents[AgentType.MARKET_MAKER].count
@@ -982,32 +870,26 @@ class ParallelArenaTrainer:
                     if state:
                         state.reset(agent_config)
 
-            # 重置鲶鱼状态
-            if self.config.catfish and self.config.catfish.enabled:
-                catfish_balance = self._calculate_catfish_initial_balance()
-                for catfish_state in arena.catfish_states.values():
-                    catfish_state.reset(catfish_balance)
+            # 重置噪声交易者状态
+            for noise_trader_state in arena.noise_trader_states.values():
+                noise_trader_state.reset()
 
             # 初始化扁平化数组（用于向量化强平检查）
             arena.init_flat_arrays()
-
-        # 强制平衡趋势创造者鲶鱼的方向（跨所有竞技场）
-        if self.config.catfish and self.config.catfish.enabled:
-            self._balance_catfish_directions()
 
         # 重置 Execute Worker 池的订单簿
         if self._execute_worker_pool is not None:
             fee_rates = self._collect_fee_rates()
 
-            # 收集所有鲶鱼 ID（用于 Worker 注册）
-            catfish_ids: list[int] = []
-            if self.arena_states and self.arena_states[0].catfish_states:
-                catfish_ids = list(self.arena_states[0].catfish_states.keys())
+            # 收集所有噪声交易者 ID（用于 Worker 注册）
+            noise_trader_ids: list[int] = []
+            if self.arena_states and self.arena_states[0].noise_trader_states:
+                noise_trader_ids = list(self.arena_states[0].noise_trader_states.keys())
 
             self._execute_worker_pool.reset_all(
                 initial_price=initial_price,
                 fee_rates=fee_rates,
-                catfish_ids=catfish_ids,
+                noise_trader_ids=noise_trader_ids,
             )
 
         # 构建 Arena 类型分组缓存（用于优化 _batch_inference_all_arenas_direct）
@@ -1297,7 +1179,7 @@ class ParallelArenaTrainer:
         all_decisions: dict[
             int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]
         ],
-        catfish_decisions_map: dict[int, list[CatfishDecision]] | None = None,
+        noise_trader_decisions_map: dict[int, list[NoiseTraderDecision]] | None = None,
     ) -> dict[int, Any]:
         """构建各竞技场的执行命令数据
 
@@ -1305,7 +1187,7 @@ class ParallelArenaTrainer:
 
         Args:
             all_decisions: 各竞技场的决策数据
-            catfish_decisions_map: 各竞技场的鲶鱼决策
+            noise_trader_decisions_map: 各竞技场的噪声交易者决策
 
         Returns:
             arena_commands: {arena_id: ArenaExecuteData}
@@ -1329,9 +1211,9 @@ class ParallelArenaTrainer:
             decisions_array = self._build_decisions_array_from_cache(arena_idx)
             mm_decisions_array = self._build_mm_decisions_array_from_cache(arena_idx)
 
-            catfish_decisions = (
-                catfish_decisions_map.get(arena_idx, [])
-                if catfish_decisions_map
+            noise_trader_decisions = (
+                noise_trader_decisions_map.get(arena_idx, [])
+                if noise_trader_decisions_map
                 else []
             )
 
@@ -1341,7 +1223,7 @@ class ParallelArenaTrainer:
                 mm_decisions=[],
                 decisions_array=decisions_array,
                 mm_decisions_array=mm_decisions_array,
-                catfish_decisions=catfish_decisions,
+                noise_trader_decisions=noise_trader_decisions,
             )
 
         return arena_commands
@@ -1351,20 +1233,20 @@ class ParallelArenaTrainer:
         all_decisions: dict[
             int, list[tuple[AgentAccountState, ActionType, dict[str, Any]]]
         ],
-        catfish_decisions_map: dict[int, list[CatfishDecision]] | None = None,
+        noise_trader_decisions_map: dict[int, list[NoiseTraderDecision]] | None = None,
     ) -> dict[int, Any]:
         """使用 Worker 池执行所有竞技场的决策
 
         Args:
             all_decisions: 各竞技场的决策数据，格式:
                 {arena_idx: [(state, action, params), ...]}
-            catfish_decisions_map: 各竞技场的鲶鱼决策，格式:
-                {arena_idx: [CatfishDecision, ...]}
+            noise_trader_decisions_map: 各竞技场的噪声交易者决策，格式:
+                {arena_idx: [NoiseTraderDecision, ...]}
 
         Returns:
             各竞技场的执行结果
         """
-        arena_commands = self._build_arena_commands(all_decisions, catfish_decisions_map)
+        arena_commands = self._build_arena_commands(all_decisions, noise_trader_decisions_map)
         assert self._execute_worker_pool is not None
         return self._execute_worker_pool.execute_all(arena_commands)
 
@@ -1536,12 +1418,12 @@ class ParallelArenaTrainer:
                 agent_state.bid_order_ids = list(bid_ids)
                 agent_state.ask_order_ids = list(ask_ids)
 
-        # 处理鲶鱼成交结果
-        for catfish_result in result.catfish_results:
-            catfish_state = arena.catfish_states.get(catfish_result.catfish_id)
-            if catfish_state is None:
+        # 处理噪声交易者成交结果
+        for nt_result in result.noise_trader_results:
+            nt_state = arena.noise_trader_states.get(nt_result.trader_id)
+            if nt_state is None:
                 continue
-            for trade_tuple in catfish_result.trades:
+            for trade_tuple in nt_result.trades:
                 (
                     _trade_id,
                     price,
@@ -1552,8 +1434,8 @@ class ParallelArenaTrainer:
                     _seller_fee,
                     is_buyer_taker,
                 ) = trade_tuple
-                is_buyer = catfish_result.catfish_id == buyer_id
-                catfish_state.on_trade(price, qty, is_buyer)
+                is_buyer = nt_result.trader_id == buyer_id
+                nt_state.on_trade(price, qty, is_buyer)
 
         # 同步价格
         arena.smooth_mid_price = result.mid_price
@@ -1590,7 +1472,7 @@ class ParallelArenaTrainer:
     def _prepare_arena_for_tick(self, arena_idx: int) -> tuple[
         NormalizedMarketState,
         list[AgentAccountState],
-        list[CatfishDecision],
+        list[NoiseTraderDecision],
     ]:
         """准备单个竞技场的 tick 数据（线程安全）
 
@@ -1601,7 +1483,7 @@ class ParallelArenaTrainer:
             arena_idx: 竞技场索引
 
         Returns:
-            (market_state, active_states, catfish_decisions)
+            (market_state, active_states, noise_trader_decisions)
         """
         arena = self.arena_states[arena_idx]
 
@@ -1642,10 +1524,10 @@ class ParallelArenaTrainer:
         # 强平检查
         self._handle_liquidations_for_arena(arena, current_price)
 
-        # 鲶鱼决策
-        catfish_decisions: list[CatfishDecision] = []
+        # 噪声交易者决策
+        noise_trader_decisions: list[NoiseTraderDecision] = []
         if self._execute_worker_pool is not None:
-            catfish_decisions = self._compute_catfish_decisions(arena)
+            noise_trader_decisions = self._compute_noise_trader_decisions(arena)
 
         # 计算市场状态
         market_state = self._compute_market_state_for_arena(arena, arena_idx)
@@ -1660,7 +1542,7 @@ class ParallelArenaTrainer:
         # 使用 per-arena RNG 打乱（线程安全）
         self._per_arena_rng[arena_idx].shuffle(active_states)
 
-        return market_state, active_states, catfish_decisions
+        return market_state, active_states, noise_trader_decisions
 
     def run_tick_all_arenas(self) -> bool:
         """并行执行所有竞技场的一个 tick
@@ -1672,8 +1554,7 @@ class ParallelArenaTrainer:
         num_arenas = len(self.arena_states)
         arena_market_states: list[NormalizedMarketState | None] = [None] * num_arenas
         arena_active_agents: list[list[AgentAccountState]] = [[] for _ in range(num_arenas)]
-        arena_catfish_trades: list[list[Trade]] = [[] for _ in self.arena_states]
-        catfish_decisions_map: dict[int, list[CatfishDecision]] = {}
+        noise_trader_decisions_map: dict[int, list[NoiseTraderDecision]] = {}
 
         # Worker 池模式且多竞技场时，Phase 1 并行执行
         if self._execute_worker_pool is not None and num_arenas > 1 and self._phase1_executor is not None:
@@ -1684,11 +1565,11 @@ class ParallelArenaTrainer:
             }
             for future in as_completed(futures):
                 idx = futures[future]
-                market_state, active, catfish_decs = future.result()
+                market_state, active, nt_decs = future.result()
                 arena_market_states[idx] = market_state
                 arena_active_agents[idx] = active
-                if catfish_decs:
-                    catfish_decisions_map[idx] = catfish_decs
+                if nt_decs:
+                    noise_trader_decisions_map[idx] = nt_decs
         else:
             # 串行回退（单竞技场或串行模式）
             for arena_idx, arena in enumerate(self.arena_states):
@@ -1729,10 +1610,7 @@ class ParallelArenaTrainer:
                 self._handle_liquidations_for_arena(arena, current_price)
 
                 if self._execute_worker_pool is not None:
-                    catfish_decisions_map[arena_idx] = self._compute_catfish_decisions(arena)
-                    arena_catfish_trades[arena_idx] = []
-                else:
-                    arena_catfish_trades[arena_idx] = self._catfish_action_for_arena(arena)
+                    noise_trader_decisions_map[arena_idx] = self._compute_noise_trader_decisions(arena)
 
                 market_state = self._compute_market_state_for_arena(arena, arena_idx)
                 arena_market_states[arena_idx] = market_state
@@ -1775,7 +1653,7 @@ class ParallelArenaTrainer:
                 if hasattr(_pool, 'submit_all') and hasattr(_pool, 'poll_result'):
                     # 增量处理：submit 后逐个 poll 结果并立即处理
                     arena_commands = self._build_arena_commands(
-                        filtered_decisions, catfish_decisions_map
+                        filtered_decisions, noise_trader_decisions_map
                     )
                     pending_arenas = set(_pool.submit_all(arena_commands))
 
@@ -1800,7 +1678,7 @@ class ParallelArenaTrainer:
                     # 回退：批量执行 + 批量处理
                     results = self._execute_with_worker_pool(
                         filtered_decisions,
-                        catfish_decisions_map,
+                        noise_trader_decisions_map,
                     )
                     arena_tick_trades = self._process_worker_results(results)
 
@@ -1808,11 +1686,6 @@ class ParallelArenaTrainer:
                 for arena_idx in filtered_decisions.keys():
                     arena = self.arena_states[arena_idx]
                     tick_trades = arena_tick_trades.get(arena_idx, [])
-                    # Worker 池模式下鲶鱼成交已在 _process_worker_results 中处理
-                    # 串行模式下鲶鱼成交在 arena_catfish_trades 中
-                    catfish_trades = arena_catfish_trades[arena_idx]
-                    if catfish_trades:
-                        tick_trades = catfish_trades + tick_trades
 
                     # 从 Worker 缓存中获取实际成交价格用于价格统计
                     actual_price = arena.smooth_mid_price
@@ -1842,9 +1715,6 @@ class ParallelArenaTrainer:
                     arena.tick_history_volumes.append(volume)
                     arena.tick_history_amounts.append(amount)
 
-                    # 鲶鱼强平检查（Worker 池模式不支持鲶鱼，但保持接口一致）
-                    self._check_catfish_liquidation_for_arena(arena, current_price)
-
                     # 检查提前结束条件
                     if arena.end_reason is None:
                         early_end = self._should_end_episode_early_for_arena(arena)
@@ -1854,9 +1724,6 @@ class ParallelArenaTrainer:
                                 arena.end_reason = f"{reason}:{agent_type.name}"
                             else:
                                 arena.end_reason = reason
-                            arena.end_tick = arena.tick
-                        elif arena.catfish_liquidated:
-                            arena.end_reason = "catfish"
                             arena.end_tick = arena.tick
 
             # Worker 池执行完成后立即释放推理数组缓存
@@ -2068,10 +1935,6 @@ class ParallelArenaTrainer:
                             )
                             arena.sync_state_to_array(maker_id)
 
-            catfish_trades = arena_catfish_trades[arena_idx]
-            if catfish_trades:
-                tick_trades = catfish_trades + tick_trades
-
             # 记录价格历史
             current_price = orderbook.last_price
             arena.price_history.append(current_price)
@@ -2087,9 +1950,6 @@ class ParallelArenaTrainer:
             arena.tick_history_volumes.append(volume)
             arena.tick_history_amounts.append(amount)
 
-            # 鲶鱼强平检查
-            self._check_catfish_liquidation_for_arena(arena, current_price)
-
             # 检查提前结束条件
             if arena.end_reason is None:
                 early_end = self._should_end_episode_early_for_arena(arena)
@@ -2099,9 +1959,6 @@ class ParallelArenaTrainer:
                         arena.end_reason = f"{reason}:{agent_type.name}"
                     else:
                         arena.end_reason = reason
-                    arena.end_tick = arena.tick
-                elif arena.catfish_liquidated:
-                    arena.end_reason = "catfish"
                     arena.end_tick = arena.tick
 
         # 只有当所有竞技场都结束时才返回 False
@@ -3318,164 +3175,42 @@ class ParallelArenaTrainer:
                 agent_state.position_avg_price = 0.0
                 arena.sync_state_to_array(agent_state.agent_id)
 
-    def _compute_catfish_decisions(
+    def _compute_noise_trader_decisions(
         self, arena: ArenaState
-    ) -> list[CatfishDecision]:
-        """计算鲶鱼决策
+    ) -> list[NoiseTraderDecision]:
+        """计算噪声交易者决策
 
-        调用 CatfishAccountState.decide() 获取决策，转换为 CatfishDecision 格式。
+        调用 NoiseTraderAccountState.decide() 获取决策，转换为 NoiseTraderDecision 格式。
         此方法仅计算决策，不执行订单（用于 Worker 池模式）。
 
         Args:
             arena: 竞技场状态
 
         Returns:
-            鲶鱼决策列表（仅包含需要行动的鲶鱼）
+            噪声交易者决策列表（仅包含需要行动的噪声交易者）
         """
-        decisions: list[CatfishDecision] = []
+        decisions: list[NoiseTraderDecision] = []
 
-        if not arena.catfish_states:
+        if not arena.noise_trader_states:
             return decisions
 
-        tick = arena.tick
-        price_history = arena.price_history
+        noise_trader_config = self.config.noise_trader
 
-        for catfish_state in arena.catfish_states.values():
-            if catfish_state.is_liquidated:
-                continue
+        for nt_state in arena.noise_trader_states.values():
+            should_act, direction, quantity = nt_state.decide(
+                noise_trader_config.action_probability
+            )
 
-            # 调用鲶鱼决策方法
-            should_act, direction = catfish_state.decide(tick, price_history)
-
-            if should_act and direction != 0:
-                # 创建决策（quantity_ticks 默认为 1，与 _catfish_action_for_arena 一致）
+            if should_act and direction != 0 and quantity > 0:
                 decisions.append(
-                    CatfishDecision(
-                        catfish_id=catfish_state.catfish_id,
+                    NoiseTraderDecision(
+                        trader_id=nt_state.trader_id,
                         direction=direction,
-                        quantity_ticks=1,
+                        quantity=quantity,
                     )
                 )
 
         return decisions
-
-    def _catfish_action_for_arena(self, arena: ArenaState) -> list[Trade]:
-        """鲶鱼在竞技场中的行动
-
-        实现三种鲶鱼的决策和执行逻辑：
-        - TREND_CREATOR: 保持当前方向持续操作
-        - MEAN_REVERSION: 价格偏离 EMA 时反向操作
-        - RANDOM: 随机概率触发，方向也随机
-        """
-        if not arena.catfish_states:
-            return []
-
-        orderbook = arena.matching_engine._orderbook
-        matching_engine = arena.matching_engine
-        tick = arena.tick
-        price_history = arena.price_history
-        tick_size = orderbook.tick_size
-
-        catfish_trades: list[Trade] = []
-        for catfish_state in arena.catfish_states.values():
-            if catfish_state.is_liquidated:
-                continue
-
-            # 调用鲶鱼决策方法
-            should_act, direction = catfish_state.decide(tick, price_history)
-
-            if not should_act:
-                continue
-
-            # 计算下单数量（吃掉前1档）
-            quantity = self._calculate_catfish_quantity(orderbook, direction)
-
-            if quantity <= 0:
-                continue
-
-            # 创建市价单
-            side = OrderSide.BUY if direction > 0 else OrderSide.SELL
-            order_id = catfish_state.generate_order_id(arena.arena_id)
-            order = Order(
-                order_id=order_id,
-                agent_id=catfish_state.catfish_id,
-                side=side,
-                order_type=OrderType.MARKET,
-                price=0.0,
-                quantity=quantity,
-            )
-
-            # 确保鲶鱼已注册（费率为0）
-            matching_engine.register_agent(catfish_state.catfish_id, 0.0, 0.0)
-
-            # 执行市价单
-            trades = matching_engine.match_market_order(order)
-
-            # 更新鲶鱼账户和 maker 账户
-            for trade in trades:
-                catfish_trades.append(trade)
-                is_buyer = trade.is_buyer_taker
-                catfish_state.on_trade(trade.price, trade.quantity, is_buyer)
-                arena.recent_trades.append(trade)
-
-                # 更新 maker 的账户状态
-                maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-                maker_state = arena.agent_states.get(maker_id)
-                if maker_state is not None:
-                    maker_is_buyer = not trade.is_buyer_taker
-                    maker_fee = (
-                        trade.seller_fee if trade.is_buyer_taker else trade.buyer_fee
-                    )
-                    maker_state.on_trade(
-                        trade.price, trade.quantity, maker_is_buyer, maker_fee, True
-                    )
-                    arena.sync_state_to_array(maker_id)
-
-        return catfish_trades
-
-    def _calculate_catfish_quantity(self, orderbook: Any, direction: int) -> int:
-        """计算鲶鱼下单数量（吃掉前1档）
-
-        Args:
-            orderbook: 订单簿
-            direction: 方向（1=买，-1=卖）
-
-        Returns:
-            下单数量
-        """
-        target_ticks = 1
-
-        # 获取盘口深度
-        depth = orderbook.get_depth(levels=target_ticks)
-
-        if direction > 0:  # 买入，吃卖盘
-            levels = depth["asks"]
-        else:  # 卖出，吃买盘
-            levels = depth["bids"]
-
-        if len(levels) < target_ticks:
-            return 0
-
-        # 累加前 target_ticks 档的数量
-        total_qty = 0
-        for i in range(min(target_ticks, len(levels))):
-            price, qty = levels[i]
-            total_qty += int(qty)
-
-        return total_qty
-
-    def _check_catfish_liquidation_for_arena(
-        self, arena: ArenaState, current_price: float
-    ) -> None:
-        """检查鲶鱼强平"""
-        for catfish_state in arena.catfish_states.values():
-            if catfish_state.is_liquidated:
-                continue
-
-            if catfish_state.check_liquidation(current_price):
-                catfish_state.is_liquidated = True
-                arena.catfish_liquidated = True
-                break
 
     def _should_end_episode_early_for_arena(
         self, arena: ArenaState
@@ -4307,23 +4042,17 @@ class ParallelArenaTrainer:
         import neat
         from src.bio.agents.base import Agent
         from src.bio.brain.brain import Brain
-        from src.bio.agents.retail import RetailAgent
         from src.bio.agents.retail_pro import RetailProAgent
-        from src.bio.agents.whale import WhaleAgent
         from src.bio.agents.market_maker import MarketMakerAgent
         from src.training.population import Population, SubPopulationManager
 
         _AGENT_CLASSES: dict[AgentType, type] = {
-            AgentType.RETAIL: RetailAgent,
             AgentType.RETAIL_PRO: RetailProAgent,
-            AgentType.WHALE: WhaleAgent,
             AgentType.MARKET_MAKER: MarketMakerAgent,
         }
         _AGENT_ID_OFFSET: dict[AgentType, int] = {
-            AgentType.RETAIL: 0,
-            AgentType.RETAIL_PRO: 1_000_000,
-            AgentType.WHALE: 2_000_000,
-            AgentType.MARKET_MAKER: 3_000_000,
+            AgentType.RETAIL_PRO: 0,
+            AgentType.MARKET_MAKER: 1_000_000,
         }
 
         # 加载 NEAT 配置
@@ -4332,12 +4061,8 @@ class ParallelArenaTrainer:
         for agent_type in AgentType:
             if agent_type == AgentType.MARKET_MAKER:
                 neat_config_path = config_dir / "neat_market_maker.cfg"
-            elif agent_type == AgentType.WHALE:
-                neat_config_path = config_dir / "neat_whale.cfg"
-            elif agent_type == AgentType.RETAIL_PRO:
-                neat_config_path = config_dir / "neat_retail_pro.cfg"
             else:
-                neat_config_path = config_dir / "neat_retail.cfg"
+                neat_config_path = config_dir / "neat_retail_pro.cfg"
             neat_configs[agent_type] = neat.Config(
                 neat.DefaultGenome,
                 neat.DefaultReproduction,

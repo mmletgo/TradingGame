@@ -27,7 +27,7 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from src.training.arena.execute_worker import (
-        CatfishDecision,
+        NoiseTraderDecision,
     )
 
 # ============================================================================
@@ -42,8 +42,8 @@ MAX_ORDERS_PER_MM = 20       # 每做市商最大订单数
 MAX_TRADES = 2000            # 每竞技场最大成交数
 MAX_PENDING_UPDATES = 12000  # 最大挂单更新数
 
-# 鲶鱼相关常量
-MAX_CATFISH = 3              # 最大鲶鱼数（3种鲶鱼：趋势创造者、均值回归、随机交易）
+# 噪声交易者相关常量
+MAX_NOISE_TRADERS = 200      # 最大噪声交易者数
 
 # Header 大小（64 bytes，填充到缓存行对齐）
 HEADER_SIZE = 64
@@ -54,17 +54,17 @@ DECISIONS_SIZE = MAX_DECISIONS * 5 * 8    # float64[MAX_DECISIONS × 5]
 MM_AGENT_IDS_SIZE = MAX_MM_AGENTS * 8     # int64[MAX_MM_AGENTS] - 存储做市商 agent_id
 MM_DECISIONS_SIZE = MAX_MM_AGENTS * MAX_ORDERS_PER_MM * 2 * 2 * 8  # float64[..., 4]
 
-# 吃单鲶鱼决策: catfish_id(int64), direction(int64), quantity_ticks(int64)
-CATFISH_DECISIONS_SIZE = MAX_CATFISH * 3 * 8  # int64[MAX_CATFISH × 3]
+# 噪声交易者决策: trader_id(int64), direction(int64), quantity(int64)
+NOISE_TRADER_DECISIONS_SIZE = MAX_NOISE_TRADERS * 3 * 8  # int64[MAX_NOISE_TRADERS × 3]
 
-# Command Region 总大小（包含鲶鱼决策区域）
+# Command Region 总大小（包含噪声交易者决策区域）
 COMMAND_REGION_SIZE = (
     HEADER_SIZE
     + LIQUIDATED_SIZE
     + DECISIONS_SIZE
     + MM_AGENT_IDS_SIZE
     + MM_DECISIONS_SIZE
-    + CATFISH_DECISIONS_SIZE
+    + NOISE_TRADER_DECISIONS_SIZE
 )
 
 # Result Region 各区域大小
@@ -119,13 +119,13 @@ class ArenaCommandView:
         - liquidated_count: uint32 (4 bytes)
         - decisions_count: uint32 (4 bytes)
         - mm_count: uint32 (4 bytes)
-        - catfish_count: uint32 (4 bytes)
+        - noise_trader_count: uint32 (4 bytes)
         - padding: 40 bytes
     - liquidated_data: int64[MAX_LIQUIDATED × 3]
     - decisions_data: float64[MAX_DECISIONS × 5]
     - mm_agent_ids: int64[MAX_MM_AGENTS] - 做市商 agent_id 列表
     - mm_decisions_data: float64[MAX_MM_AGENTS × MAX_ORDERS_PER_MM × 2 × 2]
-    - catfish_decisions: int64[MAX_CATFISH × 3] - 吃单鲶鱼决策
+    - noise_trader_decisions: int64[MAX_NOISE_TRADERS × 3] - 噪声交易者决策
 
     Attributes:
         _buffer: 底层内存视图
@@ -135,7 +135,7 @@ class ArenaCommandView:
         _decisions: 决策数据的 numpy 视图
         _mm_agent_ids: 做市商 agent_id 的 numpy 视图
         _mm_decisions: 做市商决策的 numpy 视图
-        _catfish_decisions: 吃单鲶鱼决策的 numpy 视图
+        _noise_trader_decisions: 噪声交易者决策的 numpy 视图
 
     """
 
@@ -144,7 +144,7 @@ class ArenaCommandView:
     _decisions: NDArray[np.float64]
     _mm_agent_ids: NDArray[np.int64]
     _mm_decisions: NDArray[np.float64]
-    _catfish_decisions: NDArray[np.int64]
+    _noise_trader_decisions: NDArray[np.int64]
 
     def __init__(self, buffer: bytes, offset: int = 0) -> None:
         """初始化命令视图
@@ -162,7 +162,7 @@ class ArenaCommandView:
         decisions_offset = liquidated_offset + LIQUIDATED_SIZE
         mm_agent_ids_offset = decisions_offset + DECISIONS_SIZE
         mm_decisions_offset = mm_agent_ids_offset + MM_AGENT_IDS_SIZE
-        catfish_decisions_offset = mm_decisions_offset + MM_DECISIONS_SIZE
+        noise_trader_decisions_offset = mm_decisions_offset + MM_DECISIONS_SIZE
 
         # 创建 numpy 视图
         self._header = np.ndarray(
@@ -181,8 +181,8 @@ class ArenaCommandView:
             shape=(MAX_MM_AGENTS, MAX_ORDERS_PER_MM * 2, 2), dtype=np.float64,
             buffer=buffer, offset=mm_decisions_offset
         )
-        self._catfish_decisions = np.ndarray(
-            shape=(MAX_CATFISH, 3), dtype=np.int64, buffer=buffer, offset=catfish_decisions_offset
+        self._noise_trader_decisions = np.ndarray(
+            shape=(MAX_NOISE_TRADERS, 3), dtype=np.int64, buffer=buffer, offset=noise_trader_decisions_offset
         )
 
     def release(self) -> None:
@@ -196,7 +196,7 @@ class ArenaCommandView:
         self._decisions = None  # type: ignore[assignment]
         self._mm_agent_ids = None  # type: ignore[assignment]
         self._mm_decisions = None  # type: ignore[assignment]
-        self._catfish_decisions = None  # type: ignore[assignment]
+        self._noise_trader_decisions = None  # type: ignore[assignment]
 
     @property
     def status(self) -> int:
@@ -234,8 +234,8 @@ class ArenaCommandView:
         return int(self._header[4])
 
     @property
-    def catfish_count(self) -> int:
-        """获取吃单鲶鱼数量"""
+    def noise_trader_count(self) -> int:
+        """获取噪声交易者数量"""
         return int(self._header[5])
 
     def set_liquidated(
@@ -379,44 +379,44 @@ class ArenaCommandView:
 
         return result
 
-    def set_catfish_decisions(
-        self, decisions: list["CatfishDecision"]
+    def set_noise_trader_decisions(
+        self, decisions: list["NoiseTraderDecision"]
     ) -> None:
-        """设置吃单鲶鱼决策数据
+        """设置噪声交易者决策数据
 
         Args:
-            decisions: 吃单鲶鱼决策列表，CatfishDecision 对象
+            decisions: 噪声交易者决策列表，NoiseTraderDecision 对象
         """
-        count = min(len(decisions), MAX_CATFISH)
+        count = min(len(decisions), MAX_NOISE_TRADERS)
         self._header[5] = count
         if count > 0:
             for i, decision in enumerate(decisions[:count]):
-                self._catfish_decisions[i, 0] = decision.catfish_id
-                self._catfish_decisions[i, 1] = decision.direction
-                self._catfish_decisions[i, 2] = decision.quantity_ticks
+                self._noise_trader_decisions[i, 0] = decision.trader_id
+                self._noise_trader_decisions[i, 1] = decision.direction
+                self._noise_trader_decisions[i, 2] = decision.quantity
 
-    def get_catfish_decisions(self) -> list["CatfishDecision"]:
-        """获取吃单鲶鱼决策数据
+    def get_noise_trader_decisions(self) -> list["NoiseTraderDecision"]:
+        """获取噪声交易者决策数据
 
         Returns:
-            吃单鲶鱼决策列表，CatfishDecision 对象
+            噪声交易者决策列表，NoiseTraderDecision 对象
         """
-        from src.training.arena.execute_worker import CatfishDecision
+        from src.training.arena.execute_worker import NoiseTraderDecision
 
-        count = self.catfish_count
+        count = self.noise_trader_count
         if count == 0:
             return []
 
-        result: list[CatfishDecision] = []
+        result: list[NoiseTraderDecision] = []
         for i in range(count):
-            catfish_id = int(self._catfish_decisions[i, 0])
-            direction = int(self._catfish_decisions[i, 1])
-            quantity_ticks = int(self._catfish_decisions[i, 2])
+            trader_id = int(self._noise_trader_decisions[i, 0])
+            direction = int(self._noise_trader_decisions[i, 1])
+            quantity = int(self._noise_trader_decisions[i, 2])
             result.append(
-                CatfishDecision(
-                    catfish_id=catfish_id,
+                NoiseTraderDecision(
+                    trader_id=trader_id,
                     direction=direction,
-                    quantity_ticks=quantity_ticks,
+                    quantity=quantity,
                 )
             )
         return result

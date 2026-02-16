@@ -17,7 +17,7 @@ def create_test_genome_and_config() -> tuple[neat.DefaultGenome, neat.Config]:
     config = neat.Config(
         neat.DefaultGenome, neat.DefaultReproduction,
         neat.DefaultSpeciesSet, neat.DefaultStagnation,
-        'config/neat_retail.cfg'
+        'config/neat_retail_pro.cfg'
     )
     pop = neat.Population(config)
     genome = list(pop.population.values())[0]
@@ -43,7 +43,7 @@ class TestBrainFromGenome:
         config = neat.Config(
             neat.DefaultGenome, neat.DefaultReproduction,
             neat.DefaultSpeciesSet, neat.DefaultStagnation,
-            'config/neat_retail.cfg'
+            'config/neat_retail_pro.cfg'
         )
         pop = neat.Population(config)
         genomes = list(pop.population.values())[:2]
@@ -87,7 +87,7 @@ class TestBrainInit:
         config = neat.Config(
             neat.DefaultGenome, neat.DefaultReproduction,
             neat.DefaultSpeciesSet, neat.DefaultStagnation,
-            'config/neat_retail.cfg'
+            'config/neat_retail_pro.cfg'
         )
         pop = neat.Population(config)
         genomes = list(pop.population.values())[:2]
@@ -205,7 +205,7 @@ class TestFastFeedForwardNetworkIntegration:
         config = neat.Config(
             neat.DefaultGenome, neat.DefaultReproduction,
             neat.DefaultSpeciesSet, neat.DefaultStagnation,
-            'config/neat_retail.cfg'
+            'config/neat_retail_pro.cfg'
         )
         pop = neat.Population(config)
         genome = list(pop.population.values())[0]

@@ -1,6 +1,6 @@
 """图表面板组件
 
-显示价格曲线、种群资产曲线、资产分布小提琴图和鲶鱼资金曲线。
+显示价格曲线、种群资产曲线和资产分布小提琴图。
 """
 
 import dearpygui.dearpygui as dpg
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
         alive_equities: list[float]
 
     @dataclass
-    class CatfishInfo:
+    class NoiseTraderInfo:
         name: str
         equity: float
         position_qty: int
@@ -31,41 +31,19 @@ if TYPE_CHECKING:
 
 # 种群颜色配置
 POPULATION_COLORS: dict[AgentType, tuple[int, int, int]] = {
-    AgentType.RETAIL: (100, 200, 100),       # 绿色
     AgentType.RETAIL_PRO: (100, 150, 255),   # 蓝色
-    AgentType.WHALE: (255, 100, 150),        # 粉红色（庄家）
     AgentType.MARKET_MAKER: (200, 100, 255), # 紫色
-}
-
-# 鲶鱼颜色配置
-CATFISH_COLORS: dict[str, tuple[int, int, int]] = {
-    "TrendCreatorCatfish": (255, 165, 0),        # 橙色
-    "TrendFollowingCatfish": (255, 165, 0),      # 橙色（向后兼容别名）
-    "MeanReversionCatfish": (255, 105, 180),     # 粉色
-    "RandomTradingCatfish": (148, 0, 211),       # 深紫色
-}
-
-# 鲶鱼中文名称
-CATFISH_NAMES: dict[str, str] = {
-    "TrendCreatorCatfish": "趋势创造",
-    "TrendFollowingCatfish": "趋势创造",         # 向后兼容别名
-    "MeanReversionCatfish": "逆势操作",
-    "RandomTradingCatfish": "随机买卖",
 }
 
 # 种群中文名称
 POPULATION_NAMES: dict[AgentType, str] = {
-    AgentType.RETAIL: "散户",
     AgentType.RETAIL_PRO: "高级散户",
-    AgentType.WHALE: "庄家",
     AgentType.MARKET_MAKER: "做市商",
 }
 
 # 纵向布局的种群顺序
 VERTICAL_LAYOUT: list[AgentType] = [
-    AgentType.RETAIL,
     AgentType.RETAIL_PRO,
-    AgentType.WHALE,
     AgentType.MARKET_MAKER,
 ]
 
@@ -73,7 +51,7 @@ VERTICAL_LAYOUT: list[AgentType] = [
 class ChartPanel:
     """图表面板
 
-    显示价格曲线、种群资产曲线、资产分布小提琴图和鲶鱼资金曲线。
+    显示价格曲线、种群资产曲线和资产分布小提琴图。
     """
 
     # 图表面板配置
@@ -81,20 +59,14 @@ class ChartPanel:
     EQUITY_PLOT_HEIGHT: int = 140  # 每个资产图表高度
     PRICE_PLOT_HEIGHT: int = 140  # 价格图表高度
     VIOLIN_PLOT_HEIGHT: int = 120  # 小提琴图高度
-    VIOLIN_PLOT_WIDTH: int = 340  # 每个小提琴图宽度（4个并排）
-    CATFISH_PLOT_HEIGHT: int = 140  # 鲶鱼图表高度
-    CATFISH_PLOT_WIDTH: int = 340  # 每个鲶鱼图表宽度（4个并排）
+    VIOLIN_PLOT_WIDTH: int = 340  # 每个小提琴图宽度
     KDE_POINTS: int = 50  # KDE曲线采样点数
-
-    # 是否显示鲶鱼图表
-    _catfish_enabled: bool
 
     def __init__(self) -> None:
         """初始化图表面板
 
         组件会自动添加到当前DearPyGui上下文中。
         """
-        self._catfish_enabled = False
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -135,11 +107,8 @@ class ChartPanel:
                         tag=f"stat_{agent_type.value}", color=color)
                     dpg.add_spacer(width=20)
 
-            # 小提琴图区域（4个并排）
+            # 小提琴图区域
             self._create_violin_plots()
-
-            # 鲶鱼图表区域（3个并排，默认隐藏）
-            self._create_catfish_plots()
 
     def _create_equity_row(self, agent_type: AgentType) -> None:
         """创建单个种群的资产图表行（存活个体平均）
@@ -467,158 +436,3 @@ class ChartPanel:
         dpg.set_axis_limits(f"violin_x_axis_{tag_prefix}", x_min, x_max)
         dpg.set_axis_limits(f"violin_y_axis_{tag_prefix}", -0.6, 0.6)
 
-    def _create_catfish_plots(self) -> None:
-        """创建四只鲶鱼的图表区域（一行四个，默认隐藏）"""
-        # 鲶鱼区域容器（默认隐藏）
-        with dpg.group(tag="catfish_container", show=False):
-            dpg.add_separator()
-            dpg.add_text("鲶鱼资金曲线", color=(255, 255, 0))
-
-            # 三只鲶鱼图表水平排列
-            with dpg.group(horizontal=True):
-                catfish_types = [
-                    "TrendCreatorCatfish",
-                    "MeanReversionCatfish",
-                    "RandomTradingCatfish",
-                ]
-
-                for i, catfish_type in enumerate(catfish_types):
-                    name = CATFISH_NAMES.get(catfish_type, catfish_type)
-                    color = CATFISH_COLORS.get(catfish_type, (200, 200, 200))
-
-                    with dpg.group():
-                        # 图表标题和持仓状态
-                        with dpg.group(horizontal=True):
-                            dpg.add_text(
-                                f"{name}",
-                                tag=f"catfish_title_{i}",
-                                color=color,
-                            )
-                            dpg.add_text(
-                                " | 持仓: 0",
-                                tag=f"catfish_position_{i}",
-                                color=(200, 200, 200),
-                            )
-
-                        # 净值曲线图
-                        with dpg.plot(
-                            label="",
-                            height=self.CATFISH_PLOT_HEIGHT,
-                            width=self.CATFISH_PLOT_WIDTH,
-                            tag=f"catfish_plot_{i}",
-                        ):
-                            dpg.add_plot_axis(
-                                dpg.mvXAxis,
-                                label="Tick",
-                                tag=f"catfish_x_axis_{i}",
-                            )
-                            dpg.add_plot_axis(
-                                dpg.mvYAxis,
-                                label="净值",
-                                tag=f"catfish_y_axis_{i}",
-                            )
-                            dpg.add_line_series(
-                                [],
-                                [],
-                                label=name,
-                                parent=f"catfish_y_axis_{i}",
-                                tag=f"catfish_series_{i}",
-                            )
-
-        # 设置鲶鱼曲线颜色主题
-        self._setup_catfish_themes()
-
-    def _setup_catfish_themes(self) -> None:
-        """设置鲶鱼曲线颜色主题"""
-        catfish_types = [
-            "TrendCreatorCatfish",
-            "MeanReversionCatfish",
-            "RandomTradingCatfish",
-        ]
-
-        for i, catfish_type in enumerate(catfish_types):
-            color = CATFISH_COLORS.get(catfish_type, (200, 200, 200))
-
-            with dpg.theme() as theme:
-                with dpg.theme_component(dpg.mvLineSeries):
-                    dpg.add_theme_color(
-                        dpg.mvPlotCol_Line,
-                        (*color, 255),
-                        category=dpg.mvThemeCat_Plots,
-                    )
-            dpg.bind_item_theme(f"catfish_series_{i}", theme)
-
-    def update_catfish(
-        self,
-        catfish_data: list[Any],
-        catfish_equity_history: list[list[float]],
-    ) -> None:
-        """更新鲶鱼图表
-
-        Args:
-            catfish_data: 鲶鱼信息列表（CatfishInfo对象列表）
-            catfish_equity_history: 四只鲶鱼的净值历史
-        """
-        # 如果没有鲶鱼数据，隐藏鲶鱼区域
-        if not catfish_data:
-            if self._catfish_enabled:
-                dpg.configure_item("catfish_container", show=False)
-                self._catfish_enabled = False
-            return
-
-        # 如果鲶鱼区域被隐藏，显示它
-        if not self._catfish_enabled:
-            dpg.configure_item("catfish_container", show=True)
-            self._catfish_enabled = True
-
-        # 更新每只鲶鱼的图表
-        for i, catfish_info in enumerate(catfish_data):
-            if i >= 4:  # 最多显示4只鲶鱼
-                break
-
-            # 获取鲶鱼类型和颜色
-            catfish_type = catfish_info.name
-            name = CATFISH_NAMES.get(catfish_type, catfish_type)
-            color = CATFISH_COLORS.get(catfish_type, (200, 200, 200))
-
-            # 更新持仓显示
-            position_qty = catfish_info.position_qty
-            position_value = catfish_info.position_value
-            value_str = self._format_number(position_value)
-            if position_qty > 0:
-                position_text = f" | 持仓: +{position_qty} (多) | 市值: {value_str}"
-                position_color = (100, 200, 100)  # 绿色
-            elif position_qty < 0:
-                position_text = f" | 持仓: {position_qty} (空) | 市值: {value_str}"
-                position_color = (255, 100, 100)  # 红色
-            else:
-                position_text = " | 持仓: 0 (空仓)"
-                position_color = (200, 200, 200)  # 灰色
-
-            # 如果被强平，显示强平状态
-            if catfish_info.is_liquidated:
-                position_text = " | [已强平]"
-                position_color = (255, 50, 50)
-
-            dpg.set_value(f"catfish_position_{i}", position_text)
-            dpg.configure_item(f"catfish_position_{i}", color=position_color)
-
-            # 更新净值曲线
-            if i < len(catfish_equity_history):
-                equity_history = catfish_equity_history[i]
-                if equity_history:
-                    ticks = list(range(len(equity_history)))
-                    dpg.set_value(f"catfish_series_{i}", [ticks, equity_history])
-
-                    # 自动调整坐标轴
-                    max_tick = len(equity_history)
-                    min_equity = min(equity_history)
-                    max_equity = max(equity_history)
-
-                    dpg.set_axis_limits(f"catfish_x_axis_{i}", 0, max_tick)
-                    margin = (max_equity - min_equity) * 0.1 or 1
-                    dpg.set_axis_limits(
-                        f"catfish_y_axis_{i}",
-                        min_equity - margin,
-                        max_equity + margin,
-                    )

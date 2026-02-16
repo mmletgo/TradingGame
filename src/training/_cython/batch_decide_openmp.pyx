@@ -48,19 +48,16 @@ DEF ACT_SIN = 4
 DEF ACT_GAUSS = 5
 
 # Agent 类型
-DEF AGENT_RETAIL = 0
 DEF AGENT_RETAIL_PRO = 1
-DEF AGENT_WHALE = 2
 DEF AGENT_MARKET_MAKER = 3
 
 # 输入/输出维度
-DEF INPUT_DIM_RETAIL = 127
 DEF INPUT_DIM_FULL = 907
 DEF INPUT_DIM_MARKET_MAKER = 964
-DEF OUTPUT_DIM_RETAIL = 8
+DEF OUTPUT_DIM_FULL = 8
 DEF OUTPUT_DIM_MARKET_MAKER = 41
 
-# 动作类型（散户/高级散户/庄家共用6种动作）
+# 动作类型（高级散户共用6种动作）
 DEF ACTION_HOLD = 0
 DEF ACTION_PLACE_BID = 1
 DEF ACTION_PLACE_ASK = 2
@@ -668,7 +665,7 @@ cdef void _observe_retail_single(
     double initial_balance,
     double leverage,
 ) noexcept nogil:
-    """构建散户的神经网络输入向量（127 维）
+    """构建散户的神经网络输入向量（127 维，保留以支持旧兼容）
 
     输入布局：
     - 0-19: 买盘前10档（每档2个值：价格归一化 + 数量）
@@ -766,7 +763,7 @@ cdef void _observe_full_single(
     double initial_balance,
     double leverage,
 ) noexcept nogil:
-    """构建高级散户/庄家的神经网络输入向量（907 维）
+    """构建高级散户的神经网络输入向量（907 维）
 
     输入布局：
     - 0-199: 买盘100档（每档2个值：价格归一化 + 数量）
@@ -846,7 +843,7 @@ cdef void batch_observe_full_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建高级散户/庄家的神经网络输入向量（907 维）"""
+    """批量构建高级散户的神经网络输入向量（907 维）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 100000.0  # 默认值，高级散户
@@ -983,7 +980,7 @@ cdef void batch_observe_full_multi_market_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建高级散户/庄家的神经网络输入向量（支持多市场状态）"""
+    """批量构建高级散户的神经网络输入向量（支持多市场状态）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 100000.0
@@ -1150,7 +1147,7 @@ cdef void _parse_retail_single(
     double mid_price,
     double tick_size,
 ) noexcept nogil:
-    """解析散户/高级散户/庄家的神经网络输出，并计算实际订单数量
+    """解析高级散户的神经网络输出，并计算实际订单数量
 
     输出结构（8个值）：
     - [0-5]: 动作类型得分（6种动作）
@@ -1320,7 +1317,7 @@ cdef void batch_parse_retail_nogil(
     int num_agents,
     int num_threads
 ) noexcept nogil:
-    """批量解析散户/高级散户/庄家的神经网络输出"""
+    """批量解析高级散户的神经网络输出"""
     cdef int i
 
     for i in prange(num_agents, nogil=True, num_threads=num_threads, schedule='static'):
@@ -1380,7 +1377,7 @@ cdef void batch_parse_retail_multi_market_nogil(
     int num_agents,
     int num_threads
 ) noexcept nogil:
-    """批量解析散户/高级散户/庄家的神经网络输出（多市场版本）"""
+    """批量解析高级散户的神经网络输出（多市场版本）"""
     cdef int i
     cdef int market_idx
     cdef double mid_price, tick_size
@@ -1694,126 +1691,15 @@ cdef void batch_parse_market_maker_full_multi_market_nogil(
 # Python 入口函数
 # ============================================================================
 
-def batch_decide_retail(
-    list networks,
-    list agents,
-    market_state,
-    int num_threads=0,
-) -> list:
-    """批量决策入口 - 散户版本 (127维输入, 9维输出)
-
-    Args:
-        networks: FastFeedForwardNetwork 列表
-        agents: Agent 列表
-        market_state: NormalizedMarketState
-        num_threads: 线程数（0 表示自动检测）
-
-    Returns:
-        决策结果列表：[(action_type, side, price, quantity), ...]
-    """
-    cdef int num_agents = len(agents)
-    if num_agents == 0:
-        return []
-
-    # 自动检测线程数
-    if num_threads <= 0:
-        num_threads = openmp.omp_get_max_threads()
-
-    # 获取网络参数
-    cdef int max_nodes = 0
-    cdef int max_connections = 0
-    for net in networks:
-        if net.num_nodes > max_nodes:
-            max_nodes = net.num_nodes
-        num_conns = len(net.conn_sources)
-        if num_conns > max_connections:
-            max_connections = num_conns
-
-    # 分配数据结构
-    cdef BatchNetworkData* batch_networks = alloc_batch_network_data(
-        num_agents, max_nodes, max_connections, INPUT_DIM_RETAIL, OUTPUT_DIM_RETAIL
-    )
-    cdef BatchAgentState* batch_agents = alloc_batch_agent_state(num_agents)
-    cdef MarketStateData* market_data = alloc_market_state_data()
-    cdef ThreadLocalBuffer* buffers = alloc_thread_buffers(
-        num_threads, max_nodes + INPUT_DIM_RETAIL, INPUT_DIM_RETAIL, OUTPUT_DIM_RETAIL
-    )
-
-    if (batch_networks == NULL or batch_agents == NULL or
-        market_data == NULL or buffers == NULL):
-        # 清理并返回空结果
-        if batch_networks != NULL:
-            free_batch_network_data(batch_networks)
-        if batch_agents != NULL:
-            free_batch_agent_state(batch_agents)
-        if market_data != NULL:
-            free_market_state_data(market_data)
-        if buffers != NULL:
-            free_thread_buffers(buffers, num_threads)
-        return []
-
-    # 提取数据
-    _extract_networks_to_batch(networks, batch_networks)
-    _extract_agents_to_batch(agents, batch_agents, market_state.mid_price)
-    _extract_market_state(market_state, market_data)
-
-    # 分配输入输出数组
-    cdef np.ndarray[DTYPE_t, ndim=2] inputs = np.zeros(
-        (num_agents, INPUT_DIM_RETAIL), dtype=np.float64
-    )
-    cdef np.ndarray[DTYPE_t, ndim=2] outputs = np.zeros(
-        (num_agents, OUTPUT_DIM_RETAIL), dtype=np.float64
-    )
-
-    # 分配决策结果数组
-    cdef DecisionResult* results = <DecisionResult*>calloc(num_agents, sizeof(DecisionResult))
-
-    cdef double[:, :] inputs_view = inputs
-    cdef double[:, :] outputs_view = outputs
-    cdef double mid_price = market_state.mid_price
-    cdef double tick_size = market_state.tick_size
-
-    # 执行批量计算
-    with nogil:
-        # 1. 批量观察
-        batch_observe_retail_nogil(batch_agents, market_data, inputs_view, num_threads)
-
-        # 2. 批量前向传播
-        batch_forward_nogil(batch_networks, inputs_view, outputs_view, buffers, num_threads)
-
-        # 3. 批量解析（传入 agents 以计算 quantity）
-        batch_parse_retail_nogil(outputs_view, results, batch_agents, mid_price, tick_size, num_agents, num_threads)
-
-    # 转换结果为 Python 列表
-    cdef list result_list = []
-    cdef int i
-    for i in range(num_agents):
-        result_list.append((
-            results[i].action_type,
-            results[i].side,
-            results[i].price,
-            results[i].quantity,
-        ))
-
-    # 清理
-    free_batch_network_data(batch_networks)
-    free_batch_agent_state(batch_agents)
-    free_market_state_data(market_data)
-    free_thread_buffers(buffers, num_threads)
-    free(results)
-
-    return result_list
-
-
 def batch_decide_full(
     list networks,
     list agents,
     market_state,
     int num_threads=0,
 ) -> list:
-    """批量决策入口 - 完整版本 (907维输入, 9维输出)
+    """批量决策入口 - 完整版本 (907维输入, 8维输出)
 
-    用于高级散户和庄家。
+    用于高级散户。
 
     Args:
         networks: FastFeedForwardNetwork 列表
@@ -1843,12 +1729,12 @@ def batch_decide_full(
 
     # 分配数据结构
     cdef BatchNetworkData* batch_networks = alloc_batch_network_data(
-        num_agents, max_nodes, max_connections, INPUT_DIM_FULL, OUTPUT_DIM_RETAIL
+        num_agents, max_nodes, max_connections, INPUT_DIM_FULL, OUTPUT_DIM_FULL
     )
     cdef BatchAgentState* batch_agents = alloc_batch_agent_state(num_agents)
     cdef MarketStateData* market_data = alloc_market_state_data()
     cdef ThreadLocalBuffer* buffers = alloc_thread_buffers(
-        num_threads, max_nodes + INPUT_DIM_FULL, INPUT_DIM_FULL, OUTPUT_DIM_RETAIL
+        num_threads, max_nodes + INPUT_DIM_FULL, INPUT_DIM_FULL, OUTPUT_DIM_FULL
     )
 
     if (batch_networks == NULL or batch_agents == NULL or
@@ -1873,7 +1759,7 @@ def batch_decide_full(
         (num_agents, INPUT_DIM_FULL), dtype=np.float64
     )
     cdef np.ndarray[DTYPE_t, ndim=2] outputs = np.zeros(
-        (num_agents, OUTPUT_DIM_RETAIL), dtype=np.float64
+        (num_agents, OUTPUT_DIM_FULL), dtype=np.float64
     )
 
     cdef DecisionResult* results = <DecisionResult*>calloc(num_agents, sizeof(DecisionResult))
@@ -2025,7 +1911,6 @@ def set_num_threads(int num_threads):
 # 缓存类型常量（模块级）
 # ============================================================================
 
-CACHE_TYPE_RETAIL = 0
 CACHE_TYPE_FULL = 1
 CACHE_TYPE_MARKET_MAKER = 2
 
@@ -2054,7 +1939,7 @@ cdef class BatchNetworkCache:
 
         Args:
             num_networks: 网络数量
-            cache_type: 类型 (0=retail 127维, 1=full 907维, 2=market_maker 934维)
+            cache_type: 类型 (1=full 907维, 2=market_maker 964维)
             num_threads: OpenMP 线程数，0 表示自动检测
             max_arenas: 最大竞技场数量（用于预分配多竞技场缓冲区）
             max_tasks_per_arena: 每竞技场最大任务数，0 表示使用 num_networks
@@ -2069,12 +1954,9 @@ cdef class BatchNetworkCache:
         self.network_ids = []
 
         # 根据类型设置输入输出维度
-        if cache_type == 0:  # retail
-            self.input_dim = INPUT_DIM_RETAIL
-            self.output_dim = OUTPUT_DIM_RETAIL
-        elif cache_type == 1:  # full
+        if cache_type == 1:  # full
             self.input_dim = INPUT_DIM_FULL
-            self.output_dim = OUTPUT_DIM_RETAIL
+            self.output_dim = OUTPUT_DIM_FULL
         else:  # market_maker
             self.input_dim = INPUT_DIM_MARKET_MAKER
             self.output_dim = OUTPUT_DIM_MARKET_MAKER
@@ -2336,7 +2218,7 @@ cdef class BatchNetworkCache:
             market_state: NormalizedMarketState
 
         Returns:
-            - retail/full: [(action_type, side, price, quantity), ...]
+            - full: [(action_type, side, price, quantity), ...]
             - market_maker: [(nn_output_array, mid_price, tick_size), ...]
         """
         cdef int num_agents = len(agents)
@@ -2357,12 +2239,7 @@ cdef class BatchNetworkCache:
         # 执行批量计算（nogil 并行）
         with nogil:
             # 1. 批量观察（构建神经网络输入）
-            if self.cache_type == 0:  # retail
-                batch_observe_retail_nogil(
-                    self.agent_state, self.market_data,
-                    inputs_view, self.num_threads
-                )
-            elif self.cache_type == 1:  # full
+            if self.cache_type == 1:  # full
                 batch_observe_full_nogil(
                     self.agent_state, self.market_data,
                     inputs_view, self.num_threads
@@ -2380,7 +2257,7 @@ cdef class BatchNetworkCache:
             )
 
             # 3. 批量解析（非 market_maker）
-            if self.cache_type != 2:  # retail or full
+            if self.cache_type != 2:  # full
                 batch_parse_retail_nogil(
                     outputs_view, self.results, self.agent_state, mid_price,
                     tick_size, num_agents, self.num_threads
@@ -2402,7 +2279,7 @@ cdef class BatchNetworkCache:
                     mid_price,
                     tick_size,
                 ))
-        else:  # retail/full 返回解析后的决策
+        else:  # full 返回解析后的决策
             for i in range(num_agents):
                 result_list.append((
                     self.results[i].action_type,
@@ -2541,12 +2418,7 @@ cdef class BatchNetworkCache:
         # 执行批量计算
         with nogil:
             # 1. 批量观察（使用多市场状态版本）
-            if self.cache_type == 0:  # retail
-                batch_observe_retail_multi_market_nogil(
-                    all_agents, multi_markets, market_indices,
-                    inputs_view, self.num_threads
-                )
-            elif self.cache_type == 1:  # full
+            if self.cache_type == 1:  # full
                 batch_observe_full_multi_market_nogil(
                     all_agents, multi_markets, market_indices,
                     inputs_view, self.num_threads
@@ -2565,7 +2437,7 @@ cdef class BatchNetworkCache:
             )
 
             # 3. 批量解析（使用多市场状态版本）
-            if self.cache_type != 2:  # retail or full
+            if self.cache_type != 2:  # full
                 batch_parse_retail_multi_market_nogil(
                     outputs_view, results, all_agents, multi_markets, market_indices,
                     total_tasks, self.num_threads
@@ -2596,7 +2468,7 @@ cdef class BatchNetworkCache:
                         mid_price,
                         tick_size,
                     ))
-            else:  # retail/full
+            else:  # full
                 for i in range(num_agents_in_arena):
                     result_list.append((
                         results[offset + i].action_type,
@@ -2767,12 +2639,7 @@ cdef class BatchNetworkCache:
         # 执行批量计算
         with nogil:
             # 1. 批量观察（使用多市场状态版本）
-            if self.cache_type == 0:  # retail
-                batch_observe_retail_multi_market_nogil(
-                    all_agents, multi_markets, market_indices,
-                    inputs_view, self.num_threads
-                )
-            elif self.cache_type == 1:  # full
+            if self.cache_type == 1:  # full
                 batch_observe_full_multi_market_nogil(
                     all_agents, multi_markets, market_indices,
                     inputs_view, self.num_threads
@@ -2791,7 +2658,7 @@ cdef class BatchNetworkCache:
             )
 
             # 3. 批量解析（使用多市场状态版本）
-            if self.cache_type != 2:  # retail or full
+            if self.cache_type != 2:  # full
                 batch_parse_retail_multi_market_nogil(
                     outputs_view, results, all_agents, multi_markets, market_indices,
                     total_tasks, self.num_threads
@@ -2854,7 +2721,7 @@ cdef class BatchNetworkCache:
                         mm_params = {"bid_orders": bid_orders, "ask_orders": ask_orders}
                         result_list.append(mm_params)
                     result_dict[arena_idx] = result_list
-            elif return_array:  # retail/full - 返回 NumPy 数组
+            elif return_array:  # full - 返回 NumPy 数组
                 result_array = np.zeros((num_agents_in_arena, 4), dtype=np.float64)
                 result_array_view = result_array
                 for i in range(num_agents_in_arena):
@@ -2863,7 +2730,7 @@ cdef class BatchNetworkCache:
                     result_array_view[i, 2] = results[offset + i].price
                     result_array_view[i, 3] = results[offset + i].quantity
                 result_dict[arena_idx] = result_array
-            else:  # retail/full - 返回 list 格式
+            else:  # full - 返回 list 格式
                 result_list = []
                 for i in range(num_agents_in_arena):
                     result_list.append((
@@ -2901,9 +2768,7 @@ cdef class BatchNetworkCache:
     @property
     def type_name(self) -> str:
         """返回缓存类型名称"""
-        if self.cache_type == 0:
-            return "retail"
-        elif self.cache_type == 1:
+        if self.cache_type == 1:
             return "full"
         else:
             return "market_maker"

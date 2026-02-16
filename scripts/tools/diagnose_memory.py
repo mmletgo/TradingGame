@@ -158,15 +158,11 @@ def run_memory_test():
     config = create_default_config(
         episode_length=10,  # 短 episode
         checkpoint_interval=10,
-        catfish_enabled=False
     )
 
     # 减少 agent 数量以加快测试
-    config.agents[AgentType.RETAIL].count = 100
     config.agents[AgentType.RETAIL_PRO].count = 10
-    config.agents[AgentType.WHALE].count = 10
     config.agents[AgentType.MARKET_MAKER].count = 10
-    config.training.retail_sub_population_count = 1  # 减少子种群
 
     multi_config = MultiArenaConfig(
         num_arenas=2,

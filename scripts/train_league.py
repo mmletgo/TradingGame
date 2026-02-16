@@ -100,13 +100,6 @@ def parse_args() -> argparse.Namespace:
         help="检查点保存间隔（默认每 10 代）",
     )
 
-    # 鲶鱼配置
-    parser.add_argument(
-        "--no-catfish",
-        action="store_true",
-        help="禁用鲶鱼机制（默认启用）",
-    )
-
     # 其他
     parser.add_argument(
         "--log-level",
@@ -172,12 +165,9 @@ def episode_callback(stats: dict) -> None:
         else:
             # 简化结束原因显示
             reason_abbr = {
-                "population_depleted:RETAIL": "pop:R",
                 "population_depleted:RETAIL_PRO": "pop:RP",
-                "population_depleted:WHALE": "pop:W",
                 "population_depleted:MARKET_MAKER": "pop:MM",
                 "one_sided_orderbook": "ob",
-                "catfish": "cat",
             }
             reason_str = reason_abbr.get(end_reason, end_reason[:8])
             reason_str = f"{reason_str}@{end_tick}"
@@ -222,11 +212,9 @@ def main() -> None:
     logger.info("=" * 60)
 
     # 创建配置
-    catfish_enabled = not args.no_catfish
     config = create_default_config(
         episode_length=args.episode_length,
         checkpoint_interval=args.checkpoint_interval,
-        catfish_enabled=catfish_enabled,
     )
 
     # 多竞技场配置
@@ -252,7 +240,6 @@ def main() -> None:
     logger.info(f"每竞技场 episode 数: {args.episodes_per_arena}")
     logger.info(f"Episode 长度: {args.episode_length} ticks")
     logger.info(f"采样策略: {args.sampling_strategy}")
-    logger.info(f"鲶鱼机制: {'启用' if catfish_enabled else '禁用'}")
     logger.info(f"检查点目录: {args.checkpoint_dir}")
 
     # 确保检查点目录存在

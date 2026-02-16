@@ -54,7 +54,6 @@ def main() -> None:
     config = create_default_config(
         episode_length=args.episode_length,
         config_dir="config",
-        catfish_enabled=False,
     )
     config.training.num_arenas = args.num_arenas
     config.training.episodes_per_arena = 1

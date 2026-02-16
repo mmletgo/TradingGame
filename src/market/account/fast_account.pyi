@@ -5,9 +5,7 @@ from src.market.matching.fast_matching import FastTrade
 
 
 # Agent 类型常量
-RETAIL: int
 RETAIL_PRO: int
-WHALE: int
 MARKET_MAKER: int
 
 

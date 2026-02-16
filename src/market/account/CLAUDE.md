@@ -95,17 +95,17 @@
 #### 属性
 
 - `agent_id: int` - Agent ID
-- `agent_type: AgentType` - Agent 类型（RETAIL/RETAIL_PRO/WHALE/MARKET_MAKER）
+- `agent_type: AgentType` - Agent 类型（RETAIL_PRO/MARKET_MAKER）
 - `initial_balance: float` - 初始余额
 - `balance: float` - 当前余额（已实现盈亏已计入）
 - `position: Position` - 持仓对象
-- `leverage: float` - 杠杆倍数（散户/高级散户=100，庄家/做市商=10）
+- `leverage: float` - 杠杆倍数
 - `maintenance_margin_rate: float` - 维持保证金率
 - `maker_fee_rate: float` - 挂单手续费率
 - `taker_fee_rate: float` - 吃单手续费率
 - `pending_order_id: int | None` - 当前挂单 ID
 - `maker_volume: int` - 作为 maker 的累计成交量（用于做市商适应度计算）
-- `volatility_contribution: float` - 作为 taker 的价格冲击累计（庄家适应度计算用）
+- `volatility_contribution: float` - 作为 taker 的价格冲击累计
 
 #### 核心方法
 
@@ -158,7 +158,7 @@
 #### C 级别属性（cdef public）
 
 - `agent_id: int` - Agent ID
-- `agent_type: int` - Agent 类型整数（0=RETAIL, 1=RETAIL_PRO, 2=WHALE, 3=MARKET_MAKER）
+- `agent_type: int` - Agent 类型整数（0=RETAIL_PRO, 1=MARKET_MAKER）
 - `initial_balance: double` - 初始余额
 - `balance: double` - 当前余额
 - `position: Position` - 持仓对象（Cython Position 类型）
@@ -306,10 +306,8 @@ margin_ratio = equity / position_value
 
 FastAccount 使用 DEF 宏定义常量（编译时常量）：
 ```cython
-DEF RETAIL = 0
-DEF RETAIL_PRO = 1
-DEF WHALE = 2
-DEF MARKET_MAKER = 3
+DEF RETAIL_PRO = 0
+DEF MARKET_MAKER = 1
 ```
 
 这些常量在编译时被替换，运行时无查找开销。
@@ -487,7 +485,7 @@ from src.market.orderbook.order import OrderSide
 
 # 创建账户
 config = AgentConfig()
-account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
 
 # 处理成交（买方）
 trade = Trade(
@@ -522,12 +520,12 @@ from src.market.account import FastAccount, Position
 from src.market.matching.fast_matching import FastTrade
 
 # Agent 类型常量
-from src.market.account.fast_account import RETAIL, RETAIL_PRO, WHALE, MARKET_MAKER
+from src.market.account.fast_account import RETAIL_PRO, MARKET_MAKER
 
 # 创建快速账户（直接传入参数，不使用配置对象）
 account = FastAccount(
     agent_id=1,
-    agent_type=RETAIL,  # 0
+    agent_type=RETAIL_PRO,  # 0
     initial_balance=100000.0,
     leverage=100.0,
     maintenance_margin_rate=0.5,

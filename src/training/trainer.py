@@ -36,7 +36,6 @@ def _get_memory_mb() -> float:
 
 if TYPE_CHECKING:
     from src.bio.agents.base import ActionType, Agent
-    from src.market.catfish.catfish_base import CatfishBase
     from src.market.market_state import (
         NormalizedMarketState as NormalizedMarketStateType,
     )
@@ -44,8 +43,8 @@ if TYPE_CHECKING:
 from src.config.config import Config
 from src.core.log_engine.logger import get_logger
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
-from src.market.catfish import CatfishBase, create_all_catfish, create_catfish
 from src.market.market_state import NormalizedMarketState
+from src.market.noise_trader import NoiseTrader, create_noise_traders
 from src.market.matching.matching_engine import MatchingEngine
 from src.market.matching.trade import Trade
 from src.market.orderbook.order import Order, OrderSide, OrderType
@@ -63,14 +62,12 @@ from src.training.population import (
 )
 
 # 缓存类型常量 - 直接在 Python 中定义，避免 Cython 导出问题
-CACHE_TYPE_RETAIL = 0
 CACHE_TYPE_FULL = 1
 CACHE_TYPE_MARKET_MAKER = 2
 
 # 尝试导入 OpenMP 批量决策缓存模块
 try:
     from src.training._cython.batch_decide_openmp import (
-        batch_decide_retail,
         batch_decide_full,
         batch_decide_market_maker,
         BatchNetworkCache,
@@ -110,13 +107,13 @@ class AtomicAction:
 
     Attributes:
         action_type: 动作类型（撤单/限价买/限价卖/市价买/市价卖）
-        agent_id: Agent 或鲶鱼的 ID
+        agent_id: Agent 或噪声交易者的 ID
         order_id: 撤单时使用的订单 ID
         price: 限价单价格
         quantity: 订单数量
         is_market_maker: 是否为做市商
-        is_catfish: 是否为鲶鱼
-        agent_ref: Agent 或 CatfishBase 的引用
+        is_noise_trader: 是否为噪声交易者
+        agent_ref: Agent 或 NoiseTrader 的引用
     """
     action_type: AtomicActionType
     agent_id: int
@@ -124,24 +121,25 @@ class AtomicAction:
     price: float = 0.0
     quantity: int = 0
     is_market_maker: bool = False
-    is_catfish: bool = False
+    is_noise_trader: bool = False
     agent_ref: Any = None
 
 
 class Trainer:
     """训练器
 
-    管理 NEAT 进化训练流程，协调四种群在模拟市场中竞争。
+    管理 NEAT 进化训练流程，协调两种群（高级散户/做市商）在模拟市场中竞争。
 
     Attributes:
         config: 全局配置
-        populations: 四种群（散户/高级散户/庄家/做市商）
+        populations: 两种群（高级散户/做市商）
         matching_engine: 撮合引擎
         tick: 当前 tick
         episode: 当前 episode
         is_running: 是否运行中
         is_paused: 是否暂停
         recent_trades: 最近成交记录
+        noise_traders: 噪声交易者列表
     """
 
     config: Config
@@ -169,14 +167,13 @@ class Trainer:
     ]  # 空头 ADL 候选（已排序，持仓数量会动态更新）
     _executor: ThreadPoolExecutor | None
     _num_workers: int
-    catfish_list: list["CatfishBase"]
+    noise_traders: list[NoiseTrader]
     _price_history: deque[float]
     _tick_history_prices: deque[float]
     _tick_history_volumes: deque[float]
     _tick_history_amounts: deque[float]
     _episode_high_price: float  # 当前 episode 最高价
     _episode_low_price: float  # 当前 episode 最低价
-    _retail_worker_pool: "PersistentWorkerPool | None"  # RETAIL 子种群的多进程 Worker 池（已废弃）
     _unified_worker_pool: "MultiPopulationWorkerPool | None"  # 统一多种群 Worker 池
     _worker_pool_synced: bool  # Worker 池是否已同步基因组
 
@@ -213,10 +210,9 @@ class Trainer:
         self._smooth_mid_price: float = 0.0
         self._ema_alpha: float = 0.1
 
-        # 鲶鱼相关
-        self.catfish_list: list["CatfishBase"] = []
+        # 噪声交易者
+        self.noise_traders: list[NoiseTrader] = []
         self._price_history: deque[float] = deque(maxlen=1000)  # 价格历史，自动管理长度
-        self._catfish_liquidated: bool = False  # 鲶鱼是否被强平（触发 episode 结束）
 
         # Tick 历史数据（用于 Agent 输入特征）
         self._tick_history_prices: deque[float] = deque(maxlen=100)  # 每 tick 价格
@@ -245,7 +241,6 @@ class Trainer:
         self.use_openmp_decide: bool = True
 
         # 多进程 Worker 池
-        self._retail_worker_pool: "PersistentWorkerPool | None" = None  # 已废弃
         self._unified_worker_pool: "MultiPopulationWorkerPool | None" = None
         self._worker_pool_synced: bool = False
 
@@ -324,7 +319,15 @@ class Trainer:
         for agent_type in AgentType:
             if agent_type not in populations_data:
                 # 如果检查点中没有此种群，创建全新种群
-                self.populations[agent_type] = Population(agent_type, self.config)
+                if agent_type == AgentType.RETAIL_PRO:
+                    self.populations[agent_type] = SubPopulationManager(
+                        self.config, agent_type,
+                        sub_count=self.config.training.retail_pro_sub_population_count,
+                    )
+                elif agent_type == AgentType.MARKET_MAKER:
+                    self.populations[agent_type] = SubPopulationManager(
+                        self.config, agent_type, sub_count=4,
+                    )
                 continue
 
             pop_data = populations_data[agent_type]
@@ -338,29 +341,23 @@ class Trainer:
                 continue
 
             # 单 Population 格式
-            # 创建 Population 对象但不初始化 NEAT 种群（使用检查点数据）
             pop = Population.__new__(Population)
             pop.agent_type = agent_type
             pop.agent_config = self.config.agents[agent_type]
             pop.generation = pop_data["generation"]
             pop.logger = get_logger("population")
-            pop.sub_population_id = None  # 单 Population 没有子种群 ID
+            pop.sub_population_id = None
             pop._executor = None
             pop._num_workers = 8
 
-            # 加载 NEAT 配置
             from pathlib import Path
             import neat
 
             config_dir = Path(self.config.training.neat_config_path)
             if agent_type == AgentType.MARKET_MAKER:
                 neat_config_path = config_dir / "neat_market_maker.cfg"
-            elif agent_type == AgentType.WHALE:
-                neat_config_path = config_dir / "neat_whale.cfg"
-            elif agent_type == AgentType.RETAIL_PRO:
-                neat_config_path = config_dir / "neat_retail_pro.cfg"
             else:
-                neat_config_path = config_dir / "neat_retail.cfg"
+                neat_config_path = config_dir / "neat_retail_pro.cfg"
 
             pop.neat_config = neat.Config(
                 neat.DefaultGenome,
@@ -371,10 +368,8 @@ class Trainer:
             )
             pop.neat_config.pop_size = pop.agent_config.count
 
-            # 直接使用检查点中的 NEAT 种群
             pop.neat_pop = pop_data["neat_pop"]
 
-            # 从 NEAT 种群创建 Agent
             genomes = list(pop.neat_pop.population.items())
             pop.agents = pop.create_agents(genomes)
 
@@ -407,12 +402,8 @@ class Trainer:
         config_dir = Path(self.config.training.neat_config_path)
         if agent_type == AgentType.MARKET_MAKER:
             neat_config_path = config_dir / "neat_market_maker.cfg"
-        elif agent_type == AgentType.WHALE:
-            neat_config_path = config_dir / "neat_whale.cfg"
-        elif agent_type == AgentType.RETAIL_PRO:
-            neat_config_path = config_dir / "neat_retail_pro.cfg"
         else:
-            neat_config_path = config_dir / "neat_retail.cfg"
+            neat_config_path = config_dir / "neat_retail_pro.cfg"
 
         # 计算每个子种群的 Agent 数量
         agents_per_sub = self.config.agents[agent_type].count // sub_pop_count
@@ -470,42 +461,6 @@ class Trainer:
 
         return manager
 
-    def _calculate_catfish_initial_balance(self) -> float:
-        """计算每条鲶鱼的初始资金
-
-        公式：鲶鱼总资金 = 做市商杠杆后资金 - 其他物种杠杆后资金
-        每条鲶鱼分配 1/3
-
-        Returns:
-            每条鲶鱼的初始资金
-
-        Raises:
-            ValueError: 如果其他物种资金 >= 做市商资金
-        """
-        agents_config = self.config.agents
-
-        # 做市商杠杆后资金
-        mm_config = agents_config[AgentType.MARKET_MAKER]
-        mm_fund = mm_config.count * mm_config.initial_balance * mm_config.leverage
-
-        # 其他物种杠杆后资金
-        other_fund = 0.0
-        for agent_type in [AgentType.RETAIL, AgentType.RETAIL_PRO, AgentType.WHALE]:
-            cfg = agents_config[agent_type]
-            other_fund += cfg.count * cfg.initial_balance * cfg.leverage
-
-        # 校验资金配置
-        if other_fund >= mm_fund:
-            raise ValueError(
-                f"鲶鱼资金配置错误：做市商杠杆后资金({mm_fund})必须大于"
-                f"其他物种杠杆后资金({other_fund})"
-            )
-
-        # 每条鲶鱼资金（3条鲶鱼：趋势创造者、均值回归、随机交易）
-        catfish_count = 3
-        per_catfish = (mm_fund - other_fund) / catfish_count
-        return per_catfish
-
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取或创建线程池（惰性初始化）"""
         if self._executor is None:
@@ -544,11 +499,9 @@ class Trainer:
                 continue
 
             # 确定缓存类型
-            if agent_type == AgentType.RETAIL:
-                cache_type = CACHE_TYPE_RETAIL
-            elif agent_type == AgentType.MARKET_MAKER:
+            if agent_type == AgentType.MARKET_MAKER:
                 cache_type = CACHE_TYPE_MARKET_MAKER
-            else:  # RETAIL_PRO, WHALE
+            else:
                 cache_type = CACHE_TYPE_FULL
 
             # 创建缓存（使用配置的线程数）
@@ -585,14 +538,14 @@ class Trainer:
     def setup(self, checkpoint: dict | None = None) -> None:
         """初始化训练环境
 
-        创建四种群、撮合引擎，初始化市场。
+        创建两种群（高级散户/做市商）、撮合引擎，初始化市场。
         训练模式使用直接调用。
 
         Args:
             checkpoint: 可选的检查点数据，如果提供则直接从检查点恢复种群
                        而不是创建全新种群（避免不必要的内存分配）
         """
-        # 串行创建四种群
+        # 创建两种群
         if checkpoint is not None and "populations" in checkpoint:
             # 直接从检查点恢复，不创建全新 Agent
             self._setup_populations_from_checkpoint(checkpoint["populations"])
@@ -600,18 +553,11 @@ class Trainer:
             self.episode = checkpoint.get("episode", 0)
         else:
             # 创建全新种群（每个种群内部的Agent创建是并行的）
-            # RETAIL: 10个子种群
-            self.populations[AgentType.RETAIL] = SubPopulationManager(
-                self.config, AgentType.RETAIL, sub_count=10
+            # RETAIL_PRO: 12个子种群
+            self.populations[AgentType.RETAIL_PRO] = SubPopulationManager(
+                self.config, AgentType.RETAIL_PRO,
+                sub_count=self.config.training.retail_pro_sub_population_count,
             )
-
-            # RETAIL_PRO: 1个种群（不拆分，使用普通 Population）
-            self.populations[AgentType.RETAIL_PRO] = Population(
-                AgentType.RETAIL_PRO, self.config
-            )
-
-            # WHALE: 1个种群（不拆分，使用普通 Population）
-            self.populations[AgentType.WHALE] = Population(AgentType.WHALE, self.config)
 
             # MARKET_MAKER: 4个子种群
             self.populations[AgentType.MARKET_MAKER] = SubPopulationManager(
@@ -624,53 +570,13 @@ class Trainer:
         # 创建 ADL 管理器
         self.adl_manager = ADLManager()
 
-        # 初始化鲶鱼（如果配置中启用）
-        if self.config.catfish and self.config.catfish.enabled:
-            # 计算鲶鱼初始资金
-            catfish_initial_balance = self._calculate_catfish_initial_balance()
-
-            # 鲶鱼使用庄家的杠杆和维持保证金率
-            whale_config = self.config.agents[AgentType.WHALE]
-            catfish_leverage = whale_config.leverage
-            catfish_mmr = whale_config.maintenance_margin_rate
-
-            if self.config.catfish.multi_mode:
-                # 多模式：同时创建三种鲶鱼
-                self.catfish_list = create_all_catfish(
-                    self.config.catfish,
-                    initial_balance=catfish_initial_balance,
-                    leverage=catfish_leverage,
-                    maintenance_margin_rate=catfish_mmr,
-                )
-                for catfish in self.catfish_list:
-                    self.matching_engine.register_agent(
-                        catfish.catfish_id,
-                        0.0,  # maker fee
-                        0.0,  # taker fee
-                    )
-                self.logger.info(
-                    f"鲶鱼已启用: 多模式（三种鲶鱼同时运行，相位错开）, "
-                    f"每条初始资金={catfish_initial_balance/1e8:.2f}亿"
-                )
-            else:
-                # 单模式：只创建一种鲶鱼
-                catfish = create_catfish(
-                    -1,
-                    self.config.catfish,
-                    initial_balance=catfish_initial_balance,
-                    leverage=catfish_leverage,
-                    maintenance_margin_rate=catfish_mmr,
-                )
-                self.catfish_list = [catfish]
-                self.matching_engine.register_agent(
-                    catfish.catfish_id,
-                    0.0,  # maker fee
-                    0.0,  # taker fee
-                )
-                self.logger.info(
-                    f"鲶鱼已启用: 模式={self.config.catfish.mode.value}, "
-                    f"初始资金={catfish_initial_balance/1e8:.2f}亿"
-                )
+        # 初始化噪声交易者
+        self.noise_traders = create_noise_traders(self.config.noise_trader)
+        for nt in self.noise_traders:
+            self.matching_engine.register_agent(nt.trader_id, 0.0, 0.0)
+        self.logger.info(
+            f"噪声交易者已创建: {len(self.noise_traders)} 个"
+        )
 
         # 注册所有 Agent 的费率
         self._register_all_agents()
@@ -692,32 +598,20 @@ class Trainer:
         # 初始化网络数据缓存（OpenMP 优化）
         self._init_network_caches()
 
-        # 创建统一的 Worker 池（16个Worker：RETAIL 10 + RETAIL_PRO 1 + WHALE 1 + MARKET_MAKER 4）
+        # 创建统一的 Worker 池（16个Worker：RETAIL_PRO 12 + MARKET_MAKER 4）
         config_dir = self.config.training.neat_config_path
         worker_configs: list[WorkerConfig] = []
 
-        # RETAIL: 10 Workers
-        retail_pop = self.populations[AgentType.RETAIL]
-        if isinstance(retail_pop, SubPopulationManager):
-            for i in range(retail_pop.sub_population_count):
+        # RETAIL_PRO: 12 Workers（子种群）
+        retail_pro_pop = self.populations[AgentType.RETAIL_PRO]
+        if isinstance(retail_pro_pop, SubPopulationManager):
+            for i in range(retail_pro_pop.sub_population_count):
                 worker_configs.append(WorkerConfig(
-                    AgentType.RETAIL, i, f"{config_dir}/neat_retail.cfg",
-                    retail_pop.agents_per_sub
+                    AgentType.RETAIL_PRO, i, f"{config_dir}/neat_retail_pro.cfg",
+                    retail_pro_pop.agents_per_sub
                 ))
 
-        # RETAIL_PRO: 1 Worker
-        worker_configs.append(WorkerConfig(
-            AgentType.RETAIL_PRO, 0, f"{config_dir}/neat_retail_pro.cfg",
-            self.config.agents[AgentType.RETAIL_PRO].count
-        ))
-
-        # WHALE: 1 Worker
-        worker_configs.append(WorkerConfig(
-            AgentType.WHALE, 0, f"{config_dir}/neat_whale.cfg",
-            self.config.agents[AgentType.WHALE].count
-        ))
-
-        # MARKET_MAKER: 2 Workers
+        # MARKET_MAKER: 4 Workers
         mm_pop = self.populations[AgentType.MARKET_MAKER]
         if isinstance(mm_pop, SubPopulationManager):
             for i in range(mm_pop.sub_population_count):
@@ -763,13 +657,11 @@ class Trainer:
                 self.agent_map[agent.agent_id] = agent
 
     def _build_execution_order(self) -> None:
-        """构建 Agent 执行顺序列表（做市商 -> 庄家 -> 高级散户 -> 散户）"""
+        """构建 Agent 执行顺序列表（做市商 -> 高级散户）"""
         self.agent_execution_order.clear()
         for agent_type in [
             AgentType.MARKET_MAKER,
-            AgentType.WHALE,
             AgentType.RETAIL_PRO,
-            AgentType.RETAIL,
         ]:
             population = self.populations.get(agent_type)
             if population:
@@ -791,9 +683,7 @@ class Trainer:
             agent.is_liquidated = True
             # 根据类型输出不同的日志
             type_name = {
-                AgentType.RETAIL: "散户",
                 AgentType.RETAIL_PRO: "高级散户",
-                AgentType.WHALE: "庄家",
                 AgentType.MARKET_MAKER: "做市商",
             }.get(agent.agent_type, str(agent.agent_type.value))
 
@@ -1078,16 +968,15 @@ class Trainer:
         # 输出其他物种的净仓位
         other_long = 0
         other_short = 0
-        for agent_type in [AgentType.RETAIL, AgentType.RETAIL_PRO, AgentType.WHALE]:
-            pop = self.populations.get(agent_type)
-            if pop:
-                for agent in pop.agents:
-                    if not agent.is_liquidated:
-                        qty = agent.account.position.quantity
-                        if qty > 0:
-                            other_long += qty
-                        elif qty < 0:
-                            other_short += abs(qty)
+        retail_pro_pop = self.populations.get(AgentType.RETAIL_PRO)
+        if retail_pro_pop:
+            for agent in retail_pro_pop.agents:
+                if not agent.is_liquidated:
+                    qty = agent.account.position.quantity
+                    if qty > 0:
+                        other_long += qty
+                    elif qty < 0:
+                        other_short += abs(qty)
         self.logger.warning(
             f"其他物种仓位: 多头={other_long}, 空头={other_short}, "
             f"净仓位={other_long - other_short}"
@@ -1218,9 +1107,7 @@ class Trainer:
         """真正并行进化所有种群
 
         使用 MultiPopulationWorkerPool 同时进化所有种群（16个 Worker 并行）：
-        - RETAIL: 10 个子种群
-        - RETAIL_PRO: 1 个种群
-        - WHALE: 1 个种群
+        - RETAIL_PRO: 12 个子种群
         - MARKET_MAKER: 4 个子种群
 
         优化策略：
@@ -2133,20 +2020,17 @@ class Trainer:
                     else:
                         self._adl_short_candidates.append(candidate)
 
-                # 将鲶鱼加入 ADL 候选列表
-                for catfish in self.catfish_list:
-                    if catfish.is_liquidated:
-                        continue
-
-                    position_qty = catfish.account.position.quantity
+                # 将噪声交易者加入 ADL 候选列表
+                for nt in self.noise_traders:
+                    position_qty = nt.account.position_qty
                     if position_qty == 0:
                         continue
 
-                    # 计算 ADL 分数
-                    equity = catfish.account.get_equity(latest_price)
-                    pnl_percent = (
-                        equity - catfish.account.initial_balance
-                    ) / catfish.account.initial_balance
+                    equity = nt.account.get_equity(latest_price)
+                    initial_balance = nt.account.initial_balance
+                    if initial_balance <= 0:
+                        continue
+                    pnl_percent = (equity - initial_balance) / initial_balance
 
                     # 只有盈利的才能作为 ADL 候选
                     if pnl_percent <= 0:
@@ -2157,7 +2041,7 @@ class Trainer:
                     adl_score = pnl_percent * effective_leverage
 
                     candidate = ADLCandidate(
-                        participant=catfish,
+                        participant=nt,
                         position_qty=position_qty,
                         pnl_percent=pnl_percent,
                         effective_leverage=effective_leverage,
@@ -2201,75 +2085,20 @@ class Trainer:
 
         atomic_actions: list[AtomicAction] = []
 
-        # 1. 收集鲶鱼动作
-        for catfish in self.catfish_list:
-            if catfish.is_liquidated:
-                continue
-
-            should_act, direction = catfish.decide(
-                orderbook,
-                self.tick,
-                self._price_history,
-            )
+        # 1. 噪声交易者决策与执行
+        for nt in self.noise_traders:
+            should_act, direction, quantity = nt.decide()
             if should_act:
-                if direction != 0:
-                    # 吃单鲶鱼（市价单）
-                    quantity = catfish._calculate_quantity(orderbook, direction)
-                    if quantity > 0:
-                        # 注册鲶鱼费率
-                        self.matching_engine.register_agent(catfish.catfish_id, 0.0, 0.0)
-                        action_type = AtomicActionType.MARKET_BUY if direction > 0 else AtomicActionType.MARKET_SELL
-                        atomic_actions.append(AtomicAction(
-                            action_type=action_type,
-                            agent_id=catfish.catfish_id,
-                            quantity=quantity,
-                            is_catfish=True,
-                            agent_ref=catfish,
-                        ))
-                else:
-                    # 做市鲶鱼 (direction == 0) - 收集撤单和挂单动作
-                    # 注册鲶鱼费率
-                    self.matching_engine.register_agent(catfish.catfish_id, 0.0, 0.0)
-
-                    # 撤销旧订单
-                    if hasattr(catfish, '_pending_order_ids'):
-                        for order_id in catfish._pending_order_ids:
-                            atomic_actions.append(AtomicAction(
-                                action_type=AtomicActionType.CANCEL,
-                                agent_id=catfish.catfish_id,
-                                order_id=order_id,
-                                is_catfish=True,
-                                agent_ref=catfish,
-                            ))
-                        catfish._pending_order_ids.clear()
-
-                    # 收集新挂单（在 last_price 附近挂单）
-                    tick_size = orderbook.tick_size
-                    last_price = orderbook.last_price
-                    target_depth = getattr(catfish, '_target_depth', 3)
-                    order_size = getattr(catfish, '_order_size', 100)
-
-                    for i in range(1, target_depth + 1):
-                        # 买单
-                        bid_price = last_price - tick_size * i
-                        atomic_actions.append(AtomicAction(
-                            action_type=AtomicActionType.LIMIT_BUY,
-                            agent_id=catfish.catfish_id,
-                            price=bid_price,
-                            quantity=order_size,
-                            is_catfish=True,
-                            agent_ref=catfish,
-                        ))
-                        # 卖单
-                        ask_price = last_price + tick_size * i
-                        atomic_actions.append(AtomicAction(
-                            action_type=AtomicActionType.LIMIT_SELL,
-                            agent_id=catfish.catfish_id,
-                            price=ask_price,
-                            quantity=order_size,
-                            is_catfish=True,
-                            agent_ref=catfish,
-                        ))
+                trades = nt.execute(direction, quantity, self.matching_engine)
+                for trade in trades:
+                    self.recent_trades.append(trade)
+                    tick_trades.append(trade)
+                    # 更新 maker 账户
+                    maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
+                    if maker_id > 0:
+                        maker_agent = self.agent_map.get(maker_id)
+                        if maker_agent is not None:
+                            maker_agent.account.on_trade(trade, not trade.is_buyer_taker)
 
         # 2. 收集 Agent 动作
         for decision in decisions:
@@ -2428,9 +2257,6 @@ class Trainer:
         self._tick_history_volumes.append(volume)
         self._tick_history_amounts.append(amount)
 
-        # === 鲶鱼强平检查（放在所有 Agent 之后）===
-        self._check_catfish_liquidation(current_price)
-
     def _execute_non_mm_decisions_python(
         self,
         decisions: list[tuple["Agent", "ActionType", dict]],
@@ -2455,11 +2281,7 @@ class Trainer:
         cancel_order = matching_engine.cancel_order
 
         for agent, action, params in decisions:
-            agent_type = agent.agent_type
             account = agent.account
-
-            # 庄家下单前记录价格（用于计算波动性贡献）
-            pre_trade_price = orderbook.last_price if agent_type == AgentType.WHALE else 0.0
 
             # 跳过已强平的 agent
             if agent.is_liquidated:
@@ -2533,13 +2355,6 @@ class Trainer:
                     for trade in trades:
                         account.on_trade(trade, trade.is_buyer_taker)
 
-            # 庄家波动性贡献计算
-            if agent_type == AgentType.WHALE and trades:
-                post_trade_price = orderbook.last_price
-                if pre_trade_price > 0 and post_trade_price > 0:
-                    price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
-                    account.volatility_contribution += price_impact
-
             # 记录成交和更新 maker 账户
             for trade in trades:
                 recent_trades_append(trade)
@@ -2575,15 +2390,13 @@ class Trainer:
         matching_engine = self.matching_engine
         agent_ref = action.agent_ref
 
-        # 检查 Agent/鲶鱼是否已被强平
+        # 检查 Agent/噪声交易者是否已被强平
         if agent_ref is None:
             return trades
 
-        if action.is_catfish:
-            if agent_ref.is_liquidated:
-                return trades
-            catfish = agent_ref
-            catfish_account = catfish.account
+        if action.is_noise_trader:
+            noise_trader = agent_ref
+            noise_trader_account = noise_trader.account
         else:
             agent = agent_ref
             if agent.is_liquidated:
@@ -2606,29 +2419,9 @@ class Trainer:
             price = action.price
             side = OrderSide.BUY if action_type == AtomicActionType.LIMIT_BUY else OrderSide.SELL
 
-            if action.is_catfish:
-                # 鲶鱼限价单
-                order_id = catfish._generate_order_id()
-                order = Order(
-                    order_id=order_id,
-                    agent_id=action.agent_id,
-                    side=side,
-                    order_type=OrderType.LIMIT,
-                    price=price,
-                    quantity=quantity,
-                )
-                # 鲶鱼费率已在 execute 中注册
-                trades = matching_engine.process_order(order)
-
-                # 更新鲶鱼账户
-                for trade in trades:
-                    is_buyer = trade.is_buyer_taker
-                    catfish_account.on_trade(trade, is_buyer)
-
-                # 记录做市鲶鱼的挂单 ID
-                if hasattr(catfish, '_pending_order_ids'):
-                    if orderbook.order_map.get(order_id) is not None:
-                        catfish._pending_order_ids.append(order_id)
+            if action.is_noise_trader:
+                # 噪声交易者不使用限价单，跳过
+                return trades
             else:
                 # Agent 限价单
                 if action.is_market_maker:
@@ -2657,11 +2450,6 @@ class Trainer:
                             agent.ask_order_ids.append(order_id)
                 else:
                     # 非做市商
-                    # 庄家波动性贡献计算需要记录交易前价格
-                    pre_trade_price = 0.0
-                    if agent.agent_type == AgentType.WHALE:
-                        pre_trade_price = orderbook.last_price
-
                     agent._order_counter += 1
                     order_id = (agent.agent_id << 32) | agent._order_counter
                     order = Order(
@@ -2684,13 +2472,6 @@ class Trainer:
                     else:
                         account.pending_order_id = None
 
-                    # 庄家波动性贡献计算
-                    if agent.agent_type == AgentType.WHALE and trades:
-                        post_trade_price = orderbook.last_price
-                        if pre_trade_price > 0 and post_trade_price > 0:
-                            price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
-                            account.volatility_contribution += price_impact
-
         elif action_type == AtomicActionType.MARKET_BUY or action_type == AtomicActionType.MARKET_SELL:
             # === 市价单 ===
             quantity = action.quantity
@@ -2699,11 +2480,11 @@ class Trainer:
 
             side = OrderSide.BUY if action_type == AtomicActionType.MARKET_BUY else OrderSide.SELL
 
-            if action.is_catfish:
-                # 鲶鱼市价单
-                order_id = catfish._generate_order_id()
+            if action.is_noise_trader:
+                # 噪声交易者市价单（通常通过 NoiseTrader.execute 处理，此处为兼容）
+                noise_trader._next_order_id -= 1
                 order = Order(
-                    order_id=order_id,
+                    order_id=noise_trader._next_order_id,
                     agent_id=action.agent_id,
                     side=side,
                     order_type=OrderType.MARKET,
@@ -2712,16 +2493,11 @@ class Trainer:
                 )
                 trades = matching_engine.process_order(order)
 
-                # 更新鲶鱼账户
+                # 更新噪声交易者账户
                 for trade in trades:
-                    is_buyer = trade.is_buyer_taker
-                    catfish_account.on_trade(trade, is_buyer)
+                    noise_trader_account.on_trade(trade, is_taker=True)
             else:
                 # Agent 市价单
-                pre_trade_price = 0.0
-                if agent.agent_type == AgentType.WHALE:
-                    pre_trade_price = orderbook.last_price
-
                 agent._order_counter += 1
                 order_id = (agent.agent_id << 32) | agent._order_counter
                 order = Order(
@@ -2737,13 +2513,6 @@ class Trainer:
                 # 更新 taker 账户
                 for trade in trades:
                     account.on_trade(trade, trade.is_buyer_taker)
-
-                # 庄家波动性贡献计算
-                if agent.agent_type == AgentType.WHALE and trades:
-                    post_trade_price = orderbook.last_price
-                    if pre_trade_price > 0 and post_trade_price > 0:
-                        price_impact = abs(post_trade_price - pre_trade_price) / pre_trade_price
-                        account.volatility_contribution += price_impact
 
         # 记录成交和更新 maker 账户
         for trade in trades:
@@ -2762,79 +2531,6 @@ class Trainer:
 
         return trades
 
-    def _check_catfish_liquidation(self, current_price: float) -> None:
-        """检查鲶鱼强平
-
-        鲶鱼强平后本轮 episode 立即结束，进入进化阶段。
-
-        Args:
-            current_price: 当前价格
-        """
-        for catfish in self.catfish_list:
-            if catfish.is_liquidated:
-                continue
-
-            if catfish.account.check_liquidation(current_price):
-                # 执行鲶鱼强平
-                self._execute_catfish_liquidation(catfish, current_price)
-                catfish.is_liquidated = True
-
-                # 穿仓兜底
-                if catfish.account.balance < 0:
-                    catfish.account.balance = 0.0
-
-                # 标记鲶鱼强平（调用方决定是否结束 episode）
-                self._catfish_liquidated = True
-                self.logger.info(
-                    f"鲶鱼 {catfish.__class__.__name__} 被强平 "
-                    f"(episode={self.episode}, tick={self.tick})"
-                )
-                break  # 一条鲶鱼强平就停止检查
-
-    def _execute_catfish_liquidation(
-        self, catfish: "CatfishBase", current_price: float
-    ) -> None:
-        """执行鲶鱼强平
-
-        Args:
-            catfish: 被强平的鲶鱼
-            current_price: 当前价格
-        """
-        position_qty = catfish.account.position.quantity
-        if position_qty == 0:
-            return
-
-        is_long = position_qty > 0
-        target_qty = abs(position_qty)
-
-        # 创建市价平仓单
-        side = OrderSide.SELL if is_long else OrderSide.BUY
-        order = Order(
-            order_id=catfish._generate_order_id(),
-            agent_id=catfish.catfish_id,
-            side=side,
-            order_type=OrderType.MARKET,
-            price=0.0,
-            quantity=target_qty,
-        )
-
-        # 撮合
-        trades = self.matching_engine.match_market_order(order)
-
-        # 更新账户
-        for trade in trades:
-            is_buyer = trade.is_buyer_taker
-            catfish.account.on_trade(trade, is_buyer)
-            self.recent_trades.append(trade)
-
-            # 更新 maker 账户
-            maker_id = trade.seller_id if trade.is_buyer_taker else trade.buyer_id
-            if maker_id > 0:
-                maker_agent = self.agent_map.get(maker_id)
-                if maker_agent is not None:
-                    maker_is_buyer = not trade.is_buyer_taker
-                    maker_agent.account.on_trade(trade, maker_is_buyer)
-
     def run_episode(self) -> None:
         """运行一个 episode
 
@@ -2852,10 +2548,9 @@ class Trainer:
         for population in self.populations.values():
             population.reset_agents()
 
-        # 重置鲶鱼
-        for catfish in self.catfish_list:
-            catfish.reset()
-        self._catfish_liquidated = False  # 重置鲶鱼强平标志
+        # 重置噪声交易者
+        for nt in self.noise_traders:
+            nt.reset()
 
         # 重置市场状态
         self._reset_market()
@@ -2875,13 +2570,6 @@ class Trainer:
             if not self.is_running or self.is_paused:
                 break
             self.run_tick()
-
-            # 检查鲶鱼是否被强平
-            if self._catfish_liquidated:
-                self.logger.info(
-                    f"Episode {self.episode} 因鲶鱼强平提前结束 (tick={self.tick})"
-                )
-                break
 
             # 检查是否满足提前结束条件
             early_end_result = self._should_end_episode_early()
@@ -3181,7 +2869,7 @@ class Trainer:
             else:
                 # 旧格式：单个 neat_pop，需要迁移
                 self.logger.info(
-                    f"检测到旧格式 checkpoint（单个 RETAIL 种群），自动迁移到子种群格式"
+                    f"检测到旧格式 checkpoint（单个种群），自动迁移到子种群格式"
                 )
                 self._migrate_old_checkpoint_to_sub_populations(pop, pop_data)
         else:
@@ -3280,7 +2968,7 @@ class Trainer:
 
         支持新旧两种格式：
         - 新格式：SubPopulationManager 保存为多个子种群
-        - 旧格式：单个 RETAIL 种群，自动迁移到子种群格式
+        - 旧格式：单个种群，自动迁移到子种群格式
 
         同时支持压缩和非压缩格式：
         - gzip 压缩格式（新）
@@ -3354,12 +3042,6 @@ class Trainer:
             self._unified_worker_pool.shutdown()
             self._unified_worker_pool = None
             self.logger.info("统一 Worker 池已关闭")
-
-        # 关闭 RETAIL Worker 池（已废弃，保留兼容性）
-        if self._retail_worker_pool is not None:
-            self._retail_worker_pool.shutdown()
-            self._retail_worker_pool = None
-            self.logger.info("RETAIL Worker 池已关闭")
 
         # 清理网络数据缓存
         self._network_caches = None

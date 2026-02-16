@@ -70,7 +70,7 @@ def _create_test_pool(
         pfsp_explore_bonus=2.0,
         pfsp_win_rate_ema_alpha=0.3,
     )
-    pool = OpponentPool(AgentType.RETAIL, tmp_path, config)
+    pool = OpponentPool(AgentType.RETAIL_PRO, tmp_path, config)
     pool._index = pool._create_empty_index()
 
     for ec in entries_config:
@@ -103,14 +103,14 @@ class TestWinRateTracking:
         ])
         pool.update_entry_win_rate(
             entry_id="e1",
-            target_type=AgentType.WHALE,
+            target_type=AgentType.MARKET_MAKER,
             outcome=0.7,
             ema_alpha=0.3,
         )
 
         entry_meta = pool._index["entries"][0]
         # 首次应直接赋值
-        assert entry_meta["win_rates"]["vs_WHALE"] == pytest.approx(0.7)
+        assert entry_meta["win_rates"]["vs_MARKET_MAKER"] == pytest.approx(0.7)
 
     def test_update_entry_win_rate_ema(self, tmp_path: Path) -> None:
         """多次更新胜率，验证 EMA 平滑"""
@@ -120,15 +120,15 @@ class TestWinRateTracking:
         ema_alpha = 0.3
 
         # 第一次更新: win_rate = 1.0
-        pool.update_entry_win_rate("e1", AgentType.WHALE, 1.0, ema_alpha)
+        pool.update_entry_win_rate("e1", AgentType.MARKET_MAKER, 1.0, ema_alpha)
         # 第二次更新: win_rate = (1-0.3)*1.0 + 0.3*0.0 = 0.7
-        pool.update_entry_win_rate("e1", AgentType.WHALE, 0.0, ema_alpha)
+        pool.update_entry_win_rate("e1", AgentType.MARKET_MAKER, 0.0, ema_alpha)
         # 第三次更新: win_rate = (1-0.3)*0.7 + 0.3*1.0 = 0.49 + 0.3 = 0.79
-        pool.update_entry_win_rate("e1", AgentType.WHALE, 1.0, ema_alpha)
+        pool.update_entry_win_rate("e1", AgentType.MARKET_MAKER, 1.0, ema_alpha)
 
         entry_meta = pool._index["entries"][0]
         expected = (1.0 - ema_alpha) * ((1.0 - ema_alpha) * 1.0 + ema_alpha * 0.0) + ema_alpha * 1.0
-        assert entry_meta["win_rates"]["vs_WHALE"] == pytest.approx(expected)
+        assert entry_meta["win_rates"]["vs_MARKET_MAKER"] == pytest.approx(expected)
 
     def test_update_entry_win_rate_match_count(self, tmp_path: Path) -> None:
         """验证 match_count 正确递增"""
@@ -229,14 +229,14 @@ class TestPFSPSampling:
             {
                 "entry_id": "easy",
                 "source_generation": 100,
-                "win_rates": {"vs_WHALE": 0.9},       # 目标物种 vs easy 胜率高 → 容易
-                "match_counts": {"vs_WHALE": 10},
+                "win_rates": {"vs_MARKET_MAKER": 0.9},       # 目标物种 vs easy 胜率高 → 容易
+                "match_counts": {"vs_MARKET_MAKER": 10},
             },
             {
                 "entry_id": "hard",
                 "source_generation": 100,
-                "win_rates": {"vs_WHALE": 0.1},       # 目标物种 vs hard 胜率低 → 难
-                "match_counts": {"vs_WHALE": 10},
+                "win_rates": {"vs_MARKET_MAKER": 0.1},       # 目标物种 vs hard 胜率低 → 难
+                "match_counts": {"vs_MARKET_MAKER": 10},
             },
         ]
         pool = _create_test_pool(tmp_path, entries_config)
@@ -244,7 +244,7 @@ class TestPFSPSampling:
         weights = pool._compute_weights(
             pool._index["entries"],
             strategy='pfsp',
-            target_type=AgentType.WHALE,
+            target_type=AgentType.MARKET_MAKER,
             current_generation=100,
         )
 
@@ -259,8 +259,8 @@ class TestPFSPSampling:
             {
                 "entry_id": "explored",
                 "source_generation": 100,
-                "win_rates": {"vs_WHALE": 0.5},
-                "match_counts": {"vs_WHALE": 100},
+                "win_rates": {"vs_MARKET_MAKER": 0.5},
+                "match_counts": {"vs_MARKET_MAKER": 100},
             },
             {
                 "entry_id": "unexplored",
@@ -274,7 +274,7 @@ class TestPFSPSampling:
         weights = pool._compute_weights(
             pool._index["entries"],
             strategy='pfsp',
-            target_type=AgentType.WHALE,
+            target_type=AgentType.MARKET_MAKER,
             current_generation=100,
         )
 
@@ -377,9 +377,9 @@ class TestBatchSampling:
         )
         manager = OpponentPoolManager(config)
 
-        # 向非 RETAIL 的三种类型各添加若干条目
+        # 向非目标类型添加若干条目（目标类型为 RETAIL_PRO，对手类型为 MARKET_MAKER）
         for agent_type in AgentType:
-            if agent_type == AgentType.RETAIL:
+            if agent_type == AgentType.RETAIL_PRO:
                 continue
             pool = manager.get_pool(agent_type)
             pool._index = pool._create_empty_index()
@@ -397,7 +397,7 @@ class TestBatchSampling:
 
         n_arenas = 3
         results = manager.sample_opponents_batch_for_type(
-            target_type=AgentType.RETAIL,
+            target_type=AgentType.RETAIL_PRO,
             n_arenas=n_arenas,
             current_generation=40,
         )
@@ -406,11 +406,11 @@ class TestBatchSampling:
         assert len(results) == n_arenas
 
         for arena_opponents in results:
-            # 目标类型 (RETAIL) 应为 None
-            assert arena_opponents[AgentType.RETAIL] is None
-            # 其他三种类型应有 entry_id
+            # 目标类型 (RETAIL_PRO) 应为 None
+            assert arena_opponents[AgentType.RETAIL_PRO] is None
+            # 其他类型应有 entry_id
             for agent_type in AgentType:
-                if agent_type == AgentType.RETAIL:
+                if agent_type == AgentType.RETAIL_PRO:
                     continue
                 assert arena_opponents[agent_type] is not None, (
                     f"{agent_type.value} 应有对手条目"

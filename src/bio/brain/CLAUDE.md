@@ -68,13 +68,12 @@ outputs = brain.forward(inputs)
 
 **参数：**
 - `inputs` - 输入向量，可以是 list 或 numpy ndarray
-  - 散户：127 个值
-  - 高级散户/庄家：907 个值
+  - 高级散户：907 个值
   - 做市商：964 个值
 
 **返回：**
 - 神经网络输出向量（numpy ndarray）
-  - 散户/高级散户/庄家：8 个值
+  - 高级散户：8 个值
   - 做市商：41 个值
 
 **使用示例：**
@@ -181,9 +180,7 @@ action = agent.decide(outputs, mid_price)        # 解析输出为动作
 
 | Agent 类型 | 配置文件 | 输入节点 | 输出节点 | 初始隐藏节点 |
 |-----------|---------|---------|---------|------------|
-| 散户 | neat_retail.cfg | 127 | 8 | 3 |
 | 高级散户 | neat_retail_pro.cfg | 907 | 8 | 10 |
-| 庄家 | neat_whale.cfg | 907 | 8 | 10 |
 | 做市商 | neat_market_maker.cfg | 964 | 41 | 10 |
 
 **关键配置参数：**
@@ -213,21 +210,7 @@ action = agent.decide(outputs, mid_price)        # 解析输出为动作
 | 净值 | `equity / initial_balance` | [0, +∞) | 相对初始余额的比例 |
 | 挂单数量 | `log10(quantity + 1) / 10` | ≈ [0, 1] | 对数归一化 |
 
-### 散户神经网络输入（127 个值）
-
-| 区间 | 数量 | 说明 |
-|------|------|------|
-| 0-19 | 20 | 买盘 10 档（价格归一化 + 数量）|
-| 20-39 | 20 | 卖盘 10 档（价格归一化 + 数量）|
-| 40-49 | 10 | 成交价格归一化 |
-| 50-59 | 10 | 成交数量（正=taker买入，负=taker卖出）|
-| 60-63 | 4 | 持仓信息 |
-| 64-66 | 3 | 挂单信息（价格归一化、数量、方向）|
-| 67-86 | 20 | tick 历史价格（最近 20 个）|
-| 87-106 | 20 | tick 历史成交量（最近 20 个）|
-| 107-126 | 20 | tick 历史成交额（最近 20 个）|
-
-### 高级散户/庄家神经网络输入（907 个值）
+### 高级散户神经网络输入（907 个值）
 
 | 区间 | 数量 | 说明 |
 |------|------|------|
@@ -255,7 +238,7 @@ action = agent.decide(outputs, mid_price)        # 解析输出为动作
 | 764-863 | 100 | tick 历史成交量（最近 100 个）|
 | 864-963 | 100 | tick 历史成交额（最近 100 个）|
 
-### 散户/高级散户/庄家神经网络输出（8 个值）
+### 高级散户神经网络输出（8 个值）
 
 | 索引 | 说明 | 值域 | 解析方法 |
 |------|------|------|---------|
@@ -304,7 +287,7 @@ action = agent.decide(outputs, mid_price)        # 解析输出为动作
 ```python
 # Population.create_agents() 中
 brain = Brain.from_genome(genome, neat_config)
-agent = RetailAgent(agent_id, brain, config)
+agent = RetailProAgent(agent_id, brain, config)
 ```
 
 ### 2. Agent 决策流程

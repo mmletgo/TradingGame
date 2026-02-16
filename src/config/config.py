@@ -4,29 +4,13 @@
 定义系统的各类配置数据类。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
-class AgentType(Enum):
-    """Agent 类型枚举
-
-    定义系统中四种 AI Agent 的类型。
-    """
-
-    RETAIL = "RETAIL"  # 散户
-    RETAIL_PRO = "RETAIL_PRO"  # 高级散户
-    WHALE = "WHALE"  # 庄家
-    MARKET_MAKER = "MARKET_MAKER"  # 做市商
-
-
-class CatfishMode(Enum):
-    """鲶鱼行为模式"""
-
-    TREND_CREATOR = "trend_creator"  # 趋势创造者
-    TREND_FOLLOWING = "trend_following"  # 趋势追踪（向后兼容别名）
-    MEAN_REVERSION = "mean_reversion"  # 逆势操作
-    RANDOM = "random"  # 随机买卖
+class AgentType(str, Enum):
+    RETAIL_PRO = "RETAIL_PRO"
+    MARKET_MAKER = "MARKET_MAKER"
 
 
 @dataclass
@@ -92,7 +76,7 @@ class TrainingConfig:
         enable_parallel_creation: 是否启用并行创建（默认 True）
         openmp_threads: OpenMP 并行线程数（默认 8，经测试为最优值）
         random_seed: 随机种子（默认 None，表示不固定）
-        retail_sub_population_count: 散户子种群数量（默认 10）
+        retail_pro_sub_population_count: 高级散户子种群数量（默认 12）
         evolution_interval: 每多少个 episode 进化一次（默认 10）
         num_arenas: 竞技场数量（默认 2）
         episodes_per_arena: 每个竞技场运行的 episode 数（默认 50）
@@ -112,8 +96,8 @@ class TrainingConfig:
     enable_parallel_creation: bool = True
     openmp_threads: int = 12
     random_seed: int | None = None
-    # 散户子种群配置
-    retail_sub_population_count: int = 10
+    # 高级散户子种群配置
+    retail_pro_sub_population_count: int = 12
     # 进化间隔配置
     evolution_interval: int = 10
     # 多竞技场配置
@@ -145,36 +129,12 @@ class DemoConfig:
 
 
 @dataclass
-class CatfishConfig:
-    """
-    鲶鱼配置
-
-    定义鲶鱼（Catfish）的行为参数。鲶鱼是一种特殊的市场参与者，
-    用于在训练中引入外部扰动，增加市场动态性。
-
-    Attributes:
-        enabled: 是否启用鲶鱼
-        multi_mode: 是否同时启用三种模式（默认True）
-        mode: 单模式时的鲶鱼行为模式
-
-        # 逆势操作参数（MEAN_REVERSION 模式）
-        ma_period: 均线周期
-        deviation_threshold: 偏离阈值
-
-        # 通用参数
-        action_probability: 每个 tick 行动的概率（0-1）
-    """
-
-    enabled: bool = False
-    multi_mode: bool = True  # 默认同时启用三种模式
-    mode: CatfishMode = CatfishMode.TREND_CREATOR  # 单模式时使用
-
-    # 逆势操作参数（MEAN_REVERSION 模式）
-    ma_period: int = 20
-    deviation_threshold: float = 0.003
-
-    # 通用参数
-    action_probability: float = 0.3  # 每个 tick 有 30% 概率行动
+class NoiseTraderConfig:
+    """噪声交易者配置"""
+    count: int = 100
+    action_probability: float = 0.5
+    quantity_mu: float = 3.0
+    quantity_sigma: float = 1.0
 
 
 @dataclass
@@ -189,11 +149,11 @@ class Config:
         agents: Agent 配置（按类型）
         training: 训练配置
         demo: 演示配置
-        catfish: 鲶鱼配置（可选）
+        noise_trader: 噪声交易者配置
     """
 
     market: MarketConfig
     agents: dict[AgentType, AgentConfig]
     training: TrainingConfig
     demo: DemoConfig
-    catfish: CatfishConfig | None = None
+    noise_trader: NoiseTraderConfig = field(default_factory=NoiseTraderConfig)

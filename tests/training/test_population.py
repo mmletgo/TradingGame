@@ -4,8 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from src.bio.agents.base import Agent
-from src.bio.agents.retail import RetailAgent
-from src.bio.agents.whale import WhaleAgent
+from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.bio.brain.brain import Brain
 from src.config.config import (
@@ -38,10 +37,10 @@ class TestPopulationCreateAgents:
         )
 
     @patch.object(Brain, 'from_genome')
-    def test_create_retail_agents(self, mock_from_genome):
-        """测试创建散户 Agent"""
-        # 设置种群类型为散户
-        self.population.agent_type = AgentType.RETAIL
+    def test_create_retail_pro_agents(self, mock_from_genome):
+        """测试创建高级散户 Agent"""
+        # 设置种群类型为高级散户
+        self.population.agent_type = AgentType.RETAIL_PRO
 
         # 创建 mock brain
         mock_brain = MagicMock(spec=Brain)
@@ -57,46 +56,13 @@ class TestPopulationCreateAgents:
 
         # 验证返回了正确数量的 Agent
         assert len(agents) == 2
-        # 验证都是 RetailAgent
-        assert all(isinstance(agent, RetailAgent) for agent in agents)
-        # 验证 agent_id 正确（散户 offset=0，使用 idx 作为 agent_id）
+        # 验证都是 RetailProAgent
+        assert all(isinstance(agent, RetailProAgent) for agent in agents)
+        # 验证 agent_id 正确（高级散户 offset=0，使用 idx 作为 agent_id）
         assert agents[0].agent_id == 0
         assert agents[1].agent_id == 1
         # 验证 Brain.from_genome 被调用了正确次数
         assert mock_from_genome.call_count == 2
-
-    @patch.object(Brain, 'from_genome')
-    def test_create_whale_agents(self, mock_from_genome):
-        """测试创建庄家 Agent"""
-        # 设置种群类型为庄家
-        self.population.agent_type = AgentType.WHALE
-        # 更新配置为庄家配置
-        self.population.agent_config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建 mock brain
-        mock_brain = MagicMock(spec=Brain)
-        mock_from_genome.return_value = mock_brain
-
-        # 创建 mock genomes
-        mock_genome = MagicMock()
-        genomes = [(100, mock_genome)]
-
-        # 调用 create_agents
-        agents = self.population.create_agents(genomes)
-
-        # 验证返回了正确数量的 Agent
-        assert len(agents) == 1
-        # 验证是 WhaleAgent
-        assert isinstance(agents[0], WhaleAgent)
-        # 验证 agent_id 正确（庄家 offset=2_000_000，idx=0）
-        assert agents[0].agent_id == 2_000_000
 
     @patch.object(Brain, 'from_genome')
     def test_create_market_maker_agents(self, mock_from_genome):
@@ -130,15 +96,15 @@ class TestPopulationCreateAgents:
         assert len(agents) == 3
         # 验证都是 MarketMakerAgent
         assert all(isinstance(agent, MarketMakerAgent) for agent in agents)
-        # 验证 agent_id 正确（做市商 offset=3_000_000，idx=0,1,2）
-        assert agents[0].agent_id == 3_000_000
-        assert agents[1].agent_id == 3_000_001
-        assert agents[2].agent_id == 3_000_002
+        # 验证 agent_id 正确（做市商 offset=2_000_000，idx=0,1,2）
+        assert agents[0].agent_id == 2_000_000
+        assert agents[1].agent_id == 2_000_001
+        assert agents[2].agent_id == 2_000_002
 
     @patch.object(Brain, 'from_genome')
     def test_create_agents_empty_genomes(self, mock_from_genome):
         """测试空基因组列表"""
-        self.population.agent_type = AgentType.RETAIL
+        self.population.agent_type = AgentType.RETAIL_PRO
 
         # 空基因组列表
         genomes: list[tuple[int, MagicMock]] = []
@@ -154,7 +120,7 @@ class TestPopulationCreateAgents:
     @patch.object(Brain, 'from_genome')
     def test_create_agents_uses_correct_neat_config(self, mock_from_genome):
         """测试使用正确的 NEAT 配置"""
-        self.population.agent_type = AgentType.RETAIL
+        self.population.agent_type = AgentType.RETAIL_PRO
 
         # 创建 mock brain
         mock_brain = MagicMock(spec=Brain)
@@ -175,7 +141,7 @@ class TestPopulationCreateAgents:
     @patch.object(Brain, 'from_genome')
     def test_create_agents_each_gets_unique_brain(self, mock_from_genome):
         """测试每个 Agent 获得独立的 Brain"""
-        self.population.agent_type = AgentType.RETAIL
+        self.population.agent_type = AgentType.RETAIL_PRO
 
         # 创建多个不同的 mock brain
         mock_brain1 = MagicMock(spec=Brain)
@@ -201,21 +167,13 @@ class TestPopulationInit:
 
     def _create_config(self, agent_type: AgentType) -> Config:
         """创建测试用配置"""
-        retail_config = AgentConfig(
+        retail_pro_config = AgentConfig(
             count=10,
             initial_balance=10000.0,
             leverage=100.0,
             maintenance_margin_rate=0.005,
             maker_fee_rate=0.0002,
             taker_fee_rate=0.0005,
-        )
-        whale_config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
         )
         market_maker_config = AgentConfig(
             count=100,
@@ -234,8 +192,7 @@ class TestPopulationInit:
                 depth=100,
             ),
             agents={
-                AgentType.RETAIL: retail_config,
-                AgentType.WHALE: whale_config,
+                AgentType.RETAIL_PRO: retail_pro_config,
                 AgentType.MARKET_MAKER: market_maker_config,
             },
             training=TrainingConfig(
@@ -254,10 +211,10 @@ class TestPopulationInit:
     @patch("src.training.population.neat.Population")
     @patch("src.training.population.neat.Config")
     @patch.object(Brain, "from_genome")
-    def test_create_retail_population(
+    def test_create_retail_pro_population(
         self, mock_from_genome, mock_neat_config, mock_neat_pop, mock_get_logger
     ):
-        """测试创建散户种群"""
+        """测试创建高级散户种群"""
         # 设置 mock
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
@@ -277,55 +234,25 @@ class TestPopulationInit:
         mock_from_genome.return_value = mock_brain
 
         # 创建配置
-        config = self._create_config(AgentType.RETAIL)
+        config = self._create_config(AgentType.RETAIL_PRO)
 
         # 创建种群
-        population = Population(AgentType.RETAIL, config)
+        population = Population(AgentType.RETAIL_PRO, config)
 
         # 验证属性
-        assert population.agent_type == AgentType.RETAIL
-        assert population.agent_config == config.agents[AgentType.RETAIL]
+        assert population.agent_type == AgentType.RETAIL_PRO
+        assert population.agent_config == config.agents[AgentType.RETAIL_PRO]
         assert population.generation == 0
         assert population.neat_config is mock_config_instance
         assert population.neat_pop is mock_pop_instance
 
         # 验证创建了正确数量的 Agent
         assert len(population.agents) == 2
-        assert all(isinstance(agent, RetailAgent) for agent in population.agents)
+        assert all(isinstance(agent, RetailProAgent) for agent in population.agents)
 
         # 验证日志
         mock_get_logger.assert_called_once_with("population")
         mock_logger.info.assert_called_once()
-
-    @patch("src.training.population.get_logger")
-    @patch("src.training.population.neat.Population")
-    @patch("src.training.population.neat.Config")
-    @patch.object(Brain, "from_genome")
-    def test_create_whale_population(
-        self, mock_from_genome, mock_neat_config, mock_neat_pop, mock_get_logger
-    ):
-        """测试创建庄家种群"""
-        mock_logger = MagicMock()
-        mock_get_logger.return_value = mock_logger
-
-        mock_config_instance = MagicMock()
-        mock_neat_config.return_value = mock_config_instance
-
-        mock_genome = MagicMock()
-        mock_pop_instance = MagicMock()
-        mock_pop_instance.population = {100: mock_genome}
-        mock_neat_pop.return_value = mock_pop_instance
-
-        mock_brain = MagicMock(spec=Brain)
-        mock_from_genome.return_value = mock_brain
-
-        config = self._create_config(AgentType.WHALE)
-
-        population = Population(AgentType.WHALE, config)
-
-        assert population.agent_type == AgentType.WHALE
-        assert len(population.agents) == 1
-        assert isinstance(population.agents[0], WhaleAgent)
 
     @patch("src.training.population.get_logger")
     @patch("src.training.population.neat.Population")
@@ -373,19 +300,19 @@ class TestPopulationInit:
         mock_pop_instance.population = {}
         mock_neat_pop.return_value = mock_pop_instance
 
-        config = self._create_config(AgentType.RETAIL)
+        config = self._create_config(AgentType.RETAIL_PRO)
 
-        Population(AgentType.RETAIL, config)
+        Population(AgentType.RETAIL_PRO, config)
 
         # 验证 neat.Config 使用了正确的参数
-        # 散户使用 neat_retail.cfg 配置文件（在 config 目录下）
+        # 高级散户使用 neat_retail_pro.cfg 配置文件（在 config 目录下）
         import neat
         mock_neat_config.assert_called_once_with(
             neat.DefaultGenome,
             neat.DefaultReproduction,
             neat.DefaultSpeciesSet,
             neat.DefaultStagnation,
-            "config/neat_retail.cfg",  # config_dir / neat_retail.cfg
+            "config/neat_retail_pro.cfg",  # config_dir / neat_retail_pro.cfg
         )
 
 
@@ -397,8 +324,8 @@ class TestPopulationEvaluate:
         # 创建 Population 实例（不调用 __init__，直接设置属性）
         self.population = object.__new__(Population)
         self.population.agents = []
-        # 设置 agent_type 为 RETAIL（使用纯收益率适应度）
-        self.population.agent_type = AgentType.RETAIL
+        # 设置 agent_type 为 RETAIL_PRO（使用纯收益率适应度）
+        self.population.agent_type = AgentType.RETAIL_PRO
 
     def _create_mock_agent(
         self,
@@ -579,21 +506,13 @@ class TestPopulationEvolve:
 
     def _create_config(self) -> Config:
         """创建测试用配置"""
-        retail_config = AgentConfig(
+        retail_pro_config = AgentConfig(
             count=10,
             initial_balance=10000.0,
             leverage=100.0,
             maintenance_margin_rate=0.005,
             maker_fee_rate=0.0002,
             taker_fee_rate=0.0005,
-        )
-        whale_config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
         )
         market_maker_config = AgentConfig(
             count=100,
@@ -612,8 +531,7 @@ class TestPopulationEvolve:
                 depth=100,
             ),
             agents={
-                AgentType.RETAIL: retail_config,
-                AgentType.WHALE: whale_config,
+                AgentType.RETAIL_PRO: retail_pro_config,
                 AgentType.MARKET_MAKER: market_maker_config,
             },
             training=TrainingConfig(
@@ -662,7 +580,7 @@ class TestPopulationEvolve:
 
         config = self._create_config()
 
-        population = Population(AgentType.RETAIL, config)
+        population = Population(AgentType.RETAIL_PRO, config)
 
         # 验证初始代数为 0
         assert population.generation == 0
@@ -710,7 +628,7 @@ class TestPopulationEvolve:
 
         config = self._create_config()
 
-        population = Population(AgentType.RETAIL, config)
+        population = Population(AgentType.RETAIL_PRO, config)
         initial_agents = population.agents.copy()
 
         # evolve 后更新种群的基因组（模拟 NEAT 进化）
@@ -770,7 +688,7 @@ class TestPopulationEvolve:
 
         config = self._create_config()
 
-        population = Population(AgentType.RETAIL, config)
+        population = Population(AgentType.RETAIL_PRO, config)
 
         # 验证初始时 genome.fitness 为 None
         assert mock_genome1.fitness is None
@@ -798,21 +716,13 @@ class TestPopulationResetAgents:
 
     def _create_config(self) -> Config:
         """创建测试用配置"""
-        retail_config = AgentConfig(
+        retail_pro_config = AgentConfig(
             count=10,
             initial_balance=10000.0,
             leverage=100.0,
             maintenance_margin_rate=0.005,
             maker_fee_rate=0.0002,
             taker_fee_rate=0.0005,
-        )
-        whale_config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
         )
         market_maker_config = AgentConfig(
             count=100,
@@ -831,8 +741,7 @@ class TestPopulationResetAgents:
                 depth=100,
             ),
             agents={
-                AgentType.RETAIL: retail_config,
-                AgentType.WHALE: whale_config,
+                AgentType.RETAIL_PRO: retail_pro_config,
                 AgentType.MARKET_MAKER: market_maker_config,
             },
             training=TrainingConfig(
@@ -873,10 +782,10 @@ class TestPopulationResetAgents:
 
         config = self._create_config()
 
-        population = Population(AgentType.RETAIL, config)
+        population = Population(AgentType.RETAIL_PRO, config)
 
         # 修改 Agent 的账户状态
-        initial_balance = config.agents[AgentType.RETAIL].initial_balance
+        initial_balance = config.agents[AgentType.RETAIL_PRO].initial_balance
         for agent in population.agents:
             agent.account.balance = 5000.0  # 减少余额
             agent.account.position.quantity = 100.0  # 添加持仓

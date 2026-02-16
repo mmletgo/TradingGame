@@ -33,7 +33,6 @@ class DemoUIApp:
     episode_length: int
     data_collector: UIDataCollector
     controller: UIController
-    _catfish_enabled: bool
     _analyzer: "DemoAnalyzer | None"
 
     # UI组件
@@ -46,7 +45,6 @@ class DemoUIApp:
         self,
         trainer: "Trainer",
         checkpoint_path: str | None = None,
-        catfish_enabled: bool = False,
         analyzer: "DemoAnalyzer | None" = None,
     ) -> None:
         """初始化演示模式UI应用
@@ -54,12 +52,10 @@ class DemoUIApp:
         Args:
             trainer: 已初始化的训练器
             checkpoint_path: 检查点路径（可选），用于加载训练好的模型
-            catfish_enabled: 是否启用鲶鱼机制
             analyzer: 演示分析器（可选），用于生成演示结束后的分析报告
         """
         self.trainer = trainer
         self.episode_length = trainer.config.training.episode_length
-        self._catfish_enabled = catfish_enabled
         self._analyzer = analyzer
 
         # 加载检查点
@@ -75,7 +71,6 @@ class DemoUIApp:
         )
 
         # 设置演示模式选项
-        self.controller.set_demo_catfish_enabled(catfish_enabled)
         self.controller.set_demo_end_callback(self._on_demo_end)
 
         # UI组件
@@ -238,8 +233,6 @@ class DemoUIApp:
         if self.chart_panel:
             self.chart_panel.update_price(data.price_history)
             self.chart_panel.update_equity(data.equity_history, data.alive_equity_history, data.population_stats)
-            # 更新鲶鱼图表
-            self.chart_panel.update_catfish(data.catfish_data, data.catfish_equity_history)
 
         # 更新成交记录
         if self.trades_panel:

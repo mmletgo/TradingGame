@@ -5,9 +5,7 @@ from unittest.mock import MagicMock
 import numpy as np
 
 from src.bio.agents.base import Agent, ActionType
-from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
-from src.bio.agents.whale import WhaleAgent
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.config.config import AgentConfig, AgentType
 from src.bio.brain.brain import Brain
@@ -35,8 +33,8 @@ def create_mock_market_state(mid_price: float = 100.0, tick_size: float = 0.1) -
 class TestAgentInit:
     """测试 Agent.__init__"""
 
-    def test_create_retail_agent(self):
-        """测试创建散户 Agent"""
+    def test_create_retail_pro_agent(self):
+        """测试创建高级散户 Agent"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
@@ -50,57 +48,25 @@ class TestAgentInit:
             taker_fee_rate=0.0005,
         )
 
-        # 创建散户 Agent
+        # 创建高级散户 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
 
         # 验证属性
         assert agent.agent_id == 1
-        assert agent.agent_type == AgentType.RETAIL
+        assert agent.agent_type == AgentType.RETAIL_PRO
         assert agent.brain is mock_brain
         assert agent.account.agent_id == 1
-        assert agent.account.agent_type == AgentType.RETAIL
+        assert agent.account.agent_type == AgentType.RETAIL_PRO
         assert agent.account.balance == 10000.0
         assert agent.account.leverage == 100.0
         assert agent.account.maintenance_margin_rate == 0.005
         assert agent.account.maker_fee_rate == 0.0002
         assert agent.account.taker_fee_rate == 0.0005
-
-    def test_create_whale_agent(self):
-        """测试创建庄家 Agent"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = Agent(
-            agent_id=10001,
-            agent_type=AgentType.WHALE,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 验证属性
-        assert agent.agent_id == 10001
-        assert agent.agent_type == AgentType.WHALE
-        assert agent.brain is mock_brain
-        assert agent.account.balance == 10000000.0
-        assert agent.account.leverage == 10.0
-        assert agent.account.maker_fee_rate == 0.0
-        assert agent.account.taker_fee_rate == 0.0001
 
     def test_create_market_maker_agent(self):
         """测试创建做市商 Agent"""
@@ -156,7 +122,7 @@ class TestAgentObserve:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -231,7 +197,7 @@ class TestAgentObserve:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -277,7 +243,7 @@ class TestAgentObserve:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -737,7 +703,7 @@ class TestAgentExecuteAction:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -777,7 +743,7 @@ class TestAgentExecuteAction:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -817,7 +783,7 @@ class TestAgentExecuteAction:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -857,7 +823,7 @@ class TestAgentExecuteAction:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -897,7 +863,7 @@ class TestAgentExecuteAction:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -930,7 +896,7 @@ class TestAgentExecuteAction:
         # 创建 Agent
         agent = Agent(
             agent_id=123,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=config,
         )
@@ -965,13 +931,13 @@ class TestAgentExecuteAction:
 
         agent1 = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain_1,
             config=config,
         )
         agent2 = Agent(
             agent_id=2,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain_2,
             config=config,
         )
@@ -1007,7 +973,7 @@ class TestAgentReset:
         # 创建 Agent
         agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
             config=initial_config,
         )
@@ -1033,7 +999,7 @@ class TestAgentReset:
 
         # 验证账户状态被重置
         assert agent.account.agent_id == 1
-        assert agent.account.agent_type == AgentType.RETAIL
+        assert agent.account.agent_type == AgentType.RETAIL_PRO
         assert agent.account.balance == 20000.0  # 新的初始余额
         assert agent.account.leverage == 50.0  # 新的杠杆倍数
         assert agent.account.maintenance_margin_rate == 0.01
@@ -1088,10 +1054,10 @@ class TestAgentReset:
 
     def test_reset_with_different_agent_types(self):
         """测试不同类型 Agent 的重置"""
-        # 测试散户
         mock_brain = MagicMock(spec=Brain)
 
-        retail_config = AgentConfig(
+        # 测试高级散户
+        retail_pro_config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
             leverage=100.0,
@@ -1099,34 +1065,15 @@ class TestAgentReset:
             maker_fee_rate=0.0002,
             taker_fee_rate=0.0005,
         )
-        retail_agent = Agent(
+        retail_pro_agent = Agent(
             agent_id=1,
-            agent_type=AgentType.RETAIL,
+            agent_type=AgentType.RETAIL_PRO,
             brain=mock_brain,
-            config=retail_config,
+            config=retail_pro_config,
         )
-        retail_agent.account.balance = 5000.0
-        retail_agent.reset(retail_config)
-        assert retail_agent.account.balance == 10000.0
-
-        # 测试庄家
-        whale_config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-        whale_agent = Agent(
-            agent_id=10001,
-            agent_type=AgentType.WHALE,
-            brain=mock_brain,
-            config=whale_config,
-        )
-        whale_agent.account.balance = 5000000.0
-        whale_agent.reset(whale_config)
-        assert whale_agent.account.balance == 10000000.0
+        retail_pro_agent.account.balance = 5000.0
+        retail_pro_agent.reset(retail_pro_config)
+        assert retail_pro_agent.account.balance == 10000.0
 
         # 测试做市商
         mm_config = AgentConfig(
@@ -1148,15 +1095,15 @@ class TestAgentReset:
         assert mm_agent.account.balance == 10000000.0
 
 
-class TestRetailAgentInit:
-    """测试 RetailAgent.__init__"""
+class TestRetailProAgentInit:
+    """测试 RetailProAgent.__init__"""
 
-    def test_create_retail_agent(self):
-        """测试创建散户 Agent"""
+    def test_create_retail_pro_agent(self):
+        """测试创建高级散户 Agent"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
-        # 创建散户 Agent 配置
+        # 创建高级散户 Agent 配置
         config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
@@ -1166,8 +1113,8 @@ class TestRetailAgentInit:
             taker_fee_rate=0.0005,
         )
 
-        # 创建散户 Agent
-        agent = RetailAgent(
+        # 创建高级散户 Agent
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1175,18 +1122,18 @@ class TestRetailAgentInit:
 
         # 验证属性
         assert agent.agent_id == 1
-        assert agent.agent_type == AgentType.RETAIL
+        assert agent.agent_type == AgentType.RETAIL_PRO
         assert agent.brain is mock_brain
         assert agent.account.agent_id == 1
-        assert agent.account.agent_type == AgentType.RETAIL
+        assert agent.account.agent_type == AgentType.RETAIL_PRO
         assert agent.account.balance == 10000.0
         assert agent.account.leverage == 100.0
         assert agent.account.maintenance_margin_rate == 0.005
         assert agent.account.maker_fee_rate == 0.0002
         assert agent.account.taker_fee_rate == 0.0005
 
-    def test_retail_agent_is_agent(self):
-        """测试 RetailAgent 是 Agent 的子类"""
+    def test_retail_pro_agent_is_agent(self):
+        """测试 RetailProAgent 是 Agent 的子类"""
         from src.bio.agents.base import Agent
 
         mock_brain = MagicMock(spec=Brain)
@@ -1199,7 +1146,7 @@ class TestRetailAgentInit:
             taker_fee_rate=0.0005,
         )
 
-        agent = RetailAgent(
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1208,8 +1155,8 @@ class TestRetailAgentInit:
         # 验证是 Agent 的实例
         assert isinstance(agent, Agent)
 
-    def test_retail_agent_inherits_base_methods(self):
-        """测试 RetailAgent 继承了基类方法"""
+    def test_retail_pro_agent_inherits_base_methods(self):
+        """测试 RetailProAgent 继承了基类方法"""
         mock_brain = MagicMock(spec=Brain)
         config = AgentConfig(
             count=10000,
@@ -1220,7 +1167,7 @@ class TestRetailAgentInit:
             taker_fee_rate=0.0005,
         )
 
-        agent = RetailAgent(
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1237,15 +1184,15 @@ class TestRetailAgentInit:
         assert callable(agent.reset)
 
 
-class TestRetailAgentGetActionSpace:
-    """测试 RetailAgent.get_action_space"""
+class TestRetailProAgentGetActionSpace:
+    """测试 RetailProAgent.get_action_space"""
 
     def test_get_action_space(self):
         """测试获取动作空间"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
-        # 创建散户 Agent 配置
+        # 创建高级散户 Agent 配置
         config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
@@ -1255,8 +1202,8 @@ class TestRetailAgentGetActionSpace:
             taker_fee_rate=0.0005,
         )
 
-        # 创建散户 Agent
-        agent = RetailAgent(
+        # 创建高级散户 Agent
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1289,7 +1236,7 @@ class TestRetailAgentGetActionSpace:
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
 
-        # 创建散户 Agent 配置
+        # 创建高级散户 Agent 配置
         config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
@@ -1299,8 +1246,8 @@ class TestRetailAgentGetActionSpace:
             taker_fee_rate=0.0005,
         )
 
-        # 创建散户 Agent
-        agent = RetailAgent(
+        # 创建高级散户 Agent
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1313,8 +1260,8 @@ class TestRetailAgentGetActionSpace:
         assert len(action_space) == 6
 
 
-class TestRetailAgentExecuteAction:
-    """测试 RetailAgent.execute_action"""
+class TestRetailProAgentExecuteAction:
+    """测试 RetailProAgent.execute_action"""
 
     def test_place_bid_with_existing_order(self):
         """测试有挂单时再挂买单：先撤旧单再挂新单"""
@@ -1322,7 +1269,7 @@ class TestRetailAgentExecuteAction:
         mock_brain = MagicMock(spec=Brain)
         mock_engine = create_mock_matching_engine()
 
-        # 创建散户 Agent 配置
+        # 创建高级散户 Agent 配置
         config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
@@ -1332,8 +1279,8 @@ class TestRetailAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建散户 Agent
-        agent = RetailAgent(
+        # 创建高级散户 Agent
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1366,7 +1313,7 @@ class TestRetailAgentExecuteAction:
         mock_brain = MagicMock(spec=Brain)
         mock_engine = create_mock_matching_engine()
 
-        # 创建散户 Agent 配置
+        # 创建高级散户 Agent 配置
         config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
@@ -1376,8 +1323,8 @@ class TestRetailAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建散户 Agent
-        agent = RetailAgent(
+        # 创建高级散户 Agent
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1408,7 +1355,7 @@ class TestRetailAgentExecuteAction:
         mock_brain = MagicMock(spec=Brain)
         mock_engine = create_mock_matching_engine()
 
-        # 创建散户 Agent 配置
+        # 创建高级散户 Agent 配置
         config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
@@ -1418,8 +1365,8 @@ class TestRetailAgentExecuteAction:
             taker_fee_rate=0.0005,
         )
 
-        # 创建散户 Agent
-        agent = RetailAgent(
+        # 创建高级散户 Agent
+        agent = RetailProAgent(
             agent_id=1,
             brain=mock_brain,
             config=config,
@@ -1442,330 +1389,6 @@ class TestRetailAgentExecuteAction:
         assert order.side == OrderSide.BUY
         assert order.price == 99.5
         assert order.quantity == 10
-        # 返回空成交列表
-        assert trades == []
-
-
-class TestWhaleAgentInit:
-    """测试 WhaleAgent.__init__"""
-
-    def test_create_whale_agent(self):
-        """测试创建庄家 Agent"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 验证属性
-        assert agent.agent_id == 10001
-        assert agent.agent_type == AgentType.WHALE
-        assert agent.brain is mock_brain
-        assert agent.account.agent_id == 10001
-        assert agent.account.agent_type == AgentType.WHALE
-        assert agent.account.balance == 10000000.0
-        assert agent.account.leverage == 10.0
-        assert agent.account.maintenance_margin_rate == 0.05
-        assert agent.account.maker_fee_rate == 0.0
-        assert agent.account.taker_fee_rate == 0.0001
-
-    def test_whale_agent_is_agent(self):
-        """测试 WhaleAgent 是 Agent 的子类"""
-        mock_brain = MagicMock(spec=Brain)
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 验证是 Agent 的实例
-        assert isinstance(agent, Agent)
-
-    def test_whale_agent_inherits_base_methods(self):
-        """测试 WhaleAgent 继承了基类方法"""
-        mock_brain = MagicMock(spec=Brain)
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 验证继承了基类方法
-        assert hasattr(agent, "observe")
-        assert hasattr(agent, "decide")
-        assert hasattr(agent, "execute_action")
-        assert hasattr(agent, "reset")
-        assert callable(agent.observe)
-        assert callable(agent.decide)
-        assert callable(agent.execute_action)
-        assert callable(agent.reset)
-
-
-class TestWhaleAgentGetActionSpace:
-    """测试 WhaleAgent.get_action_space"""
-
-    def test_get_action_space(self):
-        """测试获取庄家动作空间"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 获取动作空间
-        action_space = agent.get_action_space()
-
-        # 验证返回 6 种动作（与散户相同）
-        assert len(action_space) == 6
-        assert ActionType.HOLD in action_space
-        assert ActionType.PLACE_BID in action_space
-        assert ActionType.PLACE_ASK in action_space
-        assert ActionType.CANCEL in action_space
-        assert ActionType.MARKET_BUY in action_space
-        assert ActionType.MARKET_SELL in action_space
-
-        # 验证动作顺序
-        assert action_space == [
-            ActionType.HOLD,
-            ActionType.PLACE_BID,
-            ActionType.PLACE_ASK,
-            ActionType.CANCEL,
-            ActionType.MARKET_BUY,
-            ActionType.MARKET_SELL,
-        ]
-
-    def test_get_action_space_includes_hold(self):
-        """测试庄家动作空间包含 HOLD"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 获取动作空间
-        action_space = agent.get_action_space()
-
-        # 验证包含 HOLD
-        assert ActionType.HOLD in action_space
-
-    def test_get_action_space_includes_cancel(self):
-        """测试庄家动作空间包含 CANCEL"""
-        # 创建 mock Brain
-        mock_brain = MagicMock(spec=Brain)
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 获取动作空间
-        action_space = agent.get_action_space()
-
-        # 验证包含 CANCEL
-        assert ActionType.CANCEL in action_space
-
-
-class TestWhaleAgentExecuteAction:
-    """测试 WhaleAgent.execute_action"""
-
-    def test_place_bid_with_existing_order(self):
-        """测试有挂单时再挂买单：先撤旧单再挂新单"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 设置已有挂单
-        agent.account.pending_order_id = 12345
-
-        # 执行挂买单
-        action = ActionType.PLACE_BID
-        params = {"price": 99.5, "quantity": 100}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证调用了 cancel_order 撤销旧单
-        mock_engine.cancel_order.assert_called_once_with(12345)
-        # 验证调用了 process_order 挂新单
-        mock_engine.process_order.assert_called_once()
-        order = mock_engine.process_order.call_args[0][0]
-        assert order.agent_id == 10001
-        assert order.side == OrderSide.BUY
-        assert order.order_type == OrderType.LIMIT
-        assert order.price == 99.5
-        assert order.quantity == 100
-        # 返回空成交列表
-        assert trades == []
-
-    def test_place_bid_without_existing_order(self):
-        """测试无挂单时挂买单：直接挂单"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 确认没有挂单
-        assert agent.account.pending_order_id is None
-
-        # 执行挂买单
-        action = ActionType.PLACE_BID
-        params = {"price": 99.5, "quantity": 100}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证没有调用 cancel_order（因为没有旧单）
-        mock_engine.cancel_order.assert_not_called()
-        # 验证调用了 process_order
-        mock_engine.process_order.assert_called_once()
-        order = mock_engine.process_order.call_args[0][0]
-        assert order.agent_id == 10001
-        assert order.side == OrderSide.BUY
-        assert order.price == 99.5
-        assert order.quantity == 100
-        # 返回空成交列表
-        assert trades == []
-
-    def test_market_buy_with_existing_order(self):
-        """测试有挂单时市价买入：市价买入不撤旧单（因为市价单会立即成交）"""
-        # 创建 mock Brain 和 matching_engine
-        mock_brain = MagicMock(spec=Brain)
-        mock_engine = create_mock_matching_engine()
-
-        # 创建庄家 Agent 配置
-        config = AgentConfig(
-            count=10,
-            initial_balance=10000000.0,
-            leverage=10.0,
-            maintenance_margin_rate=0.05,
-            maker_fee_rate=0.0,
-            taker_fee_rate=0.0001,
-        )
-
-        # 创建庄家 Agent
-        agent = WhaleAgent(
-            agent_id=10001,
-            brain=mock_brain,
-            config=config,
-        )
-
-        # 设置已有挂单
-        agent.account.pending_order_id = 99999
-
-        # 执行市价买入
-        action = ActionType.MARKET_BUY
-        params = {"quantity": 150}
-        trades = agent.execute_action(action, params, mock_engine)
-
-        # 验证没有调用 cancel_order（市价单不需要先撤旧单）
-        mock_engine.cancel_order.assert_not_called()
-        # 验证调用了 process_order 市价单
-        mock_engine.process_order.assert_called_once()
-        order = mock_engine.process_order.call_args[0][0]
-        assert order.order_type == OrderType.MARKET
-        assert order.side == OrderSide.BUY
-        assert order.quantity == 150
         # 返回空成交列表
         assert trades == []
 

@@ -7,16 +7,16 @@ from .arena_state import (
     AgentAccountState,
     AgentStateAdapter,
     ArenaState,
-    CatfishAccountState,
+    NoiseTraderAccountState,
 )
 from .execute_worker import (
     ArenaExecuteData,
     ArenaExecuteResult,
     ArenaExecuteWorkerPool,
     ArenaExecuteWorkerPoolShm,
-    CatfishDecision,
-    CatfishTradeResult,
     ExecuteCommand,
+    NoiseTraderDecision,
+    NoiseTraderTradeResult,
     arena_execute_worker_shm,
 )
 from .fitness_aggregator import FitnessAggregator
@@ -30,12 +30,12 @@ __all__ = [
     "ArenaExecuteWorkerPool",
     "ArenaExecuteWorkerPoolShm",
     "ArenaState",
-    "CatfishAccountState",
-    "CatfishDecision",
-    "CatfishTradeResult",
     "ExecuteCommand",
     "FitnessAggregator",
     "MultiArenaConfig",
+    "NoiseTraderAccountState",
+    "NoiseTraderDecision",
+    "NoiseTraderTradeResult",
     "ParallelArenaTrainer",
     "arena_execute_worker_shm",
 ]

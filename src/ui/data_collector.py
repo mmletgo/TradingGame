@@ -27,10 +27,10 @@ class TradeInfo:
 
 
 @dataclass
-class CatfishInfo:
-    """鲶鱼信息（UI展示用）"""
+class NoiseTraderInfo:
+    """噪声交易者信息（UI展示用）"""
 
-    name: str  # 鲶鱼类型名称
+    name: str  # 噪声交易者类型名称
     equity: float  # 净值
     position_qty: int  # 持仓数量
     position_value: float  # 持仓市值 = abs(position_qty) * current_price
@@ -78,9 +78,9 @@ class UIDataSnapshot:
     equity_history: dict[AgentType, list[float]]  # 所有个体平均资产历史
     alive_equity_history: dict[AgentType, list[float]]  # 存活个体平均资产历史
 
-    # 鲶鱼数据
-    catfish_data: list[CatfishInfo]  # 四只鲶鱼的当前数据
-    catfish_equity_history: list[list[float]]  # 四只鲶鱼的净值历史
+    # 噪声交易者数据
+    noise_trader_data: list[NoiseTraderInfo]  # 噪声交易者的当前数据
+    noise_trader_equity_history: list[list[float]]  # 噪声交易者的净值历史
 
 
 class UIDataCollector:
@@ -99,7 +99,7 @@ class UIDataCollector:
     price_history: deque[float]
     equity_history: dict[AgentType, deque[float]]
     alive_equity_history: dict[AgentType, deque[float]]
-    catfish_equity_history: list[deque[float]]  # 四只鲶鱼的净值历史
+    noise_trader_equity_history: list[deque[float]]  # 噪声交易者的净值历史
 
     def __init__(self, history_length: int = 1000) -> None:
         """初始化数据采集器
@@ -115,8 +115,8 @@ class UIDataCollector:
         self.alive_equity_history = {
             agent_type: deque(maxlen=history_length) for agent_type in AgentType
         }
-        # 初始化四只鲶鱼的净值历史
-        self.catfish_equity_history = [
+        # 初始化噪声交易者的净值历史
+        self.noise_trader_equity_history = [
             deque(maxlen=history_length) for _ in range(4)
         ]
 
@@ -183,8 +183,8 @@ class UIDataCollector:
             for trade in trainer.recent_trades
         ]
 
-        # 收集鲶鱼数据
-        catfish_data = self._collect_catfish_data(trainer, price_for_equity)
+        # 收集噪声交易者数据
+        noise_trader_data = self._collect_noise_trader_data(trainer, price_for_equity)
 
         return UIDataSnapshot(
             tick=trainer.tick,
@@ -198,8 +198,8 @@ class UIDataCollector:
             price_history=list(self.price_history),
             equity_history={k: list(v) for k, v in self.equity_history.items()},
             alive_equity_history={k: list(v) for k, v in self.alive_equity_history.items()},
-            catfish_data=catfish_data,
-            catfish_equity_history=[list(h) for h in self.catfish_equity_history],
+            noise_trader_data=noise_trader_data,
+            noise_trader_equity_history=[list(h) for h in self.noise_trader_equity_history],
         )
 
     def _compute_population_stats(
@@ -257,46 +257,36 @@ class UIDataCollector:
             alive_equities=alive_equities.tolist(),
         )
 
-    def _collect_catfish_data(
+    def _collect_noise_trader_data(
         self, trainer: "Trainer", current_price: float
-    ) -> list[CatfishInfo]:
-        """收集鲶鱼数据
+    ) -> list[NoiseTraderInfo]:
+        """收集噪声交易者数据
 
         Args:
             trainer: 训练器实例
             current_price: 当前价格（用于计算净值）
 
         Returns:
-            鲶鱼信息列表
+            噪声交易者信息列表
         """
-        catfish_data: list[CatfishInfo] = []
+        noise_trader_data: list[NoiseTraderInfo] = []
 
-        # 如果鲶鱼列表为空，返回空列表
-        if not hasattr(trainer, "catfish_list") or not trainer.catfish_list:
-            return catfish_data
+        noise_traders = getattr(trainer, "noise_traders", [])
+        if not noise_traders:
+            return noise_trader_data
 
-        # 收集每只鲶鱼的数据
-        for i, catfish in enumerate(trainer.catfish_list):
-            # 获取鲶鱼类型名称
-            name = type(catfish).__name__
+        # 收集每个噪声交易者的数据
+        for i, trader_obj in enumerate(noise_traders):
+            name = type(trader_obj).__name__
 
-            # 计算净值
-            equity = catfish.account.get_equity(current_price)
-
-            # 获取持仓数量
-            position_qty = catfish.account.position.quantity
-
-            # 计算持仓市值
+            equity = trader_obj.account.get_equity(current_price)
+            position_qty = trader_obj.account.position.quantity
             position_value = abs(position_qty) * current_price
+            initial_balance = trader_obj.account.initial_balance
+            is_liquidated = trader_obj.is_liquidated
 
-            # 获取初始资金
-            initial_balance = catfish.account.initial_balance
-
-            # 是否被强平
-            is_liquidated = catfish.is_liquidated
-
-            catfish_data.append(
-                CatfishInfo(
+            noise_trader_data.append(
+                NoiseTraderInfo(
                     name=name,
                     equity=equity,
                     position_qty=position_qty,
@@ -306,11 +296,11 @@ class UIDataCollector:
                 )
             )
 
-            # 记录净值历史（最多记录4只鲶鱼）
-            if i < len(self.catfish_equity_history):
-                self.catfish_equity_history[i].append(equity)
+            # 记录净值历史
+            if i < len(self.noise_trader_equity_history):
+                self.noise_trader_equity_history[i].append(equity)
 
-        return catfish_data
+        return noise_trader_data
 
     def reset(self) -> None:
         """重置历史数据（新episode开始时调用）"""
@@ -319,6 +309,6 @@ class UIDataCollector:
             history.clear()
         for history in self.alive_equity_history.values():
             history.clear()
-        # 重置鲶鱼净值历史
-        for history in self.catfish_equity_history:
+        # 重置噪声交易者净值历史
+        for history in self.noise_trader_equity_history:
             history.clear()

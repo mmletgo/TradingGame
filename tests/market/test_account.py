@@ -294,8 +294,8 @@ class TestPositionGetMarginUsed:
 class TestAccountInit:
     """测试 Account.__init__"""
 
-    def test_create_retail_account(self):
-        """测试创建散户账户"""
+    def test_create_retail_pro_account(self):
+        """测试创建高级散户账户"""
         config = AgentConfig(
             count=10000,
             initial_balance=10000.0,
@@ -305,10 +305,10 @@ class TestAccountInit:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
 
         assert account.agent_id == 1
-        assert account.agent_type == AgentType.RETAIL
+        assert account.agent_type == AgentType.RETAIL_PRO
         assert account.balance == 10000.0
         assert account.position.quantity == 0.0
         assert account.position.avg_price == 0.0
@@ -319,8 +319,8 @@ class TestAccountInit:
         assert account.taker_fee_rate == 0.0005
         assert account.pending_order_id is None
 
-    def test_create_whale_account(self):
-        """测试创建庄家账户"""
+    def test_create_market_maker_account_with_different_config(self):
+        """测试创建做市商账户（不同配置）"""
         config = AgentConfig(
             count=10,
             initial_balance=10000000.0,
@@ -330,10 +330,10 @@ class TestAccountInit:
             taker_fee_rate=0.0001,
         )
 
-        account = Account(agent_id=10001, agent_type=AgentType.WHALE, config=config)
+        account = Account(agent_id=10001, agent_type=AgentType.MARKET_MAKER, config=config)
 
         assert account.agent_id == 10001
-        assert account.agent_type == AgentType.WHALE
+        assert account.agent_type == AgentType.MARKET_MAKER
         assert account.balance == 10000000.0
         assert account.leverage == 10.0
         assert account.maintenance_margin_rate == 0.05
@@ -378,7 +378,7 @@ class TestAccountGetEquity:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
 
         # 无持仓时，净值 = 余额
         equity = account.get_equity(100.0)
@@ -396,7 +396,7 @@ class TestAccountGetEquity:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 10 @ 100
         account.position.update(OrderSide.BUY, 10.0, 100.0)
 
@@ -417,7 +417,7 @@ class TestAccountGetEquity:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 10 @ 100
         account.position.update(OrderSide.BUY, 10.0, 100.0)
 
@@ -438,7 +438,7 @@ class TestAccountGetEquity:
             taker_fee_rate=0.0001,
         )
 
-        account = Account(agent_id=10001, agent_type=AgentType.WHALE, config=config)
+        account = Account(agent_id=10001, agent_type=AgentType.MARKET_MAKER, config=config)
         # 开空仓 100 @ 100
         account.position.update(OrderSide.SELL, 100.0, 100.0)
 
@@ -459,7 +459,7 @@ class TestAccountGetEquity:
             taker_fee_rate=0.0001,
         )
 
-        account = Account(agent_id=10001, agent_type=AgentType.WHALE, config=config)
+        account = Account(agent_id=10001, agent_type=AgentType.MARKET_MAKER, config=config)
         # 开空仓 100 @ 100
         account.position.update(OrderSide.SELL, 100.0, 100.0)
 
@@ -480,7 +480,7 @@ class TestAccountGetEquity:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 10 @ 100
         account.position.update(OrderSide.BUY, 10.0, 100.0)
         # 余额增加 500（模拟已实现盈亏）
@@ -507,7 +507,7 @@ class TestAccountGetMarginRatio:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
 
         # 无持仓时，保证金率应为无穷大
         margin_ratio = account.get_margin_ratio(100.0)
@@ -525,7 +525,7 @@ class TestAccountGetMarginRatio:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 10 @ 100
         account.position.update(OrderSide.BUY, 10.0, 100.0)
 
@@ -548,7 +548,7 @@ class TestAccountGetMarginRatio:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 100 @ 100（大量持仓）
         account.position.update(OrderSide.BUY, 100.0, 100.0)
 
@@ -571,7 +571,7 @@ class TestAccountGetMarginRatio:
             taker_fee_rate=0.0001,
         )
 
-        account = Account(agent_id=10001, agent_type=AgentType.WHALE, config=config)
+        account = Account(agent_id=10001, agent_type=AgentType.MARKET_MAKER, config=config)
         # 开空仓 100 @ 100
         account.position.update(OrderSide.SELL, 100.0, 100.0)
 
@@ -594,7 +594,7 @@ class TestAccountGetMarginRatio:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 1000 @ 100（极大量持仓）
         account.position.update(OrderSide.BUY, 1000.0, 100.0)
 
@@ -617,7 +617,7 @@ class TestAccountGetMarginRatio:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 2000 @ 100（超大量持仓）
         account.position.update(OrderSide.BUY, 2000.0, 100.0)
 
@@ -645,7 +645,7 @@ class TestAccountCheckLiquidation:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 2000 @ 100（超大量持仓）
         account.position.update(OrderSide.BUY, 2000.0, 100.0)
 
@@ -666,7 +666,7 @@ class TestAccountCheckLiquidation:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
         # 开多仓 10 @ 100（小量持仓）
         account.position.update(OrderSide.BUY, 10.0, 100.0)
 
@@ -689,7 +689,7 @@ class TestAccountCheckLiquidation:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
 
         # 无持仓时保证金率为无穷大，不需要平仓
         need_liquidation = account.check_liquidation(100.0)
@@ -707,7 +707,7 @@ class TestAccountCheckLiquidation:
             taker_fee_rate=0.0001,
         )
 
-        account = Account(agent_id=10001, agent_type=AgentType.WHALE, config=config)
+        account = Account(agent_id=10001, agent_type=AgentType.MARKET_MAKER, config=config)
         # 开空仓 200000 @ 100（大量持仓）
         account.position.update(OrderSide.SELL, 200000.0, 100.0)
 
@@ -736,7 +736,7 @@ class TestAccountOnTrade:
             taker_fee_rate=0.0005,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.RETAIL, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.RETAIL_PRO, config=config)
 
         # 创建成交记录：买入 10 @ 100，手续费 5
         trade = Trade(
@@ -772,7 +772,7 @@ class TestAccountOnTrade:
             taker_fee_rate=0.0001,
         )
 
-        account = Account(agent_id=1, agent_type=AgentType.WHALE, config=config)
+        account = Account(agent_id=1, agent_type=AgentType.MARKET_MAKER, config=config)
         # 先开多仓 100 @ 100
         account.position.update(OrderSide.BUY, 100.0, 100.0)
 

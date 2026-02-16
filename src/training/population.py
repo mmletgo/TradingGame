@@ -1546,9 +1546,7 @@ def _evolve_single_population(pop: "Population", current_price: float) -> None:
 
 
 from src.bio.agents.market_maker import MarketMakerAgent
-from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
-from src.bio.agents.whale import WhaleAgent
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType, Config, TrainingConfig
 from src.core.log_engine.logger import get_logger
@@ -1573,7 +1571,7 @@ class Population:
     管理特定类型的 Agent 种群，包括创建、评估、淘汰和繁殖。
 
     Attributes:
-        agent_type: Agent 类型（散户/庄家/做市商）
+        agent_type: Agent 类型（高级散户/做市商）
         agents: Agent 列表
         neat_pop: NEAT 种群对象
         neat_config: NEAT 配置
@@ -1594,7 +1592,7 @@ class Population:
     logger: logging.Logger
     _executor: ThreadPoolExecutor | None
     _num_workers: int
-    sub_population_id: int | None  # 子种群ID（仅散户使用）
+    sub_population_id: int | None  # 子种群ID（子种群管理器使用）
     _pending_genome_data: tuple[np.ndarray, ...] | None  # 待反序列化的基因组数据
     _genomes_dirty: bool  # 标记基因组是否需要同步
     _pending_species_data: tuple[np.ndarray, np.ndarray] | None  # 待恢复的species数据
@@ -1621,7 +1619,7 @@ class Population:
         初始化 NEAT 种群，创建初始 Agent 列表。
 
         Args:
-            agent_type: Agent 类型（散户/庄家/做市商）
+            agent_type: Agent 类型（高级散户/做市商）
             config: 全局配置对象
         """
         self.agent_type = agent_type
@@ -1640,18 +1638,15 @@ class Population:
         self._cached_network_params_data: tuple[np.ndarray, ...] | None = None
 
         # 根据 Agent 类型选择 NEAT 配置文件
-        # 散户使用 67 个输入（10档订单簿 + 10笔成交），庄家使用 607 个输入，做市商使用 634 个输入
         from pathlib import Path
 
         config_dir = Path(config.training.neat_config_path)
         if agent_type == AgentType.MARKET_MAKER:
             neat_config_path = config_dir / "neat_market_maker.cfg"
-        elif agent_type == AgentType.WHALE:
-            neat_config_path = config_dir / "neat_whale.cfg"
         elif agent_type == AgentType.RETAIL_PRO:
             neat_config_path = config_dir / "neat_retail_pro.cfg"
         else:
-            neat_config_path = config_dir / "neat_retail.cfg"
+            raise ValueError(f"未知的 Agent 类型: {agent_type}")
 
         # 保存 NEAT 配置文件路径（用于并行进化时在子进程中重新加载）
         self.neat_config_path = str(neat_config_path)
@@ -1684,21 +1679,17 @@ class Population:
         self._accumulation_count: int = 0  # 累积的 episode 数量
 
     # Agent ID 偏移量，确保不同种群的 agent_id 不冲突
-    # 新的ID分配方案：
-    # RETAIL_SUB_0:  0 ~ 99,999 (每个子种群预留100K空间)
-    # RETAIL_SUB_1: 100,000 ~ 199,999
+    # ID分配方案：
+    # RETAIL_PRO_SUB_0:  0 ~ 99,999 (每个子种群预留100K空间)
+    # RETAIL_PRO_SUB_1: 100,000 ~ 199,999
     # ...
-    # RETAIL_SUB_9: 900,000 ~ 999,999
-    # RETAIL_PRO:  1,000,000+
-    # WHALE:       2,000,000+
-    # MARKET_MAKER_SUB_0: 3,000,000 ~ 3,099,999
-    # MARKET_MAKER_SUB_1: 3,100,000 ~ 3,199,999
+    # RETAIL_PRO_SUB_11: 1,100,000 ~ 1,199,999
+    # MARKET_MAKER_SUB_0: 2,000,000 ~ 2,099,999
+    # MARKET_MAKER_SUB_1: 2,100,000 ~ 2,199,999
     # ...
     _AGENT_ID_OFFSET = {
-        AgentType.RETAIL: 0,  # 基础偏移，子种群会在此基础上再加偏移
-        AgentType.RETAIL_PRO: 1_000_000,
-        AgentType.WHALE: 2_000_000,
-        AgentType.MARKET_MAKER: 3_000_000,  # 基础偏移，子种群会在此基础上再加偏移
+        AgentType.RETAIL_PRO: 0,  # 基础偏移，子种群会在此基础上再加偏移
+        AgentType.MARKET_MAKER: 2_000_000,  # 基础偏移，子种群会在此基础上再加偏移
     }
 
     # 子种群偏移量（每个子种群的ID空间，适用于所有支持子种群的类型）
@@ -1718,7 +1709,7 @@ class Population:
             idx: Agent 在列表中的索引
             genome_id: 基因组 ID
             genome: NEAT 基因组对象
-            agent_class: Agent 类（RetailAgent/WhaleAgent/MarketMakerAgent）
+            agent_class: Agent 类（RetailProAgent/MarketMakerAgent）
             agent_id_offset: Agent ID 偏移量
 
         Returns:
@@ -1736,7 +1727,7 @@ class Population:
         """从基因组创建 Agent 列表（并行化版本）
 
         遍历基因组列表，为每个基因组创建对应的 Brain 和 Agent。
-        根据种群的 agent_type 创建对应类型的 Agent（散户/庄家/做市商）。
+        根据种群的 agent_type 创建对应类型的 Agent（高级散户/做市商）。
         小批量（<50）串行处理，大批量并行处理以提升性能。
 
         Args:
@@ -1746,12 +1737,8 @@ class Population:
             创建的 Agent 列表
         """
         # 确定 Agent 类
-        if self.agent_type == AgentType.RETAIL:
-            agent_class: type[Agent] = RetailAgent
-        elif self.agent_type == AgentType.RETAIL_PRO:
-            agent_class = RetailProAgent
-        elif self.agent_type == AgentType.WHALE:
-            agent_class = WhaleAgent
+        if self.agent_type == AgentType.RETAIL_PRO:
+            agent_class: type[Agent] = RetailProAgent
         elif self.agent_type == AgentType.MARKET_MAKER:
             agent_class = MarketMakerAgent
         else:
@@ -2482,12 +2469,8 @@ class Population:
 
         # 4. 只为新 genome 创建新的 Agent 对象
         # 确定 Agent 类
-        if self.agent_type == AgentType.RETAIL:
-            agent_class: type[Agent] = RetailAgent
-        elif self.agent_type == AgentType.RETAIL_PRO:
-            agent_class = RetailProAgent
-        elif self.agent_type == AgentType.WHALE:
-            agent_class = WhaleAgent
+        if self.agent_type == AgentType.RETAIL_PRO:
+            agent_class: type[Agent] = RetailProAgent
         elif self.agent_type == AgentType.MARKET_MAKER:
             agent_class = MarketMakerAgent
         else:
@@ -2705,7 +2688,7 @@ class SubPopulationManager:
 
         Args:
             config: 全局配置对象
-            agent_type: Agent类型（RETAIL 或 MARKET_MAKER）
+            agent_type: Agent类型（RETAIL_PRO 或 MARKET_MAKER）
             sub_count: 子种群数量（默认10）
         """
         self.agent_type = agent_type
@@ -2785,7 +2768,7 @@ class SubPopulationManager:
 
     @property
     def agent_config(self) -> AgentConfig:
-        """返回散户的Agent配置（从第一个子种群获取）"""
+        """返回Agent配置（从第一个子种群获取）"""
         if self.sub_populations:
             return self.sub_populations[0].agent_config
         raise RuntimeError("No sub-populations available")
@@ -2903,7 +2886,7 @@ class SubPopulationManager:
         total_time = time.perf_counter() - start_time
 
         self.logger.info(
-            f"散户子种群简化并行进化完成，共 {len(self.sub_populations)} 个子种群，"
+            f"{self.agent_type.value} 子种群简化并行进化完成，共 {len(self.sub_populations)} 个子种群，"
             f"耗时: eval={eval_time:.2f}s, evolve={evolve_time:.2f}s, "
             f"total={total_time:.2f}s"
         )
@@ -3064,7 +3047,7 @@ class SubPopulationManager:
         total_time = time.perf_counter() - start_time
 
         self.logger.info(
-            f"散户子种群并行进化完成，共 {len(self.sub_populations)} 个子种群，"
+            f"{self.agent_type.value} 子种群并行进化完成，共 {len(self.sub_populations)} 个子种群，"
             f"序列化大小: {total_serialize_size / 1024 / 1024:.2f} MB，"
             f"耗时: eval={eval_time:.2f}s, serialize={serialize_time:.2f}s, "
             f"parallel={parallel_time:.2f}s, update={update_time:.2f}s, total={total_time:.2f}s"
@@ -3186,7 +3169,7 @@ class SubPopulationManager:
 
         mode = "完整" if deserialize_genomes else "延迟"
         self.logger.info(
-            f"散户子种群网络参数并行进化完成（{mode}反序列化），"
+            f"{self.agent_type.value} 子种群网络参数并行进化完成（{mode}反序列化），"
             f"共 {len(self.sub_populations)} 个子种群，"
             f"耗时: sync={sync_time:.2f}s, eval={eval_time:.2f}s, evolve={evolve_time:.2f}s, "
             f"update={update_time:.2f}s, total={total_time:.2f}s"
@@ -3285,6 +3268,3 @@ class SubPopulationManager:
         for sub_pop in self.sub_populations:
             sub_pop.clear_accumulated_fitness()
 
-
-# 兼容别名，保持向后兼容性
-RetailSubPopulationManager = SubPopulationManager

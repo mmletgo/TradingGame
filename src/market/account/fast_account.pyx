@@ -11,10 +11,8 @@ from src.market.matching.fast_matching cimport FastTrade
 
 
 # Agent 类型常量（与 AgentType 枚举对应）
-DEF RETAIL = 0
-DEF RETAIL_PRO = 1
-DEF WHALE = 2
-DEF MARKET_MAKER = 3
+DEF RETAIL_PRO = 0
+DEF MARKET_MAKER = 1
 
 
 cdef class FastAccount:
@@ -25,7 +23,7 @@ cdef class FastAccount:
 
     Attributes:
         agent_id: Agent ID
-        agent_type: Agent 类型（整数：0=RETAIL, 1=RETAIL_PRO, 2=WHALE, 3=MARKET_MAKER）
+        agent_type: Agent 类型（整数：0=RETAIL_PRO, 1=MARKET_MAKER）
         initial_balance: 初始余额
         balance: 当前余额
         position: 持仓对象（Position cdef class）
@@ -65,7 +63,7 @@ cdef class FastAccount:
 
         Args:
             agent_id: Agent ID
-            agent_type: Agent 类型整数（0=RETAIL, 1=RETAIL_PRO, 2=WHALE, 3=MARKET_MAKER）
+            agent_type: Agent 类型整数（0=RETAIL_PRO, 1=MARKET_MAKER）
             initial_balance: 初始余额
             leverage: 杠杆倍数
             maintenance_margin_rate: 维持保证金率

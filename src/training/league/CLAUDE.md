@@ -16,7 +16,7 @@
 
 ### 按类型分离架构
 
-每种 Agent 类型（RETAIL, RETAIL_PRO, WHALE, MARKET_MAKER）都有独立的对手池（存储其他三种类型的历史版本）。
+每种 Agent 类型（RETAIL_PRO, MARKET_MAKER）都有独立的对手池（存储另一种类型的历史版本）。
 
 ## 模块结构
 
@@ -73,7 +73,7 @@ src/training/league/
 
 **`convergence_threshold`（收敛阈值）**
 
-判断单代是否"趋于收敛"的阈值。当某类型的泛化优势比绝对值 ≤ 该阈值时，认为该类型在这一代趋于收敛。
+判断单代是否"趋于收敛"的阈值。当某类型的泛化优势比绝对值 <= 该阈值时，认为该类型在这一代趋于收敛。
 
 - **作用**：定义"基准表现"与"泛化表现"相近的容差范围
 - **计算**：`|泛化平均适应度 - 基准平均适应度| <= threshold`
@@ -86,7 +86,7 @@ src/training/league/
 
 **`convergence_generations`（连续收敛代数）**
 
-判断最终收敛需要连续满足条件的代数。只有最近连续 N 代的泛化优势比绝对值都 ≤ `convergence_threshold`，才判定为真正收敛。
+判断最终收敛需要连续满足条件的代数。只有最近连续 N 代的泛化优势比绝对值都 <= `convergence_threshold`，才判定为真正收敛。
 
 - **作用**：防止因单次波动导致的误判，确保收敛是稳定的趋势
 - **影响**：
@@ -166,7 +166,7 @@ entry_dir/
 
 **胜率跟踪**：
 - `win_rates` 和 `match_counts` 存储在 `pool_index.json` 的每个条目中
-- key 格式为 `vs_{AgentType.value}`（如 `vs_RETAIL`）
+- key 格式为 `vs_{AgentType.value}`（如 `vs_RETAIL_PRO`）
 - 更新方式：EMA 平滑，`win_rate = (1 - α) × old + α × outcome`
 - outcome 定义：目标物种在泛化竞技场中的平均适应度 > 0 即为"赢"（1.0）
 
@@ -177,7 +177,7 @@ entry_dir/
 
 ### OpponentPoolManager (opponent_pool_manager.py)
 
-管理四种 Agent 类型的独立对手池。
+管理两种 Agent 类型的独立对手池。
 
 主要方法：
 - `add_snapshot(generation, populations, source, add_reason)`：批量保存快照
@@ -298,28 +298,26 @@ def run_round(self):
 
 ## 竞技场分配方案
 
-默认 64 个独立竞技场，每个竞技场运行 1 个 episode：
+默认 40 个独立竞技场，每个竞技场运行 1 个 episode：
 
 | 竞技场范围 | 数量 | 用途 |
 |-----------|------|------|
 | Arena 0-15 | 16 | 基准对战（全当前代） |
-| Arena 16-27 | 12 | 散户泛化测试 |
-| Arena 28-39 | 12 | 高级散户泛化测试 |
-| Arena 40-51 | 12 | 庄家泛化测试 |
-| Arena 52-63 | 12 | 做市商泛化测试 |
+| Arena 16-27 | 12 | 高级散户泛化测试 |
+| Arena 28-39 | 12 | 做市商泛化测试 |
 
-总计：16 + 12×4 = 64 个竞技场
+总计：16 + 12×2 = 40 个竞技场
 
-**冻结物种的竞技场重分配**：冻结物种的泛化竞技场转为额外的 baseline 竞技场。例如 WHALE 冻结后：16+12=28 个 baseline，36 个泛化（其他 3 种类型各 12 个）。
+**冻结物种的竞技场重分配**：冻结物种的泛化竞技场转为额外的 baseline 竞技场。例如 MARKET_MAKER 冻结后：16+12=28 个 baseline，12 个泛化（RETAIL_PRO）。
 
 ## 适应度计算
 
-以散户为例：
+以高级散户为例：
 
 ```python
-散户 Main 适应度 = 加权平均 {
+高级散户 Main 适应度 = 加权平均 {
     基准竞技场(Arena 0-15) × 权重 1.0,
-    散户泛化测试竞技场(Arena 16-27) × 权重 0.8
+    高级散户泛化测试竞技场(Arena 16-27) × 权重 0.8
 }
 ```
 
@@ -350,8 +348,8 @@ def run_round(self):
 
 收敛采用"双重收敛"机制，同时监控种群和精英的收敛状态：
 
-1. **种群收敛**：最近 `convergence_generations` 代的种群泛化优势比绝对值都 ≤ `convergence_threshold`
-2. **精英收敛**：最近 `convergence_generations` 代的精英泛化优势比绝对值都 ≤ `convergence_threshold`
+1. **种群收敛**：最近 `convergence_generations` 代的种群泛化优势比绝对值都 <= `convergence_threshold`
+2. **精英收敛**：最近 `convergence_generations` 代的精英泛化优势比绝对值都 <= `convergence_threshold`
 
 只有当种群和精英都收敛时，才判定为真正收敛。
 
@@ -383,7 +381,7 @@ def run_round(self):
 
 **隐式冷却期**：解冻后需要 `convergence_generations`（10 代）连续收敛才会重新冻结，天然防止快速反复冻结/解冻。
 
-**训练完成**：所有 4 种物种均冻结时，训练自动完成。
+**训练完成**：所有 2 种物种均冻结时，训练自动完成。
 
 **冻结状态持久化**：`SpeciesFreezeState` 随检查点保存/恢复，包含：
 - `is_frozen`：是否冻结
@@ -396,24 +394,22 @@ def run_round(self):
 
 ```
 INFO - 第 100 代泛化优势比:
-INFO -   RETAIL: 种群=+0.0234(基准=0.0512,泛化=0.0746) | 精英=+0.0156(基准=0.0823,泛化=0.0979) [击败历史对手]
 INFO -   RETAIL_PRO: 种群=-0.0087(基准=0.0893,泛化=0.0806) | 精英=-0.0045(基准=0.1234,泛化=0.1189) [不如历史表现]
-INFO -   WHALE: 种群=+0.0005(基准=0.1234,泛化=0.1239) | 精英=+0.0008(基准=0.1567,泛化=0.1575) [趋于收敛]
 INFO -   MARKET_MAKER: 种群=+0.0012(基准=0.0567,泛化=0.0579) | 精英=+0.0003(基准=0.0789,泛化=0.0792) [双重收敛]
 ```
 
 冻结后：
 ```
-INFO - 物种 WHALE 已冻结 (第 120 代, baseline=0.1234, elite_baseline=0.1567)
+INFO - 物种 MARKET_MAKER 已冻结 (第 120 代, baseline=0.0567, elite_baseline=0.0789)
 INFO - 第 140 代泛化优势比:
-INFO -   RETAIL: 种群=+0.0023(基准=0.0512,泛化=0.0535) | 精英=+0.0015(基准=0.0823,泛化=0.0838) [双重收敛]
-INFO -   WHALE: 种群=+0.0005(基准=0.1234,泛化=0.1239) | 精英=+0.0008(基准=0.1567,泛化=0.1575) [已冻结(第120代起)]
+INFO -   RETAIL_PRO: 种群=+0.0023(基准=0.0512,泛化=0.0535) | 精英=+0.0015(基准=0.0823,泛化=0.0838) [双重收敛]
+INFO -   MARKET_MAKER: 种群=+0.0005(基准=0.0567,泛化=0.0572) | 精英=+0.0008(基准=0.0789,泛化=0.0797) [已冻结(第120代起)]
 ```
 
 复评日志：
 ```
-INFO - 物种 WHALE 复评 (冻结于第 120 代): 冻结时baseline=0.1234, 当前baseline=0.1200, 下降比例=0.0275, 阈值=0.0500
-INFO - 物种 WHALE 保持冻结 (下降 2.75% <= 5.00%)
+INFO - 物种 MARKET_MAKER 复评 (冻结于第 120 代): 冻结时baseline=0.0567, 当前baseline=0.0550, 下降比例=0.0300, 阈值=0.0500
+INFO - 物种 MARKET_MAKER 保持冻结 (下降 3.00% <= 5.00%)
 ```
 
 所有物种冻结时：
@@ -437,16 +433,16 @@ INFO - 所有物种已冻结，训练完成
 ```
 checkpoints/league_training/
 ├── opponent_pools/
-│   ├── RETAIL/
+│   ├── RETAIL_PRO/
 │   │   ├── pool_index.json
 │   │   ├── gen_050/
 │   │   │   ├── metadata.json
 │   │   │   ├── genomes.npz
 │   │   │   └── networks.npz
 │   │   └── ...
-│   ├── RETAIL_PRO/
-│   ├── WHALE/
 │   └── MARKET_MAKER/
+│       ├── pool_index.json
+│       └── ...
 └── checkpoints/
     └── gen_100.pkl
 ```
@@ -456,11 +452,8 @@ checkpoints/league_training/
 ### 启动训练
 
 ```bash
-# 基本训练（默认启用鲶鱼）
+# 基本训练
 python scripts/train_league.py --rounds 200
-
-# 禁用鲶鱼
-python scripts/train_league.py --rounds 200 --no-catfish
 
 # 指定竞技场数量
 python scripts/train_league.py --num-arenas 16 --rounds 200
@@ -480,7 +473,7 @@ from src.config.config import Config
 from src.training.arena.config import MultiArenaConfig
 
 config = Config()
-multi_config = MultiArenaConfig(num_arenas=64, episodes_per_arena=1)
+multi_config = MultiArenaConfig(num_arenas=40, episodes_per_arena=1)
 league_config = LeagueTrainingConfig(
     sampling_strategy='recency',
 )
@@ -569,5 +562,5 @@ network_data: dict[int, tuple] | None      # 延迟加载
 | 竞技场分配 | < 1ms |
 | 网络缓存加载（单类型） | 首次 50-200ms/条目 |
 | 批量推理（多来源）| 增加约 30-50% |
-| 对手池 I/O（单类型） | 散户 75MB ~500ms |
+| 对手池 I/O（单类型） | 高级散户 75MB ~500ms |
 | 总内存占用 | +500MB（缓存 5 代历史对手） |

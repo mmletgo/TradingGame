@@ -53,11 +53,6 @@ def reset_episode_for_benchmark(trainer: Trainer) -> None:
     for population in trainer.populations.values():
         population.reset_agents()
 
-    # 重置鲶鱼
-    for catfish in trainer.catfish_list:
-        catfish.reset()
-    trainer._catfish_liquidated = False
-
     # 重置市场状态
     trainer._reset_market()
 
@@ -83,7 +78,6 @@ def reinit_network_caches(trainer: Trainer, num_threads: int) -> None:
     from src.bio.agents.base import AgentType
 
     # 缓存类型常量
-    CACHE_TYPE_RETAIL = 0
     CACHE_TYPE_FULL = 1
     CACHE_TYPE_MARKET_MAKER = 2
 
@@ -94,11 +88,9 @@ def reinit_network_caches(trainer: Trainer, num_threads: int) -> None:
             continue
 
         # 确定缓存类型
-        if agent_type == AgentType.RETAIL:
-            cache_type = CACHE_TYPE_RETAIL
-        elif agent_type == AgentType.MARKET_MAKER:
+        if agent_type == AgentType.MARKET_MAKER:
             cache_type = CACHE_TYPE_MARKET_MAKER
-        else:  # RETAIL_PRO, WHALE
+        else:  # RETAIL_PRO
             cache_type = CACHE_TYPE_FULL
 
         # 创建新缓存

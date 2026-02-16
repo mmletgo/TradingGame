@@ -127,7 +127,6 @@ def main() -> None:
     config = create_default_config(
         episode_length=args.episode_length,
         config_dir="config",
-        catfish_enabled=False,  # 禁用鲶鱼简化测试
     )
     config.training.num_arenas = args.num_arenas
     config.training.episodes_per_arena = args.episodes_per_arena

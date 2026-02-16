@@ -37,17 +37,13 @@ from src.config.config import AgentType
 
 # 物种颜色方案
 SPECIES_COLORS: dict[AgentType, str] = {
-    AgentType.RETAIL: "#1f77b4",       # 蓝色
     AgentType.RETAIL_PRO: "#2ca02c",   # 绿色
-    AgentType.WHALE: "#d62728",        # 红色
     AgentType.MARKET_MAKER: "#9467bd", # 紫色
 }
 
 # 物种中文名称
 SPECIES_NAMES: dict[AgentType, str] = {
-    AgentType.RETAIL: "散户",
     AgentType.RETAIL_PRO: "高级散户",
-    AgentType.WHALE: "庄家",
     AgentType.MARKET_MAKER: "做市商",
 }
 

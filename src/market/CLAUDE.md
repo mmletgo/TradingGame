@@ -2,14 +2,14 @@
 
 ## 模块概述
 
-市场引擎是交易模拟竞技场的核心基础设施，负责订单簿管理、订单撮合、账户状态跟踪、风险控制和市场扰动。该模块采用高性能的 Cython 加速技术，实现了完整的限价订单簿（LOB）交易机制，支持多种 Agent 类型的差异化手续费策略和复杂的风险控制机制。
+市场引擎是交易模拟竞技场的核心基础设施，负责订单簿管理、订单撮合、账户状态跟踪、风险控制和市场随机性提供。该模块采用高性能的 Cython 加速技术，实现了完整的限价订单簿（LOB）交易机制，支持多种 Agent 类型的差异化手续费策略和复杂的风险控制机制。
 
 ## 设计理念
 
 1. **高性能优先**：关键路径使用 Cython 加速，订单簿、持仓计算、神经网络推理等模块性能提升 10-100 倍
 2. **数据一致性**：严格的状态同步机制，确保订单簿、账户、成交记录的一致性
 3. **风险控制**：多层次风险控制机制，包括保证金监控、强制平仓、ADL 自动减仓
-4. **可扩展性**：模块化设计，支持多种订单类型、Agent 类型、鲶鱼模式
+4. **可扩展性**：模块化设计，支持多种订单类型、Agent 类型
 5. **市场真实性**：模拟真实交易所的撮合规则、手续费模型、价格发现机制
 
 ## 文件结构
@@ -36,14 +36,11 @@ src/market/
 │   ├── __init__.py
 │   ├── adl_manager.py    # ADL 管理器
 │   └── CLAUDE.md         # ADL 模块文档
-└── catfish/              # 鲶鱼模块（市场扰动器）
+└── noise_trader/         # 噪声交易者模块
     ├── __init__.py
-    ├── catfish_base.py    # 鲶鱼抽象基类
-    ├── catfish_account.py # 鲶鱼账户
-    ├── trend_following.py # 趋势创造者鲶鱼
-    ├── mean_reversion.py  # 均值回归鲶鱼
-    ├── random_trading.py  # 随机交易鲶鱼
-    └── CLAUDE.md         # 鲶鱼模块文档
+    ├── noise_trader.py        # 噪声交易者类
+    ├── noise_trader_account.py # 噪声交易者账户
+    └── CLAUDE.md              # 噪声交易者模块文档
 ```
 
 ## 核心功能模块
@@ -126,11 +123,9 @@ src/market/
 **手续费模型：**
 | Agent 类型 | 挂单费率 | 吃单费率 | 说明 |
 |-----------|----------|----------|------|
-| 散户 | 0.0002 (万2) | 0.0005 (万5) | 标准费率 |
 | 高级散户 | 0.0002 (万2) | 0.0005 (万5) | 标准费率 |
-| 庄家 | -0.0001 (负万1) | 0.0001 (万1) | Maker rebate |
 | 做市商 | -0.0001 (负万1) | 0.0001 (万1) | Maker rebate |
-| 鲶鱼 | 0 | 0 | 免手续费 |
+| 噪声交易者 | 0 | 0 | 免手续费 |
 
 ### 4. 账户管理模块（account/）
 
@@ -183,7 +178,7 @@ src/market/
 
 **执行流程（三阶段）：**
 1. **阶段1：预计算 ADL 候选清单**（Tick 开始时）
-   - 遍历所有 Agent 和鲶鱼，计算 ADL 分数
+   - 遍历所有 Agent 和噪声交易者，计算 ADL 分数
    - 筛选盈利者（pnl_percent > 0）
    - 按持仓方向分类（多头/空头）
    - 按分数降序排序
@@ -198,32 +193,31 @@ src/market/
    - 循环与候选成交
    - 兜底处理（强制清零）
 
-### 6. 鲶鱼模块（catfish/）
+### 6. 噪声交易者模块（noise_trader/）
 
-详见 [src/market/catfish/CLAUDE.md](catfish/CLAUDE.md)
+详见 [src/market/noise_trader/CLAUDE.md](noise_trader/CLAUDE.md)
 
 **核心功能：**
-- 提供市场扰动机制
-- 不参与 NEAT 进化，按预设规则交易
-- 拥有有限资金，可参与强平和 ADL 机制
+- 为市场提供随机性流动性和布朗运动价格特征
+- 不参与 NEAT 进化，按随机规则交易
+- 拥有无限资金（1e18），不触发强平
 
 **核心类：**
-- `CatfishAccount` - 鲶鱼账户类（简化版账户）
-- `CatfishBase` - 鲶鱼抽象基类
-- `TrendCreatorCatfish` - 趋势创造者鲶鱼
-- `MeanReversionCatfish` - 逆势操作型鲶鱼
-- `RandomTradingCatfish` - 随机买卖型鲶鱼
+- `NoiseTraderAccount` - 噪声交易者账户类
+- `NoiseTrader` - 噪声交易者类
 
-**三种鲶鱼行为模式：**
-1. **趋势创造者** - Episode 开始时随机选择方向，整个 Episode 保持该方向持续操作
-2. **均值回归** - 当价格偏离 EMA 均线时反向操作
-3. **随机交易** - 以随机概率进行买卖操作
+**噪声交易者行为：**
+- 100个独立噪声交易者
+- 每 tick 以 50% 概率行动
+- 行动时 50% 买 / 50% 卖，通过市价单撮合
+- 下单量：`max(1, int(lognormvariate(mu=3.0, sigma=1.0)))`
 
-**鲶鱼特点：**
+**噪声交易者特点：**
+- 初始资金 1e18（视为无限资金）
+- 不触发强平检查
 - 手续费为 0（maker 和 taker 费率均为 0）
-- 拥有有限资金，可参与强平和 ADL 机制
-- 任意鲶鱼被强平 → Episode 立即结束（训练模式）
-- 下单量按盘口深度计算（目标：吃掉前 1 档）
+- 可作为 ADL 对手方
+- 有完整的持仓和 PnL 跟踪
 
 ## 市场引擎与训练引擎的交互
 
@@ -237,17 +231,18 @@ Trainer（训练引擎）
   ├── MatchingEngine（撮合引擎）
   ├── Account/Position（账户和持仓）
   ├── ADLManager（ADL 管理器）
-  └── CatfishBase（鲶鱼）
+  └── NoiseTrader（噪声交易者）
   ↓
 2. Episode 循环
   ├── 重置所有 Agent 账户
+  ├── 重置噪声交易者状态
   ├── 重置市场状态和订单簿
   └── Tick 循环
       ├── 强平检查（三阶段）
       │   ├── 阶段1：预计算 ADL 候选清单
       │   ├── 阶段2：强平市价单执行
       │   └── 阶段3：ADL 自动减仓（如需要）
-      ├── 鲶鱼行动（如启用）
+      ├── 噪声交易者行动
       ├── 计算归一化市场状态（所有 Agent 共用）
       ├── 随机打乱 Agent 顺序
       ├── 并行决策（神经网络推理）
@@ -274,7 +269,7 @@ Trainer（训练引擎）
 2. **MatchingEngine** - 撮合引擎，用于订单提交和撮合
 3. **Account/Position** - 账户和持仓，用于状态查询和更新
 4. **ADLManager** - ADL 管理器，用于风险控制
-5. **CatfishBase** - 鲶鱼实例，用于市场扰动
+5. **NoiseTrader** - 噪声交易者实例，用于市场随机性
 6. **NormalizedMarketState** - 归一化市场状态，用于 Agent 观察
 
 **训练引擎向市场引擎提供：**
@@ -382,14 +377,12 @@ Agent 的行为通过以下方式影响市场：
 - `maker_fee_rate: float` - 挂单手续费率
 - `taker_fee_rate: float` - 吃单手续费率
 
-### CatfishConfig
+### NoiseTraderConfig
 
-- `enabled: bool` - 是否启用鲶鱼
-- `multi_mode: bool` - 是否同时启用三种模式
-- `mode: CatfishMode` - 鲶鱼行为模式（单模式）
-- `ma_period: int` - EMA 均线周期
-- `deviation_threshold: float` - 价格偏离阈值
-- `action_probability: float` - 每个 tick 行动概率
+- `count: int` - 噪声交易者数量（默认 100）
+- `action_probability: float` - 每个 tick 行动概率（默认 0.5）
+- `quantity_mu: float` - 对数正态分布 mu 参数
+- `quantity_sigma: float` - 对数正态分布 sigma 参数
 
 ## 依赖关系
 
@@ -399,7 +392,7 @@ Agent 的行为通过以下方式影响市场：
 - `sortedcontainers.SortedDict` - 高性能排序字典
 - `collections.OrderedDict` - 保持插入顺序的字典
 - `dataclasses` - 数据类装饰器
-- `random` - 随机数生成（鲶鱼）
+- `random` - 随机数生成（噪声交易者）
 
 ### 内部依赖
 
@@ -414,7 +407,7 @@ from src.market.orderbook import Order, OrderSide, OrderType, OrderBook
 from src.market.matching import MatchingEngine, FastMatchingEngine, Trade, FastTrade
 from src.market.account import Account, FastAccount, Position
 from src.market.adl import ADLManager, ADLCandidate
-from src.market.catfish import CatfishBase, CatfishAccount, create_all_catfish
+from src.market.noise_trader import NoiseTrader, NoiseTraderAccount, create_noise_traders
 ```
 
 ## 使用示例
@@ -437,7 +430,7 @@ matching_engine = MatchingEngine(config)
 agent_config = AgentConfig()
 account = Account(
     agent_id=1,
-    agent_type=AgentType.RETAIL,
+    agent_type=AgentType.RETAIL_PRO,
     config=agent_config
 )
 
@@ -462,17 +455,6 @@ trades = matching_engine.process_order(order)
 # 处理成交
 for trade in trades:
     account.on_trade(trade, is_buyer=(trade.buyer_id == 1))
-
-# 计算归一化市场状态
-mid_price = orderbook.get_mid_price()
-depth = orderbook.get_depth_numpy(levels=100)
-market_state = NormalizedMarketState(
-    mid_price=mid_price,
-    tick_size=config.tick_size,
-    bid_data=depth[0],
-    ask_data=depth[1],
-    # ... 其他字段
-)
 ```
 
 ### 强平和 ADL 流程
@@ -543,11 +525,12 @@ if remaining_qty > 0:
 - 无持仓时不参与 ADL
 - 兜底处理确保被淘汰者仓位清零
 
-### 鲶鱼约束
+### 噪声交易者约束
 
-- 鲶鱼被强平 → Episode 立即结束（训练模式）
-- 鲶鱼手续费为 0
-- 鲶鱼订单 ID 使用负数空间
+- 噪声交易者不触发强平检查
+- 噪声交易者手续费为 0
+- 噪声交易者订单 ID 使用负数空间
+- 噪声交易者可作为 ADL 对手方
 
 ## 子模块文档
 
@@ -557,7 +540,7 @@ if remaining_qty > 0:
 - [撮合引擎模块](matching/CLAUDE.md) - MatchingEngine、Trade、撮合规则
 - [账户管理模块](account/CLAUDE.md) - Account、Position、保证金计算
 - [ADL 模块](adl/CLAUDE.md) - ADLManager、ADLCandidate、排名算法
-- [鲶鱼模块](catfish/CLAUDE.md) - CatfishBase、三种鲶鱼模式
+- [噪声交易者模块](noise_trader/CLAUDE.md) - NoiseTrader、NoiseTraderAccount
 
 ## 总结
 

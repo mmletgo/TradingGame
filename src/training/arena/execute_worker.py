@@ -63,7 +63,7 @@ class AtomicAction:
         price: 订单价格（LIMIT 动作使用）
         quantity: 订单数量（非 CANCEL 动作使用）
         is_market_maker: 是否是做市商
-        is_catfish: 是否是鲶鱼
+        is_noise_trader: 是否是噪声交易者
     """
 
     action_type: AtomicActionType
@@ -72,7 +72,7 @@ class AtomicAction:
     price: float = 0.0  # LIMIT 动作使用
     quantity: int = 0  # 非 CANCEL 动作使用
     is_market_maker: bool = False
-    is_catfish: bool = False
+    is_noise_trader: bool = False
 
 
 # ============================================================================
@@ -96,39 +96,35 @@ class ExecuteCommand:
 
 
 @dataclass
-class CatfishDecision:
-    """鲶鱼决策数据
+class NoiseTraderDecision:
+    """噪声交易者决策数据
 
     Attributes:
-        catfish_id: 鲶鱼 ID（负数）
-        direction: 方向，1=买，-1=卖，0=不行动
-        quantity_ticks: 吃多少档（默认1）
+        trader_id: 噪声交易者 ID（负数）
+        direction: 方向，1=买，-1=卖
+        quantity: 下单数量
     """
 
-    catfish_id: int
-    direction: int  # 1=买, -1=卖, 0=不行动
-    quantity_ticks: int = 1
+    trader_id: int
+    direction: int  # 1=买, -1=卖
+    quantity: int = 1
 
 
 @dataclass
-class CatfishTradeResult:
-    """鲶鱼成交结果
+class NoiseTraderTradeResult:
+    """噪声交易者成交结果
 
     Attributes:
-        catfish_id: 鲶鱼 ID
+        trader_id: 噪声交易者 ID
         trades: 成交列表，每个元素格式:
             (trade_id, price, quantity, buyer_id, seller_id,
              buyer_fee, seller_fee, is_buyer_taker)
-        total_quantity: 总成交数量
-        avg_price: 平均成交价格
     """
 
-    catfish_id: int
+    trader_id: int
     trades: list[tuple[int, float, int, int, int, float, float, bool]] = field(
         default_factory=list
     )
-    total_quantity: int = 0
-    avg_price: float = 0.0
 
 
 @dataclass
@@ -149,7 +145,7 @@ class ArenaExecuteData:
         mm_decisions_array: 做市商决策 NumPy 数组（P3优化），
             shape (N, 43)，列顺序: [agent_id, num_bid, num_ask, bid_prices[10], bid_qtys[10], ask_prices[10], ask_qtys[10]]
             如果提供此字段，则优先使用此字段而非 mm_decisions 列表
-        catfish_decisions: 鲶鱼决策列表（启用鲶鱼时由主进程计算）
+        noise_trader_decisions: 噪声交易者决策列表
     """
 
     liquidated_agents: list[tuple[int, int, bool]] = field(default_factory=list)
@@ -159,7 +155,7 @@ class ArenaExecuteData:
     )
     decisions_array: NDArray[np.float64] | None = None
     mm_decisions_array: NDArray[np.float64] | None = None
-    catfish_decisions: list[CatfishDecision] = field(default_factory=list)
+    noise_trader_decisions: list[NoiseTraderDecision] = field(default_factory=list)
 
 
 @dataclass
@@ -177,7 +173,7 @@ class ArenaExecuteResult:
              buyer_fee, seller_fee, is_buyer_taker)
         pending_updates: 非做市商挂单状态更新，agent_id -> pending_order_id | None
         mm_order_updates: 做市商挂单状态更新，agent_id -> (bid_ids, ask_ids)
-        catfish_results: 鲶鱼成交结果列表
+        noise_trader_results: 噪声交易者成交结果列表
         error: 错误信息（如果有）
     """
 
@@ -197,7 +193,7 @@ class ArenaExecuteResult:
     mm_order_updates: dict[int, tuple[list[int], list[int]]] = field(
         default_factory=dict
     )
-    catfish_results: list[CatfishTradeResult] = field(default_factory=list)
+    noise_trader_results: list[NoiseTraderTradeResult] = field(default_factory=list)
     error: str | None = None
 
 
@@ -356,7 +352,7 @@ def _handle_reset(
     Args:
         arena: 竞技场状态
         config: 全局配置
-        reset_data: 重置数据，可包含 "initial_price"、"fee_rates" 和 "catfish_ids"
+        reset_data: 重置数据，可包含 "initial_price"、"fee_rates" 和 "noise_trader_ids"
     """
     initial_price = config.market.initial_price
     if reset_data and "initial_price" in reset_data:
@@ -377,10 +373,10 @@ def _handle_reset(
         for agent_id, (maker_rate, taker_rate) in reset_data["fee_rates"].items():
             arena.matching_engine.register_agent(agent_id, maker_rate, taker_rate)
 
-    # 注册鲶鱼费率（手续费为 0）
-    if reset_data and "catfish_ids" in reset_data:
-        for catfish_id in reset_data["catfish_ids"]:
-            arena.matching_engine.register_agent(catfish_id, 0.0, 0.0)
+    # 注册噪声交易者费率（手续费为 0）
+    if reset_data and "noise_trader_ids" in reset_data:
+        for trader_id in reset_data["noise_trader_ids"]:
+            arena.matching_engine.register_agent(trader_id, 0.0, 0.0)
 
 
 def _handle_init_mm(
@@ -476,107 +472,69 @@ def _handle_init_mm(
     )
 
 
-def _handle_catfish(
+def _handle_noise_traders(
     arena: WorkerArenaState,
-    catfish_decisions: list[CatfishDecision],
-) -> list[CatfishTradeResult]:
-    """处理鲶鱼市价单
-
-    在 Agent 决策执行之前执行鲶鱼的市价单。
+    noise_trader_decisions: list[NoiseTraderDecision],
+) -> list[NoiseTraderTradeResult]:
+    """处理噪声交易者市价单
 
     Args:
         arena: 竞技场状态
-        catfish_decisions: 鲶鱼决策列表
+        noise_trader_decisions: 噪声交易者决策列表
 
     Returns:
-        鲶鱼成交结果列表
+        噪声交易者成交结果列表
     """
-    results: list[CatfishTradeResult] = []
+    results: list[NoiseTraderTradeResult] = []
 
-    if not catfish_decisions:
+    if not noise_trader_decisions:
         return results
 
     matching_engine = arena.matching_engine
-    orderbook = matching_engine._orderbook
     process_order = matching_engine.process_order
 
-    for decision in catfish_decisions:
-        catfish_id = decision.catfish_id
+    for decision in noise_trader_decisions:
+        trader_id = decision.trader_id
         direction = decision.direction
-        quantity_ticks = decision.quantity_ticks
+        quantity = decision.quantity
 
-        # 方向为 0 表示不行动
-        if direction == 0:
-            results.append(CatfishTradeResult(catfish_id=catfish_id))
+        if direction == 0 or quantity <= 0:
+            results.append(NoiseTraderTradeResult(trader_id=trader_id))
             continue
 
-        # 确保鲶鱼的订单计数器存在
-        if catfish_id not in arena.order_counters:
-            arena.order_counters[catfish_id] = 0
+        # 确保订单计数器存在
+        if trader_id not in arena.order_counters:
+            arena.order_counters[trader_id] = 0
 
-        # 获取订单簿深度，计算要吃的数量
-        depth = orderbook.get_depth(levels=quantity_ticks)
-
-        total_quantity = 0
-        if direction > 0:
-            # 买入：吃卖盘 asks
-            asks = depth.get("asks", [])
-            for i in range(min(quantity_ticks, len(asks))):
-                _, qty = asks[i]
-                total_quantity += int(qty)
-            side = OrderSide.BUY
-        else:
-            # 卖出：吃买盘 bids
-            bids = depth.get("bids", [])
-            for i in range(min(quantity_ticks, len(bids))):
-                _, qty = bids[i]
-                total_quantity += int(qty)
-            side = OrderSide.SELL
-
-        # 如果没有可吃的量，跳过
-        if total_quantity <= 0:
-            results.append(CatfishTradeResult(catfish_id=catfish_id))
-            continue
-
-        # 生成订单 ID（鲶鱼 ID 是负数）
-        arena.order_counters[catfish_id] += 1
+        # 生成订单 ID
+        arena.order_counters[trader_id] += 1
         order_id = generate_order_id(
-            arena.arena_id, catfish_id, arena.order_counters[catfish_id]
+            arena.arena_id, trader_id, arena.order_counters[trader_id]
         )
 
-        # 创建市价单
+        side = OrderSide.BUY if direction > 0 else OrderSide.SELL
+
         order = Order(
             order_id=order_id,
-            agent_id=catfish_id,
+            agent_id=trader_id,
             side=side,
             order_type=OrderType.MARKET,
             price=0.0,
-            quantity=total_quantity,
+            quantity=quantity,
         )
 
-        # 执行订单
         trades = process_order(order)
 
-        # 收集成交结果
         trade_tuples: list[tuple[int, float, int, int, int, float, float, bool]] = []
-        executed_quantity = 0
-        total_amount = 0.0
-
         for trade in trades:
             trade_tuple = _trade_to_tuple(trade)
             trade_tuples.append(trade_tuple)
             arena.recent_trades.append(trade)
-            executed_quantity += trade.quantity
-            total_amount += trade.price * trade.quantity
-
-        avg_price = total_amount / executed_quantity if executed_quantity > 0 else 0.0
 
         results.append(
-            CatfishTradeResult(
-                catfish_id=catfish_id,
+            NoiseTraderTradeResult(
+                trader_id=trader_id,
                 trades=trade_tuples,
-                total_quantity=executed_quantity,
-                avg_price=avg_price,
             )
         )
 
@@ -589,7 +547,7 @@ def _execute_atomic_action(
     all_trades: list[tuple[int, float, int, int, int, float, float, bool]],
     pending_updates: dict[int, int | None],
     mm_order_updates: dict[int, tuple[list[int], list[int]]],
-    catfish_trade_map: dict[int, list[tuple[int, float, int, int, int, float, float, bool]]],
+    noise_trader_trade_map: dict[int, list[tuple[int, float, int, int, int, float, float, bool]]],
 ) -> None:
     """执行单个原子动作
 
@@ -599,7 +557,7 @@ def _execute_atomic_action(
         all_trades: 所有成交列表（会被修改）
         pending_updates: 非做市商挂单状态更新（会被修改）
         mm_order_updates: 做市商挂单状态更新（会被修改）
-        catfish_trade_map: 鲶鱼成交映射，catfish_id -> trades（会被修改）
+        noise_trader_trade_map: 噪声交易者成交映射，trader_id -> trades（会被修改）
     """
     matching_engine = arena.matching_engine
     orderbook = matching_engine._orderbook
@@ -628,7 +586,7 @@ def _execute_atomic_action(
                     bid_ids.remove(order_id)
                 if order_id in ask_ids:
                     ask_ids.remove(order_id)
-            elif not action.is_catfish:
+            elif not action.is_noise_trader:
                 # 非做市商撤单
                 if arena.pending_order_ids.get(agent_id) == order_id:
                     arena.pending_order_ids[agent_id] = None
@@ -653,11 +611,10 @@ def _execute_atomic_action(
             trade_tuple = _trade_to_tuple(trade)
             all_trades.append(trade_tuple)
             arena.recent_trades.append(trade)
-            # 鲶鱼成交记录
-            if action.is_catfish:
-                if agent_id not in catfish_trade_map:
-                    catfish_trade_map[agent_id] = []
-                catfish_trade_map[agent_id].append(trade_tuple)
+            if action.is_noise_trader:
+                if agent_id not in noise_trader_trade_map:
+                    noise_trader_trade_map[agent_id] = []
+                noise_trader_trade_map[agent_id].append(trade_tuple)
 
         # 更新挂单状态
         if order_map_get(order_id):
@@ -666,10 +623,10 @@ def _execute_atomic_action(
                     mm_order_updates[agent_id] = ([], [])
                 mm_order_updates[agent_id][0].append(order_id)
                 arena.mm_bid_order_ids[agent_id].append(order_id)
-            elif not action.is_catfish:
+            elif not action.is_noise_trader:
                 arena.pending_order_ids[agent_id] = order_id
                 pending_updates[agent_id] = order_id
-        elif not action.is_market_maker and not action.is_catfish:
+        elif not action.is_market_maker and not action.is_noise_trader:
             arena.pending_order_ids[agent_id] = None
             pending_updates[agent_id] = None
 
@@ -692,11 +649,10 @@ def _execute_atomic_action(
             trade_tuple = _trade_to_tuple(trade)
             all_trades.append(trade_tuple)
             arena.recent_trades.append(trade)
-            # 鲶鱼成交记录
-            if action.is_catfish:
-                if agent_id not in catfish_trade_map:
-                    catfish_trade_map[agent_id] = []
-                catfish_trade_map[agent_id].append(trade_tuple)
+            if action.is_noise_trader:
+                if agent_id not in noise_trader_trade_map:
+                    noise_trader_trade_map[agent_id] = []
+                noise_trader_trade_map[agent_id].append(trade_tuple)
 
         # 更新挂单状态
         if order_map_get(order_id):
@@ -705,10 +661,10 @@ def _execute_atomic_action(
                     mm_order_updates[agent_id] = ([], [])
                 mm_order_updates[agent_id][1].append(order_id)
                 arena.mm_ask_order_ids[agent_id].append(order_id)
-            elif not action.is_catfish:
+            elif not action.is_noise_trader:
                 arena.pending_order_ids[agent_id] = order_id
                 pending_updates[agent_id] = order_id
-        elif not action.is_market_maker and not action.is_catfish:
+        elif not action.is_market_maker and not action.is_noise_trader:
             arena.pending_order_ids[agent_id] = None
             pending_updates[agent_id] = None
 
@@ -731,11 +687,10 @@ def _execute_atomic_action(
             trade_tuple = _trade_to_tuple(trade)
             all_trades.append(trade_tuple)
             arena.recent_trades.append(trade)
-            # 鲶鱼成交记录
-            if action.is_catfish:
-                if agent_id not in catfish_trade_map:
-                    catfish_trade_map[agent_id] = []
-                catfish_trade_map[agent_id].append(trade_tuple)
+            if action.is_noise_trader:
+                if agent_id not in noise_trader_trade_map:
+                    noise_trader_trade_map[agent_id] = []
+                noise_trader_trade_map[agent_id].append(trade_tuple)
 
     elif action.action_type == AtomicActionType.MARKET_SELL:
         # 市价卖单
@@ -756,11 +711,10 @@ def _execute_atomic_action(
             trade_tuple = _trade_to_tuple(trade)
             all_trades.append(trade_tuple)
             arena.recent_trades.append(trade)
-            # 鲶鱼成交记录
-            if action.is_catfish:
-                if agent_id not in catfish_trade_map:
-                    catfish_trade_map[agent_id] = []
-                catfish_trade_map[agent_id].append(trade_tuple)
+            if action.is_noise_trader:
+                if agent_id not in noise_trader_trade_map:
+                    noise_trader_trade_map[agent_id] = []
+                noise_trader_trade_map[agent_id].append(trade_tuple)
 
 
 def _handle_execute(
@@ -774,7 +728,7 @@ def _handle_execute(
 
     执行顺序：
     1. 强平处理（不参与打乱，优先执行）
-    2. 收集所有原子动作（吃单鲶鱼、做市鲶鱼、做市商、非做市商）
+    2. 收集所有原子动作（噪声交易者、做市商、非做市商）
     3. 随机打乱并执行
     4. 构建返回结果
 
@@ -788,7 +742,7 @@ def _handle_execute(
     all_trades: list[tuple[int, float, int, int, int, float, float, bool]] = []
     pending_updates: dict[int, int | None] = {}
     mm_order_updates: dict[int, tuple[list[int], list[int]]] = {}
-    catfish_trade_map: dict[int, list[tuple[int, float, int, int, int, float, float, bool]]] = {}
+    noise_trader_trade_map: dict[int, list[tuple[int, float, int, int, int, float, float, bool]]] = {}
 
     matching_engine = arena.matching_engine
     orderbook = matching_engine._orderbook
@@ -839,41 +793,28 @@ def _handle_execute(
     # ====== 第二部分：收集所有原子动作 ======
     atomic_actions: list[AtomicAction] = []
 
-    # 2.1 收集吃单鲶鱼动作
-    for decision in execute_data.catfish_decisions:
-        if decision.direction == 0:
+    # 2.1 收集噪声交易者动作
+    for decision in execute_data.noise_trader_decisions:
+        if decision.direction == 0 or decision.quantity <= 0:
             continue
-        # 计算数量（吃掉前 N 档）
-        depth = orderbook.get_depth(levels=decision.quantity_ticks)
-        total_qty = 0
-        if decision.direction > 0:  # 买
-            asks = depth.get("asks", [])
-            for i in range(min(decision.quantity_ticks, len(asks))):
-                _, qty = asks[i]
-                total_qty += int(qty)
-            if total_qty > 0:
-                atomic_actions.append(
-                    AtomicAction(
-                        AtomicActionType.MARKET_BUY,
-                        decision.catfish_id,
-                        quantity=total_qty,
-                        is_catfish=True,
-                    )
+        if decision.direction > 0:
+            atomic_actions.append(
+                AtomicAction(
+                    AtomicActionType.MARKET_BUY,
+                    decision.trader_id,
+                    quantity=decision.quantity,
+                    is_noise_trader=True,
                 )
-        else:  # 卖
-            bids = depth.get("bids", [])
-            for i in range(min(decision.quantity_ticks, len(bids))):
-                _, qty = bids[i]
-                total_qty += int(qty)
-            if total_qty > 0:
-                atomic_actions.append(
-                    AtomicAction(
-                        AtomicActionType.MARKET_SELL,
-                        decision.catfish_id,
-                        quantity=total_qty,
-                        is_catfish=True,
-                    )
+            )
+        else:
+            atomic_actions.append(
+                AtomicAction(
+                    AtomicActionType.MARKET_SELL,
+                    decision.trader_id,
+                    quantity=decision.quantity,
+                    is_noise_trader=True,
                 )
+            )
 
     # 2.2 收集做市商动作（拆分）
     # 支持两种格式：mm_decisions_array（优先）或 mm_decisions
@@ -1038,33 +979,21 @@ def _handle_execute(
 
     for action in atomic_actions:
         _execute_atomic_action(
-            arena, action, all_trades, pending_updates, mm_order_updates, catfish_trade_map
+            arena, action, all_trades, pending_updates, mm_order_updates, noise_trader_trade_map
         )
 
     # ====== 第四部分：构建返回结果 ======
-    # 构建鲶鱼成交结果
-    catfish_results: list[CatfishTradeResult] = []
-    # 收集所有出现的鲶鱼 ID（包括无成交的）
-    catfish_ids_set: set[int] = set()
-    for decision in execute_data.catfish_decisions:
-        catfish_ids_set.add(decision.catfish_id)
-    for catfish_id in catfish_ids_set:
-        trades_list = catfish_trade_map.get(catfish_id, [])
-        total_quantity = 0
-        total_amount = 0.0
-        for trade_tuple in trades_list:
-            # trade_tuple: (trade_id, price, quantity, buyer_id, seller_id, buyer_fee, seller_fee, is_buyer_taker)
-            price = trade_tuple[1]
-            qty = trade_tuple[2]
-            total_quantity += qty
-            total_amount += price * qty
-        avg_price = total_amount / total_quantity if total_quantity > 0 else 0.0
-        catfish_results.append(
-            CatfishTradeResult(
-                catfish_id=catfish_id,
+    # 构建噪声交易者成交结果
+    noise_trader_results: list[NoiseTraderTradeResult] = []
+    trader_ids_set: set[int] = set()
+    for decision in execute_data.noise_trader_decisions:
+        trader_ids_set.add(decision.trader_id)
+    for trader_id in trader_ids_set:
+        trades_list = noise_trader_trade_map.get(trader_id, [])
+        noise_trader_results.append(
+            NoiseTraderTradeResult(
+                trader_id=trader_id,
                 trades=trades_list,
-                total_quantity=total_quantity,
-                avg_price=avg_price,
             )
         )
 
@@ -1081,7 +1010,7 @@ def _handle_execute(
         trades=all_trades,
         pending_updates=pending_updates,
         mm_order_updates=mm_order_updates,
-        catfish_results=catfish_results,
+        noise_trader_results=noise_trader_results,
     )
 
 
@@ -1253,14 +1182,14 @@ class ArenaExecuteWorkerPool:
         self,
         initial_price: float | None = None,
         fee_rates: dict[int, tuple[float, float]] | None = None,
-        catfish_ids: list[int] | None = None,
+        noise_trader_ids: list[int] | None = None,
     ) -> None:
         """重置所有竞技场的订单簿
 
         Args:
             initial_price: 初始价格（可选，默认使用配置）
             fee_rates: Agent 费率映射（可选），agent_id -> (maker_rate, taker_rate)
-            catfish_ids: 鲶鱼 ID 列表（可选），用于注册鲶鱼费率（0, 0）
+            noise_trader_ids: 噪声交易者 ID 列表（可选），用于注册噪声交易者费率（0, 0）
         """
         if not self._started:
             self.start()
@@ -1270,8 +1199,8 @@ class ArenaExecuteWorkerPool:
             reset_data["initial_price"] = initial_price
         if fee_rates is not None:
             reset_data["fee_rates"] = fee_rates
-        if catfish_ids is not None:
-            reset_data["catfish_ids"] = catfish_ids
+        if noise_trader_ids is not None:
+            reset_data["noise_trader_ids"] = noise_trader_ids
 
         # 发送 reset 命令到所有竞技场
         for arena_id in self.arena_ids:
@@ -1544,14 +1473,14 @@ def arena_execute_worker_shm(
                         liquidated_agents = cmd_view.get_liquidated()
                         decisions = cmd_view.get_decisions()
                         mm_decisions = cmd_view.get_mm_decisions()
-                        catfish_decisions = cmd_view.get_catfish_decisions()
+                        noise_trader_decisions = cmd_view.get_noise_trader_decisions()
 
                         # 构建执行数据
                         execute_data = ArenaExecuteData(
                             liquidated_agents=liquidated_agents,
                             decisions=decisions,
                             mm_decisions=mm_decisions,
-                            catfish_decisions=catfish_decisions,
+                            noise_trader_decisions=noise_trader_decisions,
                         )
 
                         # 执行
@@ -1722,18 +1651,18 @@ class ArenaExecuteWorkerPoolShm:
         self,
         initial_price: float | None = None,
         fee_rates: dict[int, tuple[float, float]] | None = None,
-        catfish_ids: list[int] | None = None,
+        noise_trader_ids: list[int] | None = None,
     ) -> None:
         """重置所有竞技场的订单簿
 
         Args:
             initial_price: 初始价格（可选）
             fee_rates: Agent 费率映射（可选）
-            catfish_ids: 鲶鱼 ID 列表（可选），用于注册鲶鱼费率
+            noise_trader_ids: 噪声交易者 ID 列表（可选），用于注册噪声交易者费率
 
         Note:
             共享内存版暂不支持通过共享内存传递 reset 参数，
-            catfish_ids 参数保留以保持接口一致性。
+            noise_trader_ids 参数保留以保持接口一致性。
         """
         from src.training.arena.shared_memory_ipc import CommandStatus, CommandType
 
@@ -1827,9 +1756,9 @@ class ArenaExecuteWorkerPoolShm:
 
             cmd_view.set_mm_decisions(execute_data.mm_decisions)
 
-            # 设置鲶鱼决策
-            if execute_data.catfish_decisions:
-                cmd_view.set_catfish_decisions(execute_data.catfish_decisions)
+            # 设置噪声交易者决策
+            if execute_data.noise_trader_decisions:
+                cmd_view.set_noise_trader_decisions(execute_data.noise_trader_decisions)
             
 
             cmd_view.cmd_type = CommandType.EXECUTE
@@ -1885,9 +1814,9 @@ class ArenaExecuteWorkerPoolShm:
 
             cmd_view.set_mm_decisions(execute_data.mm_decisions)
 
-            # 设置鲶鱼决策
-            if execute_data.catfish_decisions:
-                cmd_view.set_catfish_decisions(execute_data.catfish_decisions)
+            # 设置噪声交易者决策
+            if execute_data.noise_trader_decisions:
+                cmd_view.set_noise_trader_decisions(execute_data.noise_trader_decisions)
 
             cmd_view.cmd_type = CommandType.EXECUTE
             cmd_view.status = CommandStatus.PENDING

@@ -3,10 +3,8 @@
 多进程搜索合适的 NEAT compatibility_threshold 参数
 
 目标 species 数量：
-- 散户（pop_size=150）：> 10
+- 高级散户（pop_size=100）：> 2
 - 做市商（pop_size=150）：> 4
-- 高级散户（pop_size=100）：> 1
-- 庄家（pop_size=200）：> 1
 
 使用方法：
     python scripts/tune_compatibility_threshold.py
@@ -36,9 +34,7 @@ class SpeciesConfig:
 
 # 物种配置列表
 SPECIES_CONFIGS: list[SpeciesConfig] = [
-    SpeciesConfig("散户", "neat_retail.cfg", 150, 10, 100),
     SpeciesConfig("高级散户", "neat_retail_pro.cfg", 100, 2, 50),
-    SpeciesConfig("庄家", "neat_whale.cfg", 200, 2, 100),
     SpeciesConfig("做市商", "neat_market_maker.cfg", 150, 4, 50),
 ]
 

@@ -54,7 +54,6 @@ def main() -> None:
     config = create_default_config(
         episode_length=args.episode_length,
         config_dir="config",
-        catfish_enabled=False,
     )
     config.training.num_arenas = args.num_arenas
     config.training.episodes_per_arena = 1
@@ -83,7 +82,7 @@ def main() -> None:
         "total": [],
         "prepare": [],
         "liquidation": [],
-        "catfish": [],
+        "noise_trader": [],
         "market_state": [],
         "collect_active": [],
         "shuffle": [],
@@ -103,10 +102,10 @@ def main() -> None:
 
         arena_market_states: list[NormalizedMarketState] = []
         arena_active_agents: list[list[AgentAccountState]] = []
-        arena_catfish_trades: list[list[Trade]] = [[] for _ in trainer.arena_states]
+        arena_noise_trader_trades: list[list[Trade]] = [[] for _ in trainer.arena_states]
 
         total_liquidation = 0.0
-        total_catfish = 0.0
+        total_noise_trader = 0.0
         total_market_state = 0.0
         total_collect = 0.0
         total_shuffle = 0.0
@@ -155,10 +154,10 @@ def main() -> None:
             trainer._handle_liquidations_for_arena(arena, current_price)
             total_liquidation += time.perf_counter() - liq_start
 
-            # 鲶鱼行动
-            cat_start = time.perf_counter()
-            arena_catfish_trades[arena_idx] = trainer._catfish_action_for_arena(arena)
-            total_catfish += time.perf_counter() - cat_start
+            # 噪声交易者行动
+            nt_start = time.perf_counter()
+            arena_noise_trader_trades[arena_idx] = trainer._noise_trader_action_for_arena(arena)
+            total_noise_trader += time.perf_counter() - nt_start
 
             # 计算市场状态
             ms_start = time.perf_counter()
@@ -185,7 +184,7 @@ def main() -> None:
         prepare_end = time.perf_counter()
         timing_data["prepare"].append(prepare_end - prepare_start)
         timing_data["liquidation"].append(total_liquidation)
-        timing_data["catfish"].append(total_catfish)
+        timing_data["noise_trader"].append(total_noise_trader)
         timing_data["market_state"].append(total_market_state)
         timing_data["collect_active"].append(total_collect)
         timing_data["shuffle"].append(total_shuffle)
@@ -232,9 +231,9 @@ def main() -> None:
             for arena_idx in filtered_decisions.keys():
                 arena = trainer.arena_states[arena_idx]
                 tick_trades = arena_tick_trades.get(arena_idx, [])
-                catfish_trades = arena_catfish_trades[arena_idx]
-                if catfish_trades:
-                    tick_trades = catfish_trades + tick_trades
+                noise_trader_trades = arena_noise_trader_trades[arena_idx]
+                if noise_trader_trades:
+                    tick_trades = noise_trader_trades + tick_trades
 
                 actual_price = arena.smooth_mid_price
                 if arena_idx in trainer._worker_depth_cache:
@@ -255,7 +254,7 @@ def main() -> None:
                 arena.tick_history_volumes.append(volume)
                 arena.tick_history_amounts.append(amount)
 
-                trainer._check_catfish_liquidation_for_arena(arena, current_price)
+                # 噪声交易者不需要强平检查
                 trainer._should_end_episode_early_for_arena(arena)
 
         postprocess_end = time.perf_counter()
@@ -292,7 +291,7 @@ def main() -> None:
 
     print("\n--- 准备阶段详细分解 ---")
     print(stats_str(timing_data["liquidation"], "强平检查"))
-    print(stats_str(timing_data["catfish"], "鲶鱼行动"))
+    print(stats_str(timing_data["noise_trader"], "噪声交易者行动"))
     print(stats_str(timing_data["market_state"], "市场状态计算"))
     print(stats_str(timing_data["collect_active"], "收集活跃Agent"))
     print(stats_str(timing_data["shuffle"], "随机打乱"))

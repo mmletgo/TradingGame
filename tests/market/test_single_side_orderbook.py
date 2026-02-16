@@ -6,9 +6,7 @@
 import numpy as np
 import pytest
 
-from src.bio.agents.retail import RetailAgent
 from src.bio.agents.retail_pro import RetailProAgent
-from src.bio.agents.whale import WhaleAgent
 from src.bio.agents.base import ActionType
 from src.bio.brain.brain import Brain
 from src.config.config import AgentConfig, AgentType
@@ -37,7 +35,7 @@ def create_test_agent(agent_class, agent_id: int = 0):
         taker_fee_rate=0.0005,
     )
 
-    # RetailAgent 等子类的构造函数不需要 agent_type 参数（内部硬编码）
+    # Agent 子类的构造函数不需要 agent_type 参数（内部硬编码）
     return agent_class(agent_id, mock_brain, config)
 
 
@@ -111,80 +109,6 @@ def create_market_state_empty():
 class TestSingleSideOrderbook:
     """测试单边订单簿情况"""
 
-    def test_retail_agent_with_only_bids(self):
-        """测试散户在只有买盘时能否正常推理"""
-        agent = create_test_agent(RetailAgent)
-        market_state = create_market_state_with_only_bids()
-        orderbook = OrderBook(tick_size=0.01)
-
-        # 测试 observe 方法是否正常工作
-        inputs = agent.observe(market_state, orderbook)
-
-        # 验证输入维度
-        assert inputs.shape == (127,), f"期望输入维度127，实际{inputs.shape}"
-
-        # 验证买盘数据被正确填充（前20个值）
-        assert inputs[0] != 0.0, "买盘价格应该被填充"
-        assert inputs[1] != 0.0, "买盘数量应该被填充"
-
-        # 验证卖盘数据为空（第20-39个值）
-        assert np.all(inputs[20:40] == 0.0), "卖盘数据应该全为0"
-
-        # 测试 decide 方法是否正常工作
-        action, params = agent.decide(market_state, orderbook)
-
-        # 验证返回了有效的动作
-        assert action is not None
-        assert isinstance(params, dict)
-
-    def test_retail_agent_with_only_asks(self):
-        """测试散户在只有卖盘时能否正常推理"""
-        agent = create_test_agent(RetailAgent)
-        market_state = create_market_state_with_only_asks()
-        orderbook = OrderBook(tick_size=0.01)
-
-        # 测试 observe 方法是否正常工作
-        inputs = agent.observe(market_state, orderbook)
-
-        # 验证输入维度
-        assert inputs.shape == (127,), f"期望输入维度127，实际{inputs.shape}"
-
-        # 验证买盘数据为空（前20个值）
-        assert np.all(inputs[0:20] == 0.0), "买盘数据应该全为0"
-
-        # 验证卖盘数据被正确填充（第20-39个值）
-        assert inputs[20] != 0.0, "卖盘价格应该被填充"
-        assert inputs[21] != 0.0, "卖盘数量应该被填充"
-
-        # 测试 decide 方法是否正常工作
-        action, params = agent.decide(market_state, orderbook)
-
-        # 验证返回了有效的动作
-        assert action is not None
-        assert isinstance(params, dict)
-
-    def test_retail_agent_with_empty_orderbook(self):
-        """测试散户在完全空的订单簿时能否正常推理"""
-        agent = create_test_agent(RetailAgent)
-        market_state = create_market_state_empty()
-        orderbook = OrderBook(tick_size=0.01)
-
-        # 测试 observe 方法是否正常工作
-        inputs = agent.observe(market_state, orderbook)
-
-        # 验证输入维度
-        assert inputs.shape == (127,), f"期望输入维度127，实际{inputs.shape}"
-
-        # 验证买卖盘数据都为空
-        assert np.all(inputs[0:40] == 0.0), "买卖盘数据应该全为0"
-
-        # 测试 decide 方法是否正常工作
-        action, params = agent.decide(market_state, orderbook)
-
-        # 验证返回了有效的动作
-        assert action is not None
-        assert isinstance(params, dict)
-
     def test_retail_pro_agent_with_only_bids(self):
         """测试高级散户在只有买盘时能否正常推理"""
         agent = create_test_agent(RetailProAgent)
@@ -208,16 +132,16 @@ class TestSingleSideOrderbook:
         action, params = agent.decide(market_state, orderbook)
         assert action is not None
 
-    def test_whale_agent_with_only_asks(self):
-        """测试庄家在只有卖盘时能否正常推理"""
-        agent = create_test_agent(WhaleAgent)
+    def test_retail_pro_agent_with_only_asks(self):
+        """测试高级散户在只有卖盘时能否正常推理"""
+        agent = create_test_agent(RetailProAgent)
         market_state = create_market_state_with_only_asks()
         orderbook = OrderBook(tick_size=0.01)
 
         # 测试 observe 方法是否正常工作
         inputs = agent.observe(market_state, orderbook)
 
-        # 验证输入维度（庄家使用完整的607维输入）
+        # 验证输入维度
         assert inputs.shape == (907,), f"期望输入维度907，实际{inputs.shape}"
 
         # 验证买盘数据为空
@@ -233,7 +157,7 @@ class TestSingleSideOrderbook:
 
     def test_neural_network_forward_with_zeros(self):
         """测试神经网络在输入包含大量零值时能否正常前向传播"""
-        agent = create_test_agent(RetailAgent)
+        agent = create_test_agent(RetailProAgent)
         market_state = create_market_state_empty()
         orderbook = OrderBook(tick_size=0.01)
 
@@ -250,7 +174,7 @@ class TestSingleSideOrderbook:
 
     def test_price_protection_edge_case(self):
         """测试价格保护在极端 mid_price 时的行为"""
-        agent = create_test_agent(RetailAgent)
+        agent = create_test_agent(RetailProAgent)
 
         # 创建 mid_price 非常小的市场状态
         market_state = NormalizedMarketState(
