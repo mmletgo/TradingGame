@@ -48,6 +48,7 @@ from src.training.population import (
     _apply_species_data_to_population,
     _concat_network_params_numpy,
     _deserialize_genomes_numpy,
+    _pack_network_params_numpy,
     _serialize_genomes_numpy,
     _serialize_species_data,
     _unpack_network_params_numpy,
@@ -175,10 +176,8 @@ class ParallelArenaTrainer:
 
         # 6. 创建 Arena Worker Pool（替代 Execute Worker Pool）
         agent_infos = self._build_agent_infos()
-        num_workers = min(
-            self.multi_config.num_arenas,
-            max(4, (os.cpu_count() or 16) // 3),
-        )
+        num_workers = max(4, self.multi_config.num_arenas // 4)
+        num_workers = min(num_workers, os.cpu_count() or 16)
         self._arena_worker_pool = ArenaWorkerPool(
             num_workers=num_workers,
             num_arenas=self.multi_config.num_arenas,
@@ -509,38 +508,21 @@ class ParallelArenaTrainer:
                 pop._cached_network_params_data = None
                 continue
 
-            # 首次同步或回退：从主进程 network_caches 的 Agent 网络提取
-            cache = self.network_caches.get(agent_type) if self.network_caches else None
-            if cache is not None and cache.is_valid():
-                try:
-                    # 从 cache 的内部数据导出 packed numpy
-                    packed = cache.export_networks_numpy()
-                    network_params[agent_type] = packed
-                except (AttributeError, Exception):
-                    # export_networks_numpy 不可用，尝试从 agents 手动提取
-                    try:
-                        if BatchNetworkCache is None:
-                            continue
-                        networks = [agent.brain.network for agent in pop.agents]
-                        # 创建临时 cache 来提取参数
-                        if agent_type == AgentType.MARKET_MAKER:
-                            tmp_cache_type = CACHE_TYPE_MARKET_MAKER
-                        else:
-                            tmp_cache_type = CACHE_TYPE_FULL
-                        tmp_cache = BatchNetworkCache(
-                            len(networks), tmp_cache_type, 1
-                        )
-                        tmp_cache.update_networks(networks)
-                        packed = tmp_cache.export_networks_numpy()
-                        network_params[agent_type] = packed
-                        del tmp_cache
-                        networks.clear()
-                        del networks
-                    except Exception as e:
-                        self.logger.warning(
-                            f"无法提取 {agent_type.value} 的网络参数: {e}"
-                        )
-                        continue
+            # 首次同步或回退：从 Agent 的 brain.network 提取参数
+            try:
+                agents = pop.agents
+                params_list: list[dict[str, np.ndarray | int]] = []
+                for agent in agents:
+                    params_list.append(agent.brain.network.get_params())
+                packed = _pack_network_params_numpy(params_list)
+                network_params[agent_type] = packed
+                params_list.clear()
+                del params_list
+            except Exception as e:
+                self.logger.warning(
+                    f"无法提取 {agent_type.value} 的网络参数: {e}"
+                )
+                continue
 
         if network_params:
             self._arena_worker_pool.update_networks(network_params)
