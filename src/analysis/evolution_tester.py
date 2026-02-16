@@ -65,7 +65,7 @@ class EvolutionTester:
         """使用多竞技场运行单次测试
 
         创建 ParallelArenaTrainer，从 genome 数据初始化，
-        运行 episodes 并收集适应度。
+        通过 ArenaWorkerPool 运行 episodes 并收集适应度。
 
         Args:
             populations_data: 各物种的序列化基因组列表字典
@@ -76,6 +76,7 @@ class EvolutionTester:
             run_idx: 运行索引
         """
         from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
+        from src.training.arena.arena_worker import ArenaWorkerPool, EpisodeResult
         from src.training.population import SubPopulationManager
 
         multi_config = MultiArenaConfig(
@@ -85,48 +86,51 @@ class EvolutionTester:
         trainer = ParallelArenaTrainer(self.config, multi_config)
         trainer.setup_for_testing(populations_data)
 
+        # 创建临时 ArenaWorkerPool 用于测试
+        agent_infos = trainer._build_agent_infos()
+        num_workers = min(num_arenas, max(1, (os.cpu_count() or 4) // 3))
+        worker_pool = ArenaWorkerPool(
+            num_workers=num_workers,
+            num_arenas=num_arenas,
+            config=self.config,
+            agent_infos=agent_infos,
+        )
+        worker_pool.start()
+
+        # 同步网络参数到 Workers
+        trainer._arena_worker_pool = worker_pool
+        trainer._sync_networks_to_workers()
+
         try:
             all_episode_results: list[dict[str, Any]] = []
             total_ticks: int = 0
 
             for ep_idx in range(episodes_per_run):
-                trainer._reset_all_arenas()
-                trainer._init_market_all_arenas()
+                # Workers 独立运行一个 episode
+                results: list[EpisodeResult] = worker_pool.run_episodes(
+                    num_episodes=1,
+                    episode_length=episode_length,
+                )
 
-                trainer._is_running = True
-                for _ in range(episode_length):
-                    if not trainer._is_running:
-                        break
-                    should_continue = trainer.run_tick_all_arenas()
-                    if not should_continue:
-                        break
-                trainer._is_running = False
+                # 统计 ticks
+                for result in results:
+                    for arena_stats in result.arena_stats.values():
+                        total_ticks += arena_stats.end_tick
 
-                ep_ticks = max(arena.tick for arena in trainer.arena_states)
-                total_ticks += ep_ticks
-
-                episode_fitness = trainer._collect_episode_fitness()
-
+                # 汇总 fitness: 从 per_arena_fitness 提取
                 episode_result: dict[str, Any] = {
                     "episode_idx": ep_idx,
                     "species_results": {},
                 }
 
-                for agent_type, population in trainer.populations.items():
-                    fitnesses_list: list[float] = []
+                # 收集所有竞技场的适应度并按 agent_type 汇总
+                type_fitnesses: dict[AgentType, list[float]] = {t: [] for t in AgentType}
+                for result in results:
+                    for _arena_id, per_type_fitness in result.per_arena_fitness.items():
+                        for agent_type, fitness_arr in per_type_fitness.items():
+                            type_fitnesses[agent_type].extend(fitness_arr.tolist())
 
-                    if isinstance(population, SubPopulationManager):
-                        for sub_pop in population.sub_populations:
-                            key = (agent_type, sub_pop.sub_population_id or 0)
-                            if key in episode_fitness:
-                                avg_fitness = episode_fitness[key] / num_arenas
-                                fitnesses_list.extend(avg_fitness.tolist())
-                    else:
-                        key = (agent_type, 0)
-                        if key in episode_fitness:
-                            avg_fitness = episode_fitness[key] / num_arenas
-                            fitnesses_list.extend(avg_fitness.tolist())
-
+                for agent_type, fitnesses_list in type_fitnesses.items():
                     if fitnesses_list:
                         alive_count = sum(
                             1 for f in fitnesses_list if f > -0.99
@@ -135,24 +139,26 @@ class EvolutionTester:
                         survival_rate = (
                             alive_count / total_count if total_count > 0 else 0.0
                         )
+                        # 取跨竞技场平均（每个 agent 在每个竞技场都有一份适应度）
+                        # per_arena_fitness 已是单个竞技场的适应度，汇总后取平均
                         avg_fitness_val = float(np.mean(fitnesses_list))
 
                         episode_result["species_results"][agent_type] = {
-                            "total_count": total_count,
-                            "alive_count": alive_count,
+                            "total_count": total_count // num_arenas if num_arenas > 0 else total_count,
+                            "alive_count": alive_count // num_arenas if num_arenas > 0 else alive_count,
                             "survival_rate": survival_rate,
                             "avg_fitness": avg_fitness_val,
                         }
 
                 all_episode_results.append(episode_result)
 
-            results: dict[str, Any] = {
+            results_summary: dict[str, Any] = {
                 "test_type": test_type,
                 "run_idx": run_idx,
                 "episodes_per_run": episodes_per_run,
                 "total_ticks": total_ticks,
                 "avg_ticks_per_episode": (
-                    total_ticks / episodes_per_run if episodes_per_run > 0 else 0
+                    total_ticks / (episodes_per_run * num_arenas) if episodes_per_run > 0 else 0
                 ),
                 "species_results": {},
             }
@@ -172,7 +178,7 @@ class EvolutionTester:
                         total_count = species_result["total_count"]
 
                 if fitnesses_across_eps:
-                    results["species_results"][agent_type] = {
+                    results_summary["species_results"][agent_type] = {
                         "total_count": total_count,
                         "avg_fitness": float(np.mean(fitnesses_across_eps)),
                         "std_fitness": float(np.std(fitnesses_across_eps)),
@@ -180,8 +186,10 @@ class EvolutionTester:
                         "std_survival_rate": float(np.std(survival_rates)),
                     }
 
-            return results
+            return results_summary
         finally:
+            worker_pool.shutdown()
+            trainer._arena_worker_pool = None
             trainer.stop()
 
     def run_baseline_test(

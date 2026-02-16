@@ -460,12 +460,12 @@ analyzer.analyze(
 
 测试流程（每次运行）：
 1. 创建 `ParallelArenaTrainer` 并调用 `setup_for_testing()` 初始化
-2. 循环运行 episodes_per_run 个 episode：
-   - 调用 `_reset_all_arenas()` 和 `_init_market_all_arenas()` 重置状态
-   - 逐 tick 执行 `run_tick_all_arenas()`（批量推理 + 执行）
-   - 调用 `_collect_episode_fitness()` 收集跨竞技场的适应度（累加值除以竞技场数量）
-3. 汇总多个 episode 的平均适应度和存活率
-4. 调用 `trainer.stop()` 清理资源
+2. 创建临时 `ArenaWorkerPool` 并同步网络参数
+3. 循环运行 episodes_per_run 个 episode：
+   - 调用 `ArenaWorkerPool.run_episodes()` 运行一个 episode
+   - 从 `EpisodeResult.per_arena_fitness` 收集各竞技场各物种的适应度
+4. 汇总多个 episode 的平均适应度和存活率
+5. 关闭 ArenaWorkerPool 并调用 `trainer.stop()` 清理资源
 
 **存活率判断：**
 - 使用适应度阈值判断：fitness > -0.99 视为存活
@@ -625,7 +625,7 @@ for agent_type, genome_list in genomes.items():
 
 - 使用 `ParallelArenaTrainer` + OpenMP 实现并行推理
 - 各场景串行运行，PAT 内部通过多竞技场实现样本并行
-- `_collect_episode_fitness()` 返回跨竞技场的累加值，需除以竞技场数量得到平均适应度
+- `EpisodeResult.per_arena_fitness` 包含每个竞技场每个物种的适应度数组，汇总后取平均
 
 ### 适应度计算
 
