@@ -613,7 +613,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                         genome_data = sub_pop._pending_genome_data
                         species_data = sub_pop._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
                     else:
-                        sub_pop._cleanup_neat_history()
+                        sub_pop._cleanup_neat_history_light()
                         genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
                         species_data = _serialize_species_data(sub_pop.neat_pop.species)
                     sub_pop_data = {
@@ -628,7 +628,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                     genome_data = population._pending_genome_data
                     species_data = population._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
                 else:
-                    population._cleanup_neat_history()
+                    population._cleanup_neat_history_light()
                     genome_data = _serialize_genomes_numpy(population.neat_pop.population)
                     species_data = _serialize_species_data(population.neat_pop.species)
                 checkpoint_data["populations"][agent_type] = {
@@ -810,15 +810,7 @@ class LeagueTrainer(ParallelArenaTrainer):
 
                 # 内存清理（增强版）
                 if self.generation % 5 == 0:
-                    # 【内存泄漏修复】定期清理 NEAT 历史数据（每 5 代）
-                    for population in self.populations.values():
-                        if isinstance(population, SubPopulationManager):
-                            for sub_pop in population.sub_populations:
-                                sub_pop._cleanup_neat_history()
-                        else:
-                            population._cleanup_neat_history()
-
-                    # 【内存泄漏修复】清理对手池中 get_entry() 积累的大数据
+                    # 清理对手池中 get_entry() 积累的大数据
                     if self.pool_manager is not None:
                         for pool in self.pool_manager.pools.values():
                             pool.clear_memory_cache()

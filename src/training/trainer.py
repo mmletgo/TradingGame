@@ -2835,9 +2835,9 @@ class Trainer:
         for agent_type, pop in self.populations.items():
             if isinstance(pop, SubPopulationManager):
                 for sub_pop in pop.sub_populations:
-                    sub_pop._cleanup_neat_history()
+                    sub_pop._cleanup_neat_history_light()
             else:
-                pop._cleanup_neat_history()
+                pop._cleanup_neat_history_light()
 
         checkpoint_path = Path(path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

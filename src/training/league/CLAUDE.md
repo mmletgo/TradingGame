@@ -137,12 +137,12 @@ src/training/league/
 - `genome_data`：基因组数据（序列化的 NEAT 基因组）
 - `network_data`：网络参数（可选，延迟加载）
 
-存储格式：
+存储格式（使用 `np.savez` 无压缩写入，避免 gzip 压缩开销）：
 ```
 entry_dir/
 ├── metadata.json    # 元数据
-├── genomes.npz      # 基因组数据
-└── networks.npz     # 网络参数（可选）
+├── genomes.npz      # 基因组数据（无压缩）
+└── networks.npz     # 网络参数（可选，无压缩）
 ```
 
 ### OpponentPool (opponent_pool.py)
@@ -182,7 +182,7 @@ entry_dir/
 管理两种 Agent 类型的独立对手池。
 
 主要方法：
-- `add_snapshot(generation, populations, source, add_reason)`：批量保存快照
+- `add_snapshot(generation, populations, source, add_reason)`：批量保存快照（多线程并行写入各 AgentType）
 - `sample_opponents_for_arena(target_type, strategy, current_generation)`：为训练采样对手
 - `sample_opponents_batch_for_type(target_type, n_arenas, strategy, current_generation)`：批量采样保证多样性
 - `update_win_rates_from_round(allocation, arena_fitnesses, ema_alpha)`：从一轮训练结果批量更新所有对手胜率
@@ -304,7 +304,7 @@ def run_round(self):
 **冻结状态**：`_freeze_states: dict[AgentType, SpeciesFreezeState]`，随检查点持久化。
 
 **检查点系统**：
-- `save_checkpoint()`：内联父类序列化逻辑 + league 数据，一次性 plain pickle 写出（不使用 gzip），路径使用 `league_config.checkpoint_dir`
+- `save_checkpoint()`：内联父类序列化逻辑 + league 数据，主线程序列化到内存字节（`pickle.dumps` + `HIGHEST_PROTOCOL`），后台守护线程异步写盘（`_checkpoint_thread`）；下次调用前和 `stop()` 时会等待上一次写盘完成
 - `load_checkpoint()`：父类 `load_checkpoint` 已有 magic bytes 检测（兼容 gzip 和 plain pickle），league 数据使用 plain pickle 读取
 - `train()` 中每代都调用 `checkpoint_callback`（不再使用 `checkpoint_interval` 条件）
 
@@ -551,9 +551,9 @@ network_data: dict[int, tuple] | None      # 延迟加载
 
 - `_current_round_arena_fitnesses` 清空后调用 `gc.collect(0)`
 - `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行（`_milestone_thread`），避免阻塞训练主循环；下次调用前、`save_checkpoint()` 和 `stop()` 时会等待上一次异步保存完成；当 `_pending_genome_data` 存在时直接使用 pending 数据保存，跳过序列化/反序列化往返
-- `save_checkpoint()` 完成后显式 `del checkpoint_data` + `gc.collect(0)`
+- `save_checkpoint()` 主线程序列化后 `del checkpoint_data` + `gc.collect(0)`，文件写入和 `pool_manager.save_all()` 在后台线程执行（`_checkpoint_thread`）
 - 每代执行轻量级 NEAT 历史清理（`_cleanup_neat_history_light`）
-- 每 5 代清理所有种群的 NEAT 历史数据（完整版）+ 对手池内存缓存
+- 每 5 代清理对手池内存缓存
 - `run_round()` 开始时显式清理旧 `_current_allocation`（clear assignments + 置 None）
 
 ### 适应度收集优化
@@ -565,7 +565,7 @@ network_data: dict[int, tuple] | None      # 延迟加载
 | 时机 | 清理操作 |
 |------|---------|
 | 里程碑保存后 | 删除序列化中间变量 |
-| 检查点保存后 | del checkpoint_data + gc.collect(0) |
+| 检查点序列化后 | del checkpoint_data + gc.collect(0)，文件写入异步 |
 | 进化完成后 | 清空 arena_fitnesses + gc.collect(0) |
 | 每代 | 轻量级 NEAT 历史清理（genome_to_species、stagnation、ancestors） |
 | 每 5 代 | 完整 NEAT 历史清理 + 对手池 clear_memory_cache + gc.collect + malloc_trim |
@@ -579,5 +579,13 @@ network_data: dict[int, tuple] | None      # 延迟加载
 | 竞技场分配 | < 1ms |
 | 网络缓存加载（单类型） | 首次 50-200ms/条目 |
 | 批量推理（多来源）| 增加约 30-50% |
-| 对手池 I/O（单类型） | 高级散户 75MB ~500ms |
+| 对手池 I/O（单类型） | 无压缩 npz，文件更大但写入更快 |
 | 总内存占用 | +500MB（缓存 5 代历史对手） |
+
+### 保存性能优化
+
+| 优化项 | 方式 | 效果 |
+|--------|------|------|
+| 去掉 gzip 压缩 | `np.savez` 替代 `np.savez_compressed` | 写入速度提升 3-5 倍，文件体积增大 2-3 倍 |
+| 多线程并行写入 | `ThreadPoolExecutor` 并行各 AgentType | 多类型写入时间趋近最慢的单类型 |
+| checkpoint 异步写盘 | 主线程 `pickle.dumps` 后后台线程写文件 | 训练主循环不再阻塞于磁盘 I/O |

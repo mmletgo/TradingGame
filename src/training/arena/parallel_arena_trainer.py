@@ -1130,7 +1130,7 @@ class ParallelArenaTrainer:
                         species_data = sub_pop._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
                     else:
                         # 需要先清理 NEAT 历史数据
-                        sub_pop._cleanup_neat_history()
+                        sub_pop._cleanup_neat_history_light()
                         genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
                         species_data = _serialize_species_data(sub_pop.neat_pop.species)
                     sub_pop_data = {
@@ -1146,7 +1146,7 @@ class ParallelArenaTrainer:
                     genome_data = population._pending_genome_data
                     species_data = population._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
                 else:
-                    population._cleanup_neat_history()
+                    population._cleanup_neat_history_light()
                     genome_data = _serialize_genomes_numpy(population.neat_pop.population)
                     species_data = _serialize_species_data(population.neat_pop.species)
                 checkpoint_data["populations"][agent_type] = {
@@ -1269,7 +1269,7 @@ class ParallelArenaTrainer:
                                 # 旧格式：直接使用 neat_pop
                                 sub_pop.neat_pop = sub_pop_data.get("neat_pop")
                                 # 【关键修复】清理旧格式 checkpoint 中的历史数据，防止内存泄漏
-                                sub_pop._cleanup_neat_history()
+                                sub_pop._cleanup_neat_history_light()
                                 genomes = list(sub_pop.neat_pop.population.items())
                                 sub_pop.agents = sub_pop.create_agents(genomes)
                 else:
@@ -1284,7 +1284,7 @@ class ParallelArenaTrainer:
                     # 旧格式：直接使用 neat_pop
                     population.neat_pop = pop_data.get("neat_pop")
                     # 【关键修复】清理旧格式 checkpoint 中的历史数据，防止内存泄漏
-                    population._cleanup_neat_history()
+                    population._cleanup_neat_history_light()
                     genomes = list(population.neat_pop.population.items())
                     population.agents = population.create_agents(genomes)
 
@@ -1344,8 +1344,8 @@ class ParallelArenaTrainer:
         genomes = list(population.neat_pop.population.items())
         population.agents = population.create_agents(genomes)
 
-        # 【内存泄漏修复】清理 NEAT 历史数据
-        population._cleanup_neat_history()
+        # 清理 NEAT 历史数据
+        population._cleanup_neat_history_light()
 
     # ========================================================================
     # 停止和资源清理

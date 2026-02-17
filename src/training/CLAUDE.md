@@ -100,7 +100,7 @@ Numba JIT 加速的高频数学函数模块。
 
 **内存管理方法：**
 - `_cleanup_old_agents()` - 清理旧 Agent 对象，打破循环引用
-- `_cleanup_neat_history()` - 清理 NEAT 种群中的历史数据
+- `_cleanup_neat_history_light()` - 轻量级 NEAT 历史清理（genome_to_species、stagnation、ancestors）
 - `_reset_neat_population()` - 当 NEAT 进化失败时，创建全新的随机种群
 - `_cleanup_genome_internals(genomes)` - 清理基因组内部数据
 - `sync_genomes_from_pending()` - 从待处理数据同步基因组（延迟反序列化），同时恢复 `_pending_species_data` 中的 species 数据
@@ -410,18 +410,11 @@ class AtomicAction:
 
 ## 内存管理
 
-**1. NEAT 种群历史清理（两级策略）**
+**1. NEAT 种群历史清理（`_cleanup_neat_history_light`，每代调用）**
 
-- **轻量级清理（`_cleanup_neat_history_light`，每代调用）**：
-  - `genome_to_species` 字典：只保留当前代基因组的映射
-  - `stagnation.species_fitness`：清空物种适应度历史
-  - `reproduction.ancestors`：清空祖先引用
-
-- **完整清理（`_cleanup_neat_history`，每 5 代调用）**：
-  - 以上轻量级清理的全部内容
-  - `species.members`：清理已不存在的基因组引用
-  - `reporters` 统计数据：只保留最近 5 代
-  - 清理空物种、更新 `best_genome` 引用
+- `genome_to_species` 字典：只保留当前代基因组的映射
+- `stagnation.species_fitness`：清空物种适应度历史
+- `reproduction.ancestors`：清空祖先引用
 
 **2. Agent 对象清理**
 - 清理 `Brain.network` 内部状态
