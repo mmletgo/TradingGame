@@ -153,6 +153,45 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         return fitness_map
 
+    def _sync_genomes_if_needed(self) -> None:
+        """从 Worker 进程同步基因组数据到主进程
+
+        在 lite 模式下，进化后 _pending_genome_data 为 None（基因组留在 Worker 中）。
+        调用此方法后，所有 sub_pop 的 _pending_genome_data 被设置，
+        后续的 _save_milestone() 和 save_checkpoint() 可直接引用。
+        """
+        if self.evolution_worker_pool is None:
+            return
+
+        needs_sync: bool = False
+        for agent_type, population in self.populations.items():
+            if isinstance(population, SubPopulationManager):
+                for sub_pop in population.sub_populations:
+                    if sub_pop._genomes_dirty and sub_pop._pending_genome_data is None:
+                        needs_sync = True
+                        break
+            else:
+                if population._genomes_dirty and population._pending_genome_data is None:
+                    needs_sync = True
+            if needs_sync:
+                break
+
+        if not needs_sync:
+            return
+
+        genomes_map = self.evolution_worker_pool.sync_genomes_from_workers()
+        for (agent_type, sub_pop_id), genome_data in genomes_map.items():
+            population = self.populations.get(agent_type)
+            if population is None:
+                continue
+            if isinstance(population, SubPopulationManager):
+                if sub_pop_id < len(population.sub_populations):
+                    population.sub_populations[sub_pop_id]._pending_genome_data = genome_data
+            else:
+                if sub_pop_id == 0:
+                    population._pending_genome_data = genome_data
+        del genomes_map
+
     def run_round(
         self,
         episode_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -227,7 +266,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self.league_config.freeze_on_convergence:
             self._check_freeze_thaw(round_stats)
 
-        # 5. 检查里程碑保存
+        # 5. 同步基因组 + 保存里程碑
+        # lite 模式下基因组在 Worker 中，需先同步到主进程
+        self._sync_genomes_if_needed()
         if self.generation > 0:
             self._save_milestone()
 
@@ -593,6 +634,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 等待异步里程碑保存完成（避免与检查点保存冲突）
         if self._milestone_thread is not None and self._milestone_thread.is_alive():
             self._milestone_thread.join()
+
+        # 确保基因组数据已同步（run_round 中通常已调用，此为安全兜底）
+        self._sync_genomes_if_needed()
 
         # 内联父类序列化逻辑，直接构建 checkpoint_data
         checkpoint_data: dict[str, Any] = {

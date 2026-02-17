@@ -303,8 +303,12 @@ def run_round(self):
 
 **冻结状态**：`_freeze_states: dict[AgentType, SpeciesFreezeState]`，随检查点持久化。
 
+**基因组同步**：
+- `_sync_genomes_if_needed()`：lite 模式下进化后基因组留在 Worker 进程中（`_pending_genome_data=None`），此方法从 Worker 同步基因组数据并设置 `_pending_genome_data`，使 `_save_milestone()` 和 `save_checkpoint()` 可直接引用，避免在主线程重复序列化
+- 在 `run_round()` 的里程碑保存前调用一次，`save_checkpoint()` 中兜底调用
+
 **检查点系统**：
-- `save_checkpoint()`：内联父类序列化逻辑 + league 数据，主线程序列化到内存字节（`pickle.dumps` + `HIGHEST_PROTOCOL`），后台守护线程异步写盘（`_checkpoint_thread`）；下次调用前和 `stop()` 时会等待上一次写盘完成
+- `save_checkpoint()`：先调用 `_sync_genomes_if_needed()` 确保基因组数据可用，再内联父类序列化逻辑 + league 数据，主线程序列化到内存字节（`pickle.dumps` + `HIGHEST_PROTOCOL`），后台守护线程异步写盘（`_checkpoint_thread`）；下次调用前和 `stop()` 时会等待上一次写盘完成
 - `load_checkpoint()`：父类 `load_checkpoint` 已有 magic bytes 检测（兼容 gzip 和 plain pickle），league 数据使用 plain pickle 读取
 - `train()` 中每代都调用 `checkpoint_callback`（不再使用 `checkpoint_interval` 条件）
 
@@ -550,8 +554,9 @@ network_data: dict[int, tuple] | None      # 延迟加载
 ### LeagueTrainer 清理
 
 - `_current_round_arena_fitnesses` 清空后调用 `gc.collect(0)`
-- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行（`_milestone_thread`），避免阻塞训练主循环；下次调用前、`save_checkpoint()` 和 `stop()` 时会等待上一次异步保存完成；当 `_pending_genome_data` 存在时直接使用 pending 数据保存，跳过序列化/反序列化往返
-- `save_checkpoint()` 主线程序列化后 `del checkpoint_data` + `gc.collect(0)`，文件写入和 `pool_manager.save_all()` 在后台线程执行（`_checkpoint_thread`）
+- `_sync_genomes_if_needed()` 在 `run_round()` 中里程碑保存前统一从 Worker 同步基因组，16 个 Worker 并行序列化，之后 `_save_milestone()` 和 `save_checkpoint()` 直接引用 `_pending_genome_data`，无需在主线程调用 `_serialize_genomes_numpy`
+- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行（`_milestone_thread`），避免阻塞训练主循环；下次调用前、`save_checkpoint()` 和 `stop()` 时会等待上一次异步保存完成
+- `save_checkpoint()` 先调用 `_sync_genomes_if_needed()` 兜底，主线程序列化后 `del checkpoint_data` + `gc.collect(0)`，文件写入和 `pool_manager.save_all()` 在后台线程执行（`_checkpoint_thread`）
 - 每代执行轻量级 NEAT 历史清理（`_cleanup_neat_history_light`）
 - 每 5 代清理对手池内存缓存
 - `run_round()` 开始时显式清理旧 `_current_allocation`（clear assignments + 置 None）
