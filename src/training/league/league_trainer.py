@@ -83,6 +83,7 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 里程碑异步保存
         self._milestone_thread: threading.Thread | None = None
+        self._checkpoint_thread: threading.Thread | None = None
 
     def setup(self) -> None:
         """初始化
@@ -580,11 +581,15 @@ class LeagueTrainer(ParallelArenaTrainer):
         """保存检查点
 
         直接构建完整 checkpoint_data（内联父类序列化逻辑 + league 数据），
-        一次性 plain pickle 写出，避免临时文件和 gzip 开销。
+        序列化到内存字节后在后台线程异步写盘，避免阻塞训练主循环。
 
         Args:
             path: 检查点文件路径
         """
+        # 等待上一次 checkpoint 线程完成
+        if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
+            self._checkpoint_thread.join()
+
         # 等待异步里程碑保存完成（避免与检查点保存冲突）
         if self._milestone_thread is not None and self._milestone_thread.is_alive():
             self._milestone_thread.join()
@@ -649,22 +654,41 @@ class LeagueTrainer(ParallelArenaTrainer):
             },
         }
 
-        # plain pickle 写出
-        checkpoint_path = Path(path)
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        # 序列化到内存字节
+        checkpoint_bytes: bytes = pickle.dumps(checkpoint_data, protocol=pickle.HIGHEST_PROTOCOL)
 
-        with open(checkpoint_path, 'wb') as f:
-            pickle.dump(checkpoint_data, f)
-
-        # 【内存泄漏修复】显式释放大型 checkpoint_data
+        # 释放原始数据
         del checkpoint_data
         gc.collect(0)
 
-        # 保存对手池索引
-        if self.pool_manager:
-            self.pool_manager.save_all()
+        # 捕获闭包变量
+        logger = self.logger
+        pool_manager = self.pool_manager
 
-        self.logger.info(f"检查点已保存: {path}")
+        def _write_checkpoint_background(
+            data: bytes,
+            checkpoint_path: str,
+        ) -> None:
+            """后台线程：写入检查点文件并保存对手池索引"""
+            p = Path(checkpoint_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(p, 'wb') as f:
+                f.write(data)
+
+            # 保存对手池索引
+            if pool_manager is not None:
+                pool_manager.save_all()
+
+            logger.info(f"检查点已保存: {checkpoint_path}")
+
+        # 启动后台线程写盘
+        self._checkpoint_thread = threading.Thread(
+            target=_write_checkpoint_background,
+            args=(checkpoint_bytes, path),
+            daemon=True,
+        )
+        self._checkpoint_thread.start()
 
     def load_checkpoint(self, path: str) -> None:
         """加载检查点
@@ -711,6 +735,11 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self._milestone_thread is not None and self._milestone_thread.is_alive():
             self.logger.info("等待里程碑保存完成...")
             self._milestone_thread.join(timeout=30.0)
+
+        # 等待异步检查点保存完成
+        if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
+            self.logger.info("等待检查点保存完成...")
+            self._checkpoint_thread.join(timeout=30.0)
 
         # 保存对手池索引
         if self.pool_manager:

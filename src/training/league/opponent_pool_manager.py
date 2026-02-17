@@ -1,6 +1,7 @@
 """多类型对手池管理器"""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +61,8 @@ class OpponentPoolManager:
     ) -> dict[AgentType, str]:
         """保存当前所有类型的快照到各自的对手池
 
+        每个 AgentType 的 pool 写入独立目录，使用多线程并行写入。
+
         Args:
             generation: 当前代数
             genome_data_map: {AgentType: {sub_pop_id: genome_tuple}}
@@ -73,12 +76,24 @@ class OpponentPoolManager:
         Returns:
             {AgentType: entry_id} 映射
         """
-        result: dict[AgentType, str] = {}
+        # 需要处理的 AgentType 列表
+        types_to_process: list[AgentType] = [
+            agent_type for agent_type in AgentType
+            if agent_type in genome_data_map
+        ]
 
-        for agent_type in AgentType:
-            if agent_type not in genome_data_map:
-                continue
+        if not types_to_process:
+            return {}
 
+        def _process_single_type(agent_type: AgentType) -> tuple[AgentType, str]:
+            """处理单个 AgentType 的快照保存
+
+            Args:
+                agent_type: 要处理的 Agent 类型
+
+            Returns:
+                (agent_type, entry_id) 元组
+            """
             entry_id = f"gen_{generation:05d}"
             if source != "main_agents":
                 entry_id = f"gen_{generation:05d}_{source}"
@@ -102,10 +117,22 @@ class OpponentPoolManager:
                 network_data=network_data_map.get(agent_type) if network_data_map else None,
             )
 
-            # 添加到对手池
+            # 添加到对手池（各类型写入独立目录，线程安全）
             pool = self.pools[agent_type]
-            entry_id = pool.add_entry(entry)
-            result[agent_type] = entry_id
+            saved_entry_id: str = pool.add_entry(entry)
+            return agent_type, saved_entry_id
+
+        # 多线程并行写入各 AgentType 的对手池
+        result: dict[AgentType, str] = {}
+        with ThreadPoolExecutor(max_workers=len(types_to_process)) as executor:
+            futures: dict[AgentType, Any] = {
+                agent_type: executor.submit(_process_single_type, agent_type)
+                for agent_type in types_to_process
+            }
+            for agent_type in types_to_process:
+                future = futures[agent_type]
+                completed_type, entry_id = future.result()
+                result[completed_type] = entry_id
 
         return result
 
