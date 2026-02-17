@@ -2,17 +2,25 @@
 
 ## 模块概述
 
-训练模块负责管理 NEAT 进化训练流程，包括种群管理、训练协调、检查点加载和高性能数学计算。
+训练模块负责管理 NEAT 进化训练流程，包括种群管理、训练协调、检查点加载和高性能数学计算。支持两种训练模式：
+
+1. **单竞技场模式（Trainer）**：传统训练模式，单进程执行所有 tick 循环
+2. **多竞技场并行模式（ParallelArenaTrainer）**：通过 Worker 进程池并行运行多个独立竞技场
+3. **联盟训练模式（LeagueTrainer）**：基于 AlphaStar 联盟训练思路的多代对手池训练
 
 ## 文件结构
 
-- `__init__.py` - 模块导出
-- `population.py` - 种群管理类（Population、SubPopulationManager、Worker 池）
-- `trainer.py` - 训练器类（Trainer、原子动作机制）
-- `checkpoint_loader.py` - checkpoint 加载器（统一接口）
-- `fast_math.py` - Numba JIT 加速的数学函数（对数归一化等）
-- `arena/` - 竞技场模块（详见 `arena/CLAUDE.md`）
-- `_cython/` - Cython 加速模块（批量决策、订单执行）
+```
+src/training/
+├── __init__.py              # 模块导出
+├── population.py            # 种群管理类（Population、SubPopulationManager、Worker 池）
+├── trainer.py               # 训练器类（Trainer、原子动作机制）
+├── checkpoint_loader.py     # Checkpoint 加载器（统一接口）
+├── fast_math.py             # Numba JIT 加速的数学函数（对数归一化等）
+├── arena/                   # 多竞技场并行训练模块（详见 arena/CLAUDE.md）
+├── league/                  # 联盟训练模块（详见 league/CLAUDE.md）
+└── _cython/                 # Cython 加速模块（批量决策、订单执行）
+```
 
 ---
 
@@ -93,7 +101,7 @@ Numba JIT 加速的高频数学函数模块。
 - `evolve_with_cached_fitness(current_price)` - 使用缓存的适应度进行进化
 - `get_elite_species_avg_fitness()` - 获取最精英 species 的平均适应度
 - `reset_agents()` - 重置所有 Agent 账户
-- `_evaluate_market_maker(current_price, n)` - 做市商四组件复合适应度评估
+- `_evaluate_market_maker(current_price, n)` - 做市商双组件复合适应度评估
 - `accumulate_fitness(current_price)` - 累积当前 episode 的适应度（所有物种统一使用实际收益率）
 - `apply_accumulated_fitness()` - 将累积的平均适应度应用到基因组
 - `clear_accumulated_fitness()` - 清空累积的适应度数据
@@ -162,7 +170,7 @@ Worker 配置数据类。
 
 ### MultiPopulationWorkerPool (population.py)
 
-多种群统一 Worker 池，管理多个不同配置的 Worker。
+多种群统一 Worker 池，管理多个不同配置的 Worker 进程。
 
 **设计特点：**
 - 每个 Worker 使用独立的 `cmd_queue`，但共享统一的 `result_queue`
@@ -179,18 +187,6 @@ Worker 配置数据类。
 - `sync_genomes_from_workers()` - 从所有 Worker 同步基因组数据（checkpoint 保存时按需调用）
 - `set_genomes(genomes_map)` - 同步基因组到所有 Worker
 - `shutdown()` - 关闭所有 Worker
-
-**使用示例：**
-```python
-configs = [
-    WorkerConfig(AgentType.RETAIL_PRO, 0, "config/neat_retail_pro.cfg", 200),
-    WorkerConfig(AgentType.RETAIL_PRO, 1, "config/neat_retail_pro.cfg", 200),
-    WorkerConfig(AgentType.MARKET_MAKER, 0, "config/neat_market_maker.cfg", 100),
-]
-pool = MultiPopulationWorkerPool("config", configs)
-results = pool.evolve_all_parallel(fitness_map)
-pool.shutdown()
-```
 
 ---
 
@@ -501,3 +497,10 @@ python scripts/train_noui.py --infinite
 # 从指定检查点恢复
 python scripts/train_noui.py --resume checkpoints/ep_50.pkl --episodes 100
 ```
+
+---
+
+## 子模块文档
+
+- **多竞技场并行训练**：参见 `arena/CLAUDE.md`
+- **联盟训练**：参见 `league/CLAUDE.md`

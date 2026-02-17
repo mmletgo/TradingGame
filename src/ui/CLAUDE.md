@@ -18,7 +18,7 @@ UI模块提供训练可视化的完整解决方案，包括数据采集、线程
 │OrderBookPanel│        (1360px宽)         │ TradesPanel   │
 │ (280px宽)   │                           │  (280px宽)    │
 │             │  - 价格曲线               │               │
-│ - 深度图    │  - 种群资产曲线           │ - 成交记录    │
+│ - 深度图    │  - 存活个体平均资产曲线   │ - 成交记录    │
 │ - 盘口列表  │  - 小提琴图               │ (最近30笔)    │
 └─────────────┴───────────────────────────┴───────────────┘
                         │
@@ -74,6 +74,15 @@ src/ui/
 
 UI数据采集器，每tick从训练器收集数据，维护历史缓冲区。
 
+**数据类：**
+
+| 类名 | 用途 | 字段 |
+|------|------|------|
+| `TradeInfo` | 成交信息 | tick, price, quantity, is_buyer_taker |
+| `NoiseTraderInfo` | 噪声交易者信息 | name, equity, position_qty, position_value, initial_balance, is_liquidated |
+| `PopulationStats` | 种群统计 | avg_equity, total_equity, max_equity, min_equity, alive_count, total_count, generation, alive_equities |
+| `UIDataSnapshot` | UI数据快照 | tick, episode, last_price, mid_price, bids, asks, recent_trades, population_stats, price_history, equity_history, alive_equity_history, noise_trader_data, noise_trader_equity_history |
+
 **属性：**
 - `history_length: int` - 历史数据长度限制
 - `price_history: deque[float]` - 价格历史缓冲区（存储 orderbook.last_price，与盘口一致）
@@ -115,6 +124,10 @@ UI控制器，管理训练线程与UI线程的交互。
 - `_tick_counter: int` - tick计数器（用于采样率控制）
 - `_demo_end_callback: Callable[[dict], None] | None` - 演示结束时的回调函数
 
+**控制信号：**
+- `_pause_event: threading.Event` - 暂停事件
+- `_stop_event: threading.Event` - 停止事件
+
 **方法：**
 - `start_training(episodes: int) -> None` - 启动训练模式（后台线程，会进化）
 - `start_demo() -> None` - 启动演示模式（后台线程，不进化，受速度控制）
@@ -134,10 +147,6 @@ UI控制器，管理训练线程与UI线程的交互。
 - `_demo_loop() -> None` - 演示循环（后台线程，无限循环，使用演示模式专用结束条件）
 - `_collect_and_send_data() -> None` - 采集数据并发送到队列
 - `_check_demo_end_condition() -> tuple[str, AgentType | None] | None` - 检查演示模式结束条件（仅物种淘汰）
-
-**控制信号：**
-- `_pause_event: threading.Event` - 暂停事件
-- `_stop_event: threading.Event` - 停止事件
 
 **数据流：**
 1. 训练/演示线程每tick执行后，调用`_collect_and_send_data()`
@@ -242,71 +251,12 @@ UI控制器，管理训练线程与UI线程的交互。
 
 **功能：**
 - 实时显示订单簿、价格走势、成交记录、种群统计
-- 提供开始/暂停/停止按钮和速度滑块
-- 演示模式不进行进化，支持速度控制
+- 提供开始/暂停/停止按钮
+- 演示模式不进行进化，支持速度控制（通过ControlPanel的滑块）
 - 无限循环运行episode，适合展示
 - 视口标题：NEAT Trading Simulator - Demo Mode
 - 视口大小：1920x1200
 - 演示结束时调用分析器生成报告（如果提供）
-
----
-
-## 数据结构
-
-### UIDataSnapshot
-
-UI数据快照，每个tick的完整数据。
-
-**字段：**
-- `tick: int` - 当前tick
-- `episode: int` - 当前episode
-- `last_price: float` - 最新成交价（tick 结束后的 orderbook.last_price，与盘口一致）
-- `mid_price: float` - 中间价
-- `bids: list[tuple[float, float]]` - 买盘100档 [(price, qty), ...]
-- `asks: list[tuple[float, float]]` - 卖盘100档 [(price, qty), ...]
-- `recent_trades: list[TradeInfo]` - 最近成交记录
-- `population_stats: dict[AgentType, PopulationStats]` - 种群统计
-- `price_history: list[float]` - 价格历史
-- `equity_history: dict[AgentType, list[float]]` - 所有个体平均资产历史
-- `alive_equity_history: dict[AgentType, list[float]]` - 存活个体平均资产历史
-- `noise_trader_data: list[NoiseTraderInfo]` - 噪声交易者的当前数据
-- `noise_trader_equity_history: list[list[float]]` - 噪声交易者的净值历史
-
-### TradeInfo
-
-成交信息（UI展示用）。
-
-**字段：**
-- `tick: int` - 成交tick
-- `price: float` - 成交价格
-- `quantity: float` - 成交数量
-- `is_buyer_taker: bool` - True=买入（taker是买方），False=卖出（taker是卖方）
-
-### NoiseTraderInfo
-
-噪声交易者信息（UI展示用）。
-
-**字段：**
-- `name: str` - 噪声交易者类型名称
-- `equity: float` - 净值
-- `position_qty: int` - 持仓数量（正数做多，负数做空，0为空仓）
-- `position_value: float` - 持仓市值 = abs(position_qty) * current_price
-- `initial_balance: float` - 初始资金
-- `is_liquidated: bool` - 是否被强平
-
-### PopulationStats
-
-种群统计信息。
-
-**字段：**
-- `avg_equity: float` - 存活Agent平均净值
-- `total_equity: float` - 所有Agent资产总和
-- `max_equity: float` - 最大净值
-- `min_equity: float` - 最小净值
-- `alive_count: int` - 存活数量
-- `total_count: int` - 总数量
-- `generation: int` - 当前代数
-- `alive_equities: list[float]` - 存活个体的资产列表（用于小提琴图）
 
 ---
 
@@ -319,7 +269,7 @@ UI数据快照，每个tick的完整数据。
 | 组件 | 文件 | 功能 | 尺寸 |
 |------|------|------|------|
 | OrderBookPanel | orderbook_panel.py | 订单簿深度图 + 合并盘口列表 | 280px 宽 |
-| ChartPanel | chart_panel.py | 价格曲线 + 种群资产曲线 + 小提琴图 | 1360px 宽 |
+| ChartPanel | chart_panel.py | 价格曲线 + 存活个体平均资产曲线 + 小提琴图 | 1360px 宽 |
 | TradesPanel | trades_panel.py | 最近成交记录列表 | 280px 宽 |
 | ControlPanel | control_panel.py | 开始/暂停/停止按钮 + 状态显示 | 自适应宽度 |
 
@@ -341,6 +291,7 @@ UI数据快照，每个tick的完整数据。
 - `trainer._register_all_agents() -> None` - 注册所有Agent
 - `trainer._build_agent_map() -> None` - 构建Agent映射
 - `trainer._build_execution_order() -> None` - 构建执行顺序
+- `trainer.noise_traders: list[NoiseTrader]` - 噪声交易者列表
 
 ### OrderBook (src/market/orderbook/orderbook.pyx)
 - `orderbook.get_depth(levels=100) -> {"bids": [...], "asks": [...]}`
@@ -551,5 +502,5 @@ UI模块会自动尝试加载系统中文字体，按以下顺序查找：
 1. **线程安全：** UIController使用队列传递数据，避免直接跨线程访问共享状态
 2. **资源清理：** 窗口关闭时会自动调用`controller.stop()`，但建议在代码中显式处理
 3. **采样率：** 训练模式可设置`sample_rate > 1`减少UI更新频率，提升性能
-4. **演示结束：** 演示模式会在满足物种淘汰条件时自动退出，可通过回调函数自定义处理
+4. **演示结束：** 演示模式会在满足物种淘汰条件（存活数 < 总数/4）时自动退出，可通过回调函数自定义处理
 5. **分析器使用：** DemoAnalyzer需要matplotlib和seaborn依赖，首次使用请确认已安装

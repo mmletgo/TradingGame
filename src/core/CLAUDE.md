@@ -10,9 +10,8 @@
 src/core/
 ├── __init__.py           # 模块初始化文件（空）
 ├── CLAUDE.md             # 本文档
-├── event_engine/         # 事件引擎子模块（保留，暂未实现）
 └── log_engine/           # 日志引擎子模块
-    ├── __init__.py       # 导出 setup_logging 函数
+    ├── __init__.py       # 导出 setup_logging、get_logger 函数
     └── logger.py         # 日志配置和工具函数实现
 ```
 
@@ -48,6 +47,7 @@ src/core/
   - **控制台处理器**：仅记录 WARNING 及以上级别到标准输出
 - 防止重复添加处理器（多次调用自动跳过）
 - 统一的日志格式：`"%(asctime)s - %(name)s - %(levelname)s - %(message)s"`
+- 日期格式：`"%Y-%m-%d %H:%M:%S"`
 
 **使用场景：**
 在所有训练脚本的主入口处调用，且必须在导入其他项目模块之前调用。
@@ -191,16 +191,18 @@ class MatchingEngine:
 - **特殊组件日志**：使用组件名称
   ```python
   self.logger = get_logger("adl")        # ADL 管理器日志
+  self.logger = get_logger("checkpoint_loader")  # Checkpoint 加载器日志
+  self.logger = get_logger("evolution_tester")   # 进化测试器日志
   ```
 
 ### 4. 日志级别选择原则
 
 | 场景 | 推荐级别 | 示例 |
 |------|----------|------|
-| 程序正常流程的关键节点 | INFO | 种群创建完成、Episode 开始/结束 |
-| 潜在问题或异常情况 | WARNING | 种群进化失败、价格档位不一致 |
-| 运行时错误（可恢复） | ERROR | 撮合失败、订单处理异常 |
-| 开发调试信息 | DEBUG | 详细的中间计算结果 |
+| 程序正常流程的关键节点 | INFO | 种群创建完成、Episode 开始/结束、Checkpoint 加载成功 |
+| 潜在问题或异常情况 | WARNING | 价格档位不一致、checkpoint 目录不存在 |
+| 运行时错误（可恢复） | ERROR | 加载 checkpoint 失败、从 neat_pop 提取基因组失败 |
+| 开发调试信息 | DEBUG | 找到 N 个可用代数、提取某类型的 N 个基因组 |
 
 ### 5. 日志文件管理
 
@@ -238,42 +240,38 @@ class Population:
         self.logger.info(f"{self.agent_type.value} 种群完成第 {self.generation} 代进化")
 ```
 
-### 训练器 (src/training/trainer.py)
+### Checkpoint 加载器 (src/analysis/checkpoint_loader.py)
 
 ```python
 from src.core.log_engine.logger import get_logger
 
-class Trainer:
-    def __init__(self, config):
-        self.logger = get_logger("trainer")
+class CheckpointLoader:
+    def __init__(self, checkpoint_dir: str, evolution_interval: int | None):
+        self.logger = get_logger("checkpoint_loader")
         # ...
 
-    def run_episode(self):
-        self.logger.info(f"鲶鱼已启用: 多模式（三种鲶鱼同时运行）")
+    def _load_checkpoint(self, path: Path) -> dict[str, Any] | None:
+        try:
+            # ...
+            self.logger.debug(f"成功加载 checkpoint: {path}")
+            return data
+        except Exception as e:
+            self.logger.error(f"加载 checkpoint 失败: {path}, 错误: {e}")
+            return None
 ```
 
-### 撮合引擎 (src/market/matching/matching_engine.py)
+### 进化测试器 (src/analysis/evolution_tester.py)
 
 ```python
 from src.core.log_engine.logger import get_logger
 
-class MatchingEngine:
-    def __init__(self):
-        self._logger = get_logger(__name__)
-        self._logger.info("撮合引擎初始化完成")
+class EvolutionTester:
+    def __init__(self, config: Config, checkpoint_dir: str, results_dir: str):
+        self.logger = get_logger("evolution_tester")
+        # ...
 
-    def _match_limit_order(self, order, side_book):
-        self._logger.warning(f"价格档位不一致: best_price={best_price} 不在 side_book 中")
-```
-
-### ADL 管理器 (src/market/adl/adl_manager.py)
-
-```python
-from src.core.log_engine.logger import get_logger
-
-class ADLManager:
-    def __init__(self):
-        self.logger = get_logger("adl")
+    def run_baseline_test(self, generation: int, ...):
+        self.logger.info(f"开始基准测试: 代 {generation}, {num_runs} 次运行")
 ```
 
 ## 测试覆盖
@@ -310,6 +308,14 @@ pytest tests/core/test_logger.py
        handler.flush()
        handler.close()
    ```
+
+## 模块导出
+
+`log_engine/__init__.py` 导出以下函数：
+
+```python
+from src.core.log_engine import setup_logging, get_logger
+```
 
 ## 扩展建议
 

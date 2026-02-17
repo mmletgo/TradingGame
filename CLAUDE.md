@@ -163,7 +163,8 @@ src/
 ├── training/       # 训练引擎
 │   ├── population.py   # 种群管理
 │   ├── trainer.py      # 训练协调器
-│   └── arena/          # 多竞技场并行训练模块
+│   ├── arena/          # 多竞技场并行训练模块
+│   └── league/         # 联盟训练模块
 ├── ui/             # DearPyGui可视化
 ├── analysis/       # 演示分析器
 └── config/         # 配置管理
@@ -174,7 +175,7 @@ src/
 | 配置 | Agent类型 | 输入节点 | 输出节点 |
 |------|----------|----------|----------|
 | neat_retail_pro.cfg | 高级散户 | 907 | 8 |
-| neat_market_maker.cfg | 做市商 | 934 | 41 |
+| neat_market_maker.cfg | 做市商 | 964 | 41 |
 
 ---
 
@@ -189,6 +190,7 @@ src/
 | 神经网络 | src/bio/brain/CLAUDE.md | NEAT封装与前向传播 |
 | 训练引擎 | src/training/CLAUDE.md | Episode循环、强平处理 |
 | 多竞技场 | src/training/arena/CLAUDE.md | 并行训练、适应度汇总 |
+| 联盟训练 | src/training/league/CLAUDE.md | 联盟训练机制 |
 | 噪声交易者 | src/market/noise_trader/CLAUDE.md | 噪声交易者机制详解 |
 | ADL | src/market/adl/CLAUDE.md | 自动减仓机制 |
 

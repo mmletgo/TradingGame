@@ -19,28 +19,32 @@ src/market/
 ├── __init__.py              # 模块导出（NormalizedMarketState）
 ├── market_state.py          # 归一化市场状态数据类
 ├── orderbook/               # 订单簿模块（Cython 加速）
-│   ├── order.py            # 订单数据模型
-│   ├── orderbook.pyx       # 订单簿实现（Cython）
+│   ├── order.py            # 订单数据模型（Order, OrderSide, OrderType）
+│   ├── orderbook.pyx       # 订单簿实现（PriceLevel, OrderBook）
 │   └── CLAUDE.md           # 订单簿模块文档
 ├── matching/               # 撮合引擎模块
-│   ├── trade.py           # 成交记录数据类
-│   ├── matching_engine.py # 撮合引擎（Python 实现）
-│   ├── fast_matching.pyx  # 撮合引擎（Cython 实现）
-│   └── CLAUDE.md          # 撮合引擎模块文档
-├── account/               # 账户管理模块
-│   ├── account.py        # 账户类（Python 实现）
-│   ├── position.pyx      # 持仓类（Cython 实现）
-│   ├── fast_account.pyx  # 快速账户类（Cython 实现）
-│   └── CLAUDE.md         # 账户管理模块文档
-├── adl/                  # ADL 自动减仓模块
-│   ├── __init__.py
-│   ├── adl_manager.py    # ADL 管理器
-│   └── CLAUDE.md         # ADL 模块文档
-└── noise_trader/         # 噪声交易者模块
-    ├── __init__.py
-    ├── noise_trader.py        # 噪声交易者类
+│   ├── __init__.py         # 模块导出（尝试导入 Cython 版本）
+│   ├── trade.py            # 成交记录数据类（Trade）
+│   ├── matching_engine.py  # 撮合引擎（Python 实现）
+│   ├── fast_matching.pxd   # Cython 声明文件
+│   ├── fast_matching.pyx   # 撮合引擎（Cython 实现：FastTrade, FastMatchingEngine, fast_match_orders）
+│   └── CLAUDE.md           # 撮合引擎模块文档
+├── account/                # 账户管理模块
+│   ├── __init__.py         # 模块导出（Position, Account, FastAccount）
+│   ├── account.py          # 账户类（Python 实现）
+│   ├── position.pxd        # Position Cython 声明文件
+│   ├── position.pyx        # 持仓类（Cython 实现）
+│   ├── fast_account.pyx    # 快速账户类（Cython 实现）
+│   └── CLAUDE.md           # 账户管理模块文档
+├── adl/                    # ADL 自动减仓模块
+│   ├── __init__.py         # 模块导出
+│   ├── adl_manager.py      # ADL 管理器（ADLCandidate, ADLManager）
+│   └── CLAUDE.md           # ADL 模块文档
+└── noise_trader/           # 噪声交易者模块
+    ├── __init__.py         # 模块导出 + create_noise_traders 工厂函数
+    ├── noise_trader.py     # 噪声交易者类
     ├── noise_trader_account.py # 噪声交易者账户
-    └── CLAUDE.md              # 噪声交易者模块文档
+    └── CLAUDE.md           # 噪声交易者模块文档
 ```
 
 ## 核心功能模块
@@ -54,8 +58,8 @@ src/market/
 **属性：**
 - `mid_price: float` - 中间价（用于归一化计算的参考价格）
 - `tick_size: float` - 最小价格变动单位
-- `bid_data: NDArray[np.float32]` - 买盘数据，shape (200,)，100档 × 2（价格归一化 + 数量归一化）
-- `ask_data: NDArray[np.float32]` - 卖盘数据，shape (200,)，100档 × 2（价格归一化 + 数量归一化）
+- `bid_data: NDArray[np.float32]` - 买盘数据，shape (200,)，100档 x 2（价格归一化 + 数量归一化）
+- `ask_data: NDArray[np.float32]` - 卖盘数据，shape (200,)，100档 x 2（价格归一化 + 数量归一化）
 - `trade_prices: NDArray[np.float32]` - 成交价格归一化，shape (100,)
 - `trade_quantities: NDArray[np.float32]` - 成交数量归一化（带方向），shape (100,)，正数表示 taker 是买方，负数表示 taker 是卖方
 - `tick_history_prices: NDArray[np.float32]` - Tick 历史价格归一化，shape (100,)，以第一个 tick 价格为基准，最新数据在末尾
@@ -73,12 +77,6 @@ src/market/
 ### 2. 订单簿模块（orderbook/）
 
 详见 [src/market/orderbook/CLAUDE.md](orderbook/CLAUDE.md)
-
-**核心功能：**
-- 维护买卖盘的价格档位和订单管理
-- 实现价格优先、时间优先的撮合原则
-- 使用 Cython 加速关键数据结构
-- 提供高性能的订单操作接口
 
 **核心类：**
 - `Order` - 订单数据类（Python）
@@ -100,12 +98,6 @@ src/market/
 ### 3. 撮合引擎模块（matching/）
 
 详见 [src/market/matching/CLAUDE.md](matching/CLAUDE.md)
-
-**核心功能：**
-- 实现价格优先、时间优先的撮合规则
-- 支持限价单和市价单两种订单类型
-- 提供差异化的手续费策略
-- Python 和 Cython 两种实现
 
 **核心类：**
 - `Trade` - 成交记录数据类（Python）
@@ -131,12 +123,6 @@ src/market/
 
 详见 [src/market/account/CLAUDE.md](account/CLAUDE.md)
 
-**核心功能：**
-- 记录和管理 Agent 的交易账户状态
-- 余额管理、持仓跟踪、保证金计算
-- 强平风险检测
-- ADL 成交处理
-
 **核心类：**
 - `Position` - 持仓类（Cython 加速）
 - `Account` - 账户类（Python 实现）
@@ -150,19 +136,14 @@ src/market/
 - 反向开仓（多转空/空转多）- 先平仓实现盈亏，再开新仓
 
 **保证金和强平机制：**
-- 占用保证金：`margin_used = |quantity| × current_price / leverage`
+- 占用保证金：`margin_used = |quantity| x current_price / leverage`
 - 净值：`equity = balance + unrealized_pnl`
-- 保证金率：`margin_ratio = equity / (|quantity| × current_price)`
+- 保证金率：`margin_ratio = equity / (|quantity| x current_price)`
 - 强平触发条件：`margin_ratio < maintenance_margin_rate`
 
 ### 5. ADL 自动减仓模块（adl/）
 
 详见 [src/market/adl/CLAUDE.md](adl/CLAUDE.md)
-
-**核心功能：**
-- 在强平订单无法完全成交时触发
-- 强制选择盈利对手方进行减仓
-- 确保市场风险可控
 
 **核心类：**
 - `ADLCandidate` - ADL 候选者信息
@@ -171,7 +152,7 @@ src/market/
 **排名公式：**
 | 情况 | 公式 |
 |------|------|
-| 盈利时（PnL% > 0） | `adl_score = PnL% × 有效杠杆` |
+| 盈利时（PnL% > 0） | `adl_score = PnL% x 有效杠杆` |
 | 亏损时（PnL% <= 0） | `adl_score = PnL% / 有效杠杆` |
 
 **ADL 成交价格：** 直接使用当前市场价格，不使用破产价格
@@ -197,14 +178,10 @@ src/market/
 
 详见 [src/market/noise_trader/CLAUDE.md](noise_trader/CLAUDE.md)
 
-**核心功能：**
-- 为市场提供随机性流动性和布朗运动价格特征
-- 不参与 NEAT 进化，按随机规则交易
-- 拥有无限资金（1e18），不触发强平
-
 **核心类：**
 - `NoiseTraderAccount` - 噪声交易者账户类
 - `NoiseTrader` - 噪声交易者类
+- `create_noise_traders()` - 工厂函数
 
 **噪声交易者行为：**
 - 100个独立噪声交易者
@@ -225,41 +202,41 @@ src/market/
 
 ```
 Trainer（训练引擎）
-  ↓
+  |
 1. 创建市场组件
-  ├── OrderBook（订单簿）
-  ├── MatchingEngine（撮合引擎）
-  ├── Account/Position（账户和持仓）
-  ├── ADLManager（ADL 管理器）
-  └── NoiseTrader（噪声交易者）
-  ↓
+  |-- OrderBook（订单簿）
+  |-- MatchingEngine（撮合引擎）
+  |-- Account/Position（账户和持仓）
+  |-- ADLManager（ADL 管理器）
+  |-- NoiseTrader（噪声交易者）
+  |
 2. Episode 循环
-  ├── 重置所有 Agent 账户
-  ├── 重置噪声交易者状态
-  ├── 重置市场状态和订单簿
-  └── Tick 循环
-      ├── 强平检查（三阶段）
-      │   ├── 阶段1：预计算 ADL 候选清单
-      │   ├── 阶段2：强平市价单执行
-      │   └── 阶段3：ADL 自动减仓（如需要）
-      ├── 噪声交易者行动
-      ├── 计算归一化市场状态（所有 Agent 共用）
-      ├── 随机打乱 Agent 顺序
-      ├── 并行决策（神经网络推理）
-      └── 串行执行（订单提交）
-          ├── MatchingEngine.process_order()
-          │   ├── OrderBook.add_order()
-          │   ├── fast_match_orders()
-          │   └── 返回 Trade 列表
-          └── Account.on_trade()
-              ├── Position.update()
-              ├── 更新余额
-              └── 累加 maker_volume
-  ↓
+  |-- 重置所有 Agent 账户
+  |-- 重置噪声交易者状态
+  |-- 重置市场状态和订单簿
+  |-- Tick 循环
+      |-- 强平检查（三阶段）
+      |   |-- 阶段1：预计算 ADL 候选清单
+      |   |-- 阶段2：强平市价单执行
+      |   |-- 阶段3：ADL 自动减仓（如需要）
+      |-- 噪声交易者行动
+      |-- 计算归一化市场状态（所有 Agent 共用）
+      |-- 随机打乱 Agent 顺序
+      |-- 并行决策（神经网络推理）
+      |-- 串行执行（订单提交）
+          |-- MatchingEngine.process_order()
+          |   |-- OrderBook.add_order()
+          |   |-- fast_match_orders()
+          |   |-- 返回 Trade 列表
+          |-- Account.on_trade()
+              |-- Position.update()
+              |-- 更新余额
+              |-- 累加 maker_volume
+  |
 3. NEAT 进化阶段
-  ├── 计算适应度（基于 PnL）
-  ├── 执行 NEAT 进化算法
-  └── 从新基因组创建 Agent
+  |-- 计算适应度（基于 PnL）
+  |-- 执行 NEAT 进化算法
+  |-- 从新基因组创建 Agent
 ```
 
 ### 接口契约
@@ -276,44 +253,6 @@ Trainer（训练引擎）
 1. **Agent 订单** - Agent 提交的订单请求
 2. **当前价格** - 用于强平检测、ADL 计算
 3. **配置参数** - Agent 类型、费率、杠杆等
-
-## 市场引擎与生物系统的交互
-
-### Agent 观察市场
-
-Agent 通过以下方式观察市场状态：
-
-1. **NormalizedMarketState** - 归一化市场数据（预计算）
-   - 订单簿深度（买卖各 100 档）
-   - 最近 100 笔成交记录
-   - 最近 100 个 tick 的历史数据
-
-2. **OrderBook** - 原始订单簿数据
-   - 最优买价/卖价
-   - 中间价
-   - 盘口深度
-
-3. **Account** - 自身账户状态
-   - 余额、持仓、净值
-   - 保证金率
-   - 已实现盈亏、浮动盈亏
-
-### Agent 行为影响市场
-
-Agent 的行为通过以下方式影响市场：
-
-1. **提交订单** - 通过 MatchingEngine.process_order()
-   - 限价单：挂在订单簿上
-   - 市价单：立即吃对手盘
-
-2. **撤销订单** - 通过 MatchingEngine.cancel_order()
-   - 主动撤单
-   - 强平时统一撤单
-
-3. **成交回报** - 通过 Account.on_trade()
-   - 更新持仓
-   - 更新余额
-   - 累计成交量
 
 ## 性能优化
 
@@ -404,99 +343,10 @@ Agent 的行为通过以下方式影响市场：
 ```python
 from src.market import NormalizedMarketState
 from src.market.orderbook import Order, OrderSide, OrderType, OrderBook
-from src.market.matching import MatchingEngine, FastMatchingEngine, Trade, FastTrade
+from src.market.matching import MatchingEngine, FastMatchingEngine, Trade, FastTrade, fast_match_orders
 from src.market.account import Account, FastAccount, Position
 from src.market.adl import ADLManager, ADLCandidate
 from src.market.noise_trader import NoiseTrader, NoiseTraderAccount, create_noise_traders
-```
-
-## 使用示例
-
-### 基本使用
-
-```python
-from src.market import NormalizedMarketState
-from src.market.orderbook import Order, OrderSide, OrderType, OrderBook
-from src.market.matching import MatchingEngine
-from src.market.account import Account, Position
-from src.config.config import MarketConfig, AgentConfig, AgentType
-
-# 创建市场组件
-config = MarketConfig()
-orderbook = OrderBook(tick_size=config.tick_size)
-matching_engine = MatchingEngine(config)
-
-# 创建 Agent 账户
-agent_config = AgentConfig()
-account = Account(
-    agent_id=1,
-    agent_type=AgentType.RETAIL_PRO,
-    config=agent_config
-)
-
-# 注册 Agent 费率
-matching_engine.register_agent(
-    agent_id=1,
-    maker_rate=agent_config.maker_fee_rate,
-    taker_rate=agent_config.taker_fee_rate
-)
-
-# 提交订单
-order = Order(
-    order_id=1,
-    agent_id=1,
-    side=OrderSide.BUY,
-    order_type=OrderType.LIMIT,
-    price=100.5,
-    quantity=1000
-)
-trades = matching_engine.process_order(order)
-
-# 处理成交
-for trade in trades:
-    account.on_trade(trade, is_buyer=(trade.buyer_id == 1))
-```
-
-### 强平和 ADL 流程
-
-```python
-from src.market.adl import ADLManager
-
-# 创建 ADL 管理器
-adl_manager = ADLManager()
-
-# 阶段1：预计算 ADL 候选清单
-candidates = []
-for agent in agents:
-    candidate = adl_manager.calculate_adl_score(agent, current_price)
-    if candidate and candidate.pnl_percent > 0:
-        candidates.append(candidate)
-candidates.sort(key=lambda c: c.adl_score, reverse=True)
-
-# 阶段2：强平市价单执行
-liquidated_agent = agents[0]
-matching_engine.cancel_order(liquidated_agent.pending_order_id)
-market_order = Order(
-    order_id=-1,
-    agent_id=liquidated_agent.agent_id,
-    side=OrderSide.SELL if liquidated_agent.account.position.quantity > 0 else OrderSide.BUY,
-    order_type=OrderType.MARKET,
-    price=0.0,
-    quantity=abs(liquidated_agent.account.position.quantity)
-)
-trades = matching_engine.process_order(market_order)
-remaining_qty = market_order.quantity - market_order.filled_quantity
-
-# 阶段3：ADL 自动减仓（如需要）
-if remaining_qty > 0:
-    adl_price = adl_manager.get_adl_price(current_price)
-    for candidate in candidates:
-        if remaining_qty <= 0:
-            break
-        trade_qty = min(abs(candidate.position_qty), remaining_qty)
-        liquidated_agent.account.on_adl_trade(trade_qty, adl_price, is_taker=True)
-        candidate.participant.account.on_adl_trade(trade_qty, adl_price, is_taker=False)
-        remaining_qty -= trade_qty
 ```
 
 ## 注意事项
@@ -516,7 +366,7 @@ if remaining_qty > 0:
 ### 内存管理
 
 - Episode 结束时调用 `OrderBook.clear()` 清空订单簿
-- Episode 结束时调用 `Account.reset()` 重置账户
+- Episode 结束时调用 `Account.reset()` 或 `FastAccount.reset()` 重置账户
 - 定期清理历史数据防止内存泄漏
 
 ### ADL 边界情况
@@ -541,7 +391,3 @@ if remaining_qty > 0:
 - [账户管理模块](account/CLAUDE.md) - Account、Position、保证金计算
 - [ADL 模块](adl/CLAUDE.md) - ADLManager、ADLCandidate、排名算法
 - [噪声交易者模块](noise_trader/CLAUDE.md) - NoiseTrader、NoiseTraderAccount
-
-## 总结
-
-市场引擎是交易模拟竞技场的核心基础设施，通过高性能的 Cython 加速技术、严格的数据一致性保证、多层次的风险控制机制，实现了完整的限价订单簿交易系统。模块化设计确保了可扩展性和可维护性，与训练引擎和生物系统的接口清晰明确。

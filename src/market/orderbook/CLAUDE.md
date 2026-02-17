@@ -1,4 +1,4 @@
-# Orderbook 模块
+# Orderbook 模块 - 订单簿
 
 ## 模块概述
 
@@ -20,31 +20,15 @@
 
 ## 核心数据结构
 
-### Order (order.py)
-
-订单数据类，使用 `__slots__` 优化内存占用和访问速度。
-
-**Python 属性：**
-- `order_id: int` - 订单唯一标识，全局唯一
-- `agent_id: int` - 所属 Agent ID
-- `side: OrderSide` - 买卖方向（BUY=1, SELL=-1）
-- `order_type: OrderType` - 订单类型（LIMIT=1, MARKET=2）
-- `price: float` - 委托价格
-- `quantity: int` - 委托数量（整数，必须 > 0）
-- `filled_quantity: int` - 已成交数量（整数，初始为 0）
-- `timestamp: float` - 时间戳（训练模式下默认为 0）
-
-**设计要点：**
-- 使用 `__slots__` 避免创建 `__dict__`，减少内存占用
-- 所有数量字段使用整数类型，避免浮点累积误差
-- `filled_quantity` 从 0 开始，撮合引擎负责更新
-
 ### OrderSide (order.py)
 
 订单方向枚举（IntEnum），使用整数类型便于计算：
 
-- `BUY = 1` - 买单（做多）
-- `SELL = -1` - 卖单（做空）
+```python
+class OrderSide(IntEnum):
+    BUY = 1    # 买单（做多）
+    SELL = -1  # 卖单（做空）
+```
 
 **使用场景：**
 - 订单方向判断
@@ -55,25 +39,51 @@
 
 订单类型枚举（IntEnum）：
 
-- `LIMIT = 1` - 限价单，挂在订单簿上等待撮合
-- `MARKET = 2` - 市价单，立即吃对手盘，未成交部分丢弃
+```python
+class OrderType(IntEnum):
+    LIMIT = 1   # 限价单，挂在订单簿上等待撮合
+    MARKET = 2  # 市价单，立即吃对手盘，未成交部分丢弃
+```
 
 **使用场景：**
 - 撮合引擎根据订单类型选择不同的撮合逻辑
 - 限价单可能部分成交，市价单可能完全无法成交
+
+### Order (order.py)
+
+订单数据类，使用 `__slots__` 优化内存占用和访问速度。
+
+**属性：**
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `order_id` | int | 订单唯一标识，全局唯一 |
+| `agent_id` | int | 所属 Agent ID |
+| `side` | OrderSide | 买卖方向（BUY=1, SELL=-1） |
+| `order_type` | OrderType | 订单类型（LIMIT=1, MARKET=2） |
+| `price` | float | 委托价格 |
+| `quantity` | int | 委托数量（整数，必须 > 0） |
+| `filled_quantity` | int | 已成交数量（整数，初始为 0） |
+| `timestamp` | float | 时间戳（训练模式下默认为 0.0） |
+
+**设计要点：**
+- 使用 `__slots__` 避免创建 `__dict__`，减少内存占用
+- 所有数量字段使用整数类型，避免浮点累积误差
+- `filled_quantity` 从 0 开始，撮合引擎负责更新
 
 ### PriceLevel (orderbook.pyx)
 
 价格档位类（Cython cdef class），维护同一价格的所有订单，按 FIFO 顺序排列。
 
 **Cython 属性：**
-- `price: double` - 档位价格（C 级别 double）
-- `orders: OrderedDict[int, Order]` - 订单映射（order_id -> Order），保持 FIFO 顺序
-- `total_quantity: long long` - 64位整数，档位总数量
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `price` | double | 档位价格（C 级别 double） |
+| `orders` | OrderedDict[int, Order] | 订单映射（order_id -> Order），保持 FIFO 顺序 |
+| `total_quantity` | long long | 64位整数，档位总数量 |
 
 **核心方法：**
 
-#### add_order(order: Order) -> None
+#### `add_order(order: Order) -> None`
 
 向价格档位添加订单，O(1) 操作。
 
@@ -83,7 +93,7 @@
 
 **复杂度：** O(1)
 
-#### remove_order(order_id: int) -> Order | None
+#### `remove_order(order_id: int) -> Order | None`
 
 从价格档位移除订单，O(1) 操作。
 
@@ -100,7 +110,7 @@
 
 **复杂度：** O(1)
 
-#### get_volume() -> int
+#### `get_volume() -> int`
 
 获取档位总挂单量。
 
@@ -119,7 +129,7 @@
 2. **64 位整数的必要性：**
    - 单个订单数量最大可达数百万
    - 同一档位可能有数千个订单
-   - 32 位整数（最大 2^31-1 ≈ 21亿）可能溢出
+   - 32 位整数（最大 2^31-1 约 21亿）可能溢出
 
 3. **部分成交的处理：**
    - 成交时撮合引擎会同步更新 total_quantity
@@ -131,18 +141,20 @@
 订单簿类（Cython cdef class），维护买卖盘口和全局订单索引。
 
 **Cython 属性：**
-- `bids: SortedDict[float, PriceLevel]` - 买盘，升序排列
-- `asks: SortedDict[float, PriceLevel]` - 卖盘，升序排列
-- `order_map: dict[int, Order]` - 全局订单索引（order_id -> Order）
-- `last_price: double` - 最新成交价
-- `tick_size: double` - 最小变动单位（如 0.01）
-- `_depth_dirty: bint` - 深度缓存失效标志（C 级别 bool）
-- `_cached_depth: object` - 缓存的深度数据
-- `_cached_levels: int` - 缓存的档位数
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `bids` | SortedDict[float, PriceLevel] | 买盘，升序排列（最大键在末尾） |
+| `asks` | SortedDict[float, PriceLevel] | 卖盘，升序排列（最小键在开头） |
+| `order_map` | dict[int, Order] | 全局订单索引（order_id -> Order） |
+| `last_price` | double | 最新成交价 |
+| `tick_size` | double | 最小变动单位（如 0.01） |
+| `_depth_dirty` | bint | 深度缓存失效标志（C 级别 bool） |
+| `_cached_depth` | object | 缓存的深度数据 |
+| `_cached_levels` | int | 缓存的档位数 |
 
 **核心方法：**
 
-#### add_order(order: Order) -> None
+#### `add_order(order: Order) -> None`
 
 向订单簿添加订单。
 
@@ -162,7 +174,7 @@
 7. 标记深度缓存失效：`_depth_dirty = True`
 
 **关键优化：**
-- 价格归一化避免浮点精度问题（如 91.30000000000001 → 91.3）
+- 价格归一化避免浮点精度问题（如 91.30000000000001 -> 91.3）
 - SortedDict 自动维护有序性，无需手动排序
 - 档位按需创建，避免预分配浪费
 
@@ -180,7 +192,7 @@ normalized = round(price / tick_size) * tick_size  # 91.30000000000001
 normalized = round(normalized, 10)  # 91.3
 ```
 
-#### cancel_order(order_id: int) -> Order | None
+#### `cancel_order(order_id: int) -> Order | None`
 
 撤销订单。
 
@@ -200,7 +212,7 @@ normalized = round(normalized, 10)  # 91.3
 
 **复杂度：** O(log N)，N 为档位数（SortedDict 查找）
 
-#### get_best_bid() -> float | None
+#### `get_best_bid() -> float | None`
 
 获取最优买价（买盘最高价）。
 
@@ -217,7 +229,7 @@ return None
 
 **复杂度：** O(1)
 
-#### get_best_ask() -> float | None
+#### `get_best_ask() -> float | None`
 
 获取最优卖价（卖盘最低价）。
 
@@ -233,7 +245,7 @@ return None
 
 **复杂度：** O(1)
 
-#### get_mid_price() -> float | None
+#### `get_mid_price() -> float | None`
 
 获取中间价（最优买卖价的平均值）。
 
@@ -252,7 +264,7 @@ return None
 
 **复杂度：** O(1)
 
-#### get_depth(levels: int = 100) -> dict[str, list[tuple[float, float]]]
+#### `get_depth(levels: int = 100) -> dict[str, list[tuple[float, float]]]`
 
 获取盘口深度数据，Python 字典格式。
 
@@ -291,7 +303,6 @@ return None
 - 利用 SortedDict 已排序特性，时间复杂度 O(levels)
 - 避免排序操作，直接切片
 - 缓存机制避免重复计算
-- 使用切片而不是循环，提高性能
 
 **复杂度：** O(levels)
 
@@ -300,7 +311,7 @@ return None
 - 缓存匹配条件：档位数相同
 - 添加订单、撤销订单时标记失效
 
-#### get_depth_numpy(levels: int = 100) -> tuple[NDArray, NDArray]
+#### `get_depth_numpy(levels: int = 100) -> tuple[NDArray, NDArray]`
 
 获取盘口深度数据，NumPy 格式。
 
@@ -328,7 +339,7 @@ return None
 - NormalizedMarketState 直接使用 NumPy 数组
 - 避免重复的类型转换
 
-#### clear(reset_price: float | None = None) -> None
+#### `clear(reset_price: float | None = None) -> None`
 
 清空订单簿。
 
@@ -491,29 +502,29 @@ Agent -> 撮合引擎 -> 订单簿
 
 ```
 OrderBook
-├── bids: SortedDict[float, PriceLevel]  # 买盘，升序排列
-│   ├── 100.50: PriceLevel
-│   │   ├── orders: OrderedDict{order_id -> Order}
-│   │   │   ├── order_1: Order
-│   │   │   └── order_2: Order
-│   │   └── total_quantity: 2000
-│   └── 100.49: PriceLevel
-│       └── ...
-├── asks: SortedDict[float, PriceLevel]  # 卖盘，升序排列
-│   ├── 100.51: PriceLevel
-│   │   └── ...
-│   └── 100.52: PriceLevel
-│       └── ...
-├── order_map: dict[int, Order]  # 全局订单索引
-│   ├── order_1: Order
-│   └── order_2: Order
-└── last_price: double
+|-- bids: SortedDict[float, PriceLevel]  # 买盘，升序排列
+|   |-- 100.50: PriceLevel
+|   |   |-- orders: OrderedDict{order_id -> Order}
+|   |   |   |-- order_1: Order
+|   |   |   |-- order_2: Order
+|   |   |-- total_quantity: 2000
+|   |-- 100.49: PriceLevel
+|       |-- ...
+|-- asks: SortedDict[float, PriceLevel]  # 卖盘，升序排列
+|   |-- 100.51: PriceLevel
+|   |-- ...
+|   |-- 100.52: PriceLevel
+|       |-- ...
+|-- order_map: dict[int, Order]  # 全局订单索引
+|   |-- order_1: Order
+|   |-- order_2: Order
+|-- last_price: double
 ```
 
 ### 价格档位示意图
 
 ```
-买盘（降序）        卖盘（升序）
+买盘（降序显示）    卖盘（升序显示）
 100.50 (2000)    |    100.51 (1500)
 100.49 (1800)    |    100.52 (1200)
 100.48 (2500)    |    100.53 (1800)
@@ -698,7 +709,7 @@ bid_data, ask_data = ob.get_depth_numpy(levels=5)
 **A:** 64 位整数支持：
 - 单个订单数量最大可达数百万
 - 同一档位可能有数千个订单
-- 避免 32 位整数溢出（最大 2^31-1 ≈ 21亿）
+- 避免 32 位整数溢出（最大 2^31-1 约 21亿）
 
 ### Q4: 价格归一化为什么需要两轮？
 
@@ -712,21 +723,3 @@ bid_data, ask_data = ob.get_depth_numpy(levels=5)
 - 缓存可能被外部修改
 - 导致数据不一致
 - 仅 get_depth 使用缓存
-
-## 未来优化方向
-
-1. **Cython 化更多方法：**
-   - get_depth 可以改为 Cython 实现
-   - 进一步减少 Python 开销
-
-2. **内存池：**
-   - 预分配订单对象
-   - 减少内存分配开销
-
-3. **批量操作：**
-   - 批量添加订单
-   - 减少缓存失效次数
-
-4. **增量更新：**
-   - 深度数据增量更新
-   - 避免完全重新计算

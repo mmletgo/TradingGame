@@ -5,9 +5,9 @@
 Agent 模块定义了两种类型的 AI 交易代理：高级散户、做市商。通过 NEAT 神经网络进化学习交易策略。
 
 **代码统计：**
-- Python 代码：约 1,356 行（3 个核心文件）
-- Cython 代码：约 492 行（2 个加速模块）
-- 总计：约 1,848 行
+- Python 代码：约 1,347 行（3 个核心文件）
+- Cython 代码：约 398 行（2 个加速模块）
+- 总计：约 1,745 行
 
 ## 继承结构
 
@@ -25,12 +25,12 @@ Agent (base.py) - 基类，提供通用属性和方法，不包含 decide 方法
 
 | 文件 | 行数 | 功能 |
 |------|------|------|
-| `__init__.py` | 19 | 模块导出 |
-| `base.py` | 543 | Agent 基类和动作类型定义 |
-| `retail_pro.py` | 221 | 高级散户 Agent（实现高级散户通用的 decide 方法）|
-| `market_maker.py` | 578 | 做市商 Agent（实现双边挂单的 decide 方法）|
-| `_cython/fast_observe.pyx` | 398 | observe 方法的 Cython 加速实现 |
-| `_cython/fast_decide.pyx` | 96 | decide 辅助函数的 Cython 加速实现 |
+| `__init__.py` | 14 | 模块导出 |
+| `base.py` | 550 | Agent 基类和动作类型定义 |
+| `retail_pro.py` | 220 | 高级散户 Agent（实现高级散户通用的 decide 方法）|
+| `market_maker.py` | 577 | 做市商 Agent（实现双边挂单的 decide 方法）|
+| `_cython/fast_observe.pyx` | 303 | observe 方法的 Cython 加速实现 |
+| `_cython/fast_decide.pyx` | 95 | decide 辅助函数的 Cython 加速实现 |
 
 ## 核心组件
 
@@ -168,7 +168,7 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 
 **神经网络输出（8 个值）：**
 - `[0-5]`: 动作得分（HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL）
-- `[6]`: 价格偏移（-1 到 1，映射到 ±100 ticks）
+- `[6]`: 价格偏移（-1 到 1，映射到 +/-100 ticks）
 - `[7]`: 数量比例（-1 到 1，映射到 [0, 1.0]）
 
 **决策流程：**
@@ -233,8 +233,8 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 10. 计算每个订单的数量（使用 `_calculate_order_quantity`，统一以 mid_price 作为价格参数，确保买卖双边数量对称）
 
 **仓位倾斜机制：**
-- 多头仓位 → 卖单权重增加，买单权重减少（倾向平仓）
-- 空头仓位 → 买单权重增加，卖单权重减少（倾向平仓）
+- 多头仓位 -> 卖单权重增加，买单权重减少（倾向平仓）
+- 空头仓位 -> 买单权重增加，卖单权重减少（倾向平仓）
 - 始终保持双边挂单，单边最小权重为 10%
 
 **execute_action 方法：** 始终执行双边挂单，调用 `_handle_quote` 先撤所有旧单再挂新单。
@@ -244,8 +244,8 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 做市商在 `decide()` 方法中实现仓位倾斜逻辑，根据当前持仓动态调整买卖双边的挂单权重比例。
 
 **核心思路：**
-- 多头仓位 → 卖单权重增加，买单权重减少（倾向平仓）
-- 空头仓位 → 买单权重增加，卖单权重减少（倾向平仓）
+- 多头仓位 -> 卖单权重增加，买单权重减少（倾向平仓）
+- 空头仓位 -> 买单权重增加，卖单权重减少（倾向平仓）
 - 仓位越大，倾斜程度越大
 - 始终保持双边挂单，只是比例不同
 
@@ -283,15 +283,15 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 
 | 数据类型 | 归一化公式 | 数值范围 | 说明 |
 |---------|-----------|---------|------|
-| 订单簿价格 | `(price - mid_price) / mid_price` | ≈ [-0.1, 0.1] | 相对中间价的价格偏移 |
-| 订单簿数量 | `log10(quantity + 1) / 10` | ≈ [0, 1] | 对数归一化，1e10 → 1.0 |
-| 成交价格 | `(price - mid_price) / mid_price` | ≈ [-0.1, 0.1] | 相对中间价的价格偏移 |
-| 成交数量 | `sign(qty) * log10(\|qty\| + 1) / 10` | ≈ [-1, 1] | 带方向的对数归一化 |
+| 订单簿价格 | `(price - mid_price) / mid_price` | [-0.1, 0.1] | 相对中间价的价格偏移 |
+| 订单簿数量 | `log10(quantity + 1) / 10` | [0, 1] | 对数归一化，1e10 -> 1.0 |
+| 成交价格 | `(price - mid_price) / mid_price` | [-0.1, 0.1] | 相对中间价的价格偏移 |
+| 成交数量 | `sign(qty) * log10(\|qty\| + 1) / 10` | [-1, 1] | 带方向的对数归一化 |
 | 持仓价值 | `position_value / (equity * leverage)` | [0, 1] | 相对可用杠杆的比例 |
-| 持仓均价 | `(avg_price - mid_price) / mid_price` | ≈ [-0.1, 0.1] | 相对中间价的价格偏移 |
-| 余额 | `balance / initial_balance` | [0, +∞) | 相对初始余额的比例 |
-| 净值 | `equity / initial_balance` | [0, +∞) | 相对初始余额的比例 |
-| 挂单数量 | `log10(quantity + 1) / 10` | ≈ [0, 1] | 对数归一化 |
+| 持仓均价 | `(avg_price - mid_price) / mid_price` | [-0.1, 0.1] | 相对中间价的价格偏移 |
+| 余额 | `balance / initial_balance` | [0, +inf) | 相对初始余额的比例 |
+| 净值 | `equity / initial_balance` | [0, +inf) | 相对初始余额的比例 |
+| 挂单数量 | `log10(quantity + 1) / 10` | [0, 1] | 对数归一化 |
 
 ### 神经网络输入向量结构对比
 
@@ -321,7 +321,7 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 
 ### fast_observe.pyx
 
-提供 `observe()` 方法的 Cython 加速实现，每次调用仅需 1-2 微秒。
+提供 `observe()` 方法的 Cython 加速实现。
 
 **核心函数：**
 
@@ -348,6 +348,7 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 | `fast_argmax(arr, start, end)` | 在指定范围内查找最大值索引 |
 | `fast_round_price(price, tick_size)` | 将价格取整到 tick_size 的整数倍 |
 | `fast_clip(value, min_val, max_val)` | 将值裁剪到指定范围 |
+| `fast_copy_to_buffer(buffer, source, offset, length)` | 快速数据复制 |
 
 **使用方式：**
 Agent 类自动检测 Cython 模块是否可用，如果可用则使用加速版本，否则回退到纯 Python 实现。

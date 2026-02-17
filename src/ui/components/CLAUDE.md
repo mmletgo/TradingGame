@@ -9,13 +9,13 @@
 | 组件 | 文件 | 功能 | 尺寸 |
 |------|------|------|------|
 | OrderBookPanel | orderbook_panel.py | 订单簿深度图 + 合并盘口列表 | 280px 宽 |
-| ChartPanel | chart_panel.py | 价格曲线 + 种群资产曲线 + 小提琴图 | 1360px 宽 |
+| ChartPanel | chart_panel.py | 价格曲线 + 存活个体平均资产曲线 + 小提琴图 | 1360px 宽 |
 | TradesPanel | trades_panel.py | 最近成交记录列表 | 280px 宽 |
 | ControlPanel | control_panel.py | 开始/暂停/停止按钮 + 状态显示 | 自适应宽度 |
 
 ## 组件详细说明
 
-### OrderBookPanel
+### OrderBookPanel (orderbook_panel.py)
 
 订单簿面板，显示深度图和合并的买卖盘价格列表。
 
@@ -40,15 +40,23 @@ def update(self, bids: list[tuple[float, float]],
     """
 ```
 
+**私有方法：**
+- `_setup_ui() -> None` - 创建UI组件
+- `_setup_depth_theme() -> None` - 设置深度图颜色主题
+- `_update_depth_chart(bids, asks) -> None` - 更新深度图
+- `_update_orderbook_table(bids, asks) -> None` - 更新合并的价格列表
+- `_make_tag(suffix: str) -> str` - 生成唯一的tag名称
+
 **显示内容：**
 1. **深度图**（Area Series）
-   - 买盘累计量：绿色填充 (100, 255, 100)
-   - 卖盘累计量：红色填充 (255, 100, 100)
+   - 买盘累计量：绿色填充 (100, 255, 100, 100)
+   - 卖盘累计量：红色填充 (255, 100, 100, 100)
    - X轴：价格，Y轴：累计数量
+   - 显示前20档数据
 
 2. **合并盘口列表**（表格）
    - 卖盘10档（红色，价格从高到低）
-   - 分隔线（灰色虚线）
+   - 分隔线（灰色虚线，表示中间价位置）
    - 买盘10档（绿色，价格从高到低）
    - 列：价格 | 数量 | 类型
 
@@ -60,9 +68,28 @@ def update(self, bids: list[tuple[float, float]],
 
 ---
 
-### ChartPanel
+### ChartPanel (chart_panel.py)
 
 图表面板，显示价格曲线、种群资产曲线和资产分布小提琴图。
+
+**全局配置：**
+```python
+# 种群颜色配置
+POPULATION_COLORS: dict[AgentType, tuple[int, int, int]] = {
+    AgentType.RETAIL_PRO: (100, 150, 255),   # 蓝色
+    AgentType.MARKET_MAKER: (200, 100, 255), # 紫色
+}
+
+# 种群中文名称
+POPULATION_NAMES: dict[AgentType, str] = {
+    AgentType.RETAIL_PRO: "高级散户",
+    AgentType.MARKET_MAKER: "做市商",
+}
+
+# 噪声交易者颜色（橙色）
+NOISE_TRADER_COLOR: tuple[int, int, int] = (255, 165, 0)
+NOISE_TRADER_NAME: str = "噪声交易者"
+```
 
 **类常量配置：**
 ```python
@@ -105,6 +132,18 @@ def update_noise_trader_violin(self, noise_trader_data: list[Any]) -> None:
     """
 ```
 
+**私有方法：**
+- `_setup_ui() -> None` - 创建UI组件
+- `_create_equity_row(agent_type: AgentType) -> None` - 创建单个种群的资产图表行
+- `_setup_price_theme() -> None` - 设置价格曲线主题
+- `_setup_equity_themes() -> None` - 设置种群曲线颜色主题
+- `_format_number(num: float) -> str` - 格式化数字（大数字用K/M/B/亿表示）
+- `_create_violin_plots() -> None` - 创建3个并排的小提琴图
+- `_setup_violin_themes() -> None` - 设置小提琴图颜色主题
+- `_setup_noise_trader_violin_theme() -> None` - 设置噪声交易者小提琴图颜色主题
+- `_gaussian_kde(data, x_grid, bandwidth) -> np.ndarray` - 高斯核密度估计（纯NumPy实现）
+- `_update_violin_plot(agent_type, equities) -> None` - 更新单个种群的小提琴图
+
 **布局结构：**
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -131,16 +170,18 @@ def update_noise_trader_violin(self, noise_trader_data: list[Any]) -> None:
 **颜色配置：**
 | 类型 | 颜色 | RGB |
 |------|------|-----|
+| 价格曲线 | 黄色 | (255, 255, 100) |
 | 高级散户 | 蓝色 | (100, 150, 255) |
 | 做市商 | 紫色 | (200, 100, 255) |
 | 噪声交易者 | 橙色 | (255, 165, 0) |
 
 **小提琴图实现细节：**
 - 使用纯 NumPy 实现高斯核密度估计（KDE）
-- Silverman 法则自动计算带宽
+- Silverman 法则自动计算带宽：`bandwidth = 0.9 * min(std, iqr/1.34) * n^(-0.2)`
 - Area Series 绘制上下对称的密度曲线
-- 中位数线：白色粗线
-- Q1/Q3 四分位线：灰色细线
+- 中位数线：白色粗线 (255, 255, 255)
+- Q1/Q3 四分位线：灰色细线 (180, 180, 180)
+- 数据不足（<2个数据点）时清空小提琴图
 
 **Tag命名规则：**
 - 价格图：`price_plot`, `price_series`, `price_x_axis`, `price_y_axis`
@@ -149,9 +190,15 @@ def update_noise_trader_violin(self, noise_trader_data: list[Any]) -> None:
 - Agent小提琴图：`violin_plot_{agent_type}`, `violin_area_{agent_type}`, `violin_median_{agent_type}`, `violin_q1_{agent_type}`, `violin_q3_{agent_type}`
 - 噪声交易者小提琴图：`violin_plot_noise_trader`, `violin_area_noise_trader`, `violin_median_noise_trader`, `violin_q1_noise_trader`, `violin_q3_noise_trader`
 
+**数字格式化规则：**
+- >= 1亿：显示为 "X.XX亿"
+- >= 100万：显示为 "X.XM"
+- >= 1000：显示为 "X.XK"
+- < 1000：显示为整数
+
 ---
 
-### TradesPanel
+### TradesPanel (trades_panel.py)
 
 成交记录面板，显示最近的成交记录列表。
 
@@ -173,19 +220,22 @@ def update(self, trades: list[TradeInfo]) -> None:
     """
 ```
 
+**私有方法：**
+- `_setup_ui() -> None` - 创建UI组件
+
 **显示格式：**
 - 表格列：Tick | 价格 | 数量 | 方向
 - 最多显示最近30笔成交
 - 倒序显示（最新在上）
-- 买入：绿色文字 "买入"
-- 卖出：红色文字 "卖出"
+- 买入：绿色文字 "买入" (100, 255, 100)
+- 卖出：红色文字 "卖出" (255, 100, 100)
 
 **Tag命名规则：**
 - 表格：`trades_table`
 
 ---
 
-### ControlPanel
+### ControlPanel (control_panel.py)
 
 控制面板，提供训练/演示的控制按钮和状态显示。
 
@@ -219,7 +269,7 @@ def update_status(
         price: 当前价格
     """
 
-def reset(self) -> None:
+def reset() -> None:
     """重置控制面板状态"""
 
 @property
@@ -227,8 +277,14 @@ def is_paused(self) -> bool:
     """获取当前暂停状态"""
 ```
 
+**私有方法：**
+- `_setup_ui() -> None` - 创建UI组件
+- `_on_start_click(sender, app_data) -> None` - 开始按钮点击处理
+- `_on_pause_click(sender, app_data) -> None` - 暂停/继续按钮点击处理
+- `_on_stop_click(sender, app_data) -> None` - 停止按钮点击处理
+
 **显示内容：**
-- 三个按钮：开始 | 暂停 | 停止
+- 三个按钮：开始 | 暂停 | 停止（每个宽度60px）
 - 状态显示：Episode: X | Tick: Y/Z | 价格: P.PP
 
 **交互逻辑：**
@@ -255,7 +311,7 @@ def is_paused(self) -> bool:
 │OrderBookPanel│        (1360px宽)         │ TradesPanel   │
 │ (280px宽)   │                           │  (280px宽)    │
 │             │  - 价格曲线               │               │
-│ - 深度图    │  - 资产曲线               │ - 成交记录    │
+│ - 深度图    │  - 存活个体资产曲线       │ - 成交记录    │
 │ - 盘口列表  │  - 小提琴图               │ (最近30笔)    │
 └─────────────┴───────────────────────────┴───────────────┘
                         │
@@ -274,13 +330,14 @@ def is_paused(self) -> bool:
 
 ## 数据流转
 
-1. **训练线程** 执行 tick → 收集数据到 UIDataCollector
-2. **UIDataCollector** 生成 UIDataSnapshot → 放入 Queue
+1. **训练线程** 执行 tick -> 收集数据到 UIDataCollector
+2. **UIDataCollector** 生成 UIDataSnapshot -> 放入 Queue
 3. **UI主线程** 从 Queue 获取 UIDataSnapshot
 4. **UI组件** 调用各自的 `update()` 方法接收数据：
    - `OrderBookPanel.update(bids, asks)`
    - `ChartPanel.update_price(price_history)`
    - `ChartPanel.update_equity(...)`
+   - `ChartPanel.update_noise_trader_violin(...)`
    - `TradesPanel.update(trades)`
    - `ControlPanel.update_status(...)`
 
@@ -328,3 +385,11 @@ while dpg.is_dearpygui_running():
 
 dpg.destroy_context()
 ```
+
+## 性能优化要点
+
+1. **小提琴图KDE计算**：使用纯NumPy实现高斯核密度估计，避免scipy依赖
+2. **历史数据管理**：使用`deque(maxlen=N)`自动限制长度，避免内存泄漏
+3. **数据更新频率**：OrderBookPanel只显示前20档深度数据，减少渲染负担
+4. **数字格式化**：大数字使用K/M/B/亿格式，提升可读性
+5. **主题缓存**：颜色主题在初始化时创建并绑定，避免重复创建

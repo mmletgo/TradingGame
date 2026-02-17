@@ -21,7 +21,7 @@
 
 ### AgentType
 
-定义系统中两种 AI Agent 的类型枚举，用于标识和区分不同类型的 Agent。
+定义系统中两种 AI Agent 的类型枚举，继承自 `str` 和 `Enum`，支持字符串比较。
 
 **枚举值：**
 - `RETAIL_PRO` - 高级散户：数量 2,400（12子种群×200），资金 2万，可看到深层订单簿（100档）
@@ -38,6 +38,10 @@ for agent_type in AgentType:
 # 判断 Agent 类型
 if agent_type == AgentType.MARKET_MAKER:
     print("这是做市商")
+
+# 字符串比较（继承 str）
+if agent_type.value == "RETAIL_PRO":
+    print("这是高级散户")
 ```
 
 ## 核心配置类
@@ -50,10 +54,10 @@ if agent_type == AgentType.MARKET_MAKER:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| initial_price | float | 必填 | 初始价格（默认 100.0） |
-| tick_size | float | 必填 | 最小变动单位（默认 0.01） |
-| lot_size | float | 必填 | 最小交易单位（默认 1.0） |
-| depth | int | 必填 | 盘口深度，买卖各多少档（默认 100） |
+| initial_price | float | 必填 | 初始价格 |
+| tick_size | float | 必填 | 最小变动单位 |
+| lot_size | float | 必填 | 最小交易单位 |
+| depth | int | 必填 | 盘口深度，买卖各多少档 |
 | ema_alpha | float | 0.5 | EMA 平滑系数（0-1），值越小价格变化越平滑 |
 
 **详细说明：**
@@ -64,7 +68,7 @@ if agent_type == AgentType.MARKET_MAKER:
 - **depth**：订单簿深度，决定买盘和卖盘各保留多少档位，同时影响 Agent 的输入维度
   - 高级散户/做市商：使用 100 档订单簿数据
 - **ema_alpha**：EMA（指数移动平均）平滑系数，用于平滑价格波动
-  - 公式：`smooth_price = α × current_price + (1-α) × prev_smooth_price`
+  - 公式：`smooth_price = alpha * current_price + (1-alpha) * prev_smooth_price`
   - 训练时通常设为 0.9（较强平滑）
   - 演示时可以设为更小的值（0.1-0.3）以展示更平滑的价格变化
 
@@ -96,7 +100,7 @@ Agent 配置类，定义特定类型 Agent 的交易参数。
 | maker_fee_rate | float | 必填 | 挂单费率（负数表示返佣） |
 | taker_fee_rate | float | 必填 | 吃单费率 |
 
-**默认配置示例（来自 scripts/create_config.py）：**
+**默认配置示例：**
 
 | Agent 类型 | 数量 | 初始资金 | 杠杆 | 维持保证金率 | 挂单费率 | 吃单费率 |
 |-----------|------|---------|------|------------|---------|---------|
@@ -165,8 +169,8 @@ retail_pro_config = AgentConfig(
 | evolution_interval | int | 10 | 每多少个 episode 进化一次 |
 | num_arenas | int | 2 | 竞技场数量（多竞技场模式） |
 | episodes_per_arena | int | 50 | 每个竞技场运行的 episode 数 |
-| mm_fitness_pnl_weight | float | 0.7 | 做市商复合适应度中 PnL 收益率权重 α |
-| mm_fitness_volume_weight | float | 0.3 | 做市商复合适应度中 Maker 成交量权重 γ |
+| mm_fitness_pnl_weight | float | 0.7 | 做市商复合适应度中 PnL 收益率权重 alpha |
+| mm_fitness_volume_weight | float | 0.3 | 做市商复合适应度中 Maker 成交量权重 gamma |
 
 **详细说明：**
 
@@ -209,15 +213,15 @@ retail_pro_config = AgentConfig(
 - **多竞技场配置**（多竞技场并行训练模式）：
   - `num_arenas`：竞技场数量（默认 2）
   - `episodes_per_arena`：每个竞技场运行的 episode 数（默认 50）
-  - 每轮总 episode 数 = `num_arenas × episodes_per_arena`
+  - 每轮总 episode 数 = `num_arenas * episodes_per_arena`
   - 所有竞技场完成后汇总适应度（简单平均）
-  - 2 竞技场 × 50 episode = 每轮 100 个样本，提高适应度评估稳定性
+  - 2 竞技场 * 50 episode = 每轮 100 个样本，提高适应度评估稳定性
 
 - **做市商复合适应度权重**（mm_fitness_*_weight）：
-  - `mm_fitness_pnl_weight`（α=0.7）：PnL 收益率，激励盈利
-  - `mm_fitness_volume_weight`（γ=0.3）：Maker 成交量，激励实际做市
+  - `mm_fitness_pnl_weight`（alpha=0.7）：PnL 收益率，激励盈利
+  - `mm_fitness_volume_weight`（gamma=0.3）：Maker 成交量，激励实际做市
   - 两个权重之和应为 1.0
-  - 公式：`mm_fitness = α × pnl + γ × volume_score`
+  - 公式：`mm_fitness = alpha * pnl + gamma * volume_score`
 
 **使用示例：**
 ```python
@@ -602,8 +606,8 @@ config = Config(
 ## 依赖关系
 
 ### 外部依赖
-- `dataclasses` - 数据类支持（Python 3.7+）
-- `enum` - 枚举类型支持
+- `dataclasses` - 数据类支持（Python 3.7+），使用 `dataclass` 装饰器和 `field` 函数
+- `enum` - 枚举类型支持，`AgentType` 继承 `str` 和 `Enum`
 
 ### 内部依赖
 - 无（配置模块是独立的基础模块）
@@ -612,6 +616,7 @@ config = Config(
 - `src/training` - 训练模块使用配置创建种群和训练器
 - `src/market/noise_trader` - 噪声交易者模块使用 NoiseTraderConfig
 - `src/bio/agents` - Agent 模块使用 AgentConfig 和 MarketConfig
+- `src/analysis` - 分析模块使用 Config 和 AgentType
 
 ## 相关文档
 

@@ -2,12 +2,12 @@
 
 ## 模块概述
 
-竞技场模块提供多竞技场并行训练功能。核心架构为 **episode 级 Worker 进程池**（`ArenaWorkerPool`）：每个 Worker 进程独立运行若干竞技场的完整 tick 循环（包括推理、撮合、强平等），主进程仅负责 NEAT 进化和网络参数同步。
+竞技场模块提供多竞技场并行训练功能。核心架构为 **Episode 级 Worker 进程池**（`ArenaWorkerPool`）：每个 Worker 进程独立运行若干竞技场的完整 tick 循环（包括推理、撮合、强平等），主进程仅负责 NEAT 进化和网络参数同步。
 
 ## 设计理念
 
 1. **Episode 级并行**：Worker 进程独立运行完整 episode tick 循环，消除 tick 级 IPC 同步开销
-2. **神经网络同步**：进化后主进程将新的网络参数（packed numpy）发送给所有 Worker
+2. **神经网络同步**：进化后主进程将新的网络参数（packed numpy）发送给所有 Worker（支持共享内存零拷贝）
 3. **账户状态独立**：每个 Worker 内部维护独立的 `ArenaState`
 4. **订单簿独立**：每个 Worker 内部的竞技场有独立的 `MatchingEngine` 和 `OrderBook`
 5. **噪声交易者**：每个 Worker 的竞技场包含独立的噪声交易者，提供市场背景噪音
@@ -15,20 +15,51 @@
 
 ## 文件结构
 
-- `__init__.py` - 模块导出
-- `arena_state.py` - 竞技场状态类（AgentAccountState、NoiseTraderAccountState、ArenaState）
-- `arena_worker.py` - Arena Worker 进程池架构（Worker 独立运行完整 tick 循环，消除 tick 级 IPC）
-- `execute_worker.py` - Execute Worker 池（并行化 Execute 阶段，tick 级 IPC 模式）
-- `fitness_aggregator.py` - 适应度汇总器
-- `parallel_arena_trainer.py` - 多竞技场并行推理训练器
-- `shared_memory_ipc.py` - 共享内存 IPC 机制（零拷贝优化）
-- `shared_network_memory.py` - BatchNetworkData 共享内存生命周期管理（主进程创建填充，Worker 零拷贝附着）
+```
+src/training/arena/
+├── __init__.py                # 模块导出
+├── arena_state.py             # 竞技场状态类（AgentAccountState、NoiseTraderAccountState、ArenaState）
+├── arena_worker.py            # Arena Worker 进程池架构（Worker 独立运行完整 tick 循环）
+├── execute_worker.py          # Execute Worker 池（tick 级 IPC 模式，已弃用）
+├── fitness_aggregator.py      # 适应度汇总器
+├── parallel_arena_trainer.py  # 多竞技场并行推理训练器
+├── shared_memory_ipc.py       # 共享内存 IPC 机制（零拷贝优化）
+└── shared_network_memory.py   # BatchNetworkData 共享内存生命周期管理
+```
+
+---
 
 ## 核心类
 
 ### AgentAccountState (arena_state.py)
 
 Agent 账户状态类，将 Agent 账户状态与 Agent 对象解耦，每个竞技场维护独立副本。
+
+**数据结构：**
+```python
+@dataclass
+class AgentAccountState:
+    agent_id: int
+    agent_type: AgentType
+    balance: float
+    position_quantity: int
+    position_avg_price: float
+    realized_pnl: float
+    leverage: float
+    maintenance_margin_rate: float
+    initial_balance: float
+    pending_order_id: int | None
+    maker_volume: int
+    volatility_contribution: float
+    is_liquidated: bool
+    order_counter: int
+    maker_fee_rate: float
+    taker_fee_rate: float
+    bid_order_ids: list[int]      # 做市商专用
+    ask_order_ids: list[int]      # 做市商专用
+    cumulative_spread_score: float
+    quote_tick_count: int
+```
 
 **主要方法：**
 
@@ -85,9 +116,9 @@ class ArenaState:
     noise_trader_states: dict[int, NoiseTraderAccountState]
     recent_trades: deque
     price_history: deque[float]          # maxlen=1000
-    tick_history_prices: deque[float]     # maxlen=100
-    tick_history_volumes: deque[float]    # maxlen=100
-    tick_history_amounts: deque[float]    # maxlen=100
+    tick_history_prices: deque[float]    # maxlen=100
+    tick_history_volumes: deque[float]   # maxlen=100
+    tick_history_amounts: deque[float]   # maxlen=100
     smooth_mid_price: float
     tick: int
     pop_liquidated_counts: dict[AgentType, int]
@@ -121,6 +152,8 @@ class ArenaState:
 | `"population_depleted:RETAIL_PRO"` | 高级散户种群存活少于初始的 1/4 |
 | `"population_depleted:MARKET_MAKER"` | 做市商种群存活少于初始的 1/4 |
 | `"one_sided_orderbook"` | 订单簿只有单边挂单 |
+
+---
 
 ### ParallelArenaTrainer (parallel_arena_trainer.py)
 
@@ -159,69 +192,18 @@ class ArenaState:
 7. _sync_networks_to_workers() - 同步新网络到 Workers
 ```
 
-### ArenaExecuteWorkerPool / ArenaExecuteWorkerPoolShm (execute_worker.py)
+**共享内存同步机制：**
+1. 主进程创建 `SharedNetworkMemory`，填充网络参数
+2. 生成 `SharedNetworkMetadata`（~200 字节，包含 shm_name、维度信息）
+3. 通过 Queue 发送 metadata 给所有 Worker
+4. Worker 调用 `attach()` 挂载共享内存，`BatchNetworkCache` 直接使用共享内存中的网络数据
+5. 旧共享内存在所有 Worker ack 后自动清理
 
-竞技场执行 Worker 池，将 Execute 阶段并行化。
+---
 
-**数据类定义：**
+### AgentInfo (arena_worker.py)
 
-```python
-@dataclass
-class NoiseTraderDecision:
-    trader_id: int      # 噪声交易者 ID（负数）
-    direction: int      # 1=买, -1=卖
-    quantity: int       # 下单数量
-
-@dataclass
-class NoiseTraderTradeResult:
-    trader_id: int
-    trades: list[tuple]  # 成交列表
-
-@dataclass
-class ArenaExecuteData:
-    liquidated_agents: list[tuple[int, int, bool]]
-    decisions: list[tuple[int, int, int, float, int]]
-    mm_decisions: list[tuple[int, list, list]]
-    noise_trader_decisions: list[NoiseTraderDecision]
-
-@dataclass
-class ArenaExecuteResult:
-    arena_id: int
-    bid_depth: np.ndarray
-    ask_depth: np.ndarray
-    last_price: float
-    mid_price: float
-    trades: list[tuple]
-    pending_updates: dict[int, int | None]
-    mm_order_updates: dict[int, tuple[list, list]]
-    noise_trader_results: list[NoiseTraderTradeResult]
-    error: str | None
-```
-
-**主要方法：**
-
-| 方法 | 描述 |
-|------|------|
-| `start()` | 启动所有 Worker 进程 |
-| `reset_all(initial_price, fee_rates, noise_trader_ids)` | 重置所有竞技场的订单簿 |
-| `init_market_makers(mm_init_orders)` | 初始化做市商挂单 |
-| `execute_all(arena_commands)` | 执行所有竞技场的决策 |
-| `submit_all(arena_commands)` | 仅发送命令（增量处理） |
-| `poll_result(arena_id)` | 非阻塞检查结果 |
-| `shutdown()` | 关闭所有 Worker |
-
-**原子动作执行流程：**
-
-1. 强平处理（优先执行，不参与打乱）
-2. 收集原子动作（噪声交易者市价单、做市商挂单、非做市商订单）
-3. 随机打乱并执行
-4. 构建返回结果（聚合噪声交易者成交）
-
-### ArenaWorkerPool / arena_worker_main (arena_worker.py)
-
-Arena Worker 进程池架构。每个 Worker 进程独立运行若干竞技场的完整 tick 循环，消除 tick 级 IPC 同步开销。Worker 内部持有独立的 BatchNetworkCache、ArenaState、MatchingEngine。
-
-**数据类定义：**
+Worker 进程需要的轻量级 Agent 结构信息。
 
 ```python
 @dataclass
@@ -235,29 +217,41 @@ class AgentInfo:
     maintenance_margin_rate: float
     maker_fee_rate: float
     taker_fee_rate: float
+```
 
+### EpisodeResult (arena_worker.py)
+
+Worker 返回给主进程的结果。
+
+```python
 @dataclass
 class EpisodeResult:
     worker_id: int
-    accumulated_fitness: dict[tuple[AgentType, int], NDArray[np.float32]]
-    per_arena_fitness: dict[int, dict[AgentType, NDArray[np.float32]]]
-    arena_stats: dict[int, ArenaEpisodeStats]
+    accumulated_fitness: dict[tuple[AgentType, int], NDArray[np.float32]]  # 累积适应度
+    per_arena_fitness: dict[int, dict[AgentType, NDArray[np.float32]]]    # 每竞技场适应度
+    arena_stats: dict[int, ArenaEpisodeStats]                             # 竞技场统计
 ```
+
+### ArenaWorkerPool (arena_worker.py)
+
+管理持久化 Arena Worker 进程池。
 
 **通信协议：**
 
 | 命令 | 方向 | 描述 |
 |------|------|------|
 | `update_networks` | 主进程 -> Worker | 进化后发送新网络参数 |
+| `attach_shared_networks` | 主进程 -> Worker | 发送共享内存元数据，Worker 零拷贝挂载 |
 | `run_episode` | 主进程 -> Worker | Worker 独立运行 episodes 并返回适应度 |
 | `shutdown` | 主进程 -> Worker | 关闭 Worker |
 
-**ArenaWorkerPool 主要方法：**
+**主要方法：**
 
 | 方法 | 描述 |
 |------|------|
 | `start()` | 启动所有 Worker 进程 |
 | `update_networks(network_params)` | 发送新网络参数给所有 Worker |
+| `attach_shared_networks(metadata_map)` | 发送共享内存元数据给所有 Worker |
 | `run_episodes(num_episodes, episode_length)` | 所有 Worker 独立运行 episodes |
 | `shutdown()` | 关闭所有 Worker |
 
@@ -280,7 +274,7 @@ _run_episode_local()
 └─ 4. _collect_fitness_all_arenas() - 收集适应度
 ```
 
-**模块级核心函数（从 ParallelArenaTrainer 提取）：**
+**模块级核心函数：**
 
 | 函数 | 描述 |
 |------|------|
@@ -297,22 +291,35 @@ _run_episode_local()
 | `update_episode_price_stats_from_trades()` | 更新价格统计 |
 | `execute_tick_local()` | 本地原子动作执行 |
 
-**与 execute_worker.py 的区别：**
-
-- execute_worker.py: tick 级 IPC，每个 tick 主进程发送命令、Worker 执行、返回结果
-- arena_worker.py: episode 级 IPC，Worker 独立运行完整 episode，仅在进化时同步网络参数
+---
 
 ### SharedNetworkMetadata / SharedNetworkMemory (shared_network_memory.py)
 
 管理 BatchNetworkData 的共享内存生命周期。主进程创建共享内存并填充网络数据，Worker 进程通过共享内存名称附着到同一块内存实现零拷贝访问。
 
-**SharedNetworkMetadata**：轻量级数据类（~200 字节），通过 Queue 发送给 Worker，包含 shm_name、agent_type、网络维度信息和 generation。
+**SharedNetworkMetadata**：轻量级数据类（~200 字节），通过 Queue 发送给 Worker。
+
+```python
+@dataclass
+class SharedNetworkMetadata:
+    agent_type: AgentType
+    shm_name: str
+    num_networks: int
+    max_nodes: int
+    max_connections: int
+    max_inputs: int
+    max_outputs: int
+    total_nodes: int
+    total_connections: int
+    total_outputs: int
+    generation: int
+```
 
 **SharedNetworkMemory 主要方法：**
 
 | 方法 | 描述 |
 |------|------|
-| `compute_buffer_size(num_networks, total_nodes, total_connections, total_outputs)` | 静态方法，调用 Cython 计算所需共享内存大小 |
+| `compute_buffer_size(num_networks, ...)` | 静态方法，调用 Cython 计算所需共享内存大小 |
 | `create_and_fill(agent_type, network_params, generation)` | 主进程调用：创建 SharedMemory，用 Cython fill_shared_memory_buffer 填充数据，返回 SharedNetworkMetadata |
 | `attach(metadata)` | Worker 调用：附着到已有共享内存，返回 memoryview |
 | `close()` | 关闭共享内存映射（不删除底层共享内存段） |
@@ -323,25 +330,19 @@ _run_episode_local()
 - 主进程：`create_and_fill()` -> 发送 metadata 给 Worker -> Worker 使用完成 -> `close_and_unlink()`
 - Worker：收到 metadata -> `attach()` -> 使用 buffer -> `close()`
 
-### SharedMemoryIPC (shared_memory_ipc.py)
+---
 
-共享内存 IPC 管理器，提供零拷贝的进程间通信机制。
+### FitnessAggregator (fitness_aggregator.py)
 
-**内存布局：**
+适应度汇总器，汇总多个竞技场、多个 episode 的适应度数据。
 
-```
-Command Region:
-- Header (64 bytes): status, cmd_type, counts, padding
-- liquidated_data: int64[MAX_LIQUIDATED x 3]
-- decisions_data: float64[MAX_DECISIONS x 5]
-- mm_agent_ids: int64[MAX_MM_AGENTS]
-- mm_decisions_data: float64[...]
-- noise_trader_decisions: int64[MAX_NOISE_TRADERS x 3]
+**主要方法：**
 
-Result Region:
-- Header (64 bytes)
-- bid/ask depth, trades, pending_updates, mm_order_ids
-```
+| 方法 | 描述 |
+|------|------|
+| `aggregate_simple_average(arena_fitnesses, episode_counts)` | 简单加权平均：`avg = sum(fitness * count) / total_episodes` |
+
+---
 
 ## 性能优化
 
@@ -355,6 +356,9 @@ Result Region:
 - **延迟反序列化 + numpy->C 管线**：跳过中间 Python 对象
 - **做市商初始化批量推理复用**：Worker 内部 Episode 开始时所有竞技场状态相同，只对一个竞技场进行一次 BatchNetworkCache 批量推理，将结果复用到所有竞技场
 - **Worker 内部 OpenMP 推理**：每个 Worker 使用独立的 BatchNetworkCache 进行 per-arena 批量推理
+- **共享内存零拷贝**：网络参数通过共享内存同步，Worker 直接访问共享内存中的网络数据
+
+---
 
 ## 依赖关系
 
