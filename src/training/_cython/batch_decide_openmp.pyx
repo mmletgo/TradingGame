@@ -1689,7 +1689,7 @@ cdef void _parse_market_maker_full_single(
             price = mid_price - ticks * tick_size
             price = round_price(price, tick_size)
             if price > 0:
-                qty_raw = avail_buy * ratio / price
+                qty_raw = avail_buy * ratio / mid_price
                 qty = <int>qty_raw
                 # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
                 if qty == 0 and bid_ratios[i] > MM_MIN_RATIO_THRESHOLD:
@@ -1709,7 +1709,7 @@ cdef void _parse_market_maker_full_single(
             price = mid_price + ticks * tick_size
             price = round_price(price, tick_size)
             if price > 0:
-                qty_raw = avail_sell * ratio / price
+                qty_raw = avail_sell * ratio / mid_price
                 qty = <int>qty_raw
                 # 最小数量保证：当权重大于阈值但数量为0时，强制下1单位
                 if qty == 0 and ask_ratios[i] > MM_MIN_RATIO_THRESHOLD:

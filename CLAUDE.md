@@ -109,25 +109,18 @@ NEAT进化阶段
 
 ### 做市商复合适应度
 
-做市商使用四组件加权复合适应度，激励做市商不仅盈利，还要实际提供流动性：
+做市商使用双组件加权复合适应度，激励做市商盈利并实际提供流动性：
 
 ```
-mm_fitness = α × pnl + β × spread_score + γ × volume_score + δ × survival
+mm_fitness = α × pnl + γ × volume_score
 ```
 
 | 组件 | 权重 | 计算方式 | 范围 | 激励方向 |
 |------|------|---------|------|---------|
-| `pnl` | α=0.4 | `(equity - initial) / initial` | [-1, +∞) | 盈利能力 |
-| `spread_score` | β=0.3 | 每 tick 报价价差的归一化得分，episode 内取均值 | [0, 1] | 提供紧盘口 |
-| `volume_score` | γ=0.2 | `maker_volume / (max_maker_volume_in_pop + 1)` | [0, 1) | 做市成交量 |
-| `survival` | δ=0.1 | `1.0 if alive else 0.0` | {0, 1} | 风控存活 |
+| `pnl` | α=0.7 | `(equity - initial) / initial` | [-1, +∞) | 盈利能力 |
+| `volume_score` | γ=0.3 | `maker_volume / (max_maker_volume_in_pop + 1)` | [0, 1) | 做市成交量 |
 
-**Spread Score 计算：**
-- 每 tick 从做市商报价中提取最优买价和最优卖价
-- `tick_spread_score = max(0.0, 1.0 - quoted_spread / (200 * tick_size))`
-- Episode 内所有 tick 的 spread_score 取平均值
-
-权重可通过 `TrainingConfig` 的 `mm_fitness_*_weight` 参数配置。
+权重可通过 `TrainingConfig` 的 `mm_fitness_pnl_weight` 和 `mm_fitness_volume_weight` 参数配置。
 
 ### 噪声交易者
 

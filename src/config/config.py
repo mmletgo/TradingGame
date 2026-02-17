@@ -80,10 +80,8 @@ class TrainingConfig:
         evolution_interval: 每多少个 episode 进化一次（默认 10）
         num_arenas: 竞技场数量（默认 2）
         episodes_per_arena: 每个竞技场运行的 episode 数（默认 50）
-        mm_fitness_pnl_weight: 做市商复合适应度中 PnL 收益率的权重 α（默认 0.4）
-        mm_fitness_spread_weight: 做市商复合适应度中盘口价差质量的权重 β（默认 0.3）
-        mm_fitness_volume_weight: 做市商复合适应度中 Maker 成交量的权重 γ（默认 0.2）
-        mm_fitness_survival_weight: 做市商复合适应度中存活的权重 δ（默认 0.1）
+        mm_fitness_pnl_weight: 做市商复合适应度中 PnL 收益率的权重 α（默认 0.7）
+        mm_fitness_volume_weight: 做市商复合适应度中 Maker 成交量的权重 γ（默认 0.3）
     """
 
     episode_length: int
@@ -103,11 +101,10 @@ class TrainingConfig:
     # 多竞技场配置
     num_arenas: int = 2
     episodes_per_arena: int = 50
-    # 做市商复合适应度权重（α+β+γ+δ=1.0）
-    mm_fitness_pnl_weight: float = 0.4        # α: PnL 收益率
-    mm_fitness_spread_weight: float = 0.3      # β: 盘口价差质量
-    mm_fitness_volume_weight: float = 0.2      # γ: Maker 成交量
-    mm_fitness_survival_weight: float = 0.1    # δ: 存活
+    # 做市商复合适应度权重（α+γ=1.0）
+    # mm_fitness = α × pnl + γ × volume_score
+    mm_fitness_pnl_weight: float = 0.7        # α: PnL 收益率
+    mm_fitness_volume_weight: float = 0.3      # γ: Maker 成交量
 
 
 @dataclass

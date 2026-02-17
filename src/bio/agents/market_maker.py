@@ -402,7 +402,7 @@ class MarketMakerAgent(Agent):
         bid_orders: list[dict[str, float]] = []
         for i in range(10):
             quantity = self._calculate_order_quantity(
-                float(bid_prices[i]),
+                mid_price,
                 float(bid_ratios[i]),
                 is_buy=True,
                 ref_price=mid_price,
@@ -427,7 +427,7 @@ class MarketMakerAgent(Agent):
         ask_orders: list[dict[str, float]] = []
         for i in range(10):
             quantity = self._calculate_order_quantity(
-                float(ask_prices[i]),
+                mid_price,
                 float(ask_ratios[i]),
                 is_buy=False,
                 ref_price=mid_price,

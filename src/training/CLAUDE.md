@@ -84,7 +84,7 @@ Numba JIT 加速的高频数学函数模块。
 | 种群类型 | 适应度公式 |
 |---------|-----------|
 | 高级散户 | (equity - initial) / initial |
-| 做市商 | α × pnl + β × spread + γ × volume + δ × survival |
+| 做市商 | α × pnl + γ × volume（α=0.7, γ=0.3） |
 
 **关键方法：**
 - `create_agents(genomes)` - 从基因组列表创建 Agent（小批量串行，大批量并行）

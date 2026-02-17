@@ -230,7 +230,7 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 7. 应用仓位倾斜调整买卖权重
 8. 应用总下单比例基准
 9. 解析价格偏移（买单价格 = mid_price - offset * tick_size，卖单价格 = mid_price + offset * tick_size）
-10. 计算每个订单的数量（使用 `_calculate_order_quantity`）
+10. 计算每个订单的数量（使用 `_calculate_order_quantity`，统一以 mid_price 作为价格参数，确保买卖双边数量对称）
 
 **仓位倾斜机制：**
 - 多头仓位 → 卖单权重增加，买单权重减少（倾向平仓）

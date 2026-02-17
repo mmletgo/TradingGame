@@ -165,10 +165,8 @@ retail_pro_config = AgentConfig(
 | evolution_interval | int | 10 | 每多少个 episode 进化一次 |
 | num_arenas | int | 2 | 竞技场数量（多竞技场模式） |
 | episodes_per_arena | int | 50 | 每个竞技场运行的 episode 数 |
-| mm_fitness_pnl_weight | float | 0.4 | 做市商复合适应度中 PnL 收益率权重 α |
-| mm_fitness_spread_weight | float | 0.3 | 做市商复合适应度中盘口价差质量权重 β |
-| mm_fitness_volume_weight | float | 0.2 | 做市商复合适应度中 Maker 成交量权重 γ |
-| mm_fitness_survival_weight | float | 0.1 | 做市商复合适应度中存活权重 δ |
+| mm_fitness_pnl_weight | float | 0.7 | 做市商复合适应度中 PnL 收益率权重 α |
+| mm_fitness_volume_weight | float | 0.3 | 做市商复合适应度中 Maker 成交量权重 γ |
 
 **详细说明：**
 
@@ -216,12 +214,10 @@ retail_pro_config = AgentConfig(
   - 2 竞技场 × 50 episode = 每轮 100 个样本，提高适应度评估稳定性
 
 - **做市商复合适应度权重**（mm_fitness_*_weight）：
-  - `mm_fitness_pnl_weight`（α=0.4）：PnL 收益率，激励盈利
-  - `mm_fitness_spread_weight`（β=0.3）：盘口价差质量，激励提供紧盘口
-  - `mm_fitness_volume_weight`（γ=0.2）：Maker 成交量，激励实际做市
-  - `mm_fitness_survival_weight`（δ=0.1）：存活奖励，激励风控
-  - 四个权重之和应为 1.0
-  - 权重调整建议：如果做市商仍然消极，增加 β 和 γ；如果亏损过大，增加 α
+  - `mm_fitness_pnl_weight`（α=0.7）：PnL 收益率，激励盈利
+  - `mm_fitness_volume_weight`（γ=0.3）：Maker 成交量，激励实际做市
+  - 两个权重之和应为 1.0
+  - 公式：`mm_fitness = α × pnl + γ × volume_score`
 
 **使用示例：**
 ```python

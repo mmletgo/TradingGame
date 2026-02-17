@@ -1650,54 +1650,6 @@ def _init_mm_all_arenas(
 
 
 # ============================================================================
-# Spread Score 计算
-# ============================================================================
-
-
-def _compute_mm_spread_scores(
-    arena: ArenaState,
-    mm_states: list[AgentAccountState],
-    mm_array: NDArray[np.float64],
-    tick_size: float,
-) -> None:
-    """计算做市商 spread score 并累积到 AgentAccountState
-
-    Args:
-        arena: 竞技场状态
-        mm_states: 做市商状态列表
-        mm_array: 做市商决策数组
-        tick_size: 最小价格变动单位
-    """
-    for i, state in enumerate(mm_states):
-        if state.is_liquidated:
-            continue
-        if i >= len(mm_array):
-            break
-        num_bid = int(mm_array[i, 0])
-        num_ask = int(mm_array[i, 1])
-        if num_bid == 0 or num_ask == 0:
-            continue
-        bid_prices = mm_array[i, 2: 2 + num_bid]
-        bid_qtys = mm_array[i, 12: 12 + num_bid]
-        ask_prices = mm_array[i, 22: 22 + num_ask]
-        ask_qtys = mm_array[i, 32: 32 + num_ask]
-        valid_bids = bid_prices[bid_qtys > 0]
-        valid_asks = ask_prices[ask_qtys > 0]
-        if len(valid_bids) == 0 or len(valid_asks) == 0:
-            continue
-        best_bid = float(np.max(valid_bids))
-        best_ask = float(np.min(valid_asks))
-        if best_ask <= best_bid:
-            tick_score = 1.0  # 交叉报价，视为最紧盘口
-        else:
-            quoted_spread = best_ask - best_bid
-            max_spread = 200.0 * tick_size
-            tick_score = max(0.0, 1.0 - quoted_spread / max_spread)
-        state.cumulative_spread_score += tick_score
-        state.quote_tick_count += 1
-
-
-# ============================================================================
 # 适应度收集
 # ============================================================================
 
@@ -1706,7 +1658,7 @@ def _collect_fitness_all_arenas(
     worker_id: int,
     arena_states: list[ArenaState],
     agent_infos_by_sub_pop: dict[tuple[AgentType, int], list[AgentInfo]],
-    mm_fitness_weights: tuple[float, float, float, float],
+    mm_fitness_weights: tuple[float, float],
     config: Config,
 ) -> EpisodeResult:
     """收集所有竞技场的适应度
@@ -1715,7 +1667,7 @@ def _collect_fitness_all_arenas(
         worker_id: Worker ID
         arena_states: 竞技场状态列表
         agent_infos_by_sub_pop: 按 (agent_type, sub_pop_id) 分组的 agent 信息
-        mm_fitness_weights: 做市商适应度权重 (alpha, beta, gamma, delta)
+        mm_fitness_weights: 做市商适应度权重 (alpha, gamma)
         config: 全局配置
 
     Returns:
@@ -1779,7 +1731,7 @@ def _calculate_fitness_for_sub_pop(
     arena: ArenaState,
     infos: list[AgentInfo],
     current_price: float,
-    mm_fitness_weights: tuple[float, float, float, float],
+    mm_fitness_weights: tuple[float, float],
 ) -> NDArray[np.float32]:
     """计算单个子种群的适应度
 
@@ -1787,7 +1739,7 @@ def _calculate_fitness_for_sub_pop(
         arena: 竞技场状态
         infos: 子种群的 Agent 信息列表
         current_price: 当前价格
-        mm_fitness_weights: 做市商适应度权重 (alpha, beta, gamma, delta)
+        mm_fitness_weights: 做市商适应度权重 (alpha, gamma)
 
     Returns:
         适应度数组
@@ -1799,11 +1751,9 @@ def _calculate_fitness_for_sub_pop(
     agent_type = infos[0].agent_type
 
     if agent_type == AgentType.MARKET_MAKER:
-        # 四组件复合适应度
+        # 双组件复合适应度: pnl + volume
         pnl_arr = np.zeros(n, dtype=np.float32)
-        spread_arr = np.zeros(n, dtype=np.float32)
         volume_arr = np.zeros(n, dtype=np.float32)
-        survival_arr = np.zeros(n, dtype=np.float32)
 
         for idx, info in enumerate(infos):
             state = arena.agent_states.get(info.agent_id)
@@ -1813,23 +1763,13 @@ def _calculate_fitness_for_sub_pop(
             initial = state.initial_balance
             if initial > 0:
                 pnl_arr[idx] = (equity - initial) / initial
-            if state.quote_tick_count > 0:
-                spread_arr[idx] = (
-                    state.cumulative_spread_score / state.quote_tick_count
-                )
             volume_arr[idx] = float(state.maker_volume)
-            survival_arr[idx] = 0.0 if state.is_liquidated else 1.0
 
         max_volume = float(np.max(volume_arr)) if len(volume_arr) > 0 else 0.0
         norm_volume = volume_arr / (max_volume + 1.0)
 
-        alpha, beta, gamma, delta = mm_fitness_weights
-        return (
-            alpha * pnl_arr
-            + beta * spread_arr
-            + gamma * norm_volume
-            + delta * survival_arr
-        )
+        alpha, gamma = mm_fitness_weights
+        return alpha * pnl_arr + gamma * norm_volume
     else:
         # 非 MM：纯收益率
         fitnesses = np.zeros(n, dtype=np.float32)
@@ -1913,7 +1853,7 @@ def _run_episode_local(
     config: Config,
     episode_length: int,
     pop_total_counts: dict[AgentType, int],
-    mm_fitness_weights: tuple[float, float, float, float],
+    mm_fitness_weights: tuple[float, float],
     agent_infos_by_sub_pop: dict[tuple[AgentType, int], list[AgentInfo]],
     agent_infos: list[AgentInfo],
     ema_alpha: float,
@@ -2074,16 +2014,6 @@ def _run_episode_local(
                             dtype=np.int64,
                         )
                         mm_decisions_arr = mm_arr
-
-                        # 计算 spread score
-                        tick_size = (
-                            market_state.tick_size
-                            if market_state.tick_size > 0
-                            else 0.01
-                        )
-                        _compute_mm_spread_scores(
-                            arena, arena_mm_states, mm_arr, tick_size
-                        )
                 except Exception:
                     pass
 
@@ -2189,12 +2119,10 @@ def arena_worker_main(
     # 种群总数（用于早期结束检查）
     pop_total_counts = _compute_pop_total_counts(agent_infos)
 
-    # MM 适应度权重
-    mm_fitness_weights = (
+    # MM 适应度权重 (alpha: pnl, gamma: volume)
+    mm_fitness_weights: tuple[float, float] = (
         config.training.mm_fitness_pnl_weight,
-        config.training.mm_fitness_spread_weight,
         config.training.mm_fitness_volume_weight,
-        config.training.mm_fitness_survival_weight,
     )
 
     # 按 (agent_type, sub_pop_id) 分组的 agent_infos

@@ -54,11 +54,12 @@ src/training/league/
 | `pfsp_explore_bonus` | 2.0 | 未交战对手的探索奖励系数 |
 | `pfsp_win_rate_ema_alpha` | 0.3 | 胜率 EMA 平滑因子，越大越重视近期 |
 | `generalization_advantage_window` | 20 | 泛化优势比历史窗口大小 |
-| `convergence_threshold` | 0.01 | 收敛判断阈值 |
+| `convergence_threshold` | 0.005 | 收敛判断阈值 |
 | `convergence_generations` | 10 | 连续满足收敛条件的代数 |
 | `elite_ratio` | 0.1 | 精英比例，用于计算精英适应度 |
 | `freeze_on_convergence` | `True` | 收敛时是否冻结进化 |
 | `freeze_thaw_threshold` | 0.05 | 基准适应度下降超过 5% 则解冻 |
+| `min_freeze_generation` | 30 | 最早允许冻结的代数，防止早期误冻结 |
 
 #### 泛化优势比参数详解
 

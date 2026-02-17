@@ -2107,11 +2107,11 @@ class Population:
     ) -> list[tuple[Agent, float]]:
         """做市商复合适应度评估
 
-        四组件加权适应度：
+        双组件加权适应度：
         - PnL 收益率：(equity - initial) / initial
-        - 盘口价差质量：cumulative_spread_score / quote_tick_count
         - Maker 成交量：归一化后的 maker_volume
-        - 存活奖励：未被强平为 1.0，否则为 0.0
+
+        mm_fitness = α × pnl + γ × volume_score
 
         Args:
             current_price: 当前市场价格
@@ -2121,9 +2121,7 @@ class Population:
             按适应度从高到低排序的 (Agent, 适应度) 元组列表
         """
         pnl_arr = np.zeros(n, dtype=np.float64)
-        spread_arr = np.zeros(n, dtype=np.float64)
         volume_arr = np.zeros(n, dtype=np.float64)
-        survival_arr = np.zeros(n, dtype=np.float64)
 
         for idx, agent in enumerate(self.agents):
             # PnL 收益率
@@ -2132,27 +2130,18 @@ class Population:
             if initial > 0:
                 pnl_arr[idx] = (equity - initial) / initial
 
-            # 盘口价差质量（平均 spread score）
-            if agent._quote_tick_count > 0:
-                spread_arr[idx] = agent._cumulative_spread_score / agent._quote_tick_count
-
             # Maker 成交量（原始值，后续归一化）
             volume_arr[idx] = float(agent.account.maker_volume)
-
-            # 存活奖励
-            survival_arr[idx] = 0.0 if agent.is_liquidated else 1.0
 
         # 归一化 maker_volume：除以 (max_volume + 1.0) 避免除零
         max_volume = np.max(volume_arr) if n > 0 else 0.0
         norm_volume = volume_arr / (max_volume + 1.0)
 
-        # 加权求和
+        # 加权求和: α × pnl + γ × volume
         w = self._training_config
         fitnesses = (
             w.mm_fitness_pnl_weight * pnl_arr
-            + w.mm_fitness_spread_weight * spread_arr
             + w.mm_fitness_volume_weight * norm_volume
-            + w.mm_fitness_survival_weight * survival_arr
         )
 
         # 获取从高到低的排序索引

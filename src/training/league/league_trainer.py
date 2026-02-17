@@ -348,7 +348,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                     pop_converged.get(agent_type, False) and
                     elite_converged.get(agent_type, False)
                 )
-                if is_dual_converged:
+                if is_dual_converged and self.generation >= self.league_config.min_freeze_generation:
                     # 获取当前 baseline 适应度作为基准
                     baseline_avg = round_stats.get('baseline_avg_fitness', {})
                     elite_baseline_avg = round_stats.get('elite_baseline_avg_fitness', {})

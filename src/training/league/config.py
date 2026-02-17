@@ -41,13 +41,14 @@ class LeagueTrainingConfig:
 
     # 泛化优势比配置
     generalization_advantage_window: int = 20  # 历史窗口大小
-    convergence_threshold: float = 0.01  # 收敛阈值
+    convergence_threshold: float = 0.005  # 收敛阈值（更严格，减少假阳性）
     convergence_generations: int = 10  # 连续满足条件的代数
     elite_ratio: float = 0.1  # 精英比例，用于计算精英适应度，默认 top 10%
 
     # 冻结与复评配置
     freeze_on_convergence: bool = True  # 收敛时是否冻结进化
     freeze_thaw_threshold: float = 0.01  # 基准适应度下降超过 1% 则解冻
+    min_freeze_generation: int = 30  # 最早允许冻结的代数
 
     def validate(self) -> None:
         """验证配置有效性"""
