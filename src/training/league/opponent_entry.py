@@ -91,7 +91,7 @@ class OpponentEntry:
                 genome_arrays[f"sub_{sub_pop_id}_metadata"] = meta
                 genome_arrays[f"sub_{sub_pop_id}_nodes"] = nodes
                 genome_arrays[f"sub_{sub_pop_id}_conns"] = conns
-            np.savez_compressed(genomes_path, **genome_arrays)
+            np.savez(genomes_path, **genome_arrays)
 
         # 3. 保存网络参数（如果有）
         if self.network_data is not None:
@@ -112,7 +112,7 @@ class OpponentEntry:
                 network_arrays[f"sub_{sub_pop_id}_conn_sources"] = params_tuple[8]
                 network_arrays[f"sub_{sub_pop_id}_conn_weights"] = params_tuple[9]
                 network_arrays[f"sub_{sub_pop_id}_output_indices"] = params_tuple[10]
-            np.savez_compressed(networks_path, **network_arrays)
+            np.savez(networks_path, **network_arrays)
 
     @classmethod
     def load(cls, entry_dir: Path, load_networks: bool = False) -> OpponentEntry:
