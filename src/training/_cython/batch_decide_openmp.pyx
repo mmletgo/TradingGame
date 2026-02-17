@@ -264,6 +264,12 @@ cdef void free_batch_network_data(BatchNetworkData* data) noexcept:
     free(data)
 
 
+cdef void free_attached_network_data(BatchNetworkData* data) noexcept:
+    """释放仅结构体本身，不释放数组指针（数组指向共享内存）"""
+    if data != NULL:
+        free(data)
+
+
 cdef BatchAgentState* alloc_batch_agent_state(int num_agents) noexcept:
     """分配批量 Agent 状态结构"""
     cdef BatchAgentState* data = <BatchAgentState*>malloc(sizeof(BatchAgentState))
@@ -1975,6 +1981,235 @@ CACHE_TYPE_MARKET_MAKER = 2
 
 
 # ============================================================================
+# 共享内存辅助函数
+# ============================================================================
+
+DEF SHM_HEADER_SIZE = 128
+
+
+def compute_shared_memory_size(
+    int num_networks,
+    int total_nodes,
+    int total_connections,
+    int total_outputs,
+) -> int:
+    """计算共享内存所需的总字节数
+
+    Args:
+        num_networks: 网络数量
+        total_nodes: 所有网络的节点总数
+        total_connections: 所有网络的连接总数
+        total_outputs: 所有网络的输出索引总数
+
+    Returns:
+        所需的共享内存字节数
+    """
+    cdef int doubles_size = (total_nodes + total_nodes + total_connections) * 8  # biases + responses + conn_weights
+    cdef int ints_size = (
+        6 * num_networks  # num_inputs_arr + num_outputs_arr + num_nodes_arr + node_offsets + conn_offsets + output_idx_offsets
+        + total_nodes  # act_types
+        + total_nodes + num_networks  # conn_indptr
+        + total_connections  # conn_sources
+        + total_outputs  # output_indices
+    ) * 4
+    return SHM_HEADER_SIZE + doubles_size + ints_size
+
+
+def fill_shared_memory_buffer(
+    unsigned char[:] shm_buffer,
+    headers_arr,
+    all_biases,
+    all_responses,
+    all_act_types,
+    all_conn_indptr,
+    all_conn_sources,
+    all_conn_weights,
+    all_output_indices,
+) -> dict:
+    """将网络数据写入共享内存 buffer
+
+    在主进程中调用，将所有网络的参数数据写入共享内存。
+    Worker 进程通过 attach_shared_memory() 零拷贝挂载。
+
+    Args:
+        shm_buffer: 共享内存 buffer 的 memoryview
+        headers_arr: numpy structured array，包含每个网络的元信息
+        all_biases: numpy float32，所有网络的偏置
+        all_responses: numpy float32，所有网络的响应
+        all_act_types: numpy int32，所有网络的激活函数类型
+        all_conn_indptr: numpy int32，所有网络的连接 indptr
+        all_conn_sources: numpy int32，所有网络的连接源节点
+        all_conn_weights: numpy float32，所有网络的连接权重
+        all_output_indices: numpy int32，所有网络的输出索引
+
+    Returns:
+        dict: 包含维度信息的字典
+    """
+    cdef int num_networks = len(headers_arr)
+
+    # 从 headers 提取元信息
+    cdef np.ndarray[int, ndim=1] h_num_inputs = np.ascontiguousarray(
+        headers_arr['num_inputs'], dtype=np.intc)
+    cdef np.ndarray[int, ndim=1] h_num_outputs = np.ascontiguousarray(
+        headers_arr['num_outputs'], dtype=np.intc)
+    cdef np.ndarray[int, ndim=1] h_num_nodes = np.ascontiguousarray(
+        headers_arr['num_nodes'], dtype=np.intc)
+    cdef np.ndarray[int, ndim=1] h_n_connections = np.ascontiguousarray(
+        headers_arr['n_connections'], dtype=np.intc)
+    cdef np.ndarray[int, ndim=1] h_n_output_keys = np.ascontiguousarray(
+        headers_arr['n_output_keys'], dtype=np.intc)
+
+    # 计算维度信息
+    cdef int max_nodes = 0
+    cdef int max_connections = 0
+    cdef int max_inputs = 0
+    cdef int max_outputs = 0
+    cdef int total_nodes = 0
+    cdef int total_connections = 0
+    cdef int total_outputs = 0
+    cdef int i, j
+    cdef int num_nodes_i, num_conns_i, num_outputs_i
+
+    for i in range(num_networks):
+        num_nodes_i = h_num_nodes[i]
+        num_conns_i = h_n_connections[i]
+        num_outputs_i = h_n_output_keys[i]
+        if num_nodes_i > max_nodes:
+            max_nodes = num_nodes_i
+        if num_conns_i > max_connections:
+            max_connections = num_conns_i
+        if h_num_inputs[i] > max_inputs:
+            max_inputs = h_num_inputs[i]
+        if h_num_outputs[i] > max_outputs:
+            max_outputs = h_num_outputs[i]
+        total_nodes += num_nodes_i
+        total_connections += num_conns_i
+        total_outputs += num_outputs_i
+
+    # 准备 typed memoryview
+    cdef float[:] biases_view = np.ascontiguousarray(all_biases, dtype=np.float32)
+    cdef float[:] responses_view = np.ascontiguousarray(all_responses, dtype=np.float32)
+    cdef int[:] act_types_view = np.ascontiguousarray(all_act_types, dtype=np.intc)
+    cdef int[:] conn_indptr_view = np.ascontiguousarray(all_conn_indptr, dtype=np.intc)
+    cdef int[:] conn_sources_view = np.ascontiguousarray(all_conn_sources, dtype=np.intc)
+    cdef float[:] conn_weights_view = np.ascontiguousarray(all_conn_weights, dtype=np.float32)
+    cdef int[:] output_indices_view = np.ascontiguousarray(all_output_indices, dtype=np.intc)
+
+    # ===== 写入 128 字节 Header =====
+    cdef int* header_ptr = <int*>(&shm_buffer[0])
+    header_ptr[0] = num_networks
+    header_ptr[1] = max_nodes
+    header_ptr[2] = max_connections
+    header_ptr[3] = max_inputs
+    header_ptr[4] = max_outputs
+    header_ptr[5] = total_nodes
+    header_ptr[6] = total_connections
+    header_ptr[7] = total_outputs
+    # 其余保留字段清零（header 共 128 字节 = 32 个 int）
+    for i in range(8, 32):
+        header_ptr[i] = 0
+
+    # ===== 计算各段偏移量 =====
+    cdef int offset = SHM_HEADER_SIZE
+
+    # Section A - double 数组（8 字节对齐，从 offset 128 开始）
+    cdef int biases_offset = offset
+    cdef int responses_offset = biases_offset + total_nodes * 8
+    cdef int conn_weights_offset = responses_offset + total_nodes * 8
+    cdef int section_a_end = conn_weights_offset + total_connections * 8
+
+    # Section B - int 数组（4 字节）
+    cdef int num_inputs_arr_offset = section_a_end
+    cdef int num_outputs_arr_offset = num_inputs_arr_offset + num_networks * 4
+    cdef int num_nodes_arr_offset = num_outputs_arr_offset + num_networks * 4
+    cdef int node_offsets_offset = num_nodes_arr_offset + num_networks * 4
+    cdef int conn_offsets_offset = node_offsets_offset + num_networks * 4
+    cdef int output_idx_offsets_offset = conn_offsets_offset + num_networks * 4
+    cdef int act_types_offset = output_idx_offsets_offset + num_networks * 4
+    cdef int conn_indptr_offset = act_types_offset + total_nodes * 4
+    cdef int conn_sources_offset = conn_indptr_offset + (total_nodes + num_networks) * 4
+    cdef int output_indices_offset = conn_sources_offset + total_connections * 4
+
+    # 获取各段写入指针
+    cdef double* biases_ptr = <double*>(&shm_buffer[biases_offset])
+    cdef double* responses_ptr = <double*>(&shm_buffer[responses_offset])
+    cdef double* conn_weights_ptr = <double*>(&shm_buffer[conn_weights_offset])
+    cdef int* num_inputs_arr_ptr = <int*>(&shm_buffer[num_inputs_arr_offset])
+    cdef int* num_outputs_arr_ptr = <int*>(&shm_buffer[num_outputs_arr_offset])
+    cdef int* num_nodes_arr_ptr = <int*>(&shm_buffer[num_nodes_arr_offset])
+    cdef int* node_offsets_ptr = <int*>(&shm_buffer[node_offsets_offset])
+    cdef int* conn_offsets_ptr = <int*>(&shm_buffer[conn_offsets_offset])
+    cdef int* output_idx_offsets_ptr = <int*>(&shm_buffer[output_idx_offsets_offset])
+    cdef int* act_types_ptr = <int*>(&shm_buffer[act_types_offset])
+    cdef int* conn_indptr_ptr = <int*>(&shm_buffer[conn_indptr_offset])
+    cdef int* conn_sources_ptr = <int*>(&shm_buffer[conn_sources_offset])
+    cdef int* output_indices_ptr = <int*>(&shm_buffer[output_indices_offset])
+
+    # ===== 遍历所有网络，写入数据 =====
+    cdef int node_offset = 0
+    cdef int conn_offset = 0
+    cdef int output_offset = 0
+    cdef int src_node_offset = 0
+    cdef int src_conn_offset = 0
+    cdef int src_indptr_offset = 0
+    cdef int src_output_offset = 0
+
+    for i in range(num_networks):
+        num_nodes_i = h_num_nodes[i]
+        num_conns_i = h_n_connections[i]
+        num_outputs_i = h_n_output_keys[i]
+
+        # 写入元信息
+        num_inputs_arr_ptr[i] = h_num_inputs[i]
+        num_outputs_arr_ptr[i] = h_num_outputs[i]
+        num_nodes_arr_ptr[i] = num_nodes_i
+        node_offsets_ptr[i] = node_offset
+        conn_offsets_ptr[i] = conn_offset
+        output_idx_offsets_ptr[i] = output_offset
+
+        # 写入节点数据（float32 -> double 类型转换）
+        for j in range(num_nodes_i):
+            biases_ptr[node_offset + j] = <double>biases_view[src_node_offset + j]
+            responses_ptr[node_offset + j] = <double>responses_view[src_node_offset + j]
+            act_types_ptr[node_offset + j] = act_types_view[src_node_offset + j]
+
+        # 写入连接 indptr（需要加 conn_offset）
+        for j in range(num_nodes_i + 1):
+            conn_indptr_ptr[node_offset + j] = conn_indptr_view[src_indptr_offset + j] + conn_offset
+
+        # 写入连接 sources 和 weights
+        for j in range(num_conns_i):
+            conn_sources_ptr[conn_offset + j] = conn_sources_view[src_conn_offset + j]
+            conn_weights_ptr[conn_offset + j] = <double>conn_weights_view[src_conn_offset + j]
+
+        # 写入输出索引
+        for j in range(num_outputs_i):
+            output_indices_ptr[output_offset + j] = output_indices_view[src_output_offset + j]
+
+        # 更新 batch 偏移量
+        node_offset += num_nodes_i
+        conn_offset += num_conns_i
+        output_offset += num_outputs_i
+
+        # 更新源数据偏移量
+        src_node_offset += num_nodes_i
+        src_conn_offset += num_conns_i
+        src_indptr_offset += num_nodes_i + 1
+        src_output_offset += num_outputs_i
+
+    return {
+        'num_networks': num_networks,
+        'max_nodes': max_nodes,
+        'max_connections': max_connections,
+        'max_inputs': max_inputs,
+        'max_outputs': max_outputs,
+        'total_nodes': total_nodes,
+        'total_connections': total_connections,
+        'total_outputs': total_outputs,
+    }
+
+
+# ============================================================================
 # 网络数据缓存类
 # ============================================================================
 
@@ -2027,6 +2262,7 @@ cdef class BatchNetworkCache:
         # 初始化所有指针为 NULL（网络数据在 update_networks 时分配）
         self.network_data = NULL
         self.thread_buffers = NULL
+        self._is_shared = 0
 
         # 分配 Agent 状态和市场数据结构（每次 decide 都需要更新，但结构不变）
         self.agent_state = alloc_batch_agent_state(num_networks)
@@ -2062,7 +2298,10 @@ cdef class BatchNetworkCache:
     def __dealloc__(self):
         """释放所有分配的内存"""
         if self.network_data != NULL:
-            free_batch_network_data(self.network_data)
+            if self._is_shared:
+                free_attached_network_data(self.network_data)
+            else:
+                free_batch_network_data(self.network_data)
         if self.agent_state != NULL:
             free_batch_agent_state(self.agent_state)
         if self.market_data != NULL:
@@ -2124,9 +2363,13 @@ cdef class BatchNetworkCache:
 
         # 释放旧的网络数据和线程缓冲区
         if self.network_data != NULL:
-            free_batch_network_data(self.network_data)
+            if self._is_shared:
+                free_attached_network_data(self.network_data)
+            else:
+                free_batch_network_data(self.network_data)
         if self.thread_buffers != NULL:
             free_thread_buffers(self.thread_buffers, self.num_threads)
+        self._is_shared = 0  # 从 networks 更新时恢复为非共享模式
 
         # 分配新的网络数据结构
         self.network_data = alloc_batch_network_data(
@@ -2252,9 +2495,13 @@ cdef class BatchNetworkCache:
 
         # 释放旧的网络数据和线程缓冲区
         if self.network_data != NULL:
-            free_batch_network_data(self.network_data)
+            if self._is_shared:
+                free_attached_network_data(self.network_data)
+            else:
+                free_batch_network_data(self.network_data)
         if self.thread_buffers != NULL:
             free_thread_buffers(self.thread_buffers, self.num_threads)
+        self._is_shared = 0  # 从 numpy 更新时恢复为非共享模式
 
         self.network_data = new_network_data
         self.thread_buffers = new_thread_buffers
@@ -2289,6 +2536,122 @@ cdef class BatchNetworkCache:
             free(self.results)
         self.results = <DecisionResult*>calloc(num_networks, sizeof(DecisionResult))
         
+        # 重新分配 NumPy 数组（如果大小变化）
+        if self.inputs_array.shape[0] != num_networks:
+            self.inputs_array = np.zeros((num_networks, self.input_dim), dtype=np.float64)
+            self.outputs_array = np.zeros((num_networks, self.output_dim), dtype=np.float64)
+
+
+    def attach_shared_memory(self, unsigned char[:] shm_buffer,
+                             int num_networks, int max_nodes, int max_connections,
+                             int max_inputs, int max_outputs,
+                             int total_nodes, int total_connections, int total_outputs):
+        """在 Worker 进程中零拷贝挂载共享内存中的网络数据
+
+        数组指针直接指向 shm_buffer 中的对应偏移位置，不进行任何数据拷贝。
+
+        Args:
+            shm_buffer: 共享内存 buffer 的 memoryview
+            num_networks: 网络数量
+            max_nodes: 最大节点数
+            max_connections: 最大连接数
+            max_inputs: 最大输入维度
+            max_outputs: 最大输出维度
+            total_nodes: 所有网络的节点总数
+            total_connections: 所有网络的连接总数
+            total_outputs: 所有网络的输出索引总数
+        """
+        # 释放旧的 network_data
+        if self.network_data != NULL:
+            if self._is_shared:
+                free_attached_network_data(self.network_data)
+            else:
+                free_batch_network_data(self.network_data)
+
+        # 释放旧的 thread_buffers
+        if self.thread_buffers != NULL:
+            free_thread_buffers(self.thread_buffers, self.num_threads)
+
+        # 分配新的 BatchNetworkData 结构体（仅结构体本身，不分配数组）
+        cdef BatchNetworkData* data = <BatchNetworkData*>malloc(sizeof(BatchNetworkData))
+        if data == NULL:
+            import logging
+            logging.getLogger("batch_decide").error("attach_shared_memory: malloc BatchNetworkData 失败")
+            return
+
+        # 设置结构体的标量字段
+        data.num_networks = num_networks
+        data.max_nodes = max_nodes
+        data.max_connections = max_connections
+        data.max_inputs = max_inputs
+        data.max_outputs = max_outputs
+
+        # ===== 计算各段偏移量（与 fill_shared_memory_buffer 一致） =====
+        cdef int offset = SHM_HEADER_SIZE
+
+        # Section A - double 数组
+        cdef int biases_offset = offset
+        cdef int responses_offset = biases_offset + total_nodes * 8
+        cdef int conn_weights_offset = responses_offset + total_nodes * 8
+        cdef int section_a_end = conn_weights_offset + total_connections * 8
+
+        # Section B - int 数组
+        cdef int num_inputs_arr_offset = section_a_end
+        cdef int num_outputs_arr_offset = num_inputs_arr_offset + num_networks * 4
+        cdef int num_nodes_arr_offset = num_outputs_arr_offset + num_networks * 4
+        cdef int node_offsets_offset = num_nodes_arr_offset + num_networks * 4
+        cdef int conn_offsets_offset = node_offsets_offset + num_networks * 4
+        cdef int output_idx_offsets_offset = conn_offsets_offset + num_networks * 4
+        cdef int act_types_offset = output_idx_offsets_offset + num_networks * 4
+        cdef int conn_indptr_offset = act_types_offset + total_nodes * 4
+        cdef int conn_sources_offset = conn_indptr_offset + (total_nodes + num_networks) * 4
+        cdef int output_indices_offset = conn_sources_offset + total_connections * 4
+
+        # 将数组指针指向 shm_buffer 中的对应偏移位置（零拷贝）
+        data.biases = <double*>(&shm_buffer[biases_offset])
+        data.responses = <double*>(&shm_buffer[responses_offset])
+        data.conn_weights = <double*>(&shm_buffer[conn_weights_offset])
+        data.num_inputs_arr = <int*>(&shm_buffer[num_inputs_arr_offset])
+        data.num_outputs_arr = <int*>(&shm_buffer[num_outputs_arr_offset])
+        data.num_nodes_arr = <int*>(&shm_buffer[num_nodes_arr_offset])
+        data.node_offsets = <int*>(&shm_buffer[node_offsets_offset])
+        data.conn_offsets = <int*>(&shm_buffer[conn_offsets_offset])
+        data.output_idx_offsets = <int*>(&shm_buffer[output_idx_offsets_offset])
+        data.act_types = <int*>(&shm_buffer[act_types_offset])
+        data.conn_indptr = <int*>(&shm_buffer[conn_indptr_offset])
+        data.conn_sources = <int*>(&shm_buffer[conn_sources_offset])
+        data.output_indices = <int*>(&shm_buffer[output_indices_offset])
+
+        self.network_data = data
+
+        # 分配新的 ThreadLocalBuffer（每个 Worker 独有的可写缓冲区）
+        self.thread_buffers = alloc_thread_buffers(
+            self.num_threads, max_nodes + self.input_dim,
+            self.input_dim, self.output_dim
+        )
+
+        # 设置共享标志
+        self._is_shared = 1
+
+        # 更新缓存参数
+        self.num_networks = num_networks
+        self.max_nodes = max_nodes
+        self.max_connections = max_connections
+
+        # 设置 network_ids 为有效的索引列表，确保 is_valid() 返回 True
+        self.network_ids = list(range(num_networks))
+
+        # 如果 Agent 数量变化，重新分配相关结构
+        if self.agent_state == NULL or self.agent_state.num_agents != num_networks:
+            if self.agent_state != NULL:
+                free_batch_agent_state(self.agent_state)
+            self.agent_state = alloc_batch_agent_state(num_networks)
+
+        # 重新分配结果数组
+        if self.results != NULL:
+            free(self.results)
+        self.results = <DecisionResult*>calloc(num_networks, sizeof(DecisionResult))
+
         # 重新分配 NumPy 数组（如果大小变化）
         if self.inputs_array.shape[0] != num_networks:
             self.inputs_array = np.zeros((num_networks, self.input_dim), dtype=np.float64)

@@ -395,8 +395,15 @@ class AtomicAction:
 - `update_networks_from_numpy(*packed_arrays)` - 直接从 packed numpy 数组填充 C 结构，跳过中间 Python 对象创建（FastFeedForwardNetwork），性能从 ~40s 降至 ~2-5s。使用 `alloc_batch_network_data_exact` 精确分配内存（按实际总量而非 max × num_networks），分配失败时保留旧数据并记录错误
 - `decide(inputs, orderbooks, mid_prices)` - 使用缓存数据执行批量决策
 - `decide_multi_arena_direct(states, markets, indices, return_array)` - 跨竞技场批量推理
+- `attach_shared_memory(shm_buffer, ...)` - 零拷贝挂载共享内存中的网络数据（Worker 进程调用）
 - `is_valid()` - 检查缓存是否有效
 - `clear()` - 清空缓存
+
+**共享内存支持：**
+- `compute_shared_memory_size()` - 计算共享内存所需字节数
+- `fill_shared_memory_buffer()` - 主进程填充共享内存 buffer（float32→double 转换 + 偏移计算）
+- `attach_shared_memory()` - Worker 进程零拷贝挂载（数组指针直接指向共享内存）
+- `_is_shared` 标志控制析构时释放策略（共享模式仅释放结构体，非共享模式释放结构体+数组）
 
 **性能提升：**
 - 优化前：~823ms/tick

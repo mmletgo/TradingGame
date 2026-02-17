@@ -110,6 +110,7 @@ cdef BatchNetworkData* alloc_batch_network_data_exact(int num_networks, int max_
                                                        int total_connections,
                                                        int total_outputs) noexcept
 cdef void free_batch_network_data(BatchNetworkData* data) noexcept
+cdef void free_attached_network_data(BatchNetworkData* data) noexcept
 
 cdef BatchAgentState* alloc_batch_agent_state(int num_agents) noexcept
 cdef void free_batch_agent_state(BatchAgentState* data) noexcept
@@ -313,3 +314,6 @@ cdef class BatchNetworkCache:
 
     # 做市商订单结果预分配
     cdef MarketMakerOrdersResult* multi_arena_mm_orders
+
+    # 共享内存标识
+    cdef bint _is_shared
