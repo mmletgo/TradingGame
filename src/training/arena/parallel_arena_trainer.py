@@ -62,6 +62,7 @@ from .arena_state import (
 )
 from .arena_worker import AgentInfo, ArenaWorkerPool, EpisodeResult
 from .fitness_aggregator import FitnessAggregator
+from .shared_network_memory import SharedNetworkMemory, SharedNetworkMetadata
 
 # 缓存类型常量
 CACHE_TYPE_FULL = 1
@@ -141,6 +142,10 @@ class ParallelArenaTrainer:
 
         # Arena Worker 进程池（episode 级 IPC）
         self._arena_worker_pool: ArenaWorkerPool | None = None
+
+        # 共享内存管理
+        self._shared_network_memories: dict[AgentType, SharedNetworkMemory] = {}
+        self._prev_shared_network_memories: dict[AgentType, SharedNetworkMemory] = {}
 
     def setup(self) -> None:
         """初始化：创建种群、竞技场状态、网络缓存、进化 Worker 池、Arena Worker 池
@@ -491,10 +496,9 @@ class ParallelArenaTrainer:
         return agent_infos
 
     def _sync_networks_to_workers(self) -> None:
-        """将当前网络参数同步到所有 Arena Workers
+        """将当前网络参数同步到所有 Arena Workers（共享内存模式）
 
-        优先使用 _cached_network_params_data（进化后缓存的 packed numpy），
-        首次同步时从 Agent 网络对象提取。
+        使用共享内存零拷贝传输网络数据，主进程填充一次，所有 Worker 通过共享内存访问。
         """
         if self._arena_worker_pool is None:
             return
@@ -524,7 +528,44 @@ class ParallelArenaTrainer:
                 )
                 continue
 
-        if network_params:
+        if not network_params:
+            return
+
+        # 使用共享内存同步
+        new_shm_memories: dict[AgentType, SharedNetworkMemory] = {}
+        try:
+            metadata_map: dict[AgentType, SharedNetworkMetadata] = {}
+
+            for agent_type, params in network_params.items():
+                shm_mem = SharedNetworkMemory()
+                metadata = shm_mem.create_and_fill(
+                    agent_type=agent_type,
+                    network_params=params,
+                    generation=self.generation,
+                )
+                metadata_map[agent_type] = metadata
+                new_shm_memories[agent_type] = shm_mem
+
+            # 发送元数据给所有 Worker，等待 ack
+            self._arena_worker_pool.attach_shared_networks(metadata_map)
+
+            # Worker 都已 ack，可以安全清理上一代的共享内存
+            for shm_mem in self._prev_shared_network_memories.values():
+                shm_mem.close_and_unlink()
+            self._prev_shared_network_memories.clear()
+
+            # 当前的变为上一代
+            self._prev_shared_network_memories = self._shared_network_memories
+            self._shared_network_memories = new_shm_memories
+
+        except Exception as e:
+            self.logger.warning(
+                f"共享内存同步失败，回退到 Queue 模式: {e}"
+            )
+            # 清理已创建的共享内存
+            for shm_mem in new_shm_memories.values():
+                shm_mem.close_and_unlink()
+            # 回退到原有模式
             self._arena_worker_pool.update_networks(network_params)
 
     # ========================================================================
@@ -1359,6 +1400,14 @@ class ParallelArenaTrainer:
         if self._arena_worker_pool is not None:
             self._arena_worker_pool.shutdown()
             self._arena_worker_pool = None
+
+        # 清理共享内存
+        for shm_mem in self._shared_network_memories.values():
+            shm_mem.close_and_unlink()
+        self._shared_network_memories.clear()
+        for shm_mem in self._prev_shared_network_memories.values():
+            shm_mem.close_and_unlink()
+        self._prev_shared_network_memories.clear()
 
         # 关闭进化 Worker 池
         if self.evolution_worker_pool is not None:

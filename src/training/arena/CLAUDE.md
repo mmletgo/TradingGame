@@ -22,6 +22,7 @@
 - `fitness_aggregator.py` - 适应度汇总器
 - `parallel_arena_trainer.py` - 多竞技场并行推理训练器
 - `shared_memory_ipc.py` - 共享内存 IPC 机制（零拷贝优化）
+- `shared_network_memory.py` - BatchNetworkData 共享内存生命周期管理（主进程创建填充，Worker 零拷贝附着）
 
 ## 核心类
 
@@ -300,6 +301,27 @@ _run_episode_local()
 
 - execute_worker.py: tick 级 IPC，每个 tick 主进程发送命令、Worker 执行、返回结果
 - arena_worker.py: episode 级 IPC，Worker 独立运行完整 episode，仅在进化时同步网络参数
+
+### SharedNetworkMetadata / SharedNetworkMemory (shared_network_memory.py)
+
+管理 BatchNetworkData 的共享内存生命周期。主进程创建共享内存并填充网络数据，Worker 进程通过共享内存名称附着到同一块内存实现零拷贝访问。
+
+**SharedNetworkMetadata**：轻量级数据类（~200 字节），通过 Queue 发送给 Worker，包含 shm_name、agent_type、网络维度信息和 generation。
+
+**SharedNetworkMemory 主要方法：**
+
+| 方法 | 描述 |
+|------|------|
+| `compute_buffer_size(num_networks, total_nodes, total_connections, total_outputs)` | 静态方法，调用 Cython 计算所需共享内存大小 |
+| `create_and_fill(agent_type, network_params, generation)` | 主进程调用：创建 SharedMemory，用 Cython fill_shared_memory_buffer 填充数据，返回 SharedNetworkMetadata |
+| `attach(metadata)` | Worker 调用：附着到已有共享内存，返回 memoryview |
+| `close()` | 关闭共享内存映射（不删除底层共享内存段） |
+| `unlink()` | 删除底层共享内存段（仅创建者调用） |
+| `close_and_unlink()` | 关闭并删除共享内存（先 unlink 再 close） |
+
+**生命周期：**
+- 主进程：`create_and_fill()` -> 发送 metadata 给 Worker -> Worker 使用完成 -> `close_and_unlink()`
+- Worker：收到 metadata -> `attach()` -> 使用 buffer -> `close()`
 
 ### SharedMemoryIPC (shared_memory_ipc.py)
 

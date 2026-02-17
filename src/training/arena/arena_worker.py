@@ -6,6 +6,7 @@ Worker 内部持有本地 BatchNetworkCache、ArenaState、MatchingEngine，
 
 通信协议：
 - update_networks: 主进程 -> Worker 发送新网络参数，Worker 更新本地缓存
+- attach_shared_networks: 主进程 -> Worker 发送共享内存元数据，Worker 零拷贝挂载
 - run_episode: 主进程 -> Worker 发送 episode 参数，Worker 独立运行并返回适应度结果
 - shutdown: 主进程 -> Worker 发送关闭命令
 """
@@ -35,6 +36,7 @@ from src.market.noise_trader.noise_trader import NoiseTrader
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.training.fast_math import log_normalize_signed, log_normalize_unsigned
 
+from .shared_network_memory import SharedNetworkMemory, SharedNetworkMetadata
 from .arena_state import (
     AgentAccountState,
     ArenaState,
@@ -2134,6 +2136,9 @@ def arena_worker_main(
     # 噪声交易者配置
     noise_trader_config = config.noise_trader
 
+    # 共享内存附着追踪
+    shm_attachments: dict[AgentType, SharedNetworkMemory] = {}
+
     worker_logger.info(f"Worker {worker_id} 初始化完成")
 
     try:
@@ -2144,6 +2149,37 @@ def arena_worker_main(
                 for agent_type, params in cmd_data.items():
                     if agent_type in caches and caches[agent_type] is not None:
                         caches[agent_type].update_networks_from_numpy(*params)
+                result_queue.put((worker_id, "ack"))
+
+            elif cmd_type == "attach_shared_networks":
+                # cmd_data 是 dict[AgentType, SharedNetworkMetadata]
+                metadata_map: dict[AgentType, SharedNetworkMetadata] = cmd_data
+
+                for agent_type, metadata in metadata_map.items():
+                    # 关闭旧的共享内存附着
+                    if agent_type in shm_attachments:
+                        shm_attachments[agent_type].close()
+
+                    # 创建新的附着
+                    shm_mem = SharedNetworkMemory()
+                    shm_buf = shm_mem.attach(metadata)
+                    shm_attachments[agent_type] = shm_mem
+
+                    # 将缓存挂载到共享内存
+                    if agent_type in caches and caches[agent_type] is not None:
+                        shm_array = np.frombuffer(shm_buf, dtype=np.uint8)
+                        caches[agent_type].attach_shared_memory(
+                            shm_array,
+                            metadata.num_networks,
+                            metadata.max_nodes,
+                            metadata.max_connections,
+                            metadata.max_inputs,
+                            metadata.max_outputs,
+                            metadata.total_nodes,
+                            metadata.total_connections,
+                            metadata.total_outputs,
+                        )
+
                 result_queue.put((worker_id, "ack"))
 
             elif cmd_type == "run_episode":
@@ -2192,6 +2228,13 @@ def arena_worker_main(
                     cache.clear()
                 except Exception:
                     pass
+        # 清理共享内存附着
+        for shm_mem in shm_attachments.values():
+            try:
+                shm_mem.close()
+            except Exception:
+                pass
+        shm_attachments.clear()
         worker_logger.info(f"Worker {worker_id} 退出")
 
 
@@ -2301,6 +2344,26 @@ class ArenaWorkerPool:
 
         for cmd_queue in self._cmd_queues:
             cmd_queue.put(("update_networks", network_params))
+        # 等待所有 Worker 确认
+        for _ in range(self._num_workers):
+            self._result_queue.get()
+
+    def attach_shared_networks(
+        self,
+        metadata_map: dict[AgentType, SharedNetworkMetadata],
+    ) -> None:
+        """通过共享内存同步网络参数给所有 Worker
+
+        发送轻量级元数据（~200字节/Worker），Worker 通过共享内存零拷贝访问网络数据。
+
+        Args:
+            metadata_map: 每种 Agent 类型的共享内存元数据
+        """
+        if not self._is_started:
+            self.start()
+
+        for cmd_queue in self._cmd_queues:
+            cmd_queue.put(("attach_shared_networks", metadata_map))
         # 等待所有 Worker 确认
         for _ in range(self._num_workers):
             self._result_queue.get()
