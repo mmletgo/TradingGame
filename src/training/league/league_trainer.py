@@ -1,4 +1,5 @@
 """联盟训练器"""
+
 from __future__ import annotations
 
 import gc
@@ -16,20 +17,28 @@ from src.core.log_engine.logger import get_logger
 from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
 from src.training.league.arena_allocator import ArenaAllocator, ArenaAllocation
 from src.training.league.config import LeagueTrainingConfig
-from src.training.league.league_fitness import LeagueFitnessAggregator, GeneralizationAdvantageStats
+from src.training.league.league_fitness import (
+    LeagueFitnessAggregator,
+    GeneralizationAdvantageStats,
+)
 from src.training.league.multi_gen_cache import MultiGenerationNetworkCache
 from src.training.league.opponent_pool_manager import OpponentPoolManager
-from src.training.population import SubPopulationManager, _serialize_genomes_numpy, _serialize_species_data
+from src.training.population import (
+    SubPopulationManager,
+    _serialize_genomes_numpy,
+    _serialize_species_data,
+)
 
 
 @dataclass
 class SpeciesFreezeState:
     """物种冻结状态"""
+
     is_frozen: bool = False
-    freeze_generation: int = 0           # 冻结时的代数
+    freeze_generation: int = 0  # 冻结时的代数
     freeze_baseline_fitness: float = 0.0  # 冻结时的 baseline 平均适应度
-    freeze_elite_fitness: float = 0.0     # 冻结时的精英 baseline 平均适应度
-    thaw_count: int = 0                   # 解冻次数
+    freeze_elite_fitness: float = 0.0  # 冻结时的精英 baseline 平均适应度
+    thaw_count: int = 0  # 解冻次数
 
 
 class LeagueTrainer(ParallelArenaTrainer):
@@ -171,7 +180,10 @@ class LeagueTrainer(ParallelArenaTrainer):
                         needs_sync = True
                         break
             else:
-                if population._genomes_dirty and population._pending_genome_data is None:
+                if (
+                    population._genomes_dirty
+                    and population._pending_genome_data is None
+                ):
                     needs_sync = True
             if needs_sync:
                 break
@@ -186,7 +198,9 @@ class LeagueTrainer(ParallelArenaTrainer):
                 continue
             if isinstance(population, SubPopulationManager):
                 if sub_pop_id < len(population.sub_populations):
-                    population.sub_populations[sub_pop_id]._pending_genome_data = genome_data
+                    population.sub_populations[sub_pop_id]._pending_genome_data = (
+                        genome_data
+                    )
             else:
                 if sub_pop_id == 0:
                     population._pending_genome_data = genome_data
@@ -225,14 +239,17 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self.pool_manager.has_any_historical_opponents():
             frozen_types = {t for t, s in self._freeze_states.items() if s.is_frozen}
             self._current_allocation = self.arena_allocator.allocate(
-                self.pool_manager, frozen_types if frozen_types else None,
+                self.pool_manager,
+                frozen_types if frozen_types else None,
                 current_generation=self.generation,
             )
         else:
             # 对手池为空时，使用默认分配
             self._current_allocation = self.arena_allocator.allocate_no_historical()
 
-        self.logger.debug(f"竞技场分配完成: {len(self._current_allocation.assignments)} 个竞技场")
+        self.logger.debug(
+            f"竞技场分配完成: {len(self._current_allocation.assignments)} 个竞技场"
+        )
 
         # 清空当前轮次适应度数据
         self._current_round_arena_fitnesses.clear()
@@ -276,7 +293,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         self.pool_manager.cleanup_all(self.generation)
 
         # 添加联盟训练统计
-        round_stats['pool_sizes'] = self.pool_manager.get_pool_sizes()
+        round_stats["pool_sizes"] = self.pool_manager.get_pool_sizes()
 
         return round_stats
 
@@ -287,7 +304,7 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         for assignment in self._current_allocation.assignments:
             for agent_type, source_config in assignment.agent_sources.items():
-                if source_config.source == 'historical' and source_config.entry_id:
+                if source_config.source == "historical" and source_config.entry_id:
                     self.multi_cache.ensure_cached(
                         agent_type,
                         source_config.entry_id,
@@ -300,15 +317,15 @@ class LeagueTrainer(ParallelArenaTrainer):
         has_historical: bool,
     ) -> None:
         """计算并记录泛化优势比"""
-        round_stats['has_historical_opponents'] = has_historical
+        round_stats["has_historical_opponents"] = has_historical
 
         if not has_historical or self._current_allocation is None:
-            round_stats['generalization_advantage'] = None
-            round_stats['baseline_avg_fitness'] = None
-            round_stats['generalization_avg_fitness'] = None
-            round_stats['is_converged'] = False
-            round_stats['converged_by_type'] = None
-            round_stats['first_convergence_generation'] = None
+            round_stats["generalization_advantage"] = None
+            round_stats["baseline_avg_fitness"] = None
+            round_stats["generalization_avg_fitness"] = None
+            round_stats["is_converged"] = False
+            round_stats["converged_by_type"] = None
+            round_stats["first_convergence_generation"] = None
             return
 
         # 多 episode 时取平均
@@ -316,7 +333,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         if episodes > 1:
             for arena_id in self._current_round_arena_fitnesses:
                 for agent_type in self._current_round_arena_fitnesses[arena_id]:
-                    self._current_round_arena_fitnesses[arena_id][agent_type] /= episodes
+                    self._current_round_arena_fitnesses[arena_id][
+                        agent_type
+                    ] /= episodes
 
         # 计算泛化优势比
         stats = self.fitness_aggregator.compute_generalization_advantage(
@@ -327,22 +346,24 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         if stats is not None:
             # 种群级别
-            round_stats['generalization_advantage'] = stats.advantages
-            round_stats['baseline_avg_fitness'] = stats.baseline_avg
-            round_stats['generalization_avg_fitness'] = stats.generalization_avg
+            round_stats["generalization_advantage"] = stats.advantages
+            round_stats["baseline_avg_fitness"] = stats.baseline_avg
+            round_stats["generalization_avg_fitness"] = stats.generalization_avg
 
             # 精英级别
-            round_stats['elite_generalization_advantage'] = stats.elite_advantages
-            round_stats['elite_baseline_avg_fitness'] = stats.elite_baseline_avg
-            round_stats['elite_generalization_avg_fitness'] = stats.elite_generalization_avg
+            round_stats["elite_generalization_advantage"] = stats.elite_advantages
+            round_stats["elite_baseline_avg_fitness"] = stats.elite_baseline_avg
+            round_stats["elite_generalization_avg_fitness"] = (
+                stats.elite_generalization_avg
+            )
 
             is_converged, pop_converged_by_type, elite_converged_by_type = (
                 self.fitness_aggregator.check_convergence()
             )
-            round_stats['is_converged'] = is_converged
-            round_stats['pop_converged_by_type'] = pop_converged_by_type
-            round_stats['elite_converged_by_type'] = elite_converged_by_type
-            round_stats['first_convergence_generation'] = (
+            round_stats["is_converged"] = is_converged
+            round_stats["pop_converged_by_type"] = pop_converged_by_type
+            round_stats["elite_converged_by_type"] = elite_converged_by_type
+            round_stats["first_convergence_generation"] = (
                 self.fitness_aggregator.get_first_convergence_generation()
             )
 
@@ -351,18 +372,18 @@ class LeagueTrainer(ParallelArenaTrainer):
             )
         else:
             # 种群级别
-            round_stats['generalization_advantage'] = None
-            round_stats['baseline_avg_fitness'] = None
-            round_stats['generalization_avg_fitness'] = None
+            round_stats["generalization_advantage"] = None
+            round_stats["baseline_avg_fitness"] = None
+            round_stats["generalization_avg_fitness"] = None
             # 精英级别
-            round_stats['elite_generalization_advantage'] = None
-            round_stats['elite_baseline_avg_fitness'] = None
-            round_stats['elite_generalization_avg_fitness'] = None
+            round_stats["elite_generalization_advantage"] = None
+            round_stats["elite_baseline_avg_fitness"] = None
+            round_stats["elite_generalization_avg_fitness"] = None
             # 收敛状态
-            round_stats['is_converged'] = False
-            round_stats['pop_converged_by_type'] = None
-            round_stats['elite_converged_by_type'] = None
-            round_stats['first_convergence_generation'] = None
+            round_stats["is_converged"] = False
+            round_stats["pop_converged_by_type"] = None
+            round_stats["elite_converged_by_type"] = None
+            round_stats["first_convergence_generation"] = None
 
     def _check_freeze_thaw(self, round_stats: dict[str, Any]) -> None:
         """检查并执行冻结/解冻逻辑
@@ -374,8 +395,8 @@ class LeagueTrainer(ParallelArenaTrainer):
         Args:
             round_stats: 当前轮次统计信息
         """
-        pop_converged = round_stats.get('pop_converged_by_type')
-        elite_converged = round_stats.get('elite_converged_by_type')
+        pop_converged = round_stats.get("pop_converged_by_type")
+        elite_converged = round_stats.get("elite_converged_by_type")
         stats_available = pop_converged is not None and elite_converged is not None
 
         # 1. 检查未冻结物种是否需要冻结
@@ -386,14 +407,18 @@ class LeagueTrainer(ParallelArenaTrainer):
                     continue
 
                 # 双重收敛检查
-                is_dual_converged = (
-                    pop_converged.get(agent_type, False) and
-                    elite_converged.get(agent_type, False)
-                )
-                if is_dual_converged and self.generation >= self.league_config.min_freeze_generation:
+                is_dual_converged = pop_converged.get(
+                    agent_type, False
+                ) and elite_converged.get(agent_type, False)
+                if (
+                    is_dual_converged
+                    and self.generation >= self.league_config.min_freeze_generation
+                ):
                     # 获取当前 baseline 适应度作为基准
-                    baseline_avg = round_stats.get('baseline_avg_fitness', {})
-                    elite_baseline_avg = round_stats.get('elite_baseline_avg_fitness', {})
+                    baseline_avg = round_stats.get("baseline_avg_fitness", {})
+                    elite_baseline_avg = round_stats.get(
+                        "elite_baseline_avg_fitness", {}
+                    )
 
                     state.is_frozen = True
                     state.freeze_generation = self.generation
@@ -416,7 +441,7 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 3. 检查是否所有物种都已冻结
         all_frozen = all(s.is_frozen for s in self._freeze_states.values())
-        round_stats['all_species_frozen'] = all_frozen
+        round_stats["all_species_frozen"] = all_frozen
         if all_frozen:
             self.logger.info(">>> 所有物种已冻结，训练即将完成 <<<")
 
@@ -439,7 +464,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         threshold = self.league_config.freeze_thaw_threshold
 
         # 获取当前 baseline 适应度
-        baseline_avg = round_stats.get('baseline_avg_fitness', {})
+        baseline_avg = round_stats.get("baseline_avg_fitness", {})
         current_fitness = baseline_avg.get(agent_type, 0.0)
 
         # 计算下降比例
@@ -464,8 +489,12 @@ class LeagueTrainer(ParallelArenaTrainer):
                 f"累计解冻 {state.thaw_count} 次"
             )
         else:
+            if drop_ratio < 0:
+                direction = f"上升 {-drop_ratio:.2%}"
+            else:
+                direction = f"下降 {drop_ratio:.2%}"
             self.logger.info(
-                f"物种 {agent_type.name} 保持冻结 (下降 {drop_ratio:.2%} <= {threshold:.2%})"
+                f"物种 {agent_type.name} 保持冻结 ({direction}, 未下降超过阈值 {threshold:.2%})"
             )
 
     def _log_generalization_advantage(
@@ -481,7 +510,9 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 构建标题行
         if first_conv_gen is not None:
-            lines = [f"第 {stats.generation} 代泛化优势比 (首次收敛于第 {first_conv_gen} 代):"]
+            lines = [
+                f"第 {stats.generation} 代泛化优势比 (首次收敛于第 {first_conv_gen} 代):"
+            ]
         else:
             lines = [f"第 {stats.generation} 代泛化优势比:"]
 
@@ -553,13 +584,16 @@ class LeagueTrainer(ParallelArenaTrainer):
             genome_data: dict[int, tuple] = {}
 
             # 检查是否是 SubPopulationManager
-            if hasattr(pop_or_manager, 'sub_populations'):
+            if hasattr(pop_or_manager, "sub_populations"):
                 # SubPopulationManager
                 for i, sub_pop in enumerate(pop_or_manager.sub_populations):
                     # 优先使用 pending 数据
-                    if getattr(sub_pop, '_genomes_dirty', False) and getattr(sub_pop, '_pending_genome_data', None) is not None:
+                    if (
+                        getattr(sub_pop, "_genomes_dirty", False)
+                        and getattr(sub_pop, "_pending_genome_data", None) is not None
+                    ):
                         genome_data[i] = sub_pop._pending_genome_data
-                    elif hasattr(sub_pop, 'neat_pop'):
+                    elif hasattr(sub_pop, "neat_pop"):
                         genomes = sub_pop.neat_pop.population
                         genome_data[i] = _serialize_genomes_numpy(genomes)
                 sub_pop_counts[agent_type] = len(pop_or_manager.sub_populations)
@@ -568,9 +602,13 @@ class LeagueTrainer(ParallelArenaTrainer):
                 )
             else:
                 # 单个 Population - 优先使用 pending 数据
-                if getattr(pop_or_manager, '_genomes_dirty', False) and getattr(pop_or_manager, '_pending_genome_data', None) is not None:
+                if (
+                    getattr(pop_or_manager, "_genomes_dirty", False)
+                    and getattr(pop_or_manager, "_pending_genome_data", None)
+                    is not None
+                ):
                     genome_data[0] = pop_or_manager._pending_genome_data
-                elif hasattr(pop_or_manager, 'neat_pop'):
+                elif hasattr(pop_or_manager, "neat_pop"):
                     genomes = pop_or_manager.neat_pop.population
                     genome_data[0] = _serialize_genomes_numpy(genomes)
                 sub_pop_counts[agent_type] = 1
@@ -581,7 +619,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             # 计算平均适应度
             agents = (
                 pop_or_manager.agents
-                if hasattr(pop_or_manager, 'agents')
+                if hasattr(pop_or_manager, "agents")
                 else [a for sp in pop_or_manager.sub_populations for a in sp.agents]
             )
             fitnesses = [
@@ -589,7 +627,9 @@ class LeagueTrainer(ParallelArenaTrainer):
                 for a in agents
                 if a.brain.get_genome().fitness is not None
             ]
-            fitness_map[agent_type] = sum(fitnesses) / len(fitnesses) if fitnesses else 0.0
+            fitness_map[agent_type] = (
+                sum(fitnesses) / len(fitnesses) if fitnesses else 0.0
+            )
 
         # === 异步 I/O（后台线程） ===
         generation = self.generation
@@ -602,13 +642,14 @@ class LeagueTrainer(ParallelArenaTrainer):
                     genome_data_map=genome_data_map,
                     network_data_map=None,
                     fitness_map=fitness_map,
-                    source='main_agents',
-                    add_reason='milestone',
+                    source="main_agents",
+                    add_reason="milestone",
                     sub_population_counts=sub_pop_counts,
                     agent_counts=agent_counts,
                 )
             except Exception:
                 import traceback
+
                 traceback.print_exc()
 
         self._milestone_thread = threading.Thread(
@@ -653,12 +694,20 @@ class LeagueTrainer(ParallelArenaTrainer):
                     "sub_populations": [],
                 }
                 for sub_pop in population.sub_populations:
-                    if sub_pop._genomes_dirty and sub_pop._pending_genome_data is not None:
+                    if (
+                        sub_pop._genomes_dirty
+                        and sub_pop._pending_genome_data is not None
+                    ):
                         genome_data = sub_pop._pending_genome_data
-                        species_data = sub_pop._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+                        species_data = sub_pop._pending_species_data or (
+                            np.array([], dtype=np.int32),
+                            np.array([], dtype=np.int32),
+                        )
                     else:
                         sub_pop._cleanup_neat_history_light()
-                        genome_data = _serialize_genomes_numpy(sub_pop.neat_pop.population)
+                        genome_data = _serialize_genomes_numpy(
+                            sub_pop.neat_pop.population
+                        )
                         species_data = _serialize_species_data(sub_pop.neat_pop.species)
                     sub_pop_data = {
                         "generation": sub_pop.generation,
@@ -668,12 +717,20 @@ class LeagueTrainer(ParallelArenaTrainer):
                     pop_data["sub_populations"].append(sub_pop_data)
                 checkpoint_data["populations"][agent_type] = pop_data
             else:
-                if population._genomes_dirty and population._pending_genome_data is not None:
+                if (
+                    population._genomes_dirty
+                    and population._pending_genome_data is not None
+                ):
                     genome_data = population._pending_genome_data
-                    species_data = population._pending_species_data or (np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+                    species_data = population._pending_species_data or (
+                        np.array([], dtype=np.int32),
+                        np.array([], dtype=np.int32),
+                    )
                 else:
                     population._cleanup_neat_history_light()
-                    genome_data = _serialize_genomes_numpy(population.neat_pop.population)
+                    genome_data = _serialize_genomes_numpy(
+                        population.neat_pop.population
+                    )
                     species_data = _serialize_species_data(population.neat_pop.species)
                 checkpoint_data["populations"][agent_type] = {
                     "generation": population.generation,
@@ -682,24 +739,28 @@ class LeagueTrainer(ParallelArenaTrainer):
                 }
 
         # 添加联盟训练数据
-        checkpoint_data['league_training'] = {
-            'generation': self.generation,
-            'pool_sizes': self.pool_manager.get_pool_sizes() if self.pool_manager else {},
-            'last_injection_generation': self._last_injection_generation,
-            'freeze_states': {
+        checkpoint_data["league_training"] = {
+            "generation": self.generation,
+            "pool_sizes": (
+                self.pool_manager.get_pool_sizes() if self.pool_manager else {}
+            ),
+            "last_injection_generation": self._last_injection_generation,
+            "freeze_states": {
                 agent_type.value: {
-                    'is_frozen': state.is_frozen,
-                    'freeze_generation': state.freeze_generation,
-                    'freeze_baseline_fitness': state.freeze_baseline_fitness,
-                    'freeze_elite_fitness': state.freeze_elite_fitness,
-                    'thaw_count': state.thaw_count,
+                    "is_frozen": state.is_frozen,
+                    "freeze_generation": state.freeze_generation,
+                    "freeze_baseline_fitness": state.freeze_baseline_fitness,
+                    "freeze_elite_fitness": state.freeze_elite_fitness,
+                    "thaw_count": state.thaw_count,
                 }
                 for agent_type, state in self._freeze_states.items()
             },
         }
 
         # 序列化到内存字节
-        checkpoint_bytes: bytes = pickle.dumps(checkpoint_data, protocol=pickle.HIGHEST_PROTOCOL)
+        checkpoint_bytes: bytes = pickle.dumps(
+            checkpoint_data, protocol=pickle.HIGHEST_PROTOCOL
+        )
 
         # 释放原始数据
         del checkpoint_data
@@ -717,7 +778,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             p = Path(checkpoint_path)
             p.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(p, 'wb') as f:
+            with open(p, "wb") as f:
                 f.write(data)
 
             # 保存对手池索引
@@ -744,27 +805,33 @@ class LeagueTrainer(ParallelArenaTrainer):
         super().load_checkpoint(path)
 
         # 加载联盟训练数据（plain pickle）
-        with open(path, 'rb') as f:
+        with open(path, "rb") as f:
             checkpoint_data = pickle.load(f)
 
-        if 'league_training' in checkpoint_data:
-            league_data = checkpoint_data['league_training']
-            self._last_injection_generation = league_data.get('last_injection_generation', 0)
+        if "league_training" in checkpoint_data:
+            league_data = checkpoint_data["league_training"]
+            self._last_injection_generation = league_data.get(
+                "last_injection_generation", 0
+            )
 
             # 恢复冻结状态
-            freeze_states_data = league_data.get('freeze_states', {})
+            freeze_states_data = league_data.get("freeze_states", {})
             for agent_type in AgentType:
                 data = freeze_states_data.get(agent_type.value, {})
                 if data:
                     state = self._freeze_states[agent_type]
-                    state.is_frozen = data.get('is_frozen', False)
-                    state.freeze_generation = data.get('freeze_generation', 0)
-                    state.freeze_baseline_fitness = data.get('freeze_baseline_fitness', 0.0)
-                    state.freeze_elite_fitness = data.get('freeze_elite_fitness', 0.0)
-                    state.thaw_count = data.get('thaw_count', 0)
+                    state.is_frozen = data.get("is_frozen", False)
+                    state.freeze_generation = data.get("freeze_generation", 0)
+                    state.freeze_baseline_fitness = data.get(
+                        "freeze_baseline_fitness", 0.0
+                    )
+                    state.freeze_elite_fitness = data.get("freeze_elite_fitness", 0.0)
+                    state.thaw_count = data.get("thaw_count", 0)
 
             if any(s.is_frozen for s in self._freeze_states.values()):
-                frozen_names = [t.name for t, s in self._freeze_states.items() if s.is_frozen]
+                frozen_names = [
+                    t.name for t, s in self._freeze_states.items() if s.is_frozen
+                ]
                 self.logger.info(f"已恢复冻结状态: {', '.join(frozen_names)}")
 
         # 加载对手池
@@ -825,7 +892,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                 stats = self.run_round(episode_callback=episode_callback)
 
                 # 所有物种冻结时退出训练
-                if stats.get('all_species_frozen', False):
+                if stats.get("all_species_frozen", False):
                     self.logger.info("所有物种已冻结，训练完成")
                     # 执行回调（round_count 会在下面自然递增）
                     if checkpoint_callback:
