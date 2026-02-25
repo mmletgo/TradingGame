@@ -163,9 +163,26 @@ class LeagueTrainer(ParallelArenaTrainer):
                 pop._cached_network_params_data = None
                 continue
 
-            # 回退：使用上一轮保存的参数（用于 run_round 开始时的手动同步）
+            # 回退1：使用上一轮保存的参数（用于 run_round 开始时的手动同步）
             if agent_type in self._current_gen_network_params:
                 network_params[agent_type] = self._current_gen_network_params[agent_type]
+                continue
+
+            # 回退2：首次同步（setup 阶段），从 Agent 的 brain.network 提取参数
+            try:
+                agents = pop.agents
+                params_list: list[dict[str, np.ndarray | int]] = []
+                for agent in agents:
+                    params_list.append(agent.brain.network.get_params())
+                packed = _pack_network_params_numpy(params_list)
+                network_params[agent_type] = packed
+                params_list.clear()
+                del params_list
+            except Exception as e:
+                self.logger.warning(
+                    f"无法提取 {agent_type.value} 的网络参数: {e}"
+                )
+                continue
 
         if not network_params:
             return
