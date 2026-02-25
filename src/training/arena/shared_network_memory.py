@@ -171,7 +171,7 @@ class SharedNetworkMemory:
         Returns:
             共享内存的 buffer (memoryview)
         """
-        self._shm = SharedMemory(name=metadata.shm_name, create=False)
+        self._shm = SharedMemory(name=metadata.shm_name, create=False, track=False)
         self._is_creator = False
         self._agent_type = metadata.agent_type
         return self._shm.buf

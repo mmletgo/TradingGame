@@ -808,7 +808,7 @@ class SharedMemoryIPC:
             if shm_name is None:
                 raise ValueError("连接模式需要指定 shm_name")
             self._shm_name = shm_name
-            self._shm = shared_memory.SharedMemory(name=shm_name, create=False)
+            self._shm = shared_memory.SharedMemory(name=shm_name, create=False, track=False)
             logger.info(f"连接共享内存: {self._shm_name}")
 
         shm_buf = self._shm.buf
