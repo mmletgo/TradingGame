@@ -27,6 +27,7 @@ class OpponentMetadata:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
     agent_count: int = 0
     sub_population_count: int = 1
+    has_pre_evolution_fitness: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -57,6 +58,8 @@ class OpponentEntry:
     genome_data: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] | None
     # {sub_pop_id: network_params_tuple} - 可选，延迟加载
     network_data: dict[int, tuple] | None = None
+    # 预进化适应度数据: {sub_pop_id: fitness_array}
+    pre_evolution_fitness: dict[int, np.ndarray] | None = None
 
     @property
     def entry_id(self) -> str:
@@ -113,6 +116,19 @@ class OpponentEntry:
                 network_arrays[f"sub_{sub_pop_id}_conn_weights"] = params_tuple[9]
                 network_arrays[f"sub_{sub_pop_id}_output_indices"] = params_tuple[10]
             np.savez(networks_path, **network_arrays)
+
+        # 4. 保存预进化适应度（如果有）
+        if self.pre_evolution_fitness is not None:
+            fitness_path = entry_dir / "pre_evolution_fitness.npz"
+            fitness_arrays: dict[str, np.ndarray] = {}
+            for sub_pop_id, fitness_arr in self.pre_evolution_fitness.items():
+                fitness_arrays[f"sub_{sub_pop_id}_fitness"] = fitness_arr
+            np.savez(fitness_path, **fitness_arrays)
+            self.metadata.has_pre_evolution_fitness = True
+            # 重新保存元数据（更新 has_pre_evolution_fitness 标记）
+            metadata_path = entry_dir / "metadata.json"
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(self.metadata.to_dict(), f, indent=2, ensure_ascii=False)
 
     @classmethod
     def load(cls, entry_dir: Path, load_networks: bool = False) -> OpponentEntry:
@@ -174,10 +190,23 @@ class OpponentEntry:
                             np.array(network_arrays[f"{prefix}output_indices"]),
                         )
 
+        # 4. 加载预进化适应度（如果有）
+        pre_evolution_fitness: dict[int, np.ndarray] | None = None
+        if metadata.has_pre_evolution_fitness:
+            fitness_path = entry_dir / "pre_evolution_fitness.npz"
+            if fitness_path.exists():
+                with np.load(fitness_path) as fitness_arrays:
+                    pre_evolution_fitness = {}
+                    for key in fitness_arrays.files:
+                        if key.startswith("sub_") and key.endswith("_fitness"):
+                            sub_pop_id = int(key.split("_")[1])
+                            pre_evolution_fitness[sub_pop_id] = np.array(fitness_arrays[key])
+
         return cls(
             metadata=metadata,
             genome_data=genome_data,
             network_data=network_data,
+            pre_evolution_fitness=pre_evolution_fitness,
         )
 
     def get_total_agent_count(self) -> int:

@@ -38,10 +38,8 @@ from src.training.league.config import LeagueTrainingConfig
 from src.training.league.opponent_pool import OpponentPool
 from src.training.league.opponent_pool_manager import OpponentPoolManager
 from src.training.league.arena_allocator import (
-    ArenaAllocator,
-    ArenaAssignment,
-    AgentSourceConfig,
-    ArenaAllocation,
+    HybridArenaAllocator,
+    HybridSamplingResult,
 )
 
 

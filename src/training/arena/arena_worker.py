@@ -86,6 +86,8 @@ class AgentInfo:
         maintenance_margin_rate: 维持保证金率
         maker_fee_rate: 挂单费率
         taker_fee_rate: 吃单费率
+        is_historical: 是否为历史代Agent
+        historical_entry_id: 历史entry ID（用于胜率更新）
     """
 
     agent_id: int
@@ -97,6 +99,8 @@ class AgentInfo:
     maintenance_margin_rate: float
     maker_fee_rate: float
     taker_fee_rate: float
+    is_historical: bool = False
+    historical_entry_id: str = ""
 
 
 @dataclass
@@ -108,12 +112,16 @@ class ArenaEpisodeStats:
         end_tick: 结束时的 tick 数
         high_price: episode 最高价
         low_price: episode 最低价
+        historical_trade_ratio: 历史Agent成交占比
+        historical_survival_rate: 历史Agent存活率
     """
 
     end_reason: str | None
     end_tick: int
     high_price: float
     low_price: float
+    historical_trade_ratio: float = 0.0
+    historical_survival_rate: float = 0.0
 
 
 @dataclass
@@ -2182,6 +2190,29 @@ def arena_worker_main(
 
                 result_queue.put((worker_id, "ack"))
 
+            elif cmd_type == "update_agent_infos":
+                # 动态更新 agent_infos（历史Agent注入时使用）
+                new_agent_infos: list[AgentInfo] = cmd_data
+                agent_infos = new_agent_infos
+
+                # 重建所有依赖 agent_infos 的数据结构
+                caches = _create_worker_caches(config, agent_infos)
+                arena_states = _create_worker_arena_states(arena_ids, config, agent_infos)
+                type_groups = _build_worker_type_groups(agent_infos)
+                buffers_list = [_create_market_state_buffers() for _ in arena_ids]
+                pop_total_counts = _compute_pop_total_counts(agent_infos)
+                agent_infos_by_sub_pop = _group_agent_infos_by_sub_pop(agent_infos)
+
+                # 清理旧的共享内存附着
+                for shm_mem in shm_attachments.values():
+                    try:
+                        shm_mem.close()
+                    except Exception:
+                        pass
+                shm_attachments.clear()
+
+                result_queue.put((worker_id, "ack"))
+
             elif cmd_type == "run_episode":
                 episode_length: int = cmd_data["episode_length"]
                 num_episodes: int = cmd_data["num_episodes"]
@@ -2364,6 +2395,27 @@ class ArenaWorkerPool:
 
         for cmd_queue in self._cmd_queues:
             cmd_queue.put(("attach_shared_networks", metadata_map))
+        # 等待所有 Worker 确认
+        for _ in range(self._num_workers):
+            self._result_queue.get()
+
+    def update_agent_infos(
+        self,
+        new_agent_infos: list[AgentInfo],
+    ) -> None:
+        """动态更新 Agent 信息（历史Agent注入时使用）
+
+        重建 Worker 内部的所有依赖数据结构。
+
+        Args:
+            new_agent_infos: 新的 Agent 信息列表
+        """
+        if not self._is_started:
+            self.start()
+
+        self._agent_infos = new_agent_infos
+        for cmd_queue in self._cmd_queues:
+            cmd_queue.put(("update_agent_infos", new_agent_infos))
         # 等待所有 Worker 确认
         for _ in range(self._num_workers):
             self._result_queue.get()

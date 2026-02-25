@@ -1,36 +1,33 @@
-"""联盟适应度汇总器"""
+"""混合竞技场适应度汇总器"""
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
-from src.training.league.arena_allocator import ArenaAllocation
 
 
 @dataclass
-class GeneralizationAdvantageStats:
-    """单代泛化优势比统计"""
+class GenerationalComparisonStats:
+    """代际适应度对比统计"""
+
     generation: int
-    # 种群级别
-    advantages: dict[AgentType, float]          # 种群泛化优势比
-    baseline_avg: dict[AgentType, float]        # 种群基准平均适应度
-    generalization_avg: dict[AgentType, float]  # 种群泛化平均适应度
-    # 精英级别
-    elite_advantages: dict[AgentType, float]          # 精英泛化优势比
-    elite_baseline_avg: dict[AgentType, float]        # 精英基准平均适应度
-    elite_generalization_avg: dict[AgentType, float]  # 精英泛化平均适应度
+    current_avg_fitness: dict[AgentType, float]  # 本代平均适应度
+    previous_avg_fitness: dict[AgentType, float]  # 上一代平均适应度
+    improvement: dict[AgentType, float]  # 提升量
+    elite_current_avg: dict[AgentType, float]  # 本代精英平均
+    elite_previous_avg: dict[AgentType, float]  # 上一代精英平均
+    elite_improvement: dict[AgentType, float]  # 精英提升量
 
 
-class LeagueFitnessAggregator:
-    """联盟适应度汇总器
+class HybridFitnessAggregator:
+    """混合竞技场适应度汇总器
 
-    按类型和角色汇总来自不同竞技场的适应度数据。
-
-    Main Agents 的适应度来自基准竞技场和泛化测试竞技场。
+    所有竞技场使用相同的Agent集合（当前代+历史代精英），
+    适应度使用简单平均汇总。代际对比作为监控指标。
     """
 
     def __init__(self, config: LeagueTrainingConfig) -> None:
@@ -41,165 +38,49 @@ class LeagueFitnessAggregator:
         """
         self.config = config
 
-        # 泛化优势比历史
-        self._advantage_history: deque[GeneralizationAdvantageStats] = deque(
-            maxlen=config.generalization_advantage_window
+        # 代际对比历史
+        self._comparison_history: deque[GenerationalComparisonStats] = deque(
+            maxlen=config.generational_comparison_window
         )
 
-        # 首次收敛的代数（所有物种都收敛时记录）
+        # 每代平均适应度历史（用于收敛判断）
+        self._fitness_history: deque[dict[AgentType, float]] = deque(
+            maxlen=config.generational_comparison_window
+        )
+        self._elite_fitness_history: deque[dict[AgentType, float]] = deque(
+            maxlen=config.generational_comparison_window
+        )
+
+        # 首次收敛的代数
         self._first_convergence_generation: int | None = None
 
-    def aggregate_main_fitness(
+    def aggregate_fitness(
         self,
-        agent_type: AgentType,
-        baseline_fitnesses: list[np.ndarray],
-        generalization_fitnesses: list[np.ndarray],
-    ) -> np.ndarray:
-        """计算 Main Agents 的最终适应度
-
-        使用加权平均汇总基准竞技场和泛化测试竞技场的适应度。
-
-        Args:
-            agent_type: Agent 类型
-            baseline_fitnesses: 基准竞技场中该类型的适应度数组列表
-            generalization_fitnesses: 泛化测试竞技场中该类型的适应度数组列表
-
-        Returns:
-            该类型所有个体的最终适应度数组
-        """
-        if not baseline_fitnesses and not generalization_fitnesses:
-            return np.array([])
-
-        # 确定数组大小
-        sample_arr = baseline_fitnesses[0] if baseline_fitnesses else generalization_fitnesses[0]
-        n_agents = len(sample_arr)
-
-        strategy = self.config.fitness_strategy
-
-        if strategy == 'simple':
-            # 简单平均
-            all_fitnesses = baseline_fitnesses + generalization_fitnesses
-            return np.mean(all_fitnesses, axis=0)
-
-        elif strategy == 'weighted_average':
-            # 加权平均
-            baseline_weight = self.config.baseline_weight
-            generalization_weight = self.config.generalization_weight
-
-            total_fitness = np.zeros(n_agents, dtype=np.float64)
-            total_weight = 0.0
-
-            for fitness in baseline_fitnesses:
-                total_fitness += fitness * baseline_weight
-                total_weight += baseline_weight
-
-            for fitness in generalization_fitnesses:
-                total_fitness += fitness * generalization_weight
-                total_weight += generalization_weight
-
-            # 【内存泄漏修复】计算结果后删除中间变量
-            if total_weight > 0:
-                result = total_fitness / total_weight
-            else:
-                result = np.zeros(n_agents, dtype=np.float64)
-            del total_fitness
-            return result
-
-        elif strategy == 'min':
-            # 取最小值（保守策略）
-            all_fitnesses = baseline_fitnesses + generalization_fitnesses
-            return np.min(all_fitnesses, axis=0)
-
-        else:
-            # 默认使用加权平均
-            return self.aggregate_main_fitness(
-                agent_type,
-                baseline_fitnesses,
-                generalization_fitnesses,
-            )
-
-    def collect_fitness_by_role(
-        self,
-        allocation: ArenaAllocation,
         arena_fitnesses: dict[int, dict[AgentType, np.ndarray]],
-    ) -> dict[str, dict[AgentType, list[np.ndarray]]]:
-        """按角色收集适应度
-
-        根据竞技场分配方案，将各竞技场的适应度分配到对应的角色。
+    ) -> dict[AgentType, np.ndarray]:
+        """简单平均所有竞技场的适应度
 
         Args:
-            allocation: 竞技场分配方案
             arena_fitnesses: {arena_id: {AgentType: fitness_array}}
 
         Returns:
-            {
-                'main_baseline': {AgentType: [fitness_arrays]},
-                'main_generalization': {AgentType: [fitness_arrays]},
-            }
+            {AgentType: averaged_fitness_array}
         """
-        result: dict[str, dict[AgentType, list[np.ndarray]]] = {
-            'main_baseline': {t: [] for t in AgentType},
-            'main_generalization': {t: [] for t in AgentType},
-        }
+        if not arena_fitnesses:
+            return {}
 
-        # 基准竞技场：所有类型都参与 Main 适应度
-        for arena_id in allocation.baseline_arena_ids:
-            if arena_id not in arena_fitnesses:
-                continue
-            for agent_type in AgentType:
-                if agent_type in arena_fitnesses[arena_id]:
-                    result['main_baseline'][agent_type].append(
-                        arena_fitnesses[arena_id][agent_type]
-                    )
+        # 收集每种类型的所有适应度
+        collected: dict[AgentType, list[np.ndarray]] = {t: [] for t in AgentType}
+        for arena_id, fitness_by_type in arena_fitnesses.items():
+            for agent_type, fitness_arr in fitness_by_type.items():
+                collected[agent_type].append(fitness_arr)
 
-        # 泛化测试竞技场：只有目标类型参与 Main 适应度
-        for agent_type, arena_ids in allocation.generalization_arena_ids.items():
-            for arena_id in arena_ids:
-                if arena_id not in arena_fitnesses:
-                    continue
-                if agent_type in arena_fitnesses[arena_id]:
-                    result['main_generalization'][agent_type].append(
-                        arena_fitnesses[arena_id][agent_type]
-                    )
+        result: dict[AgentType, np.ndarray] = {}
+        for agent_type, arrays in collected.items():
+            if arrays:
+                result[agent_type] = np.mean(arrays, axis=0).astype(np.float32)
 
-        return result
-
-    def compute_all_fitness(
-        self,
-        allocation: ArenaAllocation,
-        arena_fitnesses: dict[int, dict[AgentType, np.ndarray]],
-    ) -> dict[str, dict[AgentType, np.ndarray]]:
-        """计算所有角色的最终适应度
-
-        Args:
-            allocation: 竞技场分配方案
-            arena_fitnesses: {arena_id: {AgentType: fitness_array}}
-
-        Returns:
-            {
-                'main': {AgentType: final_fitness_array},
-            }
-        """
-        # 收集适应度
-        collected = self.collect_fitness_by_role(allocation, arena_fitnesses)
-
-        result: dict[str, dict[AgentType, np.ndarray]] = {
-            'main': {},
-        }
-
-        # 计算 Main Agents 适应度
-        for agent_type in AgentType:
-            baseline = collected['main_baseline'][agent_type]
-            generalization = collected['main_generalization'][agent_type]
-
-            if baseline or generalization:
-                result['main'][agent_type] = self.aggregate_main_fitness(
-                    agent_type, baseline, generalization
-                )
-
-        # 【内存泄漏修复】删除 collected 字典
         del collected
-
         return result
 
     def _compute_elite_avg(self, fitness_array: np.ndarray) -> float:
@@ -217,186 +98,122 @@ class LeagueFitnessAggregator:
         sorted_fitness = np.sort(fitness_array)[::-1]  # 降序
         return float(np.mean(sorted_fitness[:n_elite]))
 
-    def determine_winner(
-        self,
-        fitness_array: np.ndarray,
-        threshold: float = 0.0,
-    ) -> bool:
-        """判断是否获胜
-
-        基于平均适应度判断是否获胜。
-
-        Args:
-            fitness_array: 适应度数组
-            threshold: 胜利阈值
-
-        Returns:
-            是否获胜
-        """
-        if len(fitness_array) == 0:
-            return False
-        return float(np.mean(fitness_array)) > threshold
-
-    def compute_generalization_advantage(
+    def compute_generational_comparison(
         self,
         generation: int,
-        allocation: ArenaAllocation,
-        arena_fitnesses: dict[int, dict[AgentType, np.ndarray]],
-    ) -> GeneralizationAdvantageStats | None:
-        """计算泛化优势比
+        avg_fitness: dict[AgentType, np.ndarray],
+    ) -> GenerationalComparisonStats | None:
+        """计算代际适应度对比
 
         Args:
             generation: 当前代数
-            allocation: 竞技场分配方案
-            arena_fitnesses: {arena_id: {AgentType: fitness_array}}
+            avg_fitness: {AgentType: fitness_array}（当前代平均适应度）
 
         Returns:
-            泛化优势比统计，无泛化竞技场时返回 None
+            代际对比统计，第一代时返回 None
         """
-        # 检查是否有泛化测试竞技场
-        has_generalization = any(
-            len(ids) > 0 for ids in allocation.generalization_arena_ids.values()
-        )
-        if not has_generalization:
-            return None
-
-        # 使用已有方法分离基准/泛化适应度
-        collected = self.collect_fitness_by_role(allocation, arena_fitnesses)
-
-        # 种群级别
-        advantages: dict[AgentType, float] = {}
-        baseline_avg: dict[AgentType, float] = {}
-        generalization_avg: dict[AgentType, float] = {}
-
-        # 精英级别
-        elite_advantages: dict[AgentType, float] = {}
-        elite_baseline_avg: dict[AgentType, float] = {}
-        elite_generalization_avg: dict[AgentType, float] = {}
-
+        # 计算当前代的种群和精英平均
+        current_avg: dict[AgentType, float] = {}
+        elite_current: dict[AgentType, float] = {}
         for agent_type in AgentType:
-            # 基准平均（种群）
-            baseline_arrays = collected['main_baseline'][agent_type]
-            baseline_avg[agent_type] = (
-                float(np.mean([np.mean(arr) for arr in baseline_arrays]))
-                if baseline_arrays else 0.0
-            )
-
-            # 泛化平均（种群）
-            gen_arrays = collected['main_generalization'][agent_type]
-            generalization_avg[agent_type] = (
-                float(np.mean([np.mean(arr) for arr in gen_arrays]))
-                if gen_arrays else 0.0
-            )
-
-            # 泛化优势比（种群）
-            advantages[agent_type] = generalization_avg[agent_type] - baseline_avg[agent_type]
-
-            # 基准精英平均
-            if baseline_arrays:
-                all_baseline = np.concatenate(baseline_arrays)
-                elite_baseline_avg[agent_type] = self._compute_elite_avg(all_baseline)
-                # 【内存泄漏修复】删除临时数组
-                del all_baseline
+            arr = avg_fitness.get(agent_type)
+            if arr is not None and len(arr) > 0:
+                current_avg[agent_type] = float(np.mean(arr))
+                elite_current[agent_type] = self._compute_elite_avg(arr)
             else:
-                elite_baseline_avg[agent_type] = 0.0
-
-            # 泛化精英平均
-            if gen_arrays:
-                all_gen = np.concatenate(gen_arrays)
-                elite_generalization_avg[agent_type] = self._compute_elite_avg(all_gen)
-                # 【内存泄漏修复】删除临时数组
-                del all_gen
-            else:
-                elite_generalization_avg[agent_type] = 0.0
-
-            # 精英泛化优势比
-            elite_advantages[agent_type] = (
-                elite_generalization_avg[agent_type] - elite_baseline_avg[agent_type]
-            )
-
-        stats = GeneralizationAdvantageStats(
-            generation=generation,
-            advantages=advantages,
-            baseline_avg=baseline_avg,
-            generalization_avg=generalization_avg,
-            elite_advantages=elite_advantages,
-            elite_baseline_avg=elite_baseline_avg,
-            elite_generalization_avg=elite_generalization_avg,
-        )
-
-        # 【内存泄漏修复】删除 collected 字典
-        del collected
+                current_avg[agent_type] = 0.0
+                elite_current[agent_type] = 0.0
 
         # 记录到历史
-        self._advantage_history.append(stats)
+        self._fitness_history.append(current_avg.copy())
+        self._elite_fitness_history.append(elite_current.copy())
 
+        # 与上一代对比
+        if len(self._fitness_history) < 2:
+            return None
+
+        previous_avg = self._fitness_history[-2]
+        elite_previous = self._elite_fitness_history[-2]
+
+        improvement: dict[AgentType, float] = {}
+        elite_improvement: dict[AgentType, float] = {}
+        for agent_type in AgentType:
+            improvement[agent_type] = (
+                current_avg[agent_type] - previous_avg.get(agent_type, 0.0)
+            )
+            elite_improvement[agent_type] = (
+                elite_current[agent_type] - elite_previous.get(agent_type, 0.0)
+            )
+
+        stats = GenerationalComparisonStats(
+            generation=generation,
+            current_avg_fitness=current_avg,
+            previous_avg_fitness=previous_avg,
+            improvement=improvement,
+            elite_current_avg=elite_current,
+            elite_previous_avg=elite_previous,
+            elite_improvement=elite_improvement,
+        )
+
+        self._comparison_history.append(stats)
         return stats
 
     def check_convergence(
         self,
-    ) -> tuple[bool, dict[AgentType, bool], dict[AgentType, bool]]:
-        """检查是否收敛
-
-        双重收敛条件：
-        1. 种群收敛：最近 N 代的种群泛化优势比绝对值都 <= 阈值
-        2. 精英收敛：最近 N 代的精英泛化优势比绝对值都 <= 阈值
+    ) -> tuple[bool, dict[AgentType, bool]]:
+        """检查收敛：最近N代适应度标准差 ≤ 阈值
 
         Returns:
-            (全部收敛, {AgentType: 种群是否收敛}, {AgentType: 精英是否收敛})
+            (全部收敛, {AgentType: 是否收敛})
         """
-        threshold = self.config.convergence_threshold
+        threshold = self.config.convergence_fitness_std_threshold
         required_gens = self.config.convergence_generations
 
-        if len(self._advantage_history) < required_gens:
-            return (
-                False,
-                {t: False for t in AgentType},
-                {t: False for t in AgentType},
-            )
+        if len(self._fitness_history) < required_gens:
+            return False, {t: False for t in AgentType}
 
-        recent = list(self._advantage_history)[-required_gens:]
+        recent_fitness = list(self._fitness_history)[-required_gens:]
+        recent_elite = list(self._elite_fitness_history)[-required_gens:]
 
-        # 种群收敛
-        pop_converged_by_type: dict[AgentType, bool] = {}
+        converged_by_type: dict[AgentType, bool] = {}
         for agent_type in AgentType:
-            pop_converged_by_type[agent_type] = all(
-                abs(stats.advantages[agent_type]) <= threshold
-                for stats in recent
+            # 种群适应度标准差
+            pop_values = [f.get(agent_type, 0.0) for f in recent_fitness]
+            pop_std = float(np.std(pop_values))
+
+            # 精英适应度标准差
+            elite_values = [f.get(agent_type, 0.0) for f in recent_elite]
+            elite_std = float(np.std(elite_values))
+
+            # 双重收敛：种群和精英的std都 ≤ 阈值
+            converged_by_type[agent_type] = (
+                pop_std <= threshold and elite_std <= threshold
             )
 
-        # 精英收敛
-        elite_converged_by_type: dict[AgentType, bool] = {}
-        for agent_type in AgentType:
-            elite_converged_by_type[agent_type] = all(
-                abs(stats.elite_advantages[agent_type]) <= threshold
-                for stats in recent
-            )
+        is_all_converged = all(converged_by_type.values())
 
-        # 双重收敛：种群和精英都收敛才算真正收敛
-        is_all_converged = (
-            all(pop_converged_by_type.values()) and
-            all(elite_converged_by_type.values())
-        )
-
-        # 记录首次收敛的代数
+        # 记录首次收敛
         if is_all_converged and self._first_convergence_generation is None:
-            self._first_convergence_generation = self._advantage_history[-1].generation
+            if self._fitness_history:
+                # 使用最后一次记录对应的generation
+                if self._comparison_history:
+                    self._first_convergence_generation = (
+                        self._comparison_history[-1].generation
+                    )
 
-        return is_all_converged, pop_converged_by_type, elite_converged_by_type
+        return is_all_converged, converged_by_type
 
     def get_first_convergence_generation(self) -> int | None:
-        """获取首次收敛的代数
-
-        Returns:
-            首次所有物种都收敛时的代数，未收敛过则返回 None
-        """
+        """获取首次收敛的代数"""
         return self._first_convergence_generation
 
-    def get_advantage_history(self) -> list[GeneralizationAdvantageStats]:
-        """获取泛化优势比历史"""
-        return list(self._advantage_history)
+    def get_comparison_history(self) -> list[GenerationalComparisonStats]:
+        """获取代际对比历史"""
+        return list(self._comparison_history)
 
     def clear_history(self) -> None:
         """清空历史记录"""
-        self._advantage_history.clear()
+        self._comparison_history.clear()
+        self._fitness_history.clear()
+        self._elite_fitness_history.clear()
         self._first_convergence_generation = None

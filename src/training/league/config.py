@@ -8,49 +8,49 @@ from typing import Literal
 class LeagueTrainingConfig:
     """联盟训练配置
 
-    参考 AlphaStar 联盟训练思路的配置类。
+    混合竞技场方案：当前代和历史代Agent同场交易。
     """
 
     # 对手池配置
     pool_dir: str = "/mnt/work/TradingGame/league_training/opponent_pools"
     checkpoint_dir: str = (
-        "/mnt/work/TradingGame/league_training/checkpoints"  # 检查点存储目录
+        "/mnt/work/TradingGame/league_training/checkpoints"
     )
-    max_pool_size_per_type: int = 100  # 每种类型最多保留100个历史版本
-    milestone_interval: int = 1  # 每1代保存里程碑
+    max_pool_size_per_type: int = 100
+    milestone_interval: int = 1
 
     # 竞技场运行配置
-    num_arenas: int = 64  # 同时运行的竞技场数量
-    episodes_per_arena: int = 1  # 每个竞技场运行的 episode 数
+    num_arenas: int = 16  # 竞技场数量（对应物理核心数）
+    episodes_per_arena: int = 4  # 每竞技场episode数
 
-    # 竞技场分配
-    num_baseline_arenas: int = 16  # 基准竞技场数量
-    num_generalization_arenas_per_type: int = 24  # 每类型泛化测试竞技场数量
+    # 历史对手配置
+    num_historical_generations: int = 6  # 每轮采样历史代数
+    historical_elite_ratio: float = 0.05  # 每代取Top 5%精英
+    historical_freshness_ratio: float = 0.5  # 采样中最近历史的最低占比
 
-    # 适应度计算
-    fitness_strategy: Literal["simple", "weighted_average", "min"] = "weighted_average"
-    baseline_weight: float = 1.0  # 基准竞技场权重
-    generalization_weight: float = 0.8  # 泛化测试竞技场权重
+    # 噪声交易者增强
+    hybrid_noise_trader_count: int = 300  # 混合竞技场噪声交易者数
+    hybrid_noise_trader_quantity_mu: float = 10.0  # 噪声交易者下单量mu
 
     # 采样策略
     sampling_strategy: Literal["uniform", "recency", "diverse", "pfsp"] = "pfsp"
 
     # PFSP 采样配置
-    recency_decay_lambda: float = 2.0  # 指数衰减速率，越大衰减越快
-    pfsp_exponent: float = 2.0  # 败率加权指数，越大越集中于难对手
-    pfsp_explore_bonus: float = 2.0  # 未交战对手的探索奖励系数
-    pfsp_win_rate_ema_alpha: float = 0.3  # 胜率 EMA 平滑因子，越大越重视近期
+    recency_decay_lambda: float = 2.0
+    pfsp_exponent: float = 2.0
+    pfsp_explore_bonus: float = 2.0
+    pfsp_win_rate_ema_alpha: float = 0.3
 
-    # 泛化优势比配置
-    generalization_advantage_window: int = 20  # 历史窗口大小
-    convergence_threshold: float = 0.005  # 收敛阈值（更严格，减少假阳性）
-    convergence_generations: int = 10  # 连续满足条件的代数
-    elite_ratio: float = 0.1  # 精英比例，用于计算精英适应度，默认 top 10%
+    # 代际对比配置
+    generational_comparison_window: int = 20  # 代际对比历史窗口
+    convergence_fitness_std_threshold: float = 0.005  # 适应度标准差收敛阈值
+    elite_ratio: float = 0.1  # 精英比例
 
     # 冻结与复评配置
-    freeze_on_convergence: bool = True  # 收敛时是否冻结进化
-    freeze_thaw_threshold: float = 0.05  # 基准适应度下降超过 5% 则解冻
-    min_freeze_generation: int = 30  # 最早允许冻结的代数
+    freeze_on_convergence: bool = True
+    freeze_thaw_threshold: float = 0.05
+    min_freeze_generation: int = 30
+    convergence_generations: int = 10  # 连续满足收敛条件的代数
 
     def validate(self) -> None:
         """验证配置有效性"""
@@ -66,21 +66,13 @@ class LeagueTrainingConfig:
             raise ValueError(
                 "freeze_thaw_threshold must be between 0.0 and 1.0 (exclusive)"
             )
-
-    def get_arena_allocation(self) -> dict[str, int]:
-        """获取竞技场分配详情
-
-        Returns:
-            各类型竞技场的数量分配
-        """
-        from src.config.config import AgentType
-
-        total_generalization = self.num_generalization_arenas_per_type * len(AgentType)
-        total = self.num_baseline_arenas + total_generalization
-
-        return {
-            "baseline": self.num_baseline_arenas,
-            "generalization_total": total_generalization,
-            "generalization_per_type": self.num_generalization_arenas_per_type,
-            "total": total,
-        }
+        if self.num_historical_generations < 1:
+            raise ValueError("num_historical_generations must be at least 1")
+        if not 0.0 < self.historical_elite_ratio <= 1.0:
+            raise ValueError(
+                "historical_elite_ratio must be between 0.0 (exclusive) and 1.0 (inclusive)"
+            )
+        if not 0.0 <= self.historical_freshness_ratio <= 1.0:
+            raise ValueError(
+                "historical_freshness_ratio must be between 0.0 and 1.0"
+            )

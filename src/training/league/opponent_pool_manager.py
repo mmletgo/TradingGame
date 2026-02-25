@@ -13,7 +13,7 @@ from src.training.league.opponent_entry import OpponentEntry, OpponentMetadata
 from src.training.league.opponent_pool import OpponentPool
 
 if TYPE_CHECKING:
-    from src.training.league.arena_allocator import ArenaAllocation
+    from src.training.league.arena_allocator import HybridSamplingResult
 
 
 class OpponentPoolManager:
@@ -58,6 +58,7 @@ class OpponentPoolManager:
         add_reason: str,
         sub_population_counts: dict[AgentType, int] | None = None,
         agent_counts: dict[AgentType, int] | None = None,
+        pre_evolution_fitness_map: dict[AgentType, dict[int, np.ndarray]] | None = None,
     ) -> dict[AgentType, str]:
         """保存当前所有类型的快照到各自的对手池
 
@@ -72,6 +73,7 @@ class OpponentPoolManager:
             add_reason: 添加原因
             sub_population_counts: {AgentType: count}
             agent_counts: {AgentType: count}
+            pre_evolution_fitness_map: {AgentType: {sub_pop_id: fitness_array}} or None
 
         Returns:
             {AgentType: entry_id} 映射
@@ -115,6 +117,7 @@ class OpponentPoolManager:
                 metadata=metadata,
                 genome_data=genome_data_map[agent_type],
                 network_data=network_data_map.get(agent_type) if network_data_map else None,
+                pre_evolution_fitness=pre_evolution_fitness_map.get(agent_type) if pre_evolution_fitness_map else None,
             )
 
             # 添加到对手池（各类型写入独立目录，线程安全）
@@ -267,48 +270,6 @@ class OpponentPoolManager:
             条目对象
         """
         return self.pools[agent_type].get_entry(entry_id, load_networks)
-
-    def update_win_rates_from_round(
-        self,
-        allocation: ArenaAllocation,
-        arena_fitnesses: dict[int, dict[AgentType, np.ndarray]],
-        ema_alpha: float = 0.3,
-    ) -> None:
-        """从一轮训练结果更新所有对手的胜率
-
-        Args:
-            allocation: 竞技场分配方案
-            arena_fitnesses: {arena_id: {AgentType: fitness_array}}
-            ema_alpha: EMA 平滑因子
-        """
-        for assignment in allocation.assignments:
-            if assignment.purpose != 'generalization_test':
-                continue
-            target_type = assignment.target_type
-            if target_type is None:
-                continue
-            arena_id = assignment.arena_id
-            if arena_id not in arena_fitnesses:
-                continue
-
-            # 获取目标类型在这个竞技场的适应度
-            target_fitness = arena_fitnesses[arena_id].get(target_type)
-            if target_fitness is None:
-                continue
-
-            # 计算 outcome: 目标物种平均适应度 > 0 为赢
-            outcome = 1.0 if float(np.mean(target_fitness)) > 0 else 0.0
-
-            # 更新每个历史对手的胜率
-            for agent_type, source_config in assignment.agent_sources.items():
-                if source_config.source == 'historical' and source_config.entry_id:
-                    pool = self.pools[agent_type]
-                    pool.update_entry_win_rate(
-                        entry_id=source_config.entry_id,
-                        target_type=target_type,
-                        outcome=outcome,
-                        ema_alpha=ema_alpha,
-                    )
 
     def sample_opponents_batch_for_type(
         self,

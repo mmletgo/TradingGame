@@ -217,7 +217,14 @@ class AgentInfo:
     maintenance_margin_rate: float
     maker_fee_rate: float
     taker_fee_rate: float
+    is_historical: bool = False        # 是否为历史代 Agent
+    historical_entry_id: str = ""      # 历史 entry ID（用于胜率更新）
 ```
+
+**历史 Agent 说明：**
+- 联盟训练中，历史代精英 Agent 通过 `is_historical=True` 标记
+- 历史 Agent 的 `sub_pop_id >= 1000`，自动不参与 NEAT 进化
+- 历史 Agent 的 `network_index` 在当前代之后偏移，对应合并后的 BatchNetworkCache 中的位置
 
 ### EpisodeResult (arena_worker.py)
 
@@ -242,6 +249,7 @@ class EpisodeResult:
 |------|------|------|
 | `update_networks` | 主进程 -> Worker | 进化后发送新网络参数 |
 | `attach_shared_networks` | 主进程 -> Worker | 发送共享内存元数据，Worker 零拷贝挂载 |
+| `update_agent_infos` | 主进程 -> Worker | 更新 agent_infos 列表（联盟训练：每轮动态变化的历史 Agent） |
 | `run_episode` | 主进程 -> Worker | Worker 独立运行 episodes 并返回适应度 |
 | `shutdown` | 主进程 -> Worker | 关闭 Worker |
 
@@ -252,6 +260,7 @@ class EpisodeResult:
 | `start()` | 启动所有 Worker 进程 |
 | `update_networks(network_params)` | 发送新网络参数给所有 Worker |
 | `attach_shared_networks(metadata_map)` | 发送共享内存元数据给所有 Worker |
+| `update_agent_infos(agent_infos)` | 更新所有 Worker 的 agent_infos（重建内部缓存） |
 | `run_episodes(num_episodes, episode_length)` | 所有 Worker 独立运行 episodes |
 | `shutdown()` | 关闭所有 Worker |
 
