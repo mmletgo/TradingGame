@@ -283,9 +283,9 @@ demo = DemoConfig(
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| count | int | 100 | 噪声交易者数量 |
+| count | int | 200 | 噪声交易者数量 |
 | action_probability | float | 0.5 | 每个 tick 行动的概率（0-1） |
-| quantity_mu | float | 3.0 | 对数正态分布的 mu 参数 |
+| quantity_mu | float | 9.5 | 对数正态分布的 mu 参数 |
 | quantity_sigma | float | 1.0 | 对数正态分布的 sigma 参数 |
 
 **噪声交易者行为说明：**
@@ -307,9 +307,9 @@ demo = DemoConfig(
 from src.config.config import NoiseTraderConfig
 
 noise_trader = NoiseTraderConfig(
-    count=100,
+    count=200,
     action_probability=0.5,
-    quantity_mu=3.0,
+    quantity_mu=9.5,
     quantity_sigma=1.0,
 )
 ```
@@ -595,13 +595,13 @@ config = Config(
 ### 噪声交易者参数调优
 
 - **count**：
-  - 100：默认数量，提供充足的随机流动性
+  - 200：默认数量，提供充足的随机流动性
 
 - **action_probability**：
   - 0.5：50% 概率行动（默认）
 
 - **quantity_mu / quantity_sigma**：
-  - mu=3.0, sigma=1.0：默认参数，产生适当的下单量分布
+  - mu=9.5, sigma=1.0：默认参数，单笔均值约 22,026 单位，200个噪声交易者每 tick 总成交量约 220 万单位
 
 ## 依赖关系
 

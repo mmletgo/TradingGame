@@ -184,10 +184,10 @@ src/market/
 - `create_noise_traders()` - 工厂函数
 
 **噪声交易者行为：**
-- 100个独立噪声交易者
+- 200个独立噪声交易者
 - 每 tick 以 50% 概率行动
 - 行动时 50% 买 / 50% 卖，通过市价单撮合
-- 下单量：`max(1, int(lognormvariate(mu=3.0, sigma=1.0)))`
+- 下单量：`max(1, int(lognormvariate(mu=9.5, sigma=1.0)))`
 
 **噪声交易者特点：**
 - 初始资金 1e18（视为无限资金）

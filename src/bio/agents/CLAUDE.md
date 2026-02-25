@@ -412,13 +412,13 @@ else:
 
 做市商每 tick 必然执行双边挂单，先撤销所有旧挂单（调用 `_cancel_all_orders`），然后双边各挂 1-10 单。神经网络直接输出 20 个订单的价格和数量参数。
 
-### MARKET_SELL 的特殊逻辑
+### MARKET_BUY / MARKET_SELL 对称设计
 
-对于高级散户的 MARKET_SELL 动作：
-- 如果持有多仓（quantity > 0）：卖出持仓的一定比例
-- 如果空仓或持有空仓（quantity <= 0）：开空仓，使用 `_calculate_order_quantity` 计算数量
+MARKET_BUY 和 MARKET_SELL 均统一使用 `_calculate_order_quantity` 计算数量，无论当前持仓状态：
+- **MARKET_BUY**: `_calculate_order_quantity(mid_price, ratio, is_buy=True)` — 可以平空仓+开多仓
+- **MARKET_SELL**: `_calculate_order_quantity(mid_price, ratio, is_buy=False)` — 可以平多仓+开空仓
 
-这与 MARKET_BUY 不同，MARKET_BUY 总是使用 `_calculate_order_quantity` 计算数量（无论是平空仓还是开多仓）。
+这种对称设计确保买卖方向没有结构性偏差，防止价格系统性单向漂移。
 
 ### 价格舍入与保护
 

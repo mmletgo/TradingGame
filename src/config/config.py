@@ -128,9 +128,9 @@ class DemoConfig:
 @dataclass
 class NoiseTraderConfig:
     """噪声交易者配置"""
-    count: int = 100
+    count: int = 200
     action_probability: float = 0.5
-    quantity_mu: float = 3.0
+    quantity_mu: float = 9.5
     quantity_sigma: float = 1.0
 
 

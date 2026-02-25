@@ -619,8 +619,12 @@ class TestRetailProAgentDecide:
         # 验证参数包含 quantity
         assert "quantity" in params
         # 数量比例 = (0.0 + 1) * 0.5 = 0.5
-        # 卖出数量 = max(1, int(100.0 * 0.5)) = 50
-        assert params["quantity"] == 50
+        # MARKET_SELL 与 MARKET_BUY 对称：统一使用 _calculate_order_quantity(is_buy=False)
+        # equity=10000, leverage=100, max_pos_value=1,000,000
+        # current_pos=100(多头), current_pos_value=10,000
+        # available = current_pos_value + max_pos_value = 1,010,000
+        # quantity = 1,010,000 * 0.5 / 100 = 5,050
+        assert params["quantity"] == 5050
 
     def test_decide_without_best_price(self):
         """测试订单簿为空时的决策"""

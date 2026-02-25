@@ -1344,33 +1344,27 @@ cdef void _parse_retail_single(
     elif action_idx == ACTION_MARKET_SELL:
         result.side = 2  # SELL
 
-        # 特殊逻辑：如果持有多仓，卖出持仓的比例
-        if current_pos > 0:
-            quantity = <int>(current_pos * quantity_ratio)
-            if quantity < 1:
-                quantity = 1
-            if quantity > <int>current_pos:
-                quantity = <int>current_pos
-            result.quantity = <double>quantity
-        else:
-            # 空仓或空头，开空仓（使用 mid_price）
-            calc_price = mid_price if mid_price > 0 else 100.0
-            if equity > 0 and leverage > 0:
-                max_pos_value = equity * leverage
-                current_pos_value = fabs(current_pos) * calc_price
-                # 卖出
-                if current_pos <= 0:
-                    available_pos_value = max_pos_value - current_pos_value
-                    if available_pos_value < 0:
-                        available_pos_value = 0
-                else:
-                    available_pos_value = current_pos_value + max_pos_value
-                raw_quantity = (available_pos_value * quantity_ratio) / calc_price
-                if raw_quantity >= 1.0:
-                    quantity = <int>raw_quantity
-                    if quantity > <int>MAX_ORDER_QUANTITY:
-                        quantity = <int>MAX_ORDER_QUANTITY
-                    result.quantity = <double>quantity
+        # 与 MARKET_BUY 完全对称：统一使用 _calculate_order_quantity 逻辑
+        # 可以平多仓+开空仓，或直接开空仓
+        calc_price = mid_price if mid_price > 0 else 100.0
+        if equity > 0 and leverage > 0:
+            max_pos_value = equity * leverage
+            current_pos_value = fabs(current_pos) * calc_price
+            # 卖出
+            if current_pos <= 0:
+                # 空头或空仓，卖出是同向加仓
+                available_pos_value = max_pos_value - current_pos_value
+                if available_pos_value < 0:
+                    available_pos_value = 0
+            else:
+                # 多头，卖出是反向平仓+可能开空仓
+                available_pos_value = current_pos_value + max_pos_value
+            raw_quantity = (available_pos_value * quantity_ratio) / calc_price
+            if raw_quantity >= 1.0:
+                quantity = <int>raw_quantity
+                if quantity > <int>MAX_ORDER_QUANTITY:
+                    quantity = <int>MAX_ORDER_QUANTITY
+                result.quantity = <double>quantity
 
 
 cdef void batch_parse_retail_nogil(

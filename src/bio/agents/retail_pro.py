@@ -18,7 +18,6 @@ from src.config.config import AgentConfig, AgentType
 from src.bio.brain.brain import Brain
 from src.market.market_state import NormalizedMarketState
 from src.market.matching.trade import Trade
-from src.market.orderbook.order import OrderSide
 from src.market.orderbook.orderbook import OrderBook
 
 if TYPE_CHECKING:
@@ -165,19 +164,12 @@ class RetailProAgent(Agent):
             )
 
         elif action == ActionType.MARKET_SELL:
-            # 市价卖出：数量由神经网络决定
-            position_qty = self.account.position.quantity
-            if position_qty > 0:
-                # 有多仓时卖出（卖出比例由神经网络决定）
-                # 取整并确保至少卖出1个单位
-                sell_qty = max(1, int(position_qty * quantity_ratio))
-                # 但不能超过持仓量
-                params["quantity"] = min(sell_qty, int(position_qty))
-            else:
-                # 空仓或空头持仓，开空仓（卖出方向，限制总持仓）
-                params["quantity"] = self._calculate_order_quantity(
-                    mid_price, quantity_ratio, is_buy=False
-                )
+            # 市价卖出：数量由神经网络决定（卖出方向，限制总持仓）
+            # 与 MARKET_BUY 完全对称：无论当前持仓状态，统一使用 _calculate_order_quantity
+            # 可以平多仓+开空仓，或直接开空仓
+            params["quantity"] = self._calculate_order_quantity(
+                mid_price, quantity_ratio, is_buy=False
+            )
 
         elif action == ActionType.CANCEL:
             # 撤单：无参数

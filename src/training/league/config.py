@@ -12,8 +12,10 @@ class LeagueTrainingConfig:
     """
 
     # 对手池配置
-    pool_dir: str = "checkpoints/league_training/opponent_pools"
-    checkpoint_dir: str = "checkpoints/league_training/checkpoints"  # 检查点存储目录
+    pool_dir: str = "/mnt/work/TradingGame/league_training/opponent_pools"
+    checkpoint_dir: str = (
+        "/mnt/work/TradingGame/league_training/checkpoints"  # 检查点存储目录
+    )
     max_pool_size_per_type: int = 100  # 每种类型最多保留100个历史版本
     milestone_interval: int = 1  # 每1代保存里程碑
 
@@ -47,7 +49,7 @@ class LeagueTrainingConfig:
 
     # 冻结与复评配置
     freeze_on_convergence: bool = True  # 收敛时是否冻结进化
-    freeze_thaw_threshold: float = 0.01  # 基准适应度下降超过 1% 则解冻
+    freeze_thaw_threshold: float = 0.05  # 基准适应度下降超过 5% 则解冻
     min_freeze_generation: int = 30  # 最早允许冻结的代数
 
     def validate(self) -> None:
