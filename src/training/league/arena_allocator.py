@@ -151,7 +151,7 @@ class HybridArenaAllocator:
         # 获取全池 PFSP 权重
         pool_entries: list[dict[str, Any]] = pool.list_entries()
         strategy: str = self.config.sampling_strategy
-        weights: np.ndarray = pool._compute_weights(
+        weights: np.ndarray = pool.compute_weights(
             pool_entries, strategy, pool.agent_type, current_generation
         )
 

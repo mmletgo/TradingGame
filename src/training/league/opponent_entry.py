@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field, fields, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -179,6 +180,12 @@ class OpponentEntry:
                     network_data = {}
                     for sub_pop_id in sorted(sub_pop_ids):
                         prefix = f"sub_{sub_pop_id}_"
+                        header_key = f"{prefix}headers"
+                        if header_key not in network_arrays:
+                            logging.getLogger("league").warning(
+                                f"networks.npz 中缺少 sub_pop_id={sub_pop_id} 的数据，跳过"
+                            )
+                            continue
                         network_data[sub_pop_id] = (
                             np.array(network_arrays[f"{prefix}headers"]),
                             np.array(network_arrays[f"{prefix}input_keys"]),

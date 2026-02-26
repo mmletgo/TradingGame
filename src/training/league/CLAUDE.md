@@ -171,7 +171,7 @@ class HybridSamplingResult:
 **采样策略（带新鲜度约束的 PFSP 加权采样）：**
 1. 对每种 AgentType 独立采样 `num_historical_generations` 个历史 entries
 2. 将对手池按代数排序，分为"最近 1/3（向上取整）"和"全池"
-3. 使用 `pool._compute_weights()` 获取配置策略（默认 PFSP）的采样权重
+3. 使用 `pool.compute_weights()` 获取配置策略（默认 PFSP）的采样权重
 4. 先从最近 1/3 中按 PFSP 权重无放回采样 `n_recent = n_total * freshness_ratio` 个
 5. 再从全池（排除已选）中按 PFSP 权重无放回采样剩余数量
 
