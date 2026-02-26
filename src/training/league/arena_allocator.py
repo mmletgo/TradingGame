@@ -148,8 +148,8 @@ class HybridArenaAllocator:
         recent_ids: list[str] = [eid for eid, _ in entries_with_gen[:recent_cutoff]]
         all_ids: list[str] = [eid for eid, _ in entries_with_gen]
 
-        # 获取全池 PFSP 权重
-        pool_entries: list[dict[str, Any]] = pool.list_entries()
+        # 获取全池 PFSP 权重（L8: 复用 index_entries，避免重复调用 list_entries()）
+        pool_entries: list[dict[str, Any]] = index_entries
         strategy: str = self.config.sampling_strategy
         weights: np.ndarray = pool.compute_weights(
             pool_entries, strategy, pool.agent_type, current_generation
@@ -184,6 +184,8 @@ class HybridArenaAllocator:
 
         # 从全池采样 n_rest 个（排除已选）
         selected_set: set[str] = set(recent_sampled)
+        # S2: 采样不足补偿 — 最近池不足时将余量补到全池采样
+        n_rest = n_total - len(recent_sampled)
         remaining_ids: list[str] = [eid for eid in all_ids if eid not in selected_set]
 
         if n_rest <= 0 or not remaining_ids:
