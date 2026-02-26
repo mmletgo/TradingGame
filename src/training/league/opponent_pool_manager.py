@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
@@ -11,9 +11,6 @@ from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.opponent_entry import OpponentEntry, OpponentMetadata
 from src.training.league.opponent_pool import OpponentPool
-
-if TYPE_CHECKING:
-    from src.training.league.arena_allocator import HybridSamplingResult
 
 
 class OpponentPoolManager:
