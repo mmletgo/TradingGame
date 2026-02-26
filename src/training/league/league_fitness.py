@@ -194,12 +194,13 @@ class HybridFitnessAggregator:
 
         # 记录首次收敛
         if is_all_converged and self._first_convergence_generation is None:
-            if self._fitness_history:
-                # 使用最后一次记录对应的generation
-                if self._comparison_history:
-                    self._first_convergence_generation = (
-                        self._comparison_history[-1].generation
-                    )
+            if self._comparison_history:
+                self._first_convergence_generation = (
+                    self._comparison_history[-1].generation
+                )
+            elif self._fitness_history:
+                # fallback: 从 fitness_history 长度推算当前代数
+                self._first_convergence_generation = len(self._fitness_history) - 1
 
         return is_all_converged, converged_by_type
 
