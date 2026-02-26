@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 import pickle
 import threading
 
@@ -106,6 +107,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 里程碑异步保存
         self._milestone_thread: threading.Thread | None = None
         self._checkpoint_thread: threading.Thread | None = None
+        self._milestone_save_failed: bool = False
 
     def setup(self) -> None:
         """初始化
@@ -251,6 +253,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 缓存预进化适应度（在 NEAT 进化前调用，此时 avg_fitness 是当前代的真实适应度）
         self._pre_evolution_fitness = {
             key: arr.copy() for key, arr in avg_fitness.items()
+            if key[1] < 1000  # 只保留当前代（排除历史Agent的sub_pop_id >= 1000）
         }
 
         fitness_map = super()._build_fitness_map(avg_fitness)
@@ -462,6 +465,11 @@ class LeagueTrainer(ParallelArenaTrainer):
         assert self.pool_manager is not None
         assert self.arena_allocator is not None
         assert self.fitness_aggregator is not None
+
+        # 检查上一轮里程碑保存是否失败
+        if self._milestone_save_failed:
+            self.logger.warning("上一轮里程碑保存失败，请检查磁盘空间和对手池目录权限")
+            self._milestone_save_failed = False
 
         # 1. 清理旧采样结果和历史数据
         self._current_sampling_result = None
@@ -839,20 +847,28 @@ class LeagueTrainer(ParallelArenaTrainer):
 
             genome_data_map[agent_type] = genome_data
 
-            # 计算平均适应度
-            agents = (
-                pop_or_manager.agents
-                if hasattr(pop_or_manager, "agents")
-                else [a for sp in pop_or_manager.sub_populations for a in sp.agents]
-            )
-            fitnesses = [
-                a.brain.get_genome().fitness
-                for a in agents
-                if a.brain.get_genome().fitness is not None
+            # 计算平均适应度（优先使用预进化适应度缓存）
+            cached_fitness_arrays: list[np.ndarray] = [
+                arr for (at, sp_id), arr in self._pre_evolution_fitness.items()
+                if at == agent_type
             ]
-            fitness_map[agent_type] = (
-                sum(fitnesses) / len(fitnesses) if fitnesses else 0.0
-            )
+            if cached_fitness_arrays:
+                fitness_map[agent_type] = float(np.mean(np.concatenate(cached_fitness_arrays)))
+            else:
+                # 回退：从 agents 遍历
+                agents = (
+                    pop_or_manager.agents
+                    if hasattr(pop_or_manager, "agents")
+                    else [a for sp in pop_or_manager.sub_populations for a in sp.agents]
+                )
+                fitnesses = [
+                    a.brain.get_genome().fitness
+                    for a in agents
+                    if a.brain.get_genome().fitness is not None
+                ]
+                fitness_map[agent_type] = (
+                    sum(fitnesses) / len(fitnesses) if fitnesses else 0.0
+                )
 
         # 构建 pre_evolution_fitness（按 AgentType 分组）
         pre_evolution_fitness_map: dict[AgentType, dict[int, np.ndarray]] = {}
@@ -881,8 +897,8 @@ class LeagueTrainer(ParallelArenaTrainer):
                 )
             except Exception:
                 import traceback
-
-                traceback.print_exc()
+                self.logger.error(f"里程碑保存失败 (gen {generation}): {traceback.format_exc()}")
+                self._milestone_save_failed = True
 
         self._milestone_thread = threading.Thread(
             target=_do_save,
@@ -1234,7 +1250,13 @@ def extract_elite_networks(
             continue
 
         # 计算精英数量
-        n_elite: int = max(1, int(len(fitness_array) * elite_ratio))
+        if len(fitness_array) != len(all_params):
+            logging.getLogger("league").warning(
+                f"extract_elite_networks: sub_pop {sub_pop_id} "
+                f"fitness({len(fitness_array)}) != params({len(all_params)})"
+            )
+        effective_len: int = min(len(fitness_array), len(all_params))
+        n_elite: int = max(1, int(effective_len * elite_ratio))
 
         if pre_evolution_fitness and sub_pop_id in pre_evolution_fitness:
             # 直接按适应度排序取 Top
