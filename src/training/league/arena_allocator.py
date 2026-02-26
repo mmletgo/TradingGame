@@ -1,7 +1,6 @@
 """混合竞技场历史对手采样器"""
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass, field
 from typing import Any
 
