@@ -83,7 +83,11 @@ class OpponentEntry:
         """
         entry_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. 保存元数据
+        # 预先设置 has_pre_evolution_fitness 标记（避免双写 metadata.json）
+        if self.pre_evolution_fitness is not None:
+            self.metadata.has_pre_evolution_fitness = True
+
+        # 1. 保存元数据（只写一次）
         metadata_path = entry_dir / "metadata.json"
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(self.metadata.to_dict(), f, indent=2, ensure_ascii=False)
@@ -128,11 +132,6 @@ class OpponentEntry:
             for sub_pop_id, fitness_arr in self.pre_evolution_fitness.items():
                 fitness_arrays[f"sub_{sub_pop_id}_fitness"] = fitness_arr
             np.savez(fitness_path, **fitness_arrays)
-            self.metadata.has_pre_evolution_fitness = True
-            # 重新保存元数据（更新 has_pre_evolution_fitness 标记）
-            metadata_path = entry_dir / "metadata.json"
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(self.metadata.to_dict(), f, indent=2, ensure_ascii=False)
 
     @classmethod
     def load(cls, entry_dir: Path, load_networks: bool = False) -> OpponentEntry:
@@ -158,7 +157,7 @@ class OpponentEntry:
             # 解析子种群 ID
             sub_pop_ids: set[int] = set()
             for key in genome_arrays.files:
-                if key.startswith("sub_") and "_keys" in key:
+                if key.startswith("sub_") and key.endswith("_keys"):
                     sub_pop_id = int(key.split("_")[1])
                     sub_pop_ids.add(sub_pop_id)
 

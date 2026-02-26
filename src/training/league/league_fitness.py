@@ -54,35 +54,6 @@ class HybridFitnessAggregator:
         # 首次收敛的代数
         self._first_convergence_generation: int | None = None
 
-    def aggregate_fitness(
-        self,
-        arena_fitnesses: dict[int, dict[AgentType, np.ndarray]],
-    ) -> dict[AgentType, np.ndarray]:
-        """简单平均所有竞技场的适应度
-
-        Args:
-            arena_fitnesses: {arena_id: {AgentType: fitness_array}}
-
-        Returns:
-            {AgentType: averaged_fitness_array}
-        """
-        if not arena_fitnesses:
-            return {}
-
-        # 收集每种类型的所有适应度
-        collected: dict[AgentType, list[np.ndarray]] = {t: [] for t in AgentType}
-        for arena_id, fitness_by_type in arena_fitnesses.items():
-            for agent_type, fitness_arr in fitness_by_type.items():
-                collected[agent_type].append(fitness_arr)
-
-        result: dict[AgentType, np.ndarray] = {}
-        for agent_type, arrays in collected.items():
-            if arrays:
-                result[agent_type] = np.mean(arrays, axis=0).astype(np.float32)
-
-        del collected
-        return result
-
     def _compute_elite_avg(self, fitness_array: np.ndarray) -> float:
         """计算精英平均适应度
 

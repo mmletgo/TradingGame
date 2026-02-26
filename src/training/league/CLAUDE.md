@@ -41,7 +41,6 @@ src/training/league/
 ├── opponent_entry.py        # 对手条目数据结构
 ├── opponent_pool.py         # 单类型对手池管理
 ├── opponent_pool_manager.py # 多类型对手池管理器
-├── multi_gen_cache.py       # 多代网络缓存（遗留，混合方案中不再使用）
 ├── arena_allocator.py       # 混合竞技场历史对手采样器
 ├── league_fitness.py        # 适应度汇总与代际对比
 └── league_trainer.py        # 联盟训练器主类
@@ -205,7 +204,6 @@ class GenerationalComparisonStats:
 ```
 
 **主要方法：**
-- `aggregate_fitness(arena_fitnesses)` -> `dict[AgentType, np.ndarray]`：简单平均所有竞技场的适应度
 - `compute_generational_comparison(generation, avg_fitness)` -> `GenerationalComparisonStats | None`：计算代际适应度对比（第一代返回 None）
 - `check_convergence()` -> `(bool, dict[AgentType, bool])`：双重收敛判断（种群和精英的 std 都 ≤ 阈值）
 - `get_first_convergence_generation()` -> `int | None`：获取首次收敛代数

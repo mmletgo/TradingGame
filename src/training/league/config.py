@@ -110,3 +110,5 @@ class LeagueTrainingConfig:
             raise ValueError("convergence_generations must be >= 1")
         if self.generational_comparison_window < 1:
             raise ValueError("generational_comparison_window must be >= 1")
+        if self.pfsp_explore_bonus < 0:
+            raise ValueError("pfsp_explore_bonus must be >= 0")

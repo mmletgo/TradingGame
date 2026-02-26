@@ -555,13 +555,19 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self._milestone_thread is not None and self._milestone_thread.is_alive():
             self._milestone_thread.join()
 
-        # 9. 更新历史对手胜率 + 保存对手池索引
-        if has_historical:
-            self._update_historical_win_rates(round_stats)
-            self.pool_manager.save_all()
+        # H2: 里程碑保存失败时跳过步骤9-10，避免操作不一致的对手池
+        if self._milestone_save_failed:
+            self.logger.warning(
+                "里程碑保存失败，跳过胜率更新和对手池清理（将在下轮开始时重置标志）"
+            )
+        else:
+            # 9. 更新历史对手胜率 + 保存对手池索引
+            if has_historical:
+                self._update_historical_win_rates(round_stats)
+                self.pool_manager.save_all()
 
-        # 10. 清理对手池
-        self.pool_manager.cleanup_all(self.generation)
+            # 10. 清理对手池
+            self.pool_manager.cleanup_all(self.generation)
 
         # 添加联盟训练统计
         round_stats["pool_sizes"] = self.pool_manager.get_pool_sizes()
@@ -711,16 +717,14 @@ class LeagueTrainer(ParallelArenaTrainer):
             avg_fitnesses = round_stats.get("avg_fitnesses")
             if not isinstance(avg_fitnesses, dict):
                 return
-            current_avg = {}
+            collected: dict[AgentType, list[np.ndarray]] = {}
             for (agent_type_key, sub_pop_id), arr in avg_fitnesses.items():
                 if sub_pop_id < 1000 and isinstance(arr, np.ndarray) and len(arr) > 0:
-                    if agent_type_key not in current_avg:
-                        current_avg[agent_type_key] = float(np.mean(arr))
-                    else:
-                        # 多个子种群时取整体平均
-                        current_avg[agent_type_key] = (
-                            current_avg[agent_type_key] + float(np.mean(arr))
-                        ) / 2.0
+                    collected.setdefault(agent_type_key, []).append(arr)
+            current_avg = {
+                at: float(np.mean(np.concatenate(arrs)))
+                for at, arrs in collected.items()
+            }
             if not current_avg:
                 return
 
@@ -787,7 +791,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             if not state.is_frozen:
                 continue
             if effective_generation > state.freeze_generation:
-                self._reevaluate_frozen_species(agent_type, round_stats)
+                self._reevaluate_frozen_species(agent_type, round_stats, effective_generation)
 
         # 3. 检查是否所有物种都已冻结
         all_frozen: bool = all(s.is_frozen for s in self._freeze_states.values())
@@ -799,6 +803,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         self,
         agent_type: AgentType,
         round_stats: dict[str, Any],
+        effective_generation: int,
     ) -> None:
         """复评冻结物种"""
         state = self._freeze_states[agent_type]
@@ -818,7 +823,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             drop_ratio = 0.0
 
         # 复评详情：每10代 info，其余 debug
-        log_level: int = logging.INFO if self.generation % 10 == 0 else logging.DEBUG
+        log_level: int = logging.INFO if effective_generation % 10 == 0 else logging.DEBUG
         self.logger.log(
             log_level,
             f"物种 {agent_type.name} 复评 (冻结于第 {state.freeze_generation} 代): "
@@ -1001,10 +1006,16 @@ class LeagueTrainer(ParallelArenaTrainer):
                         and sub_pop._pending_genome_data is not None
                     ):
                         genome_data = sub_pop._pending_genome_data
-                        species_data = sub_pop._pending_species_data or (
-                            np.array([], dtype=np.int32),
-                            np.array([], dtype=np.int32),
-                        )
+                        species_data = sub_pop._pending_species_data
+                        if species_data is None:
+                            self.logger.warning(
+                                f"save_checkpoint: {agent_type.name} sub_pop {sub_pop.sub_population_id} "
+                                f"species_data 为 None，使用空数组（物种分配信息丢失）"
+                            )
+                            species_data = (
+                                np.array([], dtype=np.int32),
+                                np.array([], dtype=np.int32),
+                            )
                     else:
                         sub_pop._cleanup_neat_history_light()
                         genome_data = _serialize_genomes_numpy(
@@ -1024,10 +1035,16 @@ class LeagueTrainer(ParallelArenaTrainer):
                     and population._pending_genome_data is not None
                 ):
                     genome_data = population._pending_genome_data
-                    species_data = population._pending_species_data or (
-                        np.array([], dtype=np.int32),
-                        np.array([], dtype=np.int32),
-                    )
+                    species_data = population._pending_species_data
+                    if species_data is None:
+                        self.logger.warning(
+                            f"save_checkpoint: {agent_type.name} "
+                            f"species_data 为 None，使用空数组（物种分配信息丢失）"
+                        )
+                        species_data = (
+                            np.array([], dtype=np.int32),
+                            np.array([], dtype=np.int32),
+                        )
                 else:
                     population._cleanup_neat_history_light()
                     genome_data = _serialize_genomes_numpy(
@@ -1162,11 +1179,15 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self._milestone_thread is not None and self._milestone_thread.is_alive():
             self.logger.info("等待里程碑保存完成...")
             self._milestone_thread.join(timeout=30.0)
+            if self._milestone_thread.is_alive():
+                self.logger.warning("里程碑保存线程在 30s 超时后仍在运行")
 
         # 等待异步检查点保存完成
         if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
             self.logger.info("等待检查点保存完成...")
             self._checkpoint_thread.join(timeout=30.0)
+            if self._checkpoint_thread.is_alive():
+                self.logger.warning("检查点保存线程在 30s 超时后仍在运行")
 
         # 保存对手池索引
         if self.pool_manager:

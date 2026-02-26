@@ -44,7 +44,6 @@ class OpponentPool:
         # Recency 采样权重缓存
         self._prob_cache: np.ndarray | None = None
         self._entry_ids_cache: list[str] | None = None
-        self._cache_version: int = 0
         self._last_cached_generation: int = -1
 
     def _invalidate_cache(self) -> None:
@@ -61,11 +60,9 @@ class OpponentPool:
             current_generation: 当前代数，用于计算与 source_generation 的差值
         """
         entries = self._index.get("entries", [])
-        current_version = len(entries)
 
         if (
             self._prob_cache is None
-            or self._cache_version != current_version
             or self._last_cached_generation != current_generation
         ):
             self._entry_ids_cache = [e["entry_id"] for e in entries]
@@ -81,7 +78,6 @@ class OpponentPool:
             ], dtype=np.float64)
             total = weights.sum()
             self._prob_cache = weights / total if total > 0 else None
-            self._cache_version = current_version
             self._last_cached_generation = current_generation
 
     def _create_empty_index(self) -> dict[str, Any]:
@@ -329,6 +325,9 @@ class OpponentPool:
         ema_alpha: float = 0.3,
     ) -> None:
         """更新指定条目对特定目标类型的胜率（EMA 平滑）
+
+        注意：此方法仅更新内存中的索引数据，不立即持久化到磁盘。
+        调用方需在后续调用 save_index() 以持久化变更。
 
         Args:
             entry_id: 条目 ID
