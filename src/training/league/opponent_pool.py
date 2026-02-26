@@ -163,11 +163,12 @@ class OpponentPool:
 
         return entry_id
 
-    def remove_entry(self, entry_id: str) -> None:
+    def remove_entry(self, entry_id: str, _skip_save_index: bool = False) -> None:
         """移除条目
 
         Args:
             entry_id: 条目 ID
+            _skip_save_index: 内部参数，跳过保存索引和清除缓存（批量删除时使用）
         """
         # 从磁盘删除
         entry_dir = self.pool_dir / entry_id
@@ -186,8 +187,9 @@ class OpponentPool:
         self._index["entries"] = [
             e for e in self._index["entries"] if e["entry_id"] != entry_id
         ]
-        self.save_index()
-        self._invalidate_cache()
+        if not _skip_save_index:
+            self.save_index()
+            self._invalidate_cache()
 
     def get_entry(self, entry_id: str, load_networks: bool = False) -> OpponentEntry | None:
         """获取条目
@@ -624,7 +626,7 @@ class OpponentPool:
         for entry in others:
             if len(removed) >= to_remove_count:
                 break
-            self.remove_entry(entry["entry_id"])
+            self.remove_entry(entry["entry_id"], _skip_save_index=True)
             removed.append(entry["entry_id"])
 
         # 非里程碑不够删时，从里程碑中删除最旧的
@@ -633,8 +635,13 @@ class OpponentPool:
             for entry in milestones:
                 if len(removed) >= to_remove_count:
                     break
-                self.remove_entry(entry["entry_id"])
+                self.remove_entry(entry["entry_id"], _skip_save_index=True)
                 removed.append(entry["entry_id"])
+
+        # 批量删除后统一保存索引
+        if removed:
+            self.save_index()
+            self._invalidate_cache()
 
         return removed
 

@@ -35,6 +35,13 @@ from src.training.population import (
 )
 
 
+# 缓存 libc 句柄，避免每次调用 CDLL
+try:
+    _libc: CDLL | None = CDLL("libc.so.6")
+except OSError:
+    _libc = None
+
+
 @dataclass
 class SpeciesFreezeState:
     """物种冻结状态"""
@@ -526,6 +533,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self.generation > 0:
             self._save_milestone()
 
+        # 等待里程碑后台保存完成（防止与步骤9/10的对手池操作竞态）
+        if self._milestone_thread is not None and self._milestone_thread.is_alive():
+            self._milestone_thread.join()
+
         # 9. 更新历史对手胜率 + 保存对手池索引
         if has_historical:
             self._update_historical_win_rates(round_stats)
@@ -768,7 +779,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         else:
             drop_ratio = 0.0
 
-        self.logger.info(
+        # 复评详情：每10代 info，其余 debug
+        log_level: int = logging.INFO if self.generation % 10 == 0 else logging.DEBUG
+        self.logger.log(
+            log_level,
             f"物种 {agent_type.name} 复评 (冻结于第 {state.freeze_generation} 代): "
             f"冻结时avg={freeze_fitness:.4f}, 当前avg={current_fitness:.4f}, "
             f"下降比例={drop_ratio:.4f}, 阈值={threshold:.4f}"
@@ -777,6 +791,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         if drop_ratio > threshold:
             state.is_frozen = False
             state.thaw_count += 1
+            # 解冻事件始终 info
             self.logger.info(
                 f"物种 {agent_type.name} 已解冻 (下降 {drop_ratio:.2%} > {threshold:.2%}), "
                 f"累计解冻 {state.thaw_count} 次"
@@ -786,7 +801,8 @@ class LeagueTrainer(ParallelArenaTrainer):
                 direction = f"上升 {-drop_ratio:.2%}"
             else:
                 direction = f"下降 {drop_ratio:.2%}"
-            self.logger.info(
+            self.logger.log(
+                log_level,
                 f"物种 {agent_type.name} 保持冻结 ({direction}, 未下降超过阈值 {threshold:.2%})"
             )
 
@@ -1043,18 +1059,17 @@ class LeagueTrainer(ParallelArenaTrainer):
         )
         self._checkpoint_thread.start()
 
-    def load_checkpoint(self, path: str) -> None:
+    def load_checkpoint(self, path: str) -> dict[str, Any]:
         """加载检查点
 
         Args:
             path: 检查点文件路径
+
+        Returns:
+            检查点数据字典
         """
         # 加载父类检查点（父类已有 magic bytes 检测，支持 plain pickle 和 gzip）
-        super().load_checkpoint(path)
-
-        # 加载联盟训练数据（plain pickle）
-        with open(path, "rb") as f:
-            checkpoint_data = pickle.load(f)
+        checkpoint_data: dict[str, Any] = super().load_checkpoint(path)
 
         if "league_training" in checkpoint_data:
             league_data = checkpoint_data["league_training"]
@@ -1087,6 +1102,8 @@ class LeagueTrainer(ParallelArenaTrainer):
             self.pool_manager.load_all()
 
         self.logger.info(f"检查点已加载: {path}")
+
+        return checkpoint_data
 
     def stop(self) -> None:
         """停止训练并清理资源"""
@@ -1171,11 +1188,8 @@ class LeagueTrainer(ParallelArenaTrainer):
                             pool.clear_memory_cache()
 
                     gc.collect()
-                    try:
-                        libc = CDLL("libc.so.6")
-                        libc.malloc_trim(c_int(0))
-                    except Exception:
-                        pass
+                    if _libc is not None:
+                        _libc.malloc_trim(c_int(0))
         finally:
             self._is_running = False
 
@@ -1269,8 +1283,10 @@ def extract_elite_networks(
             valid_mask = ~np.isnan(fitness_array.astype(np.float64))
             valid_indices: np.ndarray = np.where(valid_mask)[0]
             valid_fitnesses: np.ndarray = fitness_array[valid_indices].astype(np.float64)
+            # 基于有效样本数重新计算精英数量（总数含 NaN 会导致比例过高）
+            n_elite_fallback: int = max(1, int(len(valid_indices) * elite_ratio))
             # 按适应度排序取 Top
-            sorted_order: np.ndarray = np.argsort(valid_fitnesses)[::-1][:n_elite]
+            sorted_order: np.ndarray = np.argsort(valid_fitnesses)[::-1][:n_elite_fallback]
             actual_indices: np.ndarray = valid_indices[sorted_order]
             elite_params = [
                 all_params[i] for i in actual_indices if i < len(all_params)

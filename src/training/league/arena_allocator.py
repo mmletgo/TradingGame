@@ -124,19 +124,13 @@ class HybridArenaAllocator:
         Returns:
             采样的 entry_id 列表
         """
-        # 获取所有 entry 及其代数
+        # 统一从索引获取所有 entry 及其代数（避免双数据源不一致）
         entries_with_gen: list[tuple[str, int]] = []
-        for entry_id, entry in pool.entries.items():
-            gen: int = entry.metadata.source_generation
-            entries_with_gen.append((entry_id, gen))
-
-        # 如果 entries 字典为空，尝试从索引获取
-        if not entries_with_gen:
-            index_entries = pool.list_entries()
-            for index_entry in index_entries:
-                entry_id_str: str = index_entry["entry_id"]
-                gen_val: int = index_entry.get("source_generation", 0)
-                entries_with_gen.append((entry_id_str, gen_val))
+        index_entries: list[dict[str, Any]] = pool.list_entries()
+        for index_entry in index_entries:
+            entry_id_str: str = index_entry["entry_id"]
+            gen_val: int = index_entry.get("source_generation", 0)
+            entries_with_gen.append((entry_id_str, gen_val))
 
         if not entries_with_gen:
             return []

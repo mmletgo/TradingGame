@@ -53,7 +53,7 @@ src/training/league/
 
 ### LeagueTrainingConfig (config.py)
 
-联盟训练配置类，关键参数：
+联盟训练配置类，`validate()` 方法校验所有参数合法性（包括 `sampling_strategy` 合法值和 `convergence_fitness_std_threshold > 0`）。关键参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -86,7 +86,7 @@ src/training/league/
 ### OpponentEntry (opponent_entry.py)
 
 对手条目数据结构，包含：
-- `OpponentMetadata`：元数据（entry_id, agent_type, source, win_rates 等）
+- `OpponentMetadata`：元数据（entry_id, agent_type, source, win_rates 等），`from_dict()` 容忍未知字段实现向前兼容
 - `genome_data`：基因组数据（序列化的 NEAT 基因组）
 - `network_data`：网络参数（可选，延迟加载）
 - `pre_evolution_fitness`：预进化适应度数据（可选，`{sub_pop_id: fitness_array}`）
@@ -111,7 +111,7 @@ entry_dir/
 - `sample_opponents(n, strategy, target_type, current_generation)`：采样对手
 - `sample_opponents_batch(n, strategy, target_type, current_generation)`：批量采样 n 个不重复对手
 - `update_entry_win_rate(entry_id, target_type, outcome, ema_alpha)`：更新条目胜率（EMA 平滑）
-- `cleanup(current_generation)`：清理旧条目（优先删非里程碑，不够时删最旧的里程碑）
+- `cleanup(current_generation)`：清理旧条目（优先删非里程碑，不够时删最旧的里程碑），批量删除后统一写入索引一次
 - `clear_memory_cache()`：清理所有条目的内存缓存（genome_data, network_data 置 None）
 
 **采样策略：**
@@ -177,7 +177,7 @@ class HybridSamplingResult:
 
 **主要方法：**
 - `sample_historical(pool_manager, current_generation)` -> `HybridSamplingResult | None`：带新鲜度约束的历史对手采样，所有类型对手池为空时返回 None
-- `_sample_with_freshness(pool, n_total, freshness_ratio, current_generation)` -> `list[str]`：单个对手池的新鲜度约束采样
+- `_sample_with_freshness(pool, n_total, freshness_ratio, current_generation)` -> `list[str]`：单个对手池的新鲜度约束采样，统一使用 `pool.list_entries()` 索引作为数据源
 
 **精英网络提取**由 LeagueTrainer 负责（因为需要加载 entry 数据），allocator 仅返回采样的 entry IDs，`elite_networks` 和 `total_elite_counts` 由调用方填充。
 
@@ -227,6 +227,7 @@ class GenerationalComparisonStats:
 6. 计算代际适应度对比
 7. 检查冻结/解冻
 8. 同步基因组 + 保存里程碑
+8.5. 等待里程碑后台线程完成（防止与步骤9/10竞态）
 9. 更新历史对手胜率
 10. 清理对手池
 ```
@@ -273,7 +274,7 @@ class GenerationalComparisonStats:
 **精英网络提取（模块级函数）：**
 - `extract_elite_networks(pre_evolution_fitness, network_data, elite_ratio, genome_data)` - 从历史 entry 中提取 Top 精英的网络参数
   - 按 `pre_evolution_fitness` 排序取 Top `elite_ratio`（默认 5%）
-  - 回退机制：`pre_evolution_fitness` 不可用时从 `genome_data` 的 fitnesses 提取（过滤 NaN）
+  - 回退机制：`pre_evolution_fitness` 不可用时从 `genome_data` 的 fitnesses 提取（过滤 NaN），精英数量基于有效样本数计算（而非含 NaN 的总数）
   - 返回 `(精英总数, packed_network_params_tuple)`
 
 **冻结状态数据类：**
@@ -290,8 +291,9 @@ class SpeciesFreezeState:
 
 **检查点系统：**
 - `save_checkpoint()`：先调用 `_sync_genomes_if_needed()`，内联父类序列化逻辑 + league 数据，主线程序列化到内存字节，后台守护线程异步写盘
-- `load_checkpoint()`：父类已有 magic bytes 检测（兼容 gzip 和 plain pickle），league 数据使用 plain pickle 读取
+- `load_checkpoint()`：父类 `load_checkpoint()` 返回 `checkpoint_data` 字典，子类直接复用（避免重复反序列化）
 - `train()` 中每代都调用 `checkpoint_callback`
+- `train()` 中 `_libc` 句柄在模块级缓存，避免每次 `CDLL("libc.so.6")` 开销
 
 ---
 
@@ -380,7 +382,7 @@ INFO -   MARKET_MAKER: 种群=0.0567(上代=0.0565,变化=+0.0002) | 精英=0.07
 INFO - 物种 MARKET_MAKER 已冻结 (第 120 代, avg=0.0567, elite=0.0789)
 ```
 
-复评日志：
+复评日志（每10代 INFO，其余 DEBUG；解冻事件始终 INFO）：
 ```
 INFO - 物种 MARKET_MAKER 复评 (冻结于第 120 代): 冻结时avg=0.0567, 当前avg=0.0550, 下降比例=0.0300, 阈值=0.0500
 INFO - 物种 MARKET_MAKER 保持冻结 (下降 3.00%, 未下降超过阈值 5.00%)

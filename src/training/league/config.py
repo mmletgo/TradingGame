@@ -76,3 +76,15 @@ class LeagueTrainingConfig:
             raise ValueError(
                 "historical_freshness_ratio must be between 0.0 and 1.0"
             )
+        # 采样策略校验
+        valid_strategies: set[str] = {"uniform", "recency", "diverse", "pfsp"}
+        if self.sampling_strategy not in valid_strategies:
+            raise ValueError(
+                f"sampling_strategy must be one of {valid_strategies}, "
+                f"got '{self.sampling_strategy}'"
+            )
+        # 收敛阈值校验
+        if self.convergence_fitness_std_threshold <= 0:
+            raise ValueError(
+                "convergence_fitness_std_threshold must be > 0"
+            )

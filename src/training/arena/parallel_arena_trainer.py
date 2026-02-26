@@ -1258,7 +1258,7 @@ class ParallelArenaTrainer:
         checkpoints.sort(key=lambda x: x[0], reverse=True)
         return str(checkpoints[0][1])
 
-    def load_checkpoint(self, path: str) -> None:
+    def load_checkpoint(self, path: str) -> dict[str, Any]:
         """加载检查点
 
         支持多种检查点格式：
@@ -1341,8 +1341,7 @@ class ParallelArenaTrainer:
         # 同步网络参数到 Arena Workers
         self._sync_networks_to_workers()
 
-        # 【内存泄漏修复】加载完成后释放 checkpoint_data 及临时对象
-        del checkpoint_data
+        # 【内存泄漏修复】加载完成后释放临时对象
         gc.collect(0)
         gc.collect(1)
         gc.collect(2)
@@ -1352,6 +1351,8 @@ class ParallelArenaTrainer:
             f"检查点已加载: {path}, generation={self.generation}, "
             f"version={checkpoint_version}"
         )
+
+        return checkpoint_data
 
     def _load_population_from_compact_data(
         self, population: Population, pop_data: dict[str, Any]

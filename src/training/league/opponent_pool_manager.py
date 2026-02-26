@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class OpponentPoolManager:
     """多类型对手池管理器
 
-    管理四种 Agent 类型的独立对手池。
+    管理两种 Agent 类型的独立对手池。
     """
 
     def __init__(self, config: LeagueTrainingConfig) -> None:
@@ -31,7 +31,7 @@ class OpponentPoolManager:
         self.config = config
         self.pool_dir = Path(config.pool_dir)
 
-        # 四种类型的对手池
+        # 两种类型的对手池
         self.pools: dict[AgentType, OpponentPool] = {
             agent_type: OpponentPool(agent_type, self.pool_dir, config)
             for agent_type in AgentType

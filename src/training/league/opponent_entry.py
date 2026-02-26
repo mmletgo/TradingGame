@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,10 +37,13 @@ class OpponentMetadata:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OpponentMetadata:
-        """从字典创建"""
+        """从字典创建（容忍未知字段）"""
         data = data.copy()
         data['agent_type'] = AgentType(data['agent_type'])
-        return cls(**data)
+        # 过滤未知字段，确保向前兼容
+        known_fields: set[str] = {f.name for f in fields(cls)}
+        filtered: dict[str, Any] = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered)
 
 
 @dataclass
