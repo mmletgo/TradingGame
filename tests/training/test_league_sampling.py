@@ -239,7 +239,7 @@ class TestPFSPSampling:
         ]
         pool = _create_test_pool(tmp_path, entries_config)
 
-        weights = pool._compute_weights(
+        weights = pool.compute_weights(
             pool._index["entries"],
             strategy='pfsp',
             target_type=AgentType.MARKET_MAKER,
@@ -269,7 +269,7 @@ class TestPFSPSampling:
         ]
         pool = _create_test_pool(tmp_path, entries_config)
 
-        weights = pool._compute_weights(
+        weights = pool.compute_weights(
             pool._index["entries"],
             strategy='pfsp',
             target_type=AgentType.MARKET_MAKER,
@@ -292,13 +292,13 @@ class TestPFSPSampling:
         pool = _create_test_pool(tmp_path, entries_config)
 
         # target_type=None 时应退化为 recency
-        pfsp_weights = pool._compute_weights(
+        pfsp_weights = pool.compute_weights(
             pool._index["entries"],
             strategy='pfsp',
             target_type=None,
             current_generation=100,
         )
-        recency_weights = pool._compute_weights(
+        recency_weights = pool.compute_weights(
             pool._index["entries"],
             strategy='recency',
             target_type=None,
@@ -362,58 +362,6 @@ class TestBatchSampling:
                 f"应至少 {min_expected} 次"
             )
 
-    def test_batch_for_type_assembles_correctly(self, tmp_path: Path) -> None:
-        """OpponentPoolManager.sample_opponents_batch_for_type 正确组装结果"""
-        config = LeagueTrainingConfig(
-            pool_dir=str(tmp_path),
-            milestone_interval=10,
-            recency_decay_lambda=2.0,
-            pfsp_exponent=2.0,
-            pfsp_explore_bonus=2.0,
-            pfsp_win_rate_ema_alpha=0.3,
-            sampling_strategy='uniform',
-        )
-        manager = OpponentPoolManager(config)
-
-        # 向非目标类型添加若干条目（目标类型为 RETAIL_PRO，对手类型为 MARKET_MAKER）
-        for agent_type in AgentType:
-            if agent_type == AgentType.RETAIL_PRO:
-                continue
-            pool = manager.get_pool(agent_type)
-            pool._index = pool._create_empty_index()
-            for i in range(5):
-                pool._index["entries"].append({
-                    "entry_id": f"{agent_type.value}_e{i}",
-                    "source": "main_agents",
-                    "source_generation": i * 10,
-                    "add_reason": "milestone",
-                    "avg_fitness": 0.0,
-                    "win_rates": {},
-                    "match_counts": {},
-                    "created_at": "2024-01-01T00:00:00Z",
-                })
-
-        n_arenas = 3
-        results = manager.sample_opponents_batch_for_type(
-            target_type=AgentType.RETAIL_PRO,
-            n_arenas=n_arenas,
-            current_generation=40,
-        )
-
-        # 应返回 n_arenas 个字典
-        assert len(results) == n_arenas
-
-        for arena_opponents in results:
-            # 目标类型 (RETAIL_PRO) 应为 None
-            assert arena_opponents[AgentType.RETAIL_PRO] is None
-            # 其他类型应有 entry_id
-            for agent_type in AgentType:
-                if agent_type == AgentType.RETAIL_PRO:
-                    continue
-                assert arena_opponents[agent_type] is not None, (
-                    f"{agent_type.value} 应有对手条目"
-                )
-                assert arena_opponents[agent_type].startswith(agent_type.value)
 
 
 # ===========================================================================
@@ -421,7 +369,7 @@ class TestBatchSampling:
 # ===========================================================================
 
 class TestComputeWeights:
-    """测试 _compute_weights 方法"""
+    """测试 compute_weights 方法"""
 
     def test_uniform_weights(self, tmp_path: Path) -> None:
         """均匀策略应返回全 1"""
@@ -431,7 +379,7 @@ class TestComputeWeights:
         ]
         pool = _create_test_pool(tmp_path, entries_config)
 
-        weights = pool._compute_weights(
+        weights = pool.compute_weights(
             pool._index["entries"],
             strategy='uniform',
             target_type=None,
@@ -453,7 +401,7 @@ class TestComputeWeights:
         decay_lambda = pool.config.recency_decay_lambda   # 2.0
         milestone = pool.config.milestone_interval          # 10
 
-        weights = pool._compute_weights(
+        weights = pool.compute_weights(
             pool._index["entries"],
             strategy='recency',
             target_type=None,
@@ -502,7 +450,7 @@ class TestComputeWeights:
         pfsp_exp = pool.config.pfsp_exponent                  # 2.0
         explore_bonus_coeff = pool.config.pfsp_explore_bonus  # 2.0
 
-        weights = pool._compute_weights(
+        weights = pool.compute_weights(
             pool._index["entries"],
             strategy='pfsp',
             target_type=AgentType.RETAIL_PRO,

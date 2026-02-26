@@ -116,6 +116,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._checkpoint_thread: threading.Thread | None = None
         self._milestone_save_failed: bool = False
 
+        # 追踪上一轮是否有历史Agent（用于检测有→无变化）
+        self._had_historical_last_round: bool = False
+
     def setup(self) -> None:
         """初始化
 
@@ -125,9 +128,11 @@ class LeagueTrainer(ParallelArenaTrainer):
         3. 加载对手池
         """
         # 噪声交易者增强（在父类 setup 前设置，确保 Worker 使用增强参数）
-        self.config.noise_trader.count = self.league_config.hybrid_noise_trader_count
-        self.config.noise_trader.quantity_mu = (
-            self.league_config.hybrid_noise_trader_quantity_mu
+        from dataclasses import replace
+        self.config.noise_trader = replace(
+            self.config.noise_trader,
+            count=self.league_config.hybrid_noise_trader_count,
+            quantity_mu=self.league_config.hybrid_noise_trader_quantity_mu,
         )
 
         # 1. 调用父类 setup
@@ -473,6 +478,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         assert self.arena_allocator is not None
         assert self.fitness_aggregator is not None
 
+        # M3: 等待上一轮 checkpoint 线程完成（防止竞态）
+        if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
+            self._checkpoint_thread.join()
+
         # 检查上一轮里程碑保存是否失败
         if self._milestone_save_failed:
             self.logger.warning("上一轮里程碑保存失败，请检查磁盘空间和对手池目录权限")
@@ -509,9 +518,18 @@ class LeagueTrainer(ParallelArenaTrainer):
             del combined_infos
 
             # 手动同步合并后的网络参数
-            # 利用 _sync_networks_to_workers() override 的回退逻辑
-            # （_cached_network_params_data 为 None 时使用 _current_gen_network_params）
             self._sync_networks_to_workers()
+        elif self._had_historical_last_round:
+            # S1: 上一轮有历史Agent但本轮没有 → 需要重新发送仅当前代的 agent_infos
+            current_only_infos: list[AgentInfo] = self._build_agent_infos()
+            self._arena_worker_pool.update_agent_infos(current_only_infos)
+            del current_only_infos
+
+        # 更新追踪标志
+        self._had_historical_last_round = bool(self._current_historical_agent_infos)
+
+        # 缓存进化前的代数（super().run_round() 会递增 self.generation）
+        pre_evolution_generation: int = self.generation
 
         # 5. 运行 episodes + NEAT 进化（复用父类逻辑）
         # 父类 run_round() 会：
@@ -521,16 +539,16 @@ class LeagueTrainer(ParallelArenaTrainer):
         # - 调用 _sync_networks_to_workers()（override 会合并历史参数）
         round_stats = super().run_round(episode_callback=episode_callback)
 
-        # 6. 计算代际适应度对比
-        self._compute_generational_comparison(round_stats)
+        # 6. 计算代际适应度对比（使用进化前代数）
+        self._compute_generational_comparison(round_stats, pre_evolution_generation)
 
-        # 7. 检查冻结/解冻
+        # 7. 检查冻结/解冻（使用进化前代数）
         if self.league_config.freeze_on_convergence:
-            self._check_freeze_thaw(round_stats)
+            self._check_freeze_thaw(round_stats, pre_evolution_generation)
 
         # 8. 同步基因组 + 保存里程碑
         self._sync_genomes_if_needed()
-        if self.generation > 0:
+        if self.generation > 0 and self.generation % self.league_config.milestone_interval == 0:
             self._save_milestone()
 
         # 等待里程碑后台保存完成（防止与步骤9/10的对手池操作竞态）
@@ -558,6 +576,7 @@ class LeagueTrainer(ParallelArenaTrainer):
     def _compute_generational_comparison(
         self,
         round_stats: dict[str, Any],
+        generation: int | None = None,
     ) -> None:
         """计算代际适应度对比
 
@@ -583,9 +602,10 @@ class LeagueTrainer(ParallelArenaTrainer):
                 ])
 
         # 计算代际对比
+        effective_generation: int = generation if generation is not None else self.generation
         stats: GenerationalComparisonStats | None = (
             self.fitness_aggregator.compute_generational_comparison(
-                generation=self.generation,
+                generation=effective_generation,
                 avg_fitness=current_gen_fitness,
             )
         )
@@ -687,7 +707,22 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         current_avg = round_stats.get("current_avg_fitness")
         if not isinstance(current_avg, dict):
-            return
+            # M10: 回退——从 avg_fitnesses 计算当前代平均适应度
+            avg_fitnesses = round_stats.get("avg_fitnesses")
+            if not isinstance(avg_fitnesses, dict):
+                return
+            current_avg = {}
+            for (agent_type_key, sub_pop_id), arr in avg_fitnesses.items():
+                if sub_pop_id < 1000 and isinstance(arr, np.ndarray) and len(arr) > 0:
+                    if agent_type_key not in current_avg:
+                        current_avg[agent_type_key] = float(np.mean(arr))
+                    else:
+                        # 多个子种群时取整体平均
+                        current_avg[agent_type_key] = (
+                            current_avg[agent_type_key] + float(np.mean(arr))
+                        ) / 2.0
+            if not current_avg:
+                return
 
         ema_alpha: float = self.league_config.pfsp_win_rate_ema_alpha
 
@@ -704,8 +739,11 @@ class LeagueTrainer(ParallelArenaTrainer):
                     ema_alpha=ema_alpha,
                 )
 
-    def _check_freeze_thaw(self, round_stats: dict[str, Any]) -> None:
+    def _check_freeze_thaw(
+        self, round_stats: dict[str, Any], generation: int | None = None
+    ) -> None:
         """检查并执行冻结/解冻逻辑"""
+        effective_generation: int = generation if generation is not None else self.generation
         converged_by_type: dict[AgentType, bool] | None = round_stats.get(
             "converged_by_type"
         )
@@ -720,14 +758,14 @@ class LeagueTrainer(ParallelArenaTrainer):
                 is_converged: bool = converged_by_type.get(agent_type, False)
                 if (
                     is_converged
-                    and self.generation >= self.league_config.min_freeze_generation
+                    and effective_generation >= self.league_config.min_freeze_generation
                 ):
                     # 获取当前适应度作为基准
                     current_avg = round_stats.get("current_avg_fitness", {})
                     elite_avg = round_stats.get("elite_current_avg", {})
 
                     state.is_frozen = True
-                    state.freeze_generation = self.generation
+                    state.freeze_generation = effective_generation
                     state.freeze_baseline_fitness = (
                         current_avg.get(agent_type, 0.0)
                         if isinstance(current_avg, dict) else 0.0
@@ -738,7 +776,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                     )
 
                     self.logger.info(
-                        f"物种 {agent_type.name} 已冻结 (第 {self.generation} 代, "
+                        f"物种 {agent_type.name} 已冻结 (第 {effective_generation} 代, "
                         f"avg={state.freeze_baseline_fitness:.4f}, "
                         f"elite={state.freeze_elite_fitness:.4f})"
                     )
@@ -748,7 +786,7 @@ class LeagueTrainer(ParallelArenaTrainer):
             state = self._freeze_states[agent_type]
             if not state.is_frozen:
                 continue
-            if self.generation > state.freeze_generation:
+            if effective_generation > state.freeze_generation:
                 self._reevaluate_frozen_species(agent_type, round_stats)
 
         # 3. 检查是否所有物种都已冻结
@@ -1019,6 +1057,11 @@ class LeagueTrainer(ParallelArenaTrainer):
                 }
                 for agent_type, state in self._freeze_states.items()
             },
+            "fitness_aggregator_state": (
+                self.fitness_aggregator.get_state()
+                if self.fitness_aggregator is not None
+                else None
+            ),
         }
 
         # 序列化到内存字节
@@ -1090,6 +1133,14 @@ class LeagueTrainer(ParallelArenaTrainer):
                     )
                     state.freeze_elite_fitness = data.get("freeze_elite_fitness", 0.0)
                     state.thaw_count = data.get("thaw_count", 0)
+
+            # 恢复 fitness_aggregator 状态
+            fitness_agg_state = league_data.get("fitness_aggregator_state")
+            if fitness_agg_state is not None and self.fitness_aggregator is not None:
+                self.fitness_aggregator.set_state(fitness_agg_state)
+                self.logger.info(
+                    f"已恢复适应度历史 ({len(self.fitness_aggregator._fitness_history)} 代)"
+                )
 
             if any(s.is_frozen for s in self._freeze_states.values()):
                 frozen_names = [

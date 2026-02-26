@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -198,9 +198,7 @@ class HybridFitnessAggregator:
                 self._first_convergence_generation = (
                     self._comparison_history[-1].generation
                 )
-            elif self._fitness_history:
-                # fallback: 从 fitness_history 长度推算当前代数
-                self._first_convergence_generation = len(self._fitness_history) - 1
+            # 若无 _comparison_history（首次调用），保持 None，等下次有记录时再设置
 
         return is_all_converged, converged_by_type
 
@@ -218,3 +216,50 @@ class HybridFitnessAggregator:
         self._fitness_history.clear()
         self._elite_fitness_history.clear()
         self._first_convergence_generation = None
+
+    def get_state(self) -> dict:
+        """获取可序列化的状态（用于 checkpoint 持久化）
+
+        Returns:
+            包含 fitness_history, elite_fitness_history, first_convergence_generation 的字典
+        """
+        return {
+            "fitness_history": [
+                {k.value: v for k, v in d.items()} for d in self._fitness_history
+            ],
+            "elite_fitness_history": [
+                {k.value: v for k, v in d.items()} for d in self._elite_fitness_history
+            ],
+            "first_convergence_generation": self._first_convergence_generation,
+        }
+
+    def set_state(self, state: dict) -> None:
+        """从 checkpoint 恢复状态
+
+        Args:
+            state: get_state() 返回的字典
+        """
+        self._fitness_history.clear()
+        for d in state.get("fitness_history", []):
+            # 将字符串 key 恢复为 AgentType enum
+            restored: dict[AgentType, float] = {}
+            for k, v in d.items():
+                try:
+                    restored[AgentType(k)] = float(v)
+                except (ValueError, KeyError):
+                    pass
+            self._fitness_history.append(restored)
+
+        self._elite_fitness_history.clear()
+        for d in state.get("elite_fitness_history", []):
+            restored = {}
+            for k, v in d.items():
+                try:
+                    restored[AgentType(k)] = float(v)
+                except (ValueError, KeyError):
+                    pass
+            self._elite_fitness_history.append(restored)
+
+        self._first_convergence_generation = state.get(
+            "first_convergence_generation"
+        )

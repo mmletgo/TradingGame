@@ -53,7 +53,7 @@ src/training/league/
 
 ### LeagueTrainingConfig (config.py)
 
-联盟训练配置类，`validate()` 方法校验所有参数合法性（包括 `sampling_strategy` 合法值和 `convergence_fitness_std_threshold > 0`）。关键参数：
+联盟训练配置类，`__post_init__` 自动调用 `validate()` 校验所有参数合法性（包括 `sampling_strategy` 合法值、`convergence_fitness_std_threshold > 0`、`recency_decay_lambda > 0`、`pfsp_exponent > 0`、`pfsp_win_rate_ema_alpha ∈ (0, 1]`、`elite_ratio ∈ (0, 1]`、`min_freeze_generation >= 0`、`convergence_generations >= 1`、`generational_comparison_window >= 1`）。关键参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -110,7 +110,9 @@ entry_dir/
 - `add_entry(entry)`：添加对手条目
 - `sample_opponents(n, strategy, target_type, current_generation)`：采样对手
 - `sample_opponents_batch(n, strategy, target_type, current_generation)`：批量采样 n 个不重复对手
+- `compute_weights(entries, strategy, target_type, current_generation)`：统一计算各策略的采样权重（公开方法，供 arena_allocator 调用）
 - `update_entry_win_rate(entry_id, target_type, outcome, ema_alpha)`：更新条目胜率（EMA 平滑）
+- `save_index()`：保存索引文件（原子写入：先写 `.tmp` 再 `os.rename` 替换）
 - `cleanup(current_generation)`：清理旧条目（优先删非里程碑，不够时删最旧的里程碑），批量删除后统一写入索引一次
 - `clear_memory_cache()`：清理所有条目的内存缓存（genome_data, network_data 置 None）
 
@@ -171,9 +173,10 @@ class HybridSamplingResult:
 **采样策略（带新鲜度约束的 PFSP 加权采样）：**
 1. 对每种 AgentType 独立采样 `num_historical_generations` 个历史 entries
 2. 将对手池按代数排序，分为"最近 1/3（向上取整）"和"全池"
-3. 使用 `pool._compute_weights()` 获取配置策略（默认 PFSP）的采样权重
+3. 使用 `pool.compute_weights()` 获取配置策略（默认 PFSP）的采样权重
 4. 先从最近 1/3 中按 PFSP 权重无放回采样 `n_recent = n_total * freshness_ratio` 个
-5. 再从全池（排除已选）中按 PFSP 权重无放回采样剩余数量
+5. 采样不足补偿：若最近池实际采样数不足 n_recent，差额补偿到全池采样数
+6. 从全池（排除已选）中按 PFSP 权重无放回采样剩余数量
 
 **主要方法：**
 - `sample_historical(pool_manager, current_generation)` -> `HybridSamplingResult | None`：带新鲜度约束的历史对手采样，所有类型对手池为空时返回 None
@@ -206,6 +209,8 @@ class GenerationalComparisonStats:
 - `compute_generational_comparison(generation, avg_fitness)` -> `GenerationalComparisonStats | None`：计算代际适应度对比（第一代返回 None）
 - `check_convergence()` -> `(bool, dict[AgentType, bool])`：双重收敛判断（种群和精英的 std 都 ≤ 阈值）
 - `get_first_convergence_generation()` -> `int | None`：获取首次收敛代数
+- `get_state()` -> `dict`：获取可序列化状态（fitness_history, elite_fitness_history, first_convergence_generation），用于 checkpoint 持久化
+- `set_state(state)` -> `None`：从 checkpoint 恢复状态
 - `clear_history()`：清空历史
 
 ---
@@ -217,18 +222,21 @@ class GenerationalComparisonStats:
 **混合竞技场流程（run_round）：**
 
 ```
+0. 等待上一轮 checkpoint 线程完成（防竞态）
 1. 清理旧采样结果和历史数据
 2. PFSP 采样历史对手（带新鲜度约束）
 3. 提取精英网络，构建历史 AgentInfo 列表
 4. 更新 Workers 的 agent_infos 和合并网络
-5. super().run_round()（运行 episodes + NEAT 进化）
+   ├─ 有历史 Agent → 发送 combined agent_infos + 合并网络
+   └─ 上轮有本轮无 → 发送仅当前代 agent_infos
+5. 缓存进化前代数 → super().run_round()（运行 episodes + NEAT 进化）
    ├─ 历史 Agent（sub_pop_id >= 1000）自动不参与进化
    └─ _sync_networks_to_workers() override 合并历史参数
-6. 计算代际适应度对比
-7. 检查冻结/解冻
-8. 同步基因组 + 保存里程碑
+6. 计算代际适应度对比（使用进化前代数）
+7. 检查冻结/解冻（使用进化前代数）
+8. 同步基因组 + 按 milestone_interval 间隔保存里程碑
 8.5. 等待里程碑后台线程完成（防止与步骤9/10竞态）
-9. 更新历史对手胜率
+9. 更新历史对手胜率（含 avg_fitnesses 回退逻辑）
 10. 清理对手池
 ```
 
@@ -290,8 +298,8 @@ class SpeciesFreezeState:
 ```
 
 **检查点系统：**
-- `save_checkpoint()`：先调用 `_sync_genomes_if_needed()`，内联父类序列化逻辑 + league 数据，主线程序列化到内存字节，后台守护线程异步写盘
-- `load_checkpoint()`：父类 `load_checkpoint()` 返回 `checkpoint_data` 字典，子类直接复用（避免重复反序列化）
+- `save_checkpoint()`：先调用 `_sync_genomes_if_needed()`，内联父类序列化逻辑 + league 数据（含 `fitness_aggregator_state`），主线程序列化到内存字节，后台守护线程异步写盘
+- `load_checkpoint()`：父类 `load_checkpoint()` 返回 `checkpoint_data` 字典，子类直接复用（避免重复反序列化），恢复冻结状态和 `fitness_aggregator` 适应度历史
 - `train()` 中每代都调用 `checkpoint_callback`
 - `train()` 中 `_libc` 句柄在模块级缓存，避免每次 `CDLL("libc.so.6")` 开销
 

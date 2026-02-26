@@ -52,6 +52,10 @@ class LeagueTrainingConfig:
     min_freeze_generation: int = 30
     convergence_generations: int = 10  # 连续满足收敛条件的代数
 
+    def __post_init__(self) -> None:
+        """初始化后自动校验配置"""
+        self.validate()
+
     def validate(self) -> None:
         """验证配置有效性"""
         if self.max_pool_size_per_type < 1:
@@ -88,3 +92,21 @@ class LeagueTrainingConfig:
             raise ValueError(
                 "convergence_fitness_std_threshold must be > 0"
             )
+        if self.recency_decay_lambda <= 0:
+            raise ValueError("recency_decay_lambda must be > 0")
+        if self.pfsp_exponent <= 0:
+            raise ValueError("pfsp_exponent must be > 0")
+        if not 0.0 < self.pfsp_win_rate_ema_alpha <= 1.0:
+            raise ValueError(
+                "pfsp_win_rate_ema_alpha must be between 0.0 (exclusive) and 1.0 (inclusive)"
+            )
+        if not 0.0 < self.elite_ratio <= 1.0:
+            raise ValueError(
+                "elite_ratio must be between 0.0 (exclusive) and 1.0 (inclusive)"
+            )
+        if self.min_freeze_generation < 0:
+            raise ValueError("min_freeze_generation must be >= 0")
+        if self.convergence_generations < 1:
+            raise ValueError("convergence_generations must be >= 1")
+        if self.generational_comparison_window < 1:
+            raise ValueError("generational_comparison_window must be >= 1")

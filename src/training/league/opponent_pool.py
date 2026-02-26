@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import shutil
 from datetime import datetime, timezone
@@ -98,12 +99,14 @@ class OpponentPool:
         }
 
     def save_index(self) -> None:
-        """保存索引文件"""
+        """保存索引文件（原子写入）"""
         self.pool_dir.mkdir(parents=True, exist_ok=True)
         index_path = self.pool_dir / "pool_index.json"
+        tmp_path = self.pool_dir / "pool_index.json.tmp"
         self._index["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with open(index_path, 'w', encoding='utf-8') as f:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(self._index, f, indent=2, ensure_ascii=False)
+        os.rename(tmp_path, index_path)
 
     def load_index(self) -> None:
         """加载索引文件"""
@@ -360,7 +363,7 @@ class OpponentPool:
 
         self._invalidate_cache()
 
-    def _compute_weights(
+    def compute_weights(
         self,
         entries: list[dict[str, Any]],
         strategy: str,
@@ -402,7 +405,7 @@ class OpponentPool:
         if strategy == 'pfsp':
             if target_type is None:
                 # 退化为 recency 权重
-                return self._compute_weights(entries, 'recency', None, current_generation)
+                return self.compute_weights(entries, 'recency', None, current_generation)
 
             pfsp_exponent: float = self.config.pfsp_exponent
             explore_bonus_coeff: float = self.config.pfsp_explore_bonus
@@ -466,7 +469,7 @@ class OpponentPool:
         if target_type is None:
             return self._sample_recency_weighted(entries, n, current_generation)
 
-        weights = self._compute_weights(entries, 'pfsp', target_type, current_generation)
+        weights = self.compute_weights(entries, 'pfsp', target_type, current_generation)
         total: float = float(weights.sum())
 
         entry_ids: list[str] = [e["entry_id"] for e in entries]
@@ -544,7 +547,7 @@ class OpponentPool:
                 return result
 
         # 其他策略：使用统一权重计算
-        weights: np.ndarray = self._compute_weights(
+        weights: np.ndarray = self.compute_weights(
             entries, strategy, target_type, current_generation
         )
         total: float = float(weights.sum())
