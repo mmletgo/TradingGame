@@ -52,7 +52,7 @@ src/training/league/
 
 ### LeagueTrainingConfig (config.py)
 
-联盟训练配置类，`__post_init__` 自动调用 `validate()` 校验所有参数合法性（包括 `sampling_strategy` 合法值、`convergence_fitness_std_threshold > 0`、`recency_decay_lambda > 0`、`pfsp_exponent > 0`、`pfsp_win_rate_ema_alpha ∈ (0, 1]`、`elite_ratio ∈ (0, 1]`、`min_freeze_generation >= 0`、`convergence_generations >= 1`、`generational_comparison_window >= 1`）。关键参数：
+联盟训练配置类，`__post_init__` 自动调用 `validate()` 校验所有参数合法性（包括 `pool_dir`/`checkpoint_dir` 非空、`sampling_strategy` 通过 `Literal` 类型约束、`convergence_fitness_std_threshold > 0`、`recency_decay_lambda > 0`、`pfsp_exponent > 0`、`pfsp_win_rate_ema_alpha ∈ (0, 1]`、`elite_ratio ∈ (0, 1]`、`min_freeze_generation >= 0`、`convergence_generations >= 1`、`generational_comparison_window >= 1`、`hybrid_noise_trader_count >= 0`、`convergence_generations <= generational_comparison_window`）。关键参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -86,9 +86,11 @@ src/training/league/
 
 对手条目数据结构，包含：
 - `OpponentMetadata`：元数据（entry_id, agent_type, source, win_rates 等），`from_dict()` 容忍未知字段实现向前兼容
-- `genome_data`：基因组数据（序列化的 NEAT 基因组）
-- `network_data`：网络参数（可选，延迟加载）
+- `genome_data`：基因组数据（序列化的 NEAT 基因组），`load()` 时 `genomes.npz` 不存在则为 `None`
+- `network_data: dict[int, tuple[np.ndarray, ...]] | None`：网络参数（可选，延迟加载）
 - `pre_evolution_fitness`：预进化适应度数据（可选，`{sub_pop_id: fitness_array}`）
+
+**原子写入**：`save()` 先写入 `{entry_id}.tmp` 临时目录，全部完成后 `shutil.move` 替换目标目录，保存失败时清理临时目录。保存时自动更新 `metadata.agent_count`。sub_pop_id 解析统一使用正则 `re.match(r"^sub_(\d+)_...$", key)`。
 
 存储格式（使用 `np.savez` 无压缩写入）：
 ```
@@ -112,7 +114,10 @@ entry_dir/
 - `compute_weights(entries, strategy, target_type, current_generation)`：统一计算各策略的采样权重（公开方法，供 arena_allocator 调用）
 - `update_entry_win_rate(entry_id, target_type, outcome, ema_alpha)`：更新条目胜率（EMA 平滑）
 - `save_index()`：保存索引文件（原子写入：先写 `.tmp` 再 `os.rename` 替换）
-- `cleanup(current_generation)`：清理旧条目（优先删非里程碑，不够时删最旧的里程碑），批量删除后统一写入索引一次
+- `load_index()`：加载索引文件，捕获 `json.JSONDecodeError`/`OSError`/`ValueError` 异常并备份损坏文件（`.json.bak`）
+- `cleanup(current_generation)`：清理旧条目（优先删非里程碑，不够时删最旧的里程碑），操作前浅拷贝 entries 列表，批量删除后统一写入索引一次
+- `list_entries()`：返回索引 entries 的浅拷贝（防止外部修改）
+- `get_entry()`：从磁盘加载时记录 WARNING 日志
 - `clear_memory_cache()`：清理所有条目的内存缓存（genome_data, network_data 置 None）
 
 **采样策略：**
@@ -144,10 +149,10 @@ p(opponent) ∝ f(win_rate) × recency_factor × exploration_bonus
 
 ### OpponentPoolManager (opponent_pool_manager.py)
 
-管理两种 Agent 类型的独立对手池。
+管理两种 Agent 类型的独立对手池。通过模块级常量 `LEAGUE_AGENT_TYPES = [AgentType.RETAIL_PRO, AgentType.MARKET_MAKER]` 显式枚举参与联盟训练的类型。
 
 **主要方法：**
-- `add_snapshot(generation, genome_data_map, ..., pre_evolution_fitness_map=None)`：批量保存快照（多线程并行写入各 AgentType），可附带预进化适应度数据
+- `add_snapshot(generation, genome_data_map, ..., pre_evolution_fitness_map=None)`：批量保存快照（多线程并行写入各 AgentType，futures 结果收集带异常捕获和日志），可附带预进化适应度数据
 - `get_pool(agent_type)`：获取指定类型的对手池
 - `has_any_historical_opponents()`：检查是否有任何历史对手
 - `cleanup_all(current_generation)`：清理所有类型的旧条目
@@ -170,10 +175,10 @@ class HybridSamplingResult:
 ```
 
 **采样策略（带新鲜度约束的 PFSP 加权采样）：**
-1. 对每种 AgentType 独立采样 `num_historical_generations` 个历史 entries
+1. 仅遍历 `LEAGUE_AGENT_TYPES`，对每种类型独立采样 `num_historical_generations` 个历史 entries
 2. 将对手池按代数排序，分为"最近 1/3（向上取整）"和"全池"
 3. 使用 `pool.compute_weights()` 获取配置策略（默认 PFSP）的采样权重
-4. 先从最近 1/3 中按 PFSP 权重无放回采样 `n_recent = n_total * freshness_ratio` 个
+4. `freshness_ratio <= 0` 时 `n_recent = 0`（全部从全池采样）；否则 `n_recent = max(1, n_total * freshness_ratio)`
 5. 采样不足补偿：若最近池实际采样数不足 n_recent，差额补偿到全池采样数
 6. 从全池（排除已选）中按 PFSP 权重无放回采样剩余数量
 
@@ -204,8 +209,8 @@ class GenerationalComparisonStats:
 ```
 
 **主要方法：**
-- `compute_generational_comparison(generation, avg_fitness)` -> `GenerationalComparisonStats | None`：计算代际适应度对比（第一代返回 None）
-- `check_convergence()` -> `(bool, dict[AgentType, bool])`：双重收敛判断（种群和精英的 std 都 ≤ 阈值）
+- `compute_generational_comparison(generation, fitness_arrays)` -> `GenerationalComparisonStats | None`：计算代际适应度对比（第一代返回 None），内部对 `previous_avg`/`elite_previous` 做浅拷贝防止引用共享
+- `check_convergence()` -> `(bool, dict[AgentType, bool])`：双重收敛判断（种群和精英的 std 使用 `ddof=1` 样本标准差 ≤ 阈值）
 - `get_first_convergence_generation()` -> `int | None`：获取首次收敛代数
 - `get_state()` -> `dict`：获取可序列化状态（fitness_history, elite_fitness_history, first_convergence_generation），用于 checkpoint 持久化
 - `set_state(state)` -> `None`：从 checkpoint 恢复状态
@@ -253,8 +258,9 @@ class GenerationalComparisonStats:
 | `_prepare_historical_agents()` | 加载历史 entries → extract_elite_networks → 构建 AgentInfo 列表 |
 | `_compute_generational_comparison()` | 过滤当前代适应度（sub_pop_id < 1000）→ 代际对比 |
 | `_update_historical_win_rates()` | 根据当前代平均适应度 > 0 判断胜负，更新对手池 |
-| `_check_freeze_thaw()` | 未冻结→收敛检查→冻结；已冻结→每代复评→解冻 |
+| `_check_freeze_thaw()` | 未冻结→收敛检查→冻结；已冻结→每代复评（双维度）→解冻 |
 | `_save_milestone()` | 异步保存里程碑（附带预进化适应度） |
+| `_collect_genome_data()` | 收集所有种群的基因组数据，供 `_save_milestone()` 和 `save_checkpoint()` 复用 |
 | `_sync_genomes_if_needed()` | 从 Worker 同步基因组数据（checkpoint/milestone 保存前） |
 
 **历史 Agent ID 方案：**
@@ -296,8 +302,8 @@ class SpeciesFreezeState:
 ```
 
 **检查点系统：**
-- `save_checkpoint()`：先调用 `_sync_genomes_if_needed()`，内联父类序列化逻辑 + league 数据（含 `fitness_aggregator_state`），主线程序列化到内存字节，后台守护线程异步写盘
-- `load_checkpoint()`：父类 `load_checkpoint()` 返回 `checkpoint_data` 字典，子类直接复用（避免重复反序列化），恢复冻结状态和 `fitness_aggregator` 适应度历史
+- `save_checkpoint()`：先调用 `_sync_genomes_if_needed()`，内联父类序列化逻辑 + league 数据（含 `fitness_aggregator_state`），主线程序列化到内存字节，后台守护线程仅负责写盘（不再调用 `pool_manager.save_all()`，避免线程竞态）
+- `load_checkpoint()`：父类 `load_checkpoint()` 返回 `checkpoint_data` 字典，子类直接复用（避免重复反序列化），恢复冻结状态和 `fitness_aggregator` 适应度历史，加载后自动设置 `_had_historical_last_round = True`
 - `train()` 中每代都调用 `checkpoint_callback`
 - `train()` 中 `_libc` 句柄在模块级缓存，避免每次 `CDLL("libc.so.6")` 开销
 
@@ -362,10 +368,11 @@ class SpeciesFreezeState:
 1. 某物种达到双重收敛 → 记录当前平均适应度作为基准 → 冻结
 2. 冻结物种不参与 NEAT 进化（从 `_build_fitness_map` 中排除）
 
-**每代复评：**
+**每代复评（双维度）：**
 - 冻结物种每代都在混合竞技场参与交易，因此每代都复评
-- 复评指标：当前平均适应度 vs 冻结时的平均适应度
-- 下降比例 `(freeze_fitness - current_fitness) / |freeze_fitness|` 超过 `freeze_thaw_threshold`（默认 5%）则解冻
+- 复评指标：种群平均下降 `pop_drop` 和精英平均下降 `elite_drop`，取 `max(pop_drop, elite_drop)` 作为最终下降比例
+- 下降比例公式：`(freeze_value - current_value) / max(|freeze_value|, 0.01)`（分母使用 `max(abs, 0.01)` 避免除零）
+- 下降比例超过 `freeze_thaw_threshold`（默认 5%）则解冻
 
 **隐式冷却期**：解冻后需要 `convergence_generations`（10 代）连续收敛才会重新冻结，天然防止快速反复冻结/解冻。
 
@@ -390,7 +397,7 @@ INFO - 物种 MARKET_MAKER 已冻结 (第 120 代, avg=0.0567, elite=0.0789)
 
 复评日志（每10代 INFO，其余 DEBUG；解冻事件始终 INFO）：
 ```
-INFO - 物种 MARKET_MAKER 复评 (冻结于第 120 代): 冻结时avg=0.0567, 当前avg=0.0550, 下降比例=0.0300, 阈值=0.0500
+INFO - 物种 MARKET_MAKER 复评 (冻结于第 120 代): 种群avg: 冻结=0.0567 当前=0.0550 下降=0.0300 | 精英avg: 冻结=0.0789 当前=0.0770 下降=0.0241 | 取max=0.0300, 阈值=0.0500
 INFO - 物种 MARKET_MAKER 保持冻结 (下降 3.00%, 未下降超过阈值 5.00%)
 ```
 
@@ -487,8 +494,8 @@ trainer.stop()
 `OpponentEntry` 的 `genome_data` 和 `network_data` 字段可以为 `None`：
 
 ```python
-genome_data: dict[int, tuple[...]] | None  # 保存后可置为 None
-network_data: dict[int, tuple] | None      # 延迟加载
+genome_data: dict[int, tuple[...]] | None              # 保存后可置为 None
+network_data: dict[int, tuple[np.ndarray, ...]] | None  # 延迟加载
 ```
 
 **优化策略**：保存到磁盘后，清理内存中的大数据字段，只保留元数据。需要时从磁盘重新加载。
