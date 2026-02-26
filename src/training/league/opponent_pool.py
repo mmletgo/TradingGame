@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import random
@@ -14,7 +15,7 @@ import numpy as np
 
 from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
-from src.training.league.opponent_entry import OpponentEntry, OpponentMetadata
+from src.training.league.opponent_entry import OpponentEntry
 
 
 class OpponentPool:
@@ -44,7 +45,7 @@ class OpponentPool:
         # Recency 采样权重缓存
         self._prob_cache: np.ndarray | None = None
         self._entry_ids_cache: list[str] | None = None
-        self._last_cached_generation: int = -1
+        self._last_cached_generation: int | None = None
 
     def _invalidate_cache(self) -> None:
         """失效缓存"""
@@ -116,8 +117,16 @@ class OpponentPool:
                     else:
                         # 文件为空，创建新索引
                         self._index = self._create_empty_index()
-            except json.JSONDecodeError:
-                # 文件损坏，创建新索引
+            except (json.JSONDecodeError, OSError, ValueError) as e:
+                logger = logging.getLogger("league")
+                logger.error(f"索引文件损坏或不可读: {index_path}, 错误: {e}")
+                # 备份损坏文件
+                backup_path = index_path.with_suffix(".json.bak")
+                try:
+                    shutil.copy2(index_path, backup_path)
+                    logger.info(f"损坏索引已备份到: {backup_path}")
+                except OSError:
+                    pass
                 self._index = self._create_empty_index()
         else:
             self._index = self._create_empty_index()
@@ -216,6 +225,9 @@ class OpponentPool:
         # 从磁盘加载
         entry_dir = self.pool_dir / entry_id
         if entry_dir.exists():
+            logging.getLogger("league").warning(
+                f"条目 {entry_id} 不在内存缓存中，从磁盘加载"
+            )
             entry = OpponentEntry.load(entry_dir, load_networks=load_networks)
             self.entries[entry_id] = entry
             return entry
@@ -228,7 +240,7 @@ class OpponentPool:
         Returns:
             条目元数据列表
         """
-        return self._index.get("entries", [])
+        return list(self._index.get("entries", []))
 
     def get_entry_ids(self) -> list[str]:
         """获取所有条目 ID
@@ -306,14 +318,19 @@ class OpponentPool:
         """多样性采样：选择适应度分布较均匀的对手"""
         # 按适应度排序
         sorted_entries = sorted(entries, key=lambda e: e.get("avg_fitness", 0))
+        n = min(n, len(sorted_entries))
 
-        # 均匀间隔采样
+        # 均匀间隔采样（使用 set 去重）
         step = len(sorted_entries) / n
+        sampled_set: set[str] = set()
         sampled: list[str] = []
         for i in range(n):
             idx = int(i * step)
             idx = min(idx, len(sorted_entries) - 1)
-            sampled.append(sorted_entries[idx]["entry_id"])
+            entry_id: str = sorted_entries[idx]["entry_id"]
+            if entry_id not in sampled_set:
+                sampled_set.add(entry_id)
+                sampled.append(entry_id)
 
         return sampled
 
@@ -433,6 +450,7 @@ class OpponentPool:
                     count: int = 0
                     if match_counts is not None:
                         count = match_counts.get(key, 0)
+                    # max(1.0, ...) 确保交战过的对手探索奖励 >= 1.0，即不低于基础权重
                     exploration_bonus = max(1.0, explore_bonus_coeff / math.sqrt(count + 1))
 
                 weights[i] = f_win * recency_factor * exploration_bonus
@@ -480,8 +498,9 @@ class OpponentPool:
         sample_size: int = min(n, len(entry_ids))
         non_zero_count: int = int(np.count_nonzero(weights))
         if non_zero_count < sample_size:
-            weights = np.ones(len(entry_ids), dtype=np.float64)
-            total = float(weights.sum())
+            sample_size = non_zero_count
+            if sample_size == 0:
+                return self._sample_uniform(entries, min(n, len(entry_ids)))
 
         probs: np.ndarray = weights / total
         sampled = np.random.choice(
@@ -601,7 +620,7 @@ class OpponentPool:
         Returns:
             被删除的条目 ID 列表
         """
-        entries = self._index.get("entries", [])
+        entries = list(self._index.get("entries", []))
         max_size = self.config.max_pool_size_per_type
 
         if len(entries) <= max_size:

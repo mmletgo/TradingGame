@@ -814,21 +814,36 @@ class LeagueTrainer(ParallelArenaTrainer):
         current_fitness: float = (
             current_avg.get(agent_type, 0.0) if isinstance(current_avg, dict) else 0.0
         )
+        elite_avg = round_stats.get("elite_current_avg", {})
+        current_elite: float = (
+            elite_avg.get(agent_type, 0.0) if isinstance(elite_avg, dict) else 0.0
+        )
 
-        # 计算下降比例
+        # 计算种群平均下降比例
         freeze_fitness = state.freeze_baseline_fitness
-        if abs(freeze_fitness) > 1e-10:
-            drop_ratio = (freeze_fitness - current_fitness) / abs(freeze_fitness)
+        if abs(freeze_fitness) > 0.01:
+            pop_drop: float = (freeze_fitness - current_fitness) / abs(freeze_fitness)
         else:
-            drop_ratio = 0.0
+            pop_drop = (freeze_fitness - current_fitness) / 0.01
+
+        # 计算精英平均下降比例
+        freeze_elite = state.freeze_elite_fitness
+        if abs(freeze_elite) > 0.01:
+            elite_drop: float = (freeze_elite - current_elite) / abs(freeze_elite)
+        else:
+            elite_drop = (freeze_elite - current_elite) / 0.01
+
+        # 取两者中更严格的（下降更多的）
+        drop_ratio: float = max(pop_drop, elite_drop)
 
         # 复评详情：每10代 info，其余 debug
         log_level: int = logging.INFO if effective_generation % 10 == 0 else logging.DEBUG
         self.logger.log(
             log_level,
             f"物种 {agent_type.name} 复评 (冻结于第 {state.freeze_generation} 代): "
-            f"冻结时avg={freeze_fitness:.4f}, 当前avg={current_fitness:.4f}, "
-            f"下降比例={drop_ratio:.4f}, 阈值={threshold:.4f}"
+            f"种群avg: 冻结={freeze_fitness:.4f} 当前={current_fitness:.4f} 下降={pop_drop:.4f} | "
+            f"精英avg: 冻结={freeze_elite:.4f} 当前={current_elite:.4f} 下降={elite_drop:.4f} | "
+            f"取max={drop_ratio:.4f}, 阈值={threshold:.4f}"
         )
 
         if drop_ratio > threshold:
@@ -849,6 +864,54 @@ class LeagueTrainer(ParallelArenaTrainer):
                 f"物种 {agent_type.name} 保持冻结 ({direction}, 未下降超过阈值 {threshold:.2%})"
             )
 
+    def _collect_genome_data(self) -> tuple[
+        dict[AgentType, dict[int, tuple]],
+        dict[AgentType, int],
+        dict[AgentType, int],
+    ]:
+        """收集所有种群的基因组数据
+
+        Returns:
+            (genome_data_map, sub_pop_counts, agent_counts)
+        """
+        genome_data_map: dict[AgentType, dict[int, tuple]] = {}
+        agent_counts: dict[AgentType, int] = {}
+        sub_pop_counts: dict[AgentType, int] = {}
+
+        for agent_type, pop_or_manager in self.populations.items():
+            genome_data: dict[int, tuple] = {}
+
+            if isinstance(pop_or_manager, SubPopulationManager):
+                for i, sub_pop in enumerate(pop_or_manager.sub_populations):
+                    if (
+                        getattr(sub_pop, "_genomes_dirty", False)
+                        and getattr(sub_pop, "_pending_genome_data", None) is not None
+                    ):
+                        genome_data[i] = sub_pop._pending_genome_data
+                    elif hasattr(sub_pop, "neat_pop"):
+                        genomes = sub_pop.neat_pop.population
+                        genome_data[i] = _serialize_genomes_numpy(genomes)
+                sub_pop_counts[agent_type] = len(pop_or_manager.sub_populations)
+                agent_counts[agent_type] = sum(
+                    len(sp.agents) for sp in pop_or_manager.sub_populations
+                )
+            else:
+                if (
+                    getattr(pop_or_manager, "_genomes_dirty", False)
+                    and getattr(pop_or_manager, "_pending_genome_data", None)
+                    is not None
+                ):
+                    genome_data[0] = pop_or_manager._pending_genome_data
+                elif hasattr(pop_or_manager, "neat_pop"):
+                    genomes = pop_or_manager.neat_pop.population
+                    genome_data[0] = _serialize_genomes_numpy(genomes)
+                sub_pop_counts[agent_type] = 1
+                agent_counts[agent_type] = len(pop_or_manager.agents)
+
+            genome_data_map[agent_type] = genome_data
+
+        return genome_data_map, sub_pop_counts, agent_counts
+
     def _save_milestone(self) -> None:
         """保存里程碑到对手池（异步）
 
@@ -865,47 +928,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         self.logger.info(f"保存里程碑: 第 {self.generation} 代")
 
         # === 数据收集（主线程，快速） ===
-        genome_data_map: dict[AgentType, dict[int, tuple]] = {}
+        genome_data_map, sub_pop_counts, agent_counts = self._collect_genome_data()
         fitness_map: dict[AgentType, float] = {}
-        agent_counts: dict[AgentType, int] = {}
-        sub_pop_counts: dict[AgentType, int] = {}
 
-        for agent_type, pop_or_manager in self.populations.items():
-            genome_data: dict[int, tuple] = {}
-
-            # 检查是否是 SubPopulationManager
-            if hasattr(pop_or_manager, "sub_populations"):
-                # SubPopulationManager
-                for i, sub_pop in enumerate(pop_or_manager.sub_populations):
-                    # 优先使用 pending 数据
-                    if (
-                        getattr(sub_pop, "_genomes_dirty", False)
-                        and getattr(sub_pop, "_pending_genome_data", None) is not None
-                    ):
-                        genome_data[i] = sub_pop._pending_genome_data
-                    elif hasattr(sub_pop, "neat_pop"):
-                        genomes = sub_pop.neat_pop.population
-                        genome_data[i] = _serialize_genomes_numpy(genomes)
-                sub_pop_counts[agent_type] = len(pop_or_manager.sub_populations)
-                agent_counts[agent_type] = sum(
-                    len(sp.agents) for sp in pop_or_manager.sub_populations
-                )
-            else:
-                # 单个 Population - 优先使用 pending 数据
-                if (
-                    getattr(pop_or_manager, "_genomes_dirty", False)
-                    and getattr(pop_or_manager, "_pending_genome_data", None)
-                    is not None
-                ):
-                    genome_data[0] = pop_or_manager._pending_genome_data
-                elif hasattr(pop_or_manager, "neat_pop"):
-                    genomes = pop_or_manager.neat_pop.population
-                    genome_data[0] = _serialize_genomes_numpy(genomes)
-                sub_pop_counts[agent_type] = 1
-                agent_counts[agent_type] = len(pop_or_manager.agents)
-
-            genome_data_map[agent_type] = genome_data
-
+        for agent_type in self.populations:
             # 计算平均适应度（优先使用预进化适应度缓存）
             cached_fitness_arrays: list[np.ndarray] = [
                 arr for (at, sp_id), arr in self._pre_evolution_fitness.items()
@@ -915,12 +941,12 @@ class LeagueTrainer(ParallelArenaTrainer):
                 fitness_map[agent_type] = float(np.mean(np.concatenate(cached_fitness_arrays)))
             else:
                 # 回退：从 agents 遍历
-                agents = (
-                    pop_or_manager.agents
-                    if hasattr(pop_or_manager, "agents")
-                    else [a for sp in pop_or_manager.sub_populations for a in sp.agents]
-                )
-                fitnesses = [
+                pop_or_manager = self.populations[agent_type]
+                if isinstance(pop_or_manager, SubPopulationManager):
+                    agents = [a for sp in pop_or_manager.sub_populations for a in sp.agents]
+                else:
+                    agents = pop_or_manager.agents
+                fitnesses: list[float] = [
                     a.brain.get_genome().fitness
                     for a in agents
                     if a.brain.get_genome().fitness is not None
@@ -1092,22 +1118,17 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 捕获闭包变量
         logger = self.logger
-        pool_manager = self.pool_manager
 
         def _write_checkpoint_background(
             data: bytes,
             checkpoint_path: str,
         ) -> None:
-            """后台线程：写入检查点文件并保存对手池索引"""
+            """后台线程：写入检查点文件"""
             p = Path(checkpoint_path)
             p.parent.mkdir(parents=True, exist_ok=True)
 
             with open(p, "wb") as f:
                 f.write(data)
-
-            # 保存对手池索引
-            if pool_manager is not None:
-                pool_manager.save_all()
 
             logger.info(f"检查点已保存: {checkpoint_path}")
 
@@ -1155,8 +1176,9 @@ class LeagueTrainer(ParallelArenaTrainer):
             fitness_agg_state = league_data.get("fitness_aggregator_state")
             if fitness_agg_state is not None and self.fitness_aggregator is not None:
                 self.fitness_aggregator.set_state(fitness_agg_state)
+                history_len: int = len(fitness_agg_state.get('fitness_history', []))
                 self.logger.info(
-                    f"已恢复适应度历史 ({len(self.fitness_aggregator._fitness_history)} 代)"
+                    f"已恢复适应度历史 ({history_len} 代)"
                 )
 
             if any(s.is_frozen for s in self._freeze_states.values()):
@@ -1168,6 +1190,10 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 加载对手池
         if self.pool_manager:
             self.pool_manager.load_all()
+
+        # 恢复后标记为有历史（确保下一轮正确处理）
+        if self.pool_manager and self.pool_manager.has_any_historical_opponents():
+            self._had_historical_last_round = True
 
         self.logger.info(f"检查点已加载: {path}")
 
@@ -1227,12 +1253,11 @@ class LeagueTrainer(ParallelArenaTrainer):
                 # 所有物种冻结时退出训练
                 if stats.get("all_species_frozen", False):
                     self.logger.info("所有物种已冻结，训练完成")
-                    # 执行回调（round_count 会在下面自然递增）
+                    round_count += 1
                     if checkpoint_callback:
                         checkpoint_callback(self.generation)
                     if progress_callback:
                         progress_callback(stats)
-                    round_count += 1
                     break
                 round_count += 1
 

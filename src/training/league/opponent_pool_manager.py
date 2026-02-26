@@ -1,6 +1,7 @@
 """多类型对手池管理器"""
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,9 @@ from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.opponent_entry import OpponentEntry, OpponentMetadata
 from src.training.league.opponent_pool import OpponentPool
+
+# 参与联盟训练的 AgentType（显式枚举，避免遍历全部 AgentType）
+LEAGUE_AGENT_TYPES: list[AgentType] = [AgentType.RETAIL_PRO, AgentType.MARKET_MAKER]
 
 
 class OpponentPoolManager:
@@ -31,7 +35,7 @@ class OpponentPoolManager:
         # 两种类型的对手池
         self.pools: dict[AgentType, OpponentPool] = {
             agent_type: OpponentPool(agent_type, self.pool_dir, config)
-            for agent_type in AgentType
+            for agent_type in LEAGUE_AGENT_TYPES
         }
 
     def get_pool(self, agent_type: AgentType) -> OpponentPool:
@@ -77,7 +81,7 @@ class OpponentPoolManager:
         """
         # 需要处理的 AgentType 列表
         types_to_process: list[AgentType] = [
-            agent_type for agent_type in AgentType
+            agent_type for agent_type in LEAGUE_AGENT_TYPES
             if agent_type in genome_data_map
         ]
 
@@ -130,9 +134,14 @@ class OpponentPoolManager:
                 for agent_type in types_to_process
             }
             for agent_type in types_to_process:
-                future = futures[agent_type]
-                completed_type, entry_id = future.result()
-                result[completed_type] = entry_id
+                try:
+                    completed_type, entry_id = futures[agent_type].result()
+                    result[completed_type] = entry_id
+                except Exception as e:
+                    logging.getLogger("league").error(
+                        f"保存 {agent_type.name} 快照失败: {e}"
+                    )
+                    raise
 
         return result
 

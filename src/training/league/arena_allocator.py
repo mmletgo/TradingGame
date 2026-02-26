@@ -9,7 +9,7 @@ import numpy as np
 from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.opponent_pool import OpponentPool
-from src.training.league.opponent_pool_manager import OpponentPoolManager
+from src.training.league.opponent_pool_manager import OpponentPoolManager, LEAGUE_AGENT_TYPES
 
 
 @dataclass
@@ -17,6 +17,9 @@ class HybridSamplingResult:
     """一轮训练的历史对手采样结果
 
     每种 AgentType 独立采样多代历史 entries，提取精英网络。
+
+    注意：elite_networks 和 total_elite_counts 由 LeagueTrainer（调用方）
+    在 _prepare_historical_agents() 中填充，allocator 仅填充 sampled_entries。
     """
 
     # 采样到的 entry IDs
@@ -75,7 +78,7 @@ class HybridArenaAllocator:
         sampled_entries: dict[AgentType, list[str]] = {}
         any_sampled: bool = False
 
-        for agent_type in AgentType:
+        for agent_type in LEAGUE_AGENT_TYPES:
             pool: OpponentPool = pool_manager.get_pool(agent_type)
 
             if pool.is_empty():
@@ -140,7 +143,10 @@ class HybridArenaAllocator:
 
         # 计算采样数量
         n_total = min(n_total, len(entries_with_gen))
-        n_recent: int = max(1, int(n_total * freshness_ratio))
+        if freshness_ratio <= 0:
+            n_recent = 0
+        else:
+            n_recent: int = max(1, int(n_total * freshness_ratio))
         n_rest: int = n_total - n_recent
 
         # 划分"最近 1/3"池（向上取整）
@@ -158,7 +164,8 @@ class HybridArenaAllocator:
         # 建立 entry_id -> 权重索引映射
         entry_id_to_weight: dict[str, float] = {}
         for i, entry_meta in enumerate(pool_entries):
-            entry_id_to_weight[entry_meta["entry_id"]] = float(weights[i]) if i < len(weights) else 1.0
+            assert i < len(weights), f"权重数组长度({len(weights)})与条目数({len(pool_entries)})不一致"
+            entry_id_to_weight[entry_meta["entry_id"]] = float(weights[i])
 
         # 从最近池按 PFSP 权重采样 n_recent 个
         actual_n_recent: int = min(n_recent, len(recent_ids))

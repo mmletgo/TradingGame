@@ -12,7 +12,7 @@ from src.training.league.config import LeagueTrainingConfig
 
 @dataclass
 class GenerationalComparisonStats:
-    """代际适应度对比统计"""
+    """代际适应度对比统计（不可变语义：创建后不应修改）"""
 
     generation: int
     current_avg_fitness: dict[AgentType, float]  # 本代平均适应度
@@ -65,20 +65,24 @@ class HybridFitnessAggregator:
         """
         if len(fitness_array) == 0:
             return 0.0
-        n_elite = max(1, int(len(fitness_array) * self.config.elite_ratio))
-        sorted_fitness = np.sort(fitness_array)[::-1]  # 降序
+        # 过滤 NaN 值
+        valid: np.ndarray = fitness_array[~np.isnan(fitness_array)]
+        if len(valid) == 0:
+            return 0.0
+        n_elite = max(1, int(len(valid) * self.config.elite_ratio))
+        sorted_fitness = np.sort(valid)[::-1]  # 降序
         return float(np.mean(sorted_fitness[:n_elite]))
 
     def compute_generational_comparison(
         self,
         generation: int,
-        avg_fitness: dict[AgentType, np.ndarray],
+        fitness_arrays: dict[AgentType, np.ndarray],
     ) -> GenerationalComparisonStats | None:
         """计算代际适应度对比
 
         Args:
             generation: 当前代数
-            avg_fitness: {AgentType: fitness_array}（当前代平均适应度）
+            fitness_arrays: {AgentType: fitness_array}（当前代各Agent的适应度数组）
 
         Returns:
             代际对比统计，第一代时返回 None
@@ -87,7 +91,7 @@ class HybridFitnessAggregator:
         current_avg: dict[AgentType, float] = {}
         elite_current: dict[AgentType, float] = {}
         for agent_type in AgentType:
-            arr = avg_fitness.get(agent_type)
+            arr = fitness_arrays.get(agent_type)
             if arr is not None and len(arr) > 0:
                 current_avg[agent_type] = float(np.mean(arr))
                 elite_current[agent_type] = self._compute_elite_avg(arr)
@@ -103,8 +107,8 @@ class HybridFitnessAggregator:
         if len(self._fitness_history) < 2:
             return None
 
-        previous_avg = self._fitness_history[-2]
-        elite_previous = self._elite_fitness_history[-2]
+        previous_avg = dict(self._fitness_history[-2])
+        elite_previous = dict(self._elite_fitness_history[-2])
 
         improvement: dict[AgentType, float] = {}
         elite_improvement: dict[AgentType, float] = {}
@@ -150,11 +154,11 @@ class HybridFitnessAggregator:
         for agent_type in AgentType:
             # 种群适应度标准差
             pop_values = [f.get(agent_type, 0.0) for f in recent_fitness]
-            pop_std = float(np.std(pop_values))
+            pop_std = float(np.std(pop_values, ddof=1))
 
             # 精英适应度标准差
             elite_values = [f.get(agent_type, 0.0) for f in recent_elite]
-            elite_std = float(np.std(elite_values))
+            elite_std = float(np.std(elite_values, ddof=1))
 
             # 双重收敛：种群和精英的std都 ≤ 阈值
             converged_by_type[agent_type] = (
@@ -223,7 +227,7 @@ class HybridFitnessAggregator:
 
         self._elite_fitness_history.clear()
         for d in state.get("elite_fitness_history", []):
-            restored = {}
+            restored: dict[AgentType, float] = {}
             for k, v in d.items():
                 try:
                     restored[AgentType(k)] = float(v)
