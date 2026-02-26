@@ -58,6 +58,10 @@ class LeagueTrainingConfig:
 
     def validate(self) -> None:
         """验证配置有效性"""
+        if not self.pool_dir or not self.pool_dir.strip():
+            raise ValueError("pool_dir must not be empty")
+        if not self.checkpoint_dir or not self.checkpoint_dir.strip():
+            raise ValueError("checkpoint_dir must not be empty")
         if self.max_pool_size_per_type < 1:
             raise ValueError("max_pool_size_per_type must be at least 1")
         if self.milestone_interval < 1:
@@ -79,13 +83,6 @@ class LeagueTrainingConfig:
         if not 0.0 <= self.historical_freshness_ratio <= 1.0:
             raise ValueError(
                 "historical_freshness_ratio must be between 0.0 and 1.0"
-            )
-        # 采样策略校验
-        valid_strategies: set[str] = {"uniform", "recency", "diverse", "pfsp"}
-        if self.sampling_strategy not in valid_strategies:
-            raise ValueError(
-                f"sampling_strategy must be one of {valid_strategies}, "
-                f"got '{self.sampling_strategy}'"
             )
         # 收敛阈值校验
         if self.convergence_fitness_std_threshold <= 0:
@@ -112,3 +109,9 @@ class LeagueTrainingConfig:
             raise ValueError("generational_comparison_window must be >= 1")
         if self.pfsp_explore_bonus < 0:
             raise ValueError("pfsp_explore_bonus must be >= 0")
+        if self.hybrid_noise_trader_count < 0:
+            raise ValueError("hybrid_noise_trader_count must be >= 0")
+        if self.convergence_generations > self.generational_comparison_window:
+            raise ValueError(
+                "convergence_generations must be <= generational_comparison_window"
+            )
