@@ -137,6 +137,7 @@ p(opponent) ∝ f(win_rate) × recency_factor × exploration_bonus
 - key 格式为 `vs_{AgentType.value}`（如 `vs_RETAIL_PRO`）
 - 更新方式：EMA 平滑，`win_rate = (1 - α) × old + α × outcome`
 - outcome 定义：当前代同类型 Agent 平均适应度 > 0 即为"赢"（1.0）
+- 设计意图：采用二元 outcome（0/1）是 PFSP 的标准做法，简化胜率计算同时保持有效的优先级排序
 
 ---
 
@@ -167,11 +168,12 @@ class HybridSamplingResult:
     total_elite_counts: dict[AgentType, int]
 ```
 
-**采样策略（带新鲜度约束）：**
+**采样策略（带新鲜度约束的 PFSP 加权采样）：**
 1. 对每种 AgentType 独立采样 `num_historical_generations` 个历史 entries
-2. 将对手池按代数排序，分为"最近 1/3"和"全池"
-3. 先从最近 1/3 中采样 `n_recent = n_total * freshness_ratio` 个
-4. 再从全池中采样剩余数量（排除已选的）
+2. 将对手池按代数排序，分为"最近 1/3（向上取整）"和"全池"
+3. 使用 `pool._compute_weights()` 获取配置策略（默认 PFSP）的采样权重
+4. 先从最近 1/3 中按 PFSP 权重无放回采样 `n_recent = n_total * freshness_ratio` 个
+5. 再从全池（排除已选）中按 PFSP 权重无放回采样剩余数量
 
 **主要方法：**
 - `sample_historical(pool_manager, current_generation)` -> `HybridSamplingResult | None`：带新鲜度约束的历史对手采样，所有类型对手池为空时返回 None

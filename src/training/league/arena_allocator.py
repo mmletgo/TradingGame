@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -109,10 +110,11 @@ class HybridArenaAllocator:
         freshness_ratio: float,
         current_generation: int,
     ) -> list[str]:
-        """带新鲜度约束的采样
+        """带新鲜度约束的 PFSP 采样
 
         将对手池按代数排序，分为"最近 1/3"和"全池"两部分。
-        先从最近 1/3 中采样 n_recent 个，再从全池中采样 n_rest 个（排除已选的）。
+        先从最近 1/3 中按 PFSP 权重采样 n_recent 个，
+        再从全池中按 PFSP 权重采样 n_rest 个（排除已选的）。
 
         Args:
             pool: 对手池
@@ -148,27 +150,71 @@ class HybridArenaAllocator:
         n_recent: int = max(1, int(n_total * freshness_ratio))
         n_rest: int = n_total - n_recent
 
-        # 划分"最近 1/3"池
-        recent_cutoff: int = max(1, len(entries_with_gen) // 3)
-        recent_pool: list[str] = [
-            eid for eid, _ in entries_with_gen[:recent_cutoff]
-        ]
+        # 划分"最近 1/3"池（向上取整）
+        recent_cutoff: int = max(1, (len(entries_with_gen) + 2) // 3)
+        recent_ids: list[str] = [eid for eid, _ in entries_with_gen[:recent_cutoff]]
+        all_ids: list[str] = [eid for eid, _ in entries_with_gen]
 
-        # 从最近池采样 n_recent 个
-        if len(recent_pool) <= n_recent:
-            recent_sampled: list[str] = recent_pool[:]
+        # 获取全池 PFSP 权重
+        pool_entries: list[dict[str, Any]] = pool.list_entries()
+        strategy: str = self.config.sampling_strategy
+        weights: np.ndarray = pool._compute_weights(
+            pool_entries, strategy, pool.agent_type, current_generation
+        )
+
+        # 建立 entry_id -> 权重索引映射
+        entry_id_to_weight: dict[str, float] = {}
+        for i, entry_meta in enumerate(pool_entries):
+            entry_id_to_weight[entry_meta["entry_id"]] = float(weights[i]) if i < len(weights) else 1.0
+
+        # 从最近池按 PFSP 权重采样 n_recent 个
+        actual_n_recent: int = min(n_recent, len(recent_ids))
+        if actual_n_recent >= len(recent_ids):
+            recent_sampled: list[str] = recent_ids[:]
         else:
-            recent_sampled = random.sample(recent_pool, n_recent)
+            recent_weights: np.ndarray = np.array(
+                [entry_id_to_weight.get(eid, 1.0) for eid in recent_ids],
+                dtype=np.float64,
+            )
+            total_w: float = float(recent_weights.sum())
+            if total_w > 0:
+                recent_probs: np.ndarray = recent_weights / total_w
+                sampled_indices: np.ndarray = np.random.choice(
+                    len(recent_ids),
+                    size=actual_n_recent,
+                    replace=False,
+                    p=recent_probs,
+                )
+                recent_sampled = [recent_ids[i] for i in sampled_indices]
+            else:
+                recent_sampled = recent_ids[:actual_n_recent]
 
         # 从全池采样 n_rest 个（排除已选）
         selected_set: set[str] = set(recent_sampled)
-        remaining_pool: list[str] = [
-            eid for eid, _ in entries_with_gen if eid not in selected_set
-        ]
+        remaining_ids: list[str] = [eid for eid in all_ids if eid not in selected_set]
 
-        if len(remaining_pool) <= n_rest:
-            rest_sampled: list[str] = remaining_pool[:]
+        if n_rest <= 0 or not remaining_ids:
+            return recent_sampled
+
+        actual_n_rest: int = min(n_rest, len(remaining_ids))
+        if actual_n_rest >= len(remaining_ids):
+            rest_sampled: list[str] = remaining_ids[:]
         else:
-            rest_sampled = random.sample(remaining_pool, n_rest)
+            rest_weights: np.ndarray = np.array(
+                [entry_id_to_weight.get(eid, 1.0) for eid in remaining_ids],
+                dtype=np.float64,
+            )
+            total_w_rest: float = float(rest_weights.sum())
+            if total_w_rest > 0:
+                rest_probs: np.ndarray = rest_weights / total_w_rest
+                sampled_rest_indices: np.ndarray = np.random.choice(
+                    len(remaining_ids),
+                    size=actual_n_rest,
+                    replace=False,
+                    p=rest_probs,
+                )
+                rest_sampled = [remaining_ids[i] for i in sampled_rest_indices]
+            else:
+                rest_sampled = remaining_ids[:actual_n_rest]
 
         return recent_sampled + rest_sampled
