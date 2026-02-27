@@ -1583,14 +1583,21 @@ def _init_mm_all_arenas(
         buffers_list: 市场状态缓冲区列表
         ema_alpha: EMA 平滑系数
     """
+    _diag_logger = logging.getLogger("arena_worker.diag")
+
     mm_cache = caches.get(AgentType.MARKET_MAKER)
     if mm_cache is None or not mm_cache.is_valid():
+        _diag_logger.warning(
+            f"MM init 跳过: cache={mm_cache is not None}, "
+            f"valid={mm_cache.is_valid() if mm_cache else 'N/A'}"
+        )
         return
 
     mm_ids, mm_net_indices = type_groups.get(
         AgentType.MARKET_MAKER, ([], np.array([], dtype=np.int32))
     )
     if not mm_ids:
+        _diag_logger.warning("MM init 跳过: mm_ids 为空")
         return
 
     arena0 = arena_states[0]
@@ -1607,6 +1614,12 @@ def _init_mm_all_arenas(
         int(idx) for idx in mm_net_indices[: len(mm_states)]
     ]
 
+    _diag_logger.info(
+        f"MM init: cache_valid={mm_cache.is_valid()}, "
+        f"mm_ids={len(mm_ids)}, mm_states={len(mm_states)}, "
+        f"max_index={max(mm_indices_list) if mm_indices_list else -1}"
+    )
+
     # 批量推理
     try:
         raw = mm_cache.decide_multi_arena_direct(
@@ -1616,11 +1629,26 @@ def _init_mm_all_arenas(
             return_array=True,
         )
         mm_array: NDArray[np.float64] | None = raw.get(0)
-    except Exception:
+    except Exception as exc:
+        _diag_logger.error(f"MM init 推理异常: {exc}", exc_info=True)
         return
 
     if mm_array is None or len(mm_array) == 0:
+        _diag_logger.warning(
+            f"MM init 推理结果为空: mm_array={mm_array is not None}, "
+            f"len={len(mm_array) if mm_array is not None else 0}"
+        )
         return
+
+    # 统计有效订单数
+    _n_valid_orders = sum(
+        1 for i in range(min(len(mm_ids), len(mm_array)))
+        if int(mm_array[i, 0]) > 0 or int(mm_array[i, 1]) > 0
+    )
+    _diag_logger.info(
+        f"MM init 推理完成: {len(mm_array)} 个MM, "
+        f"{_n_valid_orders} 个有有效订单"
+    )
 
     # 解析订单（参考 _prepare_mm_init_orders 中的解析逻辑）
     mm_orders: list[
@@ -2164,16 +2192,15 @@ def arena_worker_main(
                 metadata_map: dict[AgentType, SharedNetworkMetadata] = cmd_data
 
                 for agent_type, metadata in metadata_map.items():
-                    # 关闭旧的共享内存附着
-                    if agent_type in shm_attachments:
-                        shm_attachments[agent_type].close()
+                    # 保存旧的共享内存引用（延迟关闭）
+                    old_shm = shm_attachments.pop(agent_type, None)
 
                     # 创建新的附着
                     shm_mem = SharedNetworkMemory()
                     shm_buf = shm_mem.attach(metadata)
                     shm_attachments[agent_type] = shm_mem
 
-                    # 将缓存挂载到共享内存
+                    # 先将缓存挂载到新共享内存（释放对旧 buffer 的引用）
                     if agent_type in caches and caches[agent_type] is not None:
                         shm_array = np.frombuffer(shm_buf, dtype=np.uint8)
                         caches[agent_type].attach_shared_memory(
@@ -2187,6 +2214,17 @@ def arena_worker_main(
                             metadata.total_connections,
                             metadata.total_outputs,
                         )
+                        del shm_array  # 释放局部引用
+                        _diag2 = logging.getLogger("arena_worker.diag")
+                        _diag2.info(
+                            f"Worker {worker_id} attach_shared: "
+                            f"{agent_type.name} num_nets={metadata.num_networks}, "
+                            f"valid={caches[agent_type].is_valid()}"
+                        )
+
+                    # cache 已切换到新 buffer 后，关闭旧的共享内存
+                    if old_shm is not None:
+                        old_shm.close()
 
                 result_queue.put((worker_id, "ack"))
 
@@ -2194,6 +2232,16 @@ def arena_worker_main(
                 # 动态更新 agent_infos（历史Agent注入时使用）
                 new_agent_infos: list[AgentInfo] = cmd_data
                 agent_infos = new_agent_infos
+
+                _diag = logging.getLogger("arena_worker.diag")
+                _type_counts: dict[str, int] = {}
+                for _info in agent_infos:
+                    _k = _info.agent_type.name
+                    _type_counts[_k] = _type_counts.get(_k, 0) + 1
+                _diag.info(
+                    f"Worker {worker_id} update_agent_infos: "
+                    f"total={len(agent_infos)}, types={_type_counts}"
+                )
 
                 # 重建所有依赖 agent_infos 的数据结构
                 caches = _create_worker_caches(config, agent_infos)

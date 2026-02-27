@@ -231,7 +231,7 @@ class GenerationalComparisonStats:
 3. 提取精英网络，构建历史 AgentInfo 列表
 4. 更新 Workers 的 agent_infos 和合并网络
    ├─ 有历史 Agent → 发送 combined agent_infos + 合并网络
-   └─ 上轮有本轮无 → 发送仅当前代 agent_infos
+   └─ 上轮有本轮无 → 发送仅当前代 agent_infos + 重新同步网络（update_agent_infos 会重建空缓存）
 5. 缓存进化前代数 → super().run_round()（运行 episodes + NEAT 进化）
    ├─ 历史 Agent（sub_pop_id >= 1000）自动不参与进化
    └─ _sync_networks_to_workers() override 合并历史参数
@@ -255,7 +255,7 @@ class GenerationalComparisonStats:
 
 | 方法 | 描述 |
 |------|------|
-| `_prepare_historical_agents()` | 加载历史 entries → extract_elite_networks → 构建 AgentInfo 列表 |
+| `_prepare_historical_agents()` | 加载历史 entries → 按需从基因组重建网络参数 → extract_elite_networks → 构建 AgentInfo 列表 |
 | `_compute_generational_comparison()` | 过滤当前代适应度（sub_pop_id < 1000）→ 代际对比 |
 | `_update_historical_win_rates()` | 根据当前代平均适应度 > 0 判断胜负，更新对手池 |
 | `_check_freeze_thaw()` | 未冻结→收敛检查→冻结；已冻结→每代复评（双维度）→解冻 |
@@ -288,6 +288,13 @@ class GenerationalComparisonStats:
   - 按 `pre_evolution_fitness` 排序取 Top `elite_ratio`（默认 5%）
   - 回退机制：`pre_evolution_fitness` 不可用时从 `genome_data` 的 fitnesses 提取（过滤 NaN），精英数量基于有效样本数计算（而非含 NaN 的总数）
   - 返回 `(精英总数, packed_network_params_tuple)`
+
+**网络参数重建（模块级函数）：**
+- `_reconstruct_network_data(genome_data, agent_type, config)` - 从基因组数据重建网络参数
+  - 当历史 entry 没有 `networks.npz` 时，从 `genomes.npz` 反序列化基因组 → 创建 FastFeedForwardNetwork → 提取并打包网络参数
+  - 使用 `_deserialize_genomes_numpy` + `_extract_and_pack_all_network_params` 完成重建
+  - 返回 `{sub_pop_id: packed_network_params_tuple}` 或 `None`
+  - 性能：约 2.9s / 200 个网络（单子种群）
 
 **冻结状态数据类：**
 
@@ -513,7 +520,7 @@ network_data: dict[int, tuple[np.ndarray, ...]] | None  # 延迟加载
 
 - `_prepare_historical_agents()`：加载 entry 后立即清理 `genome_data`/`network_data`/`pre_evolution_fitness`
 - `_sync_genomes_if_needed()` 在 `run_round()` 中里程碑保存前统一从 Worker 同步基因组
-- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行
+- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行（注意：`_save_milestone` 传入 `network_data_map=None`，里程碑不保存 networks.npz，加载时通过 `_reconstruct_network_data` 从基因组重建）
 - `save_checkpoint()` 先调用 `_sync_genomes_if_needed()` 兜底，主线程序列化后删除中间变量，文件写入在后台线程执行
 - 每代执行轻量级 NEAT 历史清理（`_cleanup_neat_history_light`）
 - 每 5 代清理对手池内存缓存 + gc.collect + malloc_trim
@@ -552,6 +559,6 @@ network_data: dict[int, tuple[np.ndarray, ...]] | None  # 延迟加载
 
 ## 依赖模块
 
-- `src.training.population`：种群管理、基因组序列化、网络参数拼接（`_concat_network_params_numpy`）
+- `src.training.population`：种群管理、基因组序列化/反序列化（`_deserialize_genomes_numpy`）、网络参数提取（`_extract_and_pack_all_network_params`）、网络参数拼接（`_concat_network_params_numpy`）
 - `src.training.arena`：多竞技场并行训练（`ParallelArenaTrainer`、`AgentInfo`、`SharedNetworkMemory`）
 - `src.config.config`：基础配置

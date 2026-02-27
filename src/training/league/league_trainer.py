@@ -32,6 +32,8 @@ from src.training.population import (
     _pack_network_params_numpy,
     _unpack_network_params_numpy,
     _concat_network_params_numpy,
+    _deserialize_genomes_numpy,
+    _extract_and_pack_all_network_params,
 )
 
 
@@ -208,9 +210,15 @@ class LeagueTrainer(ParallelArenaTrainer):
         merged_params: dict[AgentType, tuple[np.ndarray, ...]] = {}
         for agent_type, params in network_params.items():
             if agent_type in self._current_historical_params:
+                hist_params = self._current_historical_params[agent_type]
                 merged_params[agent_type] = _concat_network_params_numpy([
-                    params, self._current_historical_params[agent_type]
+                    params, hist_params
                 ])
+                self.logger.info(
+                    f"网络合并 {agent_type.name}: "
+                    f"当前代={len(params[0])} + 历史={len(hist_params[0])} "
+                    f"= 合并后={len(merged_params[agent_type][0])}"
+                )
             else:
                 merged_params[agent_type] = params
 
@@ -381,7 +389,21 @@ class LeagueTrainer(ParallelArenaTrainer):
             for entry_index, entry_id in enumerate(entry_ids):
                 pool = self.pool_manager.get_pool(agent_type)
                 entry = pool.get_entry(entry_id, load_networks=True)
-                if entry is None or entry.network_data is None:
+                if entry is None:
+                    continue
+
+                # 如果没有 network_data 但有 genome_data，从基因组重建网络参数
+                if entry.network_data is None and entry.genome_data is not None:
+                    entry.network_data = _reconstruct_network_data(
+                        entry.genome_data, agent_type, self.config,
+                    )
+                    if entry.network_data is not None:
+                        self.logger.debug(
+                            f"从基因组重建网络参数: {entry_id} "
+                            f"({sum(len(v[0]) for v in entry.network_data.values())} 个网络)"
+                        )
+
+                if entry.network_data is None:
                     continue
 
                 # 提取精英网络
@@ -525,6 +547,10 @@ class LeagueTrainer(ParallelArenaTrainer):
             self._arena_worker_pool.update_agent_infos(current_only_infos)
             del current_only_infos
 
+            # update_agent_infos 会创建新的空 BatchNetworkCache 并清除共享内存，
+            # 必须重新同步网络参数，否则 Workers 将使用空缓存导致零交易
+            self._sync_networks_to_workers()
+
         # 更新追踪标志
         self._had_historical_last_round = bool(self._current_historical_agent_infos)
 
@@ -612,7 +638,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         stats: GenerationalComparisonStats | None = (
             self.fitness_aggregator.compute_generational_comparison(
                 generation=effective_generation,
-                avg_fitness=current_gen_fitness,
+                fitness_arrays=current_gen_fitness,
             )
         )
 
@@ -1406,3 +1432,67 @@ def extract_elite_networks(
     del elite_params_list
 
     return (total_elites, packed)
+
+
+def _reconstruct_network_data(
+    genome_data: dict[int, tuple],
+    agent_type: AgentType,
+    config: Config,
+) -> dict[int, tuple[np.ndarray, ...]] | None:
+    """从基因组数据重建网络参数
+
+    当历史 entry 没有 networks.npz 时，从 genomes.npz 重建网络参数。
+
+    Args:
+        genome_data: {sub_pop_id: (keys, fitnesses, metadata, nodes, conns)}
+        agent_type: Agent 类型（用于确定 NEAT 配置）
+        config: 全局配置
+
+    Returns:
+        {sub_pop_id: packed_network_params_tuple} 或 None（重建失败时）
+    """
+    import neat
+
+    # 确定 NEAT 配置文件路径
+    config_dir: str = config.training.neat_config_path
+    if agent_type == AgentType.RETAIL_PRO:
+        neat_config_path = f"{config_dir}/neat_retail_pro.cfg"
+    elif agent_type == AgentType.MARKET_MAKER:
+        neat_config_path = f"{config_dir}/neat_market_maker.cfg"
+    else:
+        return None
+
+    try:
+        neat_config = neat.Config(
+            neat.DefaultGenome,
+            neat.DefaultReproduction,
+            neat.DefaultSpeciesSet,
+            neat.DefaultStagnation,
+            neat_config_path,
+        )
+    except Exception:
+        logging.getLogger("league").warning(
+            f"无法加载 NEAT 配置: {neat_config_path}"
+        )
+        return None
+
+    network_data: dict[int, tuple[np.ndarray, ...]] = {}
+    for sub_pop_id, gdata in genome_data.items():
+        try:
+            keys, fitnesses, metadata, all_nodes, all_conns = gdata
+            population = _deserialize_genomes_numpy(
+                keys, fitnesses, metadata, all_nodes, all_conns,
+                neat_config.genome_config,
+            )
+            packed = _extract_and_pack_all_network_params(
+                population, neat_config,
+            )
+            network_data[sub_pop_id] = packed
+            del population
+        except Exception as e:
+            logging.getLogger("league").warning(
+                f"重建 sub_pop {sub_pop_id} 网络参数失败: {e}"
+            )
+            continue
+
+    return network_data if network_data else None

@@ -146,6 +146,7 @@ class SharedNetworkMemory:
             all_conn_weights,
             all_output_indices,
         )
+        del shm_buf  # 显式释放对共享内存 buffer 的引用
 
         # 6. 返回元数据
         return SharedNetworkMetadata(
@@ -176,11 +177,26 @@ class SharedNetworkMemory:
         self._agent_type = metadata.agent_type
         return self._shm.buf
 
+    @staticmethod
+    def _force_cleanup_shm_internals(shm: SharedMemory) -> None:
+        """强制清理 SharedMemory 内部状态，防止 __del__ 重复触发 BufferError
+
+        当 SharedMemory.close() 因 numpy 数组仍引用 buffer 而抛出 BufferError 时，
+        清除 _buf 和 _mmap 引用，让 mmap 随 numpy 引用释放后自然关闭。
+        """
+        try:
+            shm._buf = None  # type: ignore[attr-defined]
+            shm._mmap = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     def close(self) -> None:
         """关闭共享内存映射（不删除底层共享内存段）"""
         if self._shm is not None:
             try:
                 self._shm.close()
+            except BufferError:
+                self._force_cleanup_shm_internals(self._shm)
             except Exception:
                 pass
             self._shm = None
@@ -206,6 +222,8 @@ class SharedNetworkMemory:
             try:
                 self._shm.close()
                 logger.debug("已关闭共享内存映射: %s", shm_name)
+            except BufferError:
+                self._force_cleanup_shm_internals(self._shm)
             except Exception:
                 logger.warning("关闭共享内存映射失败: %s", shm_name, exc_info=True)
             self._shm = None

@@ -181,8 +181,7 @@ class ParallelArenaTrainer:
 
         # 6. 创建 Arena Worker Pool（替代 Execute Worker Pool）
         agent_infos = self._build_agent_infos()
-        num_workers = max(4, self.multi_config.num_arenas // 4)
-        num_workers = min(num_workers, os.cpu_count() or 16)
+        num_workers = min(self.multi_config.num_arenas, os.cpu_count() or 16)
         self._arena_worker_pool = ArenaWorkerPool(
             num_workers=num_workers,
             num_arenas=self.multi_config.num_arenas,
@@ -376,6 +375,8 @@ class ParallelArenaTrainer:
 
         优先使用 _cached_network_params_data（packed numpy 数组）直接填充 C 结构，
         跳过 Python 对象创建。回退时使用原有的 Python 对象路径。
+
+        注意：不清除 _cached_network_params_data，由后续的 _sync_networks_to_workers() 消费。
         """
         if self.network_caches is None:
             return
@@ -389,7 +390,8 @@ class ParallelArenaTrainer:
             if cached is not None:
                 # Phase 2: 直接从 packed numpy 数组更新 C 结构
                 cache.update_networks_from_numpy(*cached)
-                population._cached_network_params_data = None
+                # 不清除 _cached_network_params_data：
+                # 由 _sync_networks_to_workers() 消费，确保进化后的新参数能正确同步到 Workers
             else:
                 # 回退：使用原有方式（从 Python 对象提取）
                 if not population.agents:

@@ -179,13 +179,26 @@ class HybridArenaAllocator:
             total_w: float = float(recent_weights.sum())
             if total_w > 0:
                 recent_probs: np.ndarray = recent_weights / total_w
-                sampled_indices: np.ndarray = np.random.choice(
-                    len(recent_ids),
-                    size=actual_n_recent,
-                    replace=False,
-                    p=recent_probs,
-                )
-                recent_sampled = [recent_ids[i] for i in sampled_indices]
+                nonzero_count: int = int(np.count_nonzero(recent_probs))
+                if nonzero_count >= actual_n_recent:
+                    sampled_indices: np.ndarray = np.random.choice(
+                        len(recent_ids),
+                        size=actual_n_recent,
+                        replace=False,
+                        p=recent_probs,
+                    )
+                    recent_sampled = [recent_ids[i] for i in sampled_indices]
+                else:
+                    # 非零项不足：先取所有非零项，再从零权重项中随机补齐
+                    nonzero_indices: np.ndarray = np.nonzero(recent_probs)[0]
+                    recent_sampled = [recent_ids[i] for i in nonzero_indices]
+                    zero_indices: np.ndarray = np.where(recent_probs == 0)[0]
+                    n_fill: int = actual_n_recent - nonzero_count
+                    if n_fill > 0 and len(zero_indices) > 0:
+                        fill_indices: np.ndarray = np.random.choice(
+                            zero_indices, size=min(n_fill, len(zero_indices)), replace=False
+                        )
+                        recent_sampled.extend(recent_ids[i] for i in fill_indices)
             else:
                 recent_sampled = recent_ids[:actual_n_recent]
 
@@ -209,13 +222,26 @@ class HybridArenaAllocator:
             total_w_rest: float = float(rest_weights.sum())
             if total_w_rest > 0:
                 rest_probs: np.ndarray = rest_weights / total_w_rest
-                sampled_rest_indices: np.ndarray = np.random.choice(
-                    len(remaining_ids),
-                    size=actual_n_rest,
-                    replace=False,
-                    p=rest_probs,
-                )
-                rest_sampled = [remaining_ids[i] for i in sampled_rest_indices]
+                nonzero_count_rest: int = int(np.count_nonzero(rest_probs))
+                if nonzero_count_rest >= actual_n_rest:
+                    sampled_rest_indices: np.ndarray = np.random.choice(
+                        len(remaining_ids),
+                        size=actual_n_rest,
+                        replace=False,
+                        p=rest_probs,
+                    )
+                    rest_sampled = [remaining_ids[i] for i in sampled_rest_indices]
+                else:
+                    # 非零项不足：先取所有非零项，再从零权重项中随机补齐
+                    nonzero_rest_indices: np.ndarray = np.nonzero(rest_probs)[0]
+                    rest_sampled = [remaining_ids[i] for i in nonzero_rest_indices]
+                    zero_rest_indices: np.ndarray = np.where(rest_probs == 0)[0]
+                    n_fill_rest: int = actual_n_rest - nonzero_count_rest
+                    if n_fill_rest > 0 and len(zero_rest_indices) > 0:
+                        fill_rest_indices: np.ndarray = np.random.choice(
+                            zero_rest_indices, size=min(n_fill_rest, len(zero_rest_indices)), replace=False
+                        )
+                        rest_sampled.extend(remaining_ids[i] for i in fill_rest_indices)
             else:
                 rest_sampled = remaining_ids[:actual_n_rest]
 

@@ -187,7 +187,7 @@ class ArenaState:
 2. _collect_fitness_all_arenas() - 跨 episode 平均 fitness
 3. NEAT 进化（lite 模式：跳过基因组序列化，仅返回网络参数和 species 数据）
 4. _update_populations_from_evolution() - 更新种群（跳过 brain 更新，仅缓存网络参数）
-5. _update_network_caches() - 更新主进程网络缓存
+5. _update_network_caches() - 更新主进程网络缓存（不清除 _cached_network_params_data，由后续 _sync_networks_to_workers 消费）
 6. _refresh_agent_states() - 刷新 Agent 状态
 7. _sync_networks_to_workers() - 同步新网络到 Workers
 ```
@@ -337,7 +337,7 @@ class SharedNetworkMetadata:
 
 **生命周期：**
 - 主进程：`create_and_fill()` -> 发送 metadata 给 Worker -> Worker 使用完成 -> `close_and_unlink()`
-- Worker：收到 metadata -> `attach()` -> 使用 buffer -> `close()`
+- Worker：收到 metadata -> `attach()` 新共享内存 -> `attach_shared_memory()` 切换缓存到新 buffer -> `close()` 旧共享内存（延迟关闭，确保缓存已切换后再释放旧 buffer）
 
 ---
 
