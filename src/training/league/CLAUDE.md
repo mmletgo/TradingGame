@@ -257,6 +257,7 @@ class GenerationalComparisonStats:
 |------|------|
 | `_prepare_historical_agents()` | 加载历史 entries → 按需从基因组重建网络参数 → extract_elite_networks → 构建 AgentInfo 列表 |
 | `_compute_generational_comparison()` | 过滤当前代适应度（sub_pop_id < 1000）→ 代际对比 |
+| `_update_populations_from_evolution()` | Override: 保存 per-sub-pop 网络参数到 `_per_subpop_network_params` 后调用父类 |
 | `_update_historical_win_rates()` | 根据当前代平均适应度 > 0 判断胜负，更新对手池 |
 | `_check_freeze_thaw()` | 未冻结→收敛检查→冻结；已冻结→每代复评（双维度）→解冻 |
 | `_save_milestone()` | 异步保存里程碑（附带预进化适应度） |
@@ -289,9 +290,10 @@ class GenerationalComparisonStats:
   - 回退机制：`pre_evolution_fitness` 不可用时从 `genome_data` 的 fitnesses 提取（过滤 NaN），精英数量基于有效样本数计算（而非含 NaN 的总数）
   - 返回 `(精英总数, packed_network_params_tuple)`
 
-**网络参数重建（模块级函数）：**
+**网络参数重建（模块级函数，回退路径）：**
 - `_reconstruct_network_data(genome_data, agent_type, config)` - 从基因组数据重建网络参数
-  - 当历史 entry 没有 `networks.npz` 时，从 `genomes.npz` 反序列化基因组 → 创建 FastFeedForwardNetwork → 提取并打包网络参数
+  - 当历史 entry 没有 `networks.npz`（旧版 entry）时的回退路径，从 `genomes.npz` 反序列化基因组 → 创建 FastFeedForwardNetwork → 提取并打包网络参数
+  - 正常流程里程碑保存时已写入 `networks.npz`，此函数仅处理旧数据兼容
   - 使用 `_deserialize_genomes_numpy` + `_extract_and_pack_all_network_params` 完成重建
   - 返回 `{sub_pop_id: packed_network_params_tuple}` 或 `None`
   - 性能：约 2.9s / 200 个网络（单子种群）
@@ -520,7 +522,7 @@ network_data: dict[int, tuple[np.ndarray, ...]] | None  # 延迟加载
 
 - `_prepare_historical_agents()`：加载 entry 后立即清理 `genome_data`/`network_data`/`pre_evolution_fitness`
 - `_sync_genomes_if_needed()` 在 `run_round()` 中里程碑保存前统一从 Worker 同步基因组
-- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行（注意：`_save_milestone` 传入 `network_data_map=None`，里程碑不保存 networks.npz，加载时通过 `_reconstruct_network_data` 从基因组重建）
+- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行。里程碑保存时传入 `_per_subpop_network_params` 作为 `network_data_map`，写入 `networks.npz`，后续加载历史对手时直接使用，无需 `_reconstruct_network_data` 重建
 - `save_checkpoint()` 先调用 `_sync_genomes_if_needed()` 兜底，主线程序列化后删除中间变量，文件写入在后台线程执行
 - 每代执行轻量级 NEAT 历史清理（`_cleanup_neat_history_light`）
 - 每 5 代清理对手池内存缓存 + gc.collect + malloc_trim

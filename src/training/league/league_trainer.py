@@ -121,6 +121,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 追踪上一轮是否有历史Agent（用于检测有→无变化）
         self._had_historical_last_round: bool = False
 
+        # 每轮进化后缓存 per-sub-pop 网络参数，供 _save_milestone 写入 networks.npz
+        self._per_subpop_network_params: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] = {}
+
     def setup(self) -> None:
         """初始化
 
@@ -157,6 +160,18 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self._current_historical_agent_infos:
             infos.extend(self._current_historical_agent_infos)
         return infos
+
+    def _update_populations_from_evolution(
+        self,
+        evolution_results: dict[tuple[AgentType, int], tuple],
+        deserialize_genomes: bool = False,
+    ) -> None:
+        """Override: 进化结果更新前保存 per-sub-pop 网络参数供里程碑写入 networks.npz"""
+        per_subpop: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] = {}
+        for (agent_type, sub_pop_id), (_, network_params_data, _) in evolution_results.items():
+            per_subpop.setdefault(agent_type, {})[sub_pop_id] = network_params_data
+        self._per_subpop_network_params = per_subpop
+        super()._update_populations_from_evolution(evolution_results, deserialize_genomes)
 
     def _sync_networks_to_workers(self) -> None:
         """Override: 合并历史精英网络参数后同步
@@ -989,6 +1004,11 @@ class LeagueTrainer(ParallelArenaTrainer):
                     pre_evolution_fitness_map[agent_type] = {}
                 pre_evolution_fitness_map[agent_type][sub_pop_id] = fitness_arr
 
+        # === 网络参数收集 ===
+        network_data_map: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] | None = (
+            self._per_subpop_network_params if self._per_subpop_network_params else None
+        )
+
         # === 异步 I/O（后台线程） ===
         generation = self.generation
         pool_manager = self.pool_manager
@@ -998,7 +1018,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                 pool_manager.add_snapshot(
                     generation=generation,
                     genome_data_map=genome_data_map,
-                    network_data_map=None,
+                    network_data_map=network_data_map,
                     fitness_map=fitness_map,
                     source="main_agents",
                     add_reason="milestone",
@@ -1017,6 +1037,9 @@ class LeagueTrainer(ParallelArenaTrainer):
             name=f"milestone_save_gen{generation}",
         )
         self._milestone_thread.start()
+
+        # 闭包已捕获 network_data_map 引用，释放实例属性减少内存占用
+        self._per_subpop_network_params = {}
 
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
