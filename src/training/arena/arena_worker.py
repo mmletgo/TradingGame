@@ -527,7 +527,8 @@ def update_trade_accounts(
 
 
 def compute_noise_trader_decisions(
-    arena: ArenaState, noise_trader_config: NoiseTraderConfig
+    arena: ArenaState, noise_trader_config: NoiseTraderConfig,
+    buy_probability: float = 0.5,
 ) -> list[NoiseTraderDecision]:
     """计算噪声交易者决策
 
@@ -536,6 +537,7 @@ def compute_noise_trader_decisions(
     Args:
         arena: 竞技场状态
         noise_trader_config: 噪声交易者配置
+        buy_probability: 买入概率（默认0.5，即无偏置）
 
     Returns:
         噪声交易者决策列表（仅包含需要行动的噪声交易者）
@@ -547,7 +549,8 @@ def compute_noise_trader_decisions(
 
     for nt_state in arena.noise_trader_states.values():
         should_act, direction, quantity = nt_state.decide(
-            noise_trader_config.action_probability
+            noise_trader_config.action_probability,
+            buy_probability,
         )
 
         if should_act and direction != 0 and quantity > 0:
@@ -1769,10 +1772,12 @@ def _calculate_fitness_for_sub_pop(
             state = arena.agent_states.get(info.agent_id)
             if state is None:
                 continue
-            equity = state.get_equity(current_price)
+            # 调整后净值：仅计入已实现收益 + 未实现亏损
+            unrealized_pnl = (current_price - state.position_avg_price) * state.position_quantity
+            adjusted_equity = state.balance + min(0.0, unrealized_pnl)
             initial = state.initial_balance
             if initial > 0:
-                pnl_arr[idx] = (equity - initial) / initial
+                pnl_arr[idx] = (adjusted_equity - initial) / initial
             volume_arr[idx] = float(state.maker_volume)
 
         max_volume = float(np.max(volume_arr)) if len(volume_arr) > 0 else 0.0
@@ -1787,10 +1792,12 @@ def _calculate_fitness_for_sub_pop(
             state = arena.agent_states.get(info.agent_id)
             if state is None:
                 continue
-            equity = state.get_equity(current_price)
+            # 调整后净值：仅计入已实现收益 + 未实现亏损
+            unrealized_pnl = (current_price - state.position_avg_price) * state.position_quantity
+            adjusted_equity = state.balance + min(0.0, unrealized_pnl)
             initial = state.initial_balance
             if initial > 0:
-                fitnesses[idx] = (equity - initial) / initial
+                fitnesses[idx] = (adjusted_equity - initial) / initial
         return fitnesses
 
 
@@ -1893,6 +1900,10 @@ def _run_episode_local(
     for arena in arena_states:
         _reset_arena(arena, config, type_groups, agent_infos)
 
+    # Episode 级随机方向偏置
+    bias_range = noise_trader_config.episode_bias_range
+    episode_buy_probability = 0.5 + random.uniform(-bias_range, bias_range)
+
     # 2. MM 初始化
     _init_mm_all_arenas(
         arena_states, caches, type_groups, config, buffers_list, ema_alpha
@@ -1928,7 +1939,7 @@ def _run_episode_local(
 
             # 噪声交易者决策
             noise_decisions = compute_noise_trader_decisions(
-                arena, noise_trader_config
+                arena, noise_trader_config, episode_buy_probability
             )
 
             # 计算市场状态

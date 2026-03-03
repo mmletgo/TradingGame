@@ -212,6 +212,7 @@ class Trainer:
 
         # 噪声交易者
         self.noise_traders: list[NoiseTrader] = []
+        self._episode_buy_probability: float = 0.5
         self._price_history: deque[float] = deque(maxlen=1000)  # 价格历史，自动管理长度
 
         # Tick 历史数据（用于 Agent 输入特征）
@@ -2099,7 +2100,7 @@ class Trainer:
 
         # 1. 噪声交易者决策与执行
         for nt in self.noise_traders:
-            should_act, direction, quantity = nt.decide()
+            should_act, direction, quantity = nt.decide(self._episode_buy_probability)
             if should_act:
                 trades = nt.execute(direction, quantity, self.matching_engine)
                 for trade in trades:
@@ -2576,6 +2577,10 @@ class Trainer:
         initial_price = self.config.market.initial_price
         self._episode_high_price = initial_price
         self._episode_low_price = initial_price
+
+        # Episode 级随机方向偏置
+        bias_range = self.config.noise_trader.episode_bias_range
+        self._episode_buy_probability = 0.5 + random.uniform(-bias_range, bias_range)
 
         # 2. 运行 episode_length 个 tick
         for _ in range(episode_length):

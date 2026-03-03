@@ -107,6 +107,18 @@ NEAT进化阶段
 - 所有操作在最新价 ±100 个最小变动单位内
 - 噪声交易者：不触发强平，零手续费，下单量服从对数正态分布
 
+### 适应度计算（调整后净值）
+
+所有 Agent 的适应度使用调整后净值公式，防止未实现盈利导致的价格单向漂移：
+
+```
+adjusted_equity = balance + min(0, unrealized_pnl)
+fitness = (adjusted_equity - initial) / initial
+```
+
+- **盈利持仓**：未实现收益不计入，fitness 仅基于已实现 PnL
+- **亏损持仓**：未实现亏损照常计入
+
 ### 做市商复合适应度
 
 做市商使用双组件加权复合适应度，激励做市商盈利并实际提供流动性：
@@ -117,7 +129,7 @@ mm_fitness = α × pnl + γ × volume_score
 
 | 组件 | 权重 | 计算方式 | 范围 | 激励方向 |
 |------|------|---------|------|---------|
-| `pnl` | α=0.7 | `(equity - initial) / initial` | [-1, +∞) | 盈利能力 |
+| `pnl` | α=0.7 | `(adjusted_equity - initial) / initial` | [-1, 0] | 盈利能力（仅已实现） |
 | `volume_score` | γ=0.3 | `maker_volume / (max_maker_volume_in_pop + 1)` | [0, 1) | 做市成交量 |
 
 权重可通过 `TrainingConfig` 的 `mm_fitness_pnl_weight` 和 `mm_fitness_volume_weight` 参数配置。
@@ -127,7 +139,9 @@ mm_fitness = α × pnl + γ × volume_score
 市场随机性提供者（不参与NEAT进化）：
 
 - 200个独立噪声交易者，各自每 tick 以 50% 概率行动
-- 行动时 50% 买 / 50% 卖，通过市价单撮合
+- 行动时按 `buy_probability` 概率买入，通过市价单撮合
+- 每个 Episode 开始时生成随机偏置：`buy_probability = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
+- `episode_bias_range` 默认 0.15，即 buy_prob ∈ [0.35, 0.65]
 - 下单量：`max(1, int(lognormvariate(mu=14.5, sigma=1.0)))`
 - 无限资金（1e18），不触发强平检查
 - 手续费为 0

@@ -287,6 +287,7 @@ demo = DemoConfig(
 | action_probability | float | 0.5 | 每个 tick 行动的概率（0-1） |
 | quantity_mu | float | 14.5 | 对数正态分布的 mu 参数 |
 | quantity_sigma | float | 1.0 | 对数正态分布的 sigma 参数 |
+| episode_bias_range | float | 0.15 | Episode 级买入概率偏置范围，buy_prob ∈ [0.5-range, 0.5+range] |
 
 **噪声交易者行为说明：**
 
@@ -311,6 +312,7 @@ noise_trader = NoiseTraderConfig(
     action_probability=0.5,
     quantity_mu=14.5,
     quantity_sigma=1.0,
+    episode_bias_range=0.15,
 )
 ```
 
@@ -602,6 +604,11 @@ config = Config(
 
 - **quantity_mu / quantity_sigma**：
   - mu=14.5, sigma=1.0：默认参数，单笔均值约 3,269,017 单位，200个噪声交易者每 tick 总成交量约 3.3 亿单位，噪声力量约为散户（含10倍杠杆）的 11 倍，主导价格走势
+
+- **episode_bias_range**：
+  - 0.15：每个 Episode 开始时，买入概率在 [0.35, 0.65] 范围内随机偏置
+  - 防止 NEAT 进化形成单向交易的羊群效应
+  - 设为 0 则退化为无偏置的等概率买卖
 
 ## 依赖关系
 

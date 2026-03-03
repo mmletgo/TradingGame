@@ -132,6 +132,7 @@ class NoiseTraderConfig:
     action_probability: float = 0.5
     quantity_mu: float = 14.5
     quantity_sigma: float = 1.0
+    episode_bias_range: float = 0.15  # Episode 级买入概率偏置范围，buy_prob ∈ [0.5-range, 0.5+range]
 
 
 @dataclass

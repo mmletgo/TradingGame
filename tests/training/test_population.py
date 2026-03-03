@@ -372,11 +372,15 @@ class TestPopulationEvaluate:
         assert result[0][1] == pytest.approx(0.0)
 
     def test_evaluate_sorted_by_fitness_descending(self):
-        """测试按适应度从高到低排序"""
+        """测试按适应度从高到低排序
+
+        适应度使用调整后净值: adjusted_equity = balance + min(0, unrealized_pnl)
+        盈利持仓不计入未实现收益，亏损持仓计入未实现亏损。
+        """
         # Agent 1: balance=10000, quantity=10, avg_price=90, current_price=100
-        # 未实现盈亏 = (100 - 90) * 10 = 100
-        # 净值 = 10000 + 100 = 10100
-        # 适应度 = (10100 - 10000) / 10000 = 0.01
+        # 未实现盈亏 = (100 - 90) * 10 = 100 (正值，不计入)
+        # 调整后净值 = 10000 + min(0, 100) = 10000
+        # 适应度 = (10000 - 10000) / 10000 = 0.0
         agent1 = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -396,9 +400,9 @@ class TestPopulationEvaluate:
         )
 
         # Agent 3: balance=5000, quantity=-10, avg_price=110, current_price=100
-        # 未实现盈亏 = (100 - 110) * (-10) = 100
-        # 净值 = 5000 + 100 = 5100
-        # 适应度 = (5100 - 10000) / 10000 = -0.49
+        # 未实现盈亏 = (100 - 110) * (-10) = 100 (正值，不计入)
+        # 调整后净值 = 5000 + min(0, 100) = 5000
+        # 适应度 = (5000 - 10000) / 10000 = -0.5
         agent3 = self._create_mock_agent(
             agent_id=3,
             balance=5000.0,
@@ -411,20 +415,24 @@ class TestPopulationEvaluate:
 
         result = self.population.evaluate(100.0)
 
-        # 验证排序: agent2 (0.5) > agent1 (0.01) > agent3 (-0.49)
+        # 验证排序: agent2 (0.5) > agent1 (0.0) > agent3 (-0.5)
         assert len(result) == 3
         assert result[0][0] is agent2
         assert result[0][1] == pytest.approx(0.5)
         assert result[1][0] is agent1
-        assert result[1][1] == pytest.approx(0.01)
+        assert result[1][1] == pytest.approx(0.0)
         assert result[2][0] is agent3
-        assert result[2][1] == pytest.approx(-0.49)
+        assert result[2][1] == pytest.approx(-0.5)
 
     def test_evaluate_with_unrealized_pnl(self):
-        """测试带未实现盈亏的评估"""
+        """测试带未实现盈亏的评估
+
+        适应度使用调整后净值: adjusted_equity = balance + min(0, unrealized_pnl)
+        盈利持仓不计入未实现收益（适应度为0），亏损持仓计入未实现亏损。
+        """
         # 多头盈利: balance=10000, quantity=100, avg_price=90, current_price=100
-        # 未实现盈亏 = (100 - 90) * 100 = 1000
-        # 适应度 = (10000 + 1000 - 10000) / 10000 = 0.1
+        # 未实现盈亏 = (100 - 90) * 100 = 1000 (正值，不计入)
+        # 适应度 = (10000 + 0 - 10000) / 10000 = 0.0
         agent_long_profit = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -434,7 +442,7 @@ class TestPopulationEvaluate:
         )
 
         # 多头亏损: balance=10000, quantity=100, avg_price=110, current_price=100
-        # 未实现盈亏 = (100 - 110) * 100 = -1000
+        # 未实现盈亏 = (100 - 110) * 100 = -1000 (负值，计入)
         # 适应度 = (10000 - 1000 - 10000) / 10000 = -0.1
         agent_long_loss = self._create_mock_agent(
             agent_id=2,
@@ -445,8 +453,8 @@ class TestPopulationEvaluate:
         )
 
         # 空头盈利: balance=10000, quantity=-100, avg_price=110, current_price=100
-        # 未实现盈亏 = (100 - 110) * (-100) = 1000
-        # 适应度 = (10000 + 1000 - 10000) / 10000 = 0.1
+        # 未实现盈亏 = (100 - 110) * (-100) = 1000 (正值，不计入)
+        # 适应度 = (10000 + 0 - 10000) / 10000 = 0.0
         agent_short_profit = self._create_mock_agent(
             agent_id=3,
             balance=10000.0,
@@ -456,7 +464,7 @@ class TestPopulationEvaluate:
         )
 
         # 空头亏损: balance=10000, quantity=-100, avg_price=90, current_price=100
-        # 未实现盈亏 = (100 - 90) * (-100) = -1000
+        # 未实现盈亏 = (100 - 90) * (-100) = -1000 (负值，计入)
         # 适应度 = (10000 - 1000 - 10000) / 10000 = -0.1
         agent_short_loss = self._create_mock_agent(
             agent_id=4,
@@ -477,9 +485,9 @@ class TestPopulationEvaluate:
 
         # 验证适应度计算正确
         assert len(result) == 4
-        # 盈利的在前（适应度 0.1），亏损的在后（适应度 -0.1）
-        assert result[0][1] == pytest.approx(0.1)
-        assert result[1][1] == pytest.approx(0.1)
+        # 盈利持仓适应度为0（未实现收益不计入），亏损持仓适应度为-0.1
+        assert result[0][1] == pytest.approx(0.0)
+        assert result[1][1] == pytest.approx(0.0)
         assert result[2][1] == pytest.approx(-0.1)
         assert result[3][1] == pytest.approx(-0.1)
 
