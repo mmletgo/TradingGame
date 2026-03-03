@@ -142,7 +142,7 @@ mm_fitness = α × pnl + γ × volume_score
 - 行动时按 `buy_probability` 概率买入，通过市价单撮合
 - 每个 Episode 开始时生成随机偏置：`buy_probability = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
 - `episode_bias_range` 默认 0.15，即 buy_prob ∈ [0.35, 0.65]
-- 下单量：`max(1, int(lognormvariate(mu=14.5, sigma=1.0)))`
+- 下单量：`max(1, int(lognormvariate(mu=12.0, sigma=1.0)))`
 - 无限资金（1e18），不触发强平检查
 - 手续费为 0
 - 可作为 ADL 对手方

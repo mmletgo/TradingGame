@@ -285,7 +285,7 @@ demo = DemoConfig(
 |------|------|--------|------|
 | count | int | 200 | 噪声交易者数量 |
 | action_probability | float | 0.5 | 每个 tick 行动的概率（0-1） |
-| quantity_mu | float | 14.5 | 对数正态分布的 mu 参数 |
+| quantity_mu | float | 12.0 | 对数正态分布的 mu 参数 |
 | quantity_sigma | float | 1.0 | 对数正态分布的 sigma 参数 |
 | episode_bias_range | float | 0.15 | Episode 级买入概率偏置范围，buy_prob ∈ [0.5-range, 0.5+range] |
 
@@ -310,7 +310,7 @@ from src.config.config import NoiseTraderConfig
 noise_trader = NoiseTraderConfig(
     count=200,
     action_probability=0.5,
-    quantity_mu=14.5,
+    quantity_mu=12.0,
     quantity_sigma=1.0,
     episode_bias_range=0.15,
 )
@@ -603,7 +603,7 @@ config = Config(
   - 0.5：50% 概率行动（默认）
 
 - **quantity_mu / quantity_sigma**：
-  - mu=14.5, sigma=1.0：默认参数，单笔均值约 3,269,017 单位，200个噪声交易者每 tick 总成交量约 3.3 亿单位，噪声力量约为散户（含10倍杠杆）的 11 倍，主导价格走势
+  - mu=12.0, sigma=1.0：默认参数，单笔均值约 268,337 单位，200个噪声交易者每 tick 总成交量约 2,680 万单位，噪声力量约为散户现实定向力量的 3.4 倍，既主导价格走势又不会击穿做市商双边挂单
 
 - **episode_bias_range**：
   - 0.15：每个 Episode 开始时，买入概率在 [0.35, 0.65] 范围内随机偏置

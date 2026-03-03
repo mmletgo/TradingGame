@@ -129,7 +129,7 @@ if trader_id >= 0:
 **决策逻辑：**
 1. 以 `action_probability`（默认 50%）概率决定是否行动
 2. 行动时以 `buy_probability` 概率决定买入（默认 50%，可由 Episode 级偏置调整）
-3. 下单量从对数正态分布采样：`max(1, int(lognormvariate(mu=14.5, sigma=1.0)))`
+3. 下单量从对数正态分布采样：`max(1, int(lognormvariate(mu=12.0, sigma=1.0)))`
 
 #### `execute(direction: int, quantity: int, matching_engine: MatchingEngine) -> list[Trade]`
 
@@ -310,15 +310,15 @@ for trader in noise_traders:
 |--------|------|--------|------|
 | `count` | int | 200 | 噪声交易者数量 |
 | `action_probability` | float | 0.5 | 每个 tick 行动概率 |
-| `quantity_mu` | float | 14.5 | 对数正态分布 mu 参数 |
+| `quantity_mu` | float | 12.0 | 对数正态分布 mu 参数 |
 | `quantity_sigma` | float | 1.0 | 对数正态分布 sigma 参数 |
 | `episode_bias_range` | float | 0.15 | Episode 级买入概率偏置范围 |
 
 **下单量分布说明：**
 - 使用对数正态分布 `lognormvariate(mu, sigma)`
-- `mu=14.5, sigma=1.0` 产生的下单量中位数约 1,982,759，均值约 3,269,017
+- `mu=12.0, sigma=1.0` 产生的下单量中位数约 162,755，均值约 268,337
 - `max(1, int(...))` 确保下单量至少为 1
-- 200 个噪声交易者每 tick 总成交量约 3.3 亿单位，净力量标准差约 53,900,000 单位，约为散户最大定向力量（含10倍杠杆）的 11 倍，确保噪声交易者主导价格走势，散户只能在价格波动中投机
+- 200 个噪声交易者每 tick 总成交量约 2,680 万单位，净力量标准差约 4,400,000 单位，约为散户现实定向力量的 3.4 倍，既主导价格走势又不会击穿做市商双边挂单
 
 ## 注意事项
 

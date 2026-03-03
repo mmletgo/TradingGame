@@ -305,7 +305,7 @@ NEAT进化阶段
 
 - 200个独立噪声交易者，各自每 tick 以 50% 概率行动
 - 行动时 50% 买 / 50% 卖，通过市价单撮合
-- 下单量：`max(1, int(lognormvariate(mu=14.5, sigma=1.0)))`
+- 下单量：`max(1, int(lognormvariate(mu=12.0, sigma=1.0)))`
 - 无限资金（1e18），不触发强平
 - 手续费为 0，可作为 ADL 对手方
 

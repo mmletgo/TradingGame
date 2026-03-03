@@ -329,7 +329,7 @@ class NoiseTraderAccountState:
     initial_balance: float = 1e18
     is_liquidated: bool = False  # Always False, noise traders never get liquidated
     order_counter: int = 0
-    config_quantity_mu: float = 14.5
+    config_quantity_mu: float = 12.0
     config_quantity_sigma: float = 1.0
 
     @classmethod

@@ -86,7 +86,7 @@ class NoiseTraderAccountState:
     position_quantity: int
     position_avg_price: float
     order_counter: int
-    config_quantity_mu: float = 14.5   # 对数正态分布 mu 参数（从配置复制）
+    config_quantity_mu: float = 12.0   # 对数正态分布 mu 参数（从配置复制）
     config_quantity_sigma: float = 1.0 # 对数正态分布 sigma 参数（从配置复制）
 ```
 
