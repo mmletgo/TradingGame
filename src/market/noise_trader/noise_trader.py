@@ -28,8 +28,11 @@ class NoiseTrader:
         self.account: NoiseTraderAccount = NoiseTraderAccount(trader_id)
         self._next_order_id: int = trader_id * 1_000_000
 
-    def decide(self) -> tuple[bool, int, int]:
+    def decide(self, buy_probability: float = 0.5) -> tuple[bool, int, int]:
         """决策是否行动、方向和数量
+
+        Args:
+            buy_probability: 买入概率，默认0.5表示等概率买卖
 
         Returns:
             (should_act, direction, quantity):
@@ -40,7 +43,7 @@ class NoiseTrader:
         if random.random() >= self.config.action_probability:
             return False, 0, 0
 
-        direction = 1 if random.random() < 0.5 else -1
+        direction = 1 if random.random() < buy_probability else -1
         quantity = max(1, int(random.lognormvariate(self.config.quantity_mu, self.config.quantity_sigma)))
         return True, direction, quantity
 

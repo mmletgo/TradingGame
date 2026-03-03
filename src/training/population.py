@@ -2088,11 +2088,12 @@ class Population:
         # 2. 向量化计算未实现盈亏: (current_price - avg_price) * quantity
         unrealized_pnl = (current_price - avg_prices) * quantities
 
-        # 3. 向量化计算净值: balance + unrealized_pnl
-        equities = balances + unrealized_pnl
+        # 3. 调整后净值: balance + min(0, unrealized_pnl)
+        # 盈利持仓不计入，亏损持仓计入
+        adjusted_equities = balances + np.minimum(0.0, unrealized_pnl)
 
-        # 4. 向量化计算收益率: (equity - initial) / initial
-        fitnesses = (equities - initial_balances) / initial_balances
+        # 4. 向量化计算收益率: (adjusted_equity - initial) / initial
+        fitnesses = (adjusted_equities - initial_balances) / initial_balances
 
         # 5. 获取从高到低的排序索引
         sorted_indices = np.argsort(fitnesses)[::-1]
@@ -2124,11 +2125,12 @@ class Population:
         volume_arr = np.zeros(n, dtype=np.float64)
 
         for idx, agent in enumerate(self.agents):
-            # PnL 收益率
-            equity = agent.account.get_equity(current_price)
+            # PnL 收益率（调整后：仅计入已实现收益 + 未实现亏损）
+            unrealized_pnl = (current_price - agent.account.position.avg_price) * agent.account.position.quantity
+            adjusted_equity = agent.account.balance + min(0.0, unrealized_pnl)
             initial = agent.account.initial_balance
             if initial > 0:
-                pnl_arr[idx] = (equity - initial) / initial
+                pnl_arr[idx] = (adjusted_equity - initial) / initial
 
             # Maker 成交量（原始值，后续归一化）
             volume_arr[idx] = float(agent.account.maker_volume)

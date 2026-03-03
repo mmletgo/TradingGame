@@ -329,6 +329,8 @@ class NoiseTraderAccountState:
     initial_balance: float = 1e18
     is_liquidated: bool = False  # Always False, noise traders never get liquidated
     order_counter: int = 0
+    config_quantity_mu: float = 14.5
+    config_quantity_sigma: float = 1.0
 
     @classmethod
     def from_noise_trader(cls, nt: "NoiseTrader") -> "NoiseTraderAccountState":
@@ -340,6 +342,8 @@ class NoiseTraderAccountState:
             position_avg_price=nt.account.position_avg_price,
             realized_pnl=nt.account.realized_pnl,
             initial_balance=nt.account.initial_balance,
+            config_quantity_mu=nt.config.quantity_mu,
+            config_quantity_sigma=nt.config.quantity_sigma,
         )
 
     def reset(self) -> None:
@@ -396,12 +400,12 @@ class NoiseTraderAccountState:
         self.order_counter += 1
         return -(arena_id * 1_000_000_000 + abs(self.trader_id) * 1_000_000 + self.order_counter)
 
-    def decide(self, action_probability: float) -> tuple[bool, int, int]:
+    def decide(self, action_probability: float, buy_probability: float = 0.5) -> tuple[bool, int, int]:
         """决策（随机行动）"""
         if random.random() >= action_probability:
             return False, 0, 0
-        direction = 1 if random.random() < 0.5 else -1
-        quantity = max(1, int(random.lognormvariate(3.0, 1.0)))
+        direction = 1 if random.random() < buy_probability else -1
+        quantity = max(1, int(random.lognormvariate(self.config_quantity_mu, self.config_quantity_sigma)))
         return True, direction, quantity
 
 

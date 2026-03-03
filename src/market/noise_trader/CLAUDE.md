@@ -110,9 +110,14 @@ if trader_id >= 0:
 
 **核心方法：**
 
-#### `decide() -> tuple[bool, int, int]`
+#### `decide(buy_probability: float = 0.5) -> tuple[bool, int, int]`
 
 决策是否行动、方向和数量。
+
+**参数：**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `buy_probability` | float | 买入概率，默认0.5表示等概率买卖 |
 
 **返回值：** `(should_act, direction, quantity)`
 | 返回值 | 类型 | 说明 |
@@ -123,7 +128,7 @@ if trader_id >= 0:
 
 **决策逻辑：**
 1. 以 `action_probability`（默认 50%）概率决定是否行动
-2. 行动时以 50% 概率决定买或卖
+2. 行动时以 `buy_probability` 概率决定买入（默认 50%，可由 Episode 级偏置调整）
 3. 下单量从对数正态分布采样：`max(1, int(lognormvariate(mu=14.5, sigma=1.0)))`
 
 #### `execute(direction: int, quantity: int, matching_engine: MatchingEngine) -> list[Trade]`
@@ -307,6 +312,7 @@ for trader in noise_traders:
 | `action_probability` | float | 0.5 | 每个 tick 行动概率 |
 | `quantity_mu` | float | 14.5 | 对数正态分布 mu 参数 |
 | `quantity_sigma` | float | 1.0 | 对数正态分布 sigma 参数 |
+| `episode_bias_range` | float | 0.15 | Episode 级买入概率偏置范围 |
 
 **下单量分布说明：**
 - 使用对数正态分布 `lognormvariate(mu, sigma)`

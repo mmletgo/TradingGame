@@ -86,20 +86,20 @@ class NoiseTraderAccountState:
     position_quantity: int
     position_avg_price: float
     order_counter: int
-    config_quantity_mu: float   # 对数正态分布参数
-    config_quantity_sigma: float
+    config_quantity_mu: float = 14.5   # 对数正态分布 mu 参数（从配置复制）
+    config_quantity_sigma: float = 1.0 # 对数正态分布 sigma 参数（从配置复制）
 ```
 
 **主要方法：**
 
 | 方法 | 描述 |
 |------|------|
-| `from_noise_trader(noise_trader)` | 类方法，从 NoiseTrader 对象创建状态副本 |
+| `from_noise_trader(noise_trader)` | 类方法，从 NoiseTrader 对象创建状态副本（包括 quantity_mu/sigma） |
 | `reset()` | 重置到初始状态 |
 | `get_equity(current_price)` | 计算净值 |
 | `on_trade(price, quantity, is_buyer)` | 处理成交（无手续费） |
 | `generate_order_id(arena_id)` | 生成唯一订单 ID |
-| `decide(action_probability)` | 决策：返回 (should_act, direction, quantity) |
+| `decide(action_probability, buy_probability=0.5)` | 决策：返回 (should_act, direction, quantity)，buy_probability 支持 Episode 级方向偏置 |
 
 ### ArenaState (arena_state.py)
 
@@ -293,7 +293,7 @@ _run_episode_local()
 | `execute_liquidation()` | 强平市价平仓 |
 | `execute_adl()` | ADL 自动减仓 |
 | `update_trade_accounts()` | 更新成交账户状态 |
-| `compute_noise_trader_decisions()` | 噪声交易者决策 |
+| `compute_noise_trader_decisions()` | 噪声交易者决策（支持 buy_probability 参数） |
 | `compute_market_state()` | 归一化市场状态计算 |
 | `check_early_end()` | 检查 Episode 提前结束 |
 | `aggregate_tick_trades()` | 聚合 tick 成交量/额 |
