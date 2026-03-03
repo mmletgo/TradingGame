@@ -46,7 +46,7 @@ def create_default_config(
         ema_alpha=0.9,
     )
     maker_initial_balance = 10_000_000.0  # 做市商初始资金 10M
-    maker_leverage = 1.0
+    maker_leverage = 10.0
 
     agents = {
         AgentType.RETAIL_PRO: AgentConfig(
