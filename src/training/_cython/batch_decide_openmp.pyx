@@ -1593,7 +1593,7 @@ cdef void _parse_market_maker_full_single(
     - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
     """
     cdef double MAX_ORDER_QUANTITY = 100000000.0
-    cdef double MIN_SIDE_WEIGHT = 0.1
+    cdef double MIN_SIDE_WEIGHT = 0.25
     cdef int MM_MIN_ORDER_QUANTITY = 1  # 最小订单数量
     cdef double MM_MIN_RATIO_THRESHOLD = 0.001  # 最小权重阈值 (0.1%)
 

@@ -140,7 +140,7 @@ mm_fitness = α × pnl + γ × volume_score
 
 - 200个独立噪声交易者，各自每 tick 以 50% 概率行动
 - 行动时按 `buy_probability` 概率买入，通过市价单撮合
-- 每个 Episode 开始时生成随机偏置：`buy_probability = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
+- 每个 Episode 开始时，每个竞技场独立生成随机偏置：`buy_probability = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
 - `episode_bias_range` 默认 0.15，即 buy_prob ∈ [0.35, 0.65]
 - 下单量：`max(1, int(lognormvariate(mu=12.0, sigma=1.0)))`
 - 无限资金（1e18），不触发强平检查

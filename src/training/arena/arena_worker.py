@@ -1900,9 +1900,12 @@ def _run_episode_local(
     for arena in arena_states:
         _reset_arena(arena, config, type_groups, agent_infos)
 
-    # Episode 级随机方向偏置
+    # Episode 级随机方向偏置（每个竞技场独立生成）
     bias_range = noise_trader_config.episode_bias_range
-    episode_buy_probability = 0.5 + random.uniform(-bias_range, bias_range)
+    episode_buy_probabilities = [
+        0.5 + random.uniform(-bias_range, bias_range)
+        for _ in arena_states
+    ]
 
     # 2. MM 初始化
     _init_mm_all_arenas(
@@ -1939,7 +1942,7 @@ def _run_episode_local(
 
             # 噪声交易者决策
             noise_decisions = compute_noise_trader_decisions(
-                arena, noise_trader_config, episode_buy_probability
+                arena, noise_trader_config, episode_buy_probabilities[arena_idx]
             )
 
             # 计算市场状态
