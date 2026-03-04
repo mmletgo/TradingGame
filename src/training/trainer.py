@@ -1614,12 +1614,10 @@ class Trainer:
 
         # 解析 AS 调整输出
         gamma_adj_raw = fast_clip(output[41], -1.0, 1.0) if len(output) > 41 else 0.0
-        blend_raw = fast_clip(output[42], -1.0, 1.0) if len(output) > 42 else -1.0
-        spread_adj_raw = fast_clip(output[43], -1.0, 1.0) if len(output) > 43 else 0.0
+        spread_adj_raw = fast_clip(output[42], -1.0, 1.0) if len(output) > 42 else 0.0
 
         # 映射到实际范围
         gamma_adj: float = as_config.gamma_adj_min * (as_config.gamma_adj_max / as_config.gamma_adj_min) ** ((gamma_adj_raw + 1) / 2)
-        blend: float = (blend_raw + 1) / 2  # [0, 1]
         spread_adj: float = as_config.spread_adj_min + (spread_adj_raw + 1) / 2 * (as_config.spread_adj_max - as_config.spread_adj_min)
 
         # 计算 AS reservation price
@@ -1655,15 +1653,7 @@ class Trainer:
         as_offset: float = -(q_norm * effective_gamma * sigma_sq * tau_safe)
         as_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, as_offset))
 
-        # 旧式倾斜偏移（用于混合）
-        nn_offset: float = 0.0
-        if position_qty != 0 and equity > 0:
-            pos_value: float = abs(position_qty) * mid_price
-            max_pv: float = equity * leverage
-            pr: float = min(1.0, pos_value / max_pv) if max_pv > 0 else 0.0
-            nn_offset = pr * 0.05 if position_qty < 0 else -pr * 0.05
-
-        final_offset: float = (1 - blend) * as_offset + blend * nn_offset
+        final_offset: float = as_offset
         final_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, final_offset))
         reservation_price: float = mid_price * (1 + final_offset)
 

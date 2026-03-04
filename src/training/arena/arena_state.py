@@ -647,43 +647,6 @@ def calculate_order_quantity_from_state(
     return min(MAX_ORDER_QUANTITY, int(quantity))
 
 
-def calculate_skew_factor_from_state(
-    state: AgentAccountState,
-    mid_price: float,
-) -> float:
-    """根据 AgentAccountState 计算做市商仓位倾斜因子
-
-    与 MarketMakerAgent._calculate_skew_factor() 逻辑完全一致。
-
-    Args:
-        state: Agent 账户状态
-        mid_price: 中间价
-
-    Returns:
-        倾斜因子，范围 [-1, 1]
-    """
-    equity = state.get_equity(mid_price)
-    if equity <= 0:
-        return 0.0
-
-    position_qty = state.position_quantity
-    if position_qty == 0:
-        return 0.0
-
-    position_value = abs(position_qty) * mid_price
-    max_position_value = equity * state.leverage
-    pos_ratio = (
-        min(1.0, position_value / max_position_value)
-        if max_position_value > 0
-        else 0.0
-    )
-
-    if position_qty > 0:
-        return -pos_ratio
-    else:
-        return pos_ratio
-
-
 def calculate_as_reservation_offset(
     state: AgentAccountState,
     mid_price: float,
@@ -692,7 +655,6 @@ def calculate_as_reservation_offset(
     kappa: float,
     as_config: ASConfig,
     gamma_adj: float = 1.0,
-    blend: float = 0.0,
     spread_adj: float = 1.0,
 ) -> tuple[float, float, float]:
     """Calculate AS-based reservation price offset and min spread ticks.
@@ -705,7 +667,6 @@ def calculate_as_reservation_offset(
         kappa: Order arrival rate
         as_config: AS model config
         gamma_adj: NN gamma adjustment multiplier
-        blend: 0=pure AS, 1=pure NN old-style skew
         spread_adj: NN spread adjustment multiplier
 
     Returns:
@@ -731,15 +692,7 @@ def calculate_as_reservation_offset(
     as_offset = -(q_norm * effective_gamma * sigma_sq * tau_safe)
     as_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, as_offset))
 
-    # Old-style skew offset for blending
-    nn_offset: float = 0.0
-    if position_qty != 0 and equity > 0:
-        pos_value = abs(position_qty) * mid_price
-        max_pv = equity * leverage
-        pr = min(1.0, pos_value / max_pv) if max_pv > 0 else 0.0
-        nn_offset = pr * 0.05 if position_qty < 0 else -pr * 0.05
-
-    final_offset = (1.0 - blend) * as_offset + blend * nn_offset
+    final_offset = as_offset
     final_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, final_offset))
     reservation_price = mid_price * (1.0 + final_offset)
 

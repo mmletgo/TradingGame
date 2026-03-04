@@ -42,7 +42,6 @@ from .arena_state import (
     ArenaState,
     NoiseTraderAccountState,
     calculate_order_quantity_from_state,
-    calculate_skew_factor_from_state,
     calculate_as_reservation_offset,
 )
 from .execute_worker import NoiseTraderDecision, NoiseTraderTradeResult

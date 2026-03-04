@@ -55,7 +55,7 @@ DEF AGENT_MARKET_MAKER = 3
 DEF INPUT_DIM_FULL = 907
 DEF INPUT_DIM_MARKET_MAKER = 972
 DEF OUTPUT_DIM_FULL = 8
-DEF OUTPUT_DIM_MARKET_MAKER = 44
+DEF OUTPUT_DIM_MARKET_MAKER = 43
 
 # 动作类型（高级散户共用6种动作）
 DEF ACTION_HOLD = 0
@@ -1457,15 +1457,14 @@ cdef void _parse_market_maker_single(
 ) noexcept nogil:
     """解析做市商的神经网络输出
 
-    输出结构（44个值）：
+    输出结构（43个值）：
     - [0-9]: 买单价格偏移（10个买单）
     - [10-19]: 买单数量权重（10个买单）
     - [20-29]: 卖单价格偏移（10个卖单）
     - [30-39]: 卖单数量权重（10个卖单）
     - [40]: 总下单比例基准
     - [41]: gamma_adj（AS风险厌恶调整）
-    - [42]: blend（AS/NN混合比例）
-    - [43]: spread_adj（价差调整）
+    - [42]: spread_adj（价差调整）
 
     做市商始终执行 QUOTE 动作，价格和数量信息存储在 result 中供后续处理。
     """
@@ -1551,15 +1550,14 @@ cdef void _parse_market_maker_full_single(
 ) noexcept nogil:
     """解析做市商的神经网络输出并直接生成订单数据（AS 模型版本）
 
-    神经网络输出结构（共 44 个值）：
+    神经网络输出结构（共 43 个值）：
     - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到 min_offset ~ max_offset ticks）
     - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1）
     - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到 min_offset ~ max_offset ticks）
     - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
     - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
     - 输出[41]: gamma_adj（-1到1，log-scale映射到[gamma_adj_min, gamma_adj_max]）
-    - 输出[42]: blend（-1到1，映射到[0,1]，0=纯AS，1=纯NN旧式倾斜）
-    - 输出[43]: spread_adj（-1到1，映射到[spread_adj_min, spread_adj_max]）
+    - 输出[42]: spread_adj（-1到1，映射到[spread_adj_min, spread_adj_max]）
     """
     cdef double MAX_ORDER_QUANTITY = 100000000.0
     cdef int MM_MIN_ORDER_QUANTITY = 1  # 最小订单数量
@@ -1594,8 +1592,7 @@ cdef void _parse_market_maker_full_single(
 
     # Parse NN AS adjustment outputs
     cdef double gamma_adj_raw = clip(nn_output[41], -1.0, 1.0)
-    cdef double blend_raw = clip(nn_output[42], -1.0, 1.0)
-    cdef double spread_adj_raw = clip(nn_output[43], -1.0, 1.0)
+    cdef double spread_adj_raw = clip(nn_output[42], -1.0, 1.0)
 
     # gamma_adj: log-scale mapping [gamma_adj_min, gamma_adj_max]
     cdef double gmin = market.as_gamma_adj_min
@@ -1603,9 +1600,6 @@ cdef void _parse_market_maker_full_single(
     cdef double gamma_adj = 1.0
     if gmin > 0 and gmax > gmin:
         gamma_adj = gmin * exp(log(gmax / gmin) * (gamma_adj_raw + 1.0) * 0.5)
-
-    # blend: [0, 1], 0=pure AS, 1=pure NN old-style skew
-    cdef double blend = (blend_raw + 1.0) * 0.5
 
     # spread_adj: [spread_adj_min, spread_adj_max]
     cdef double smin = market.as_spread_adj_min
@@ -1630,22 +1624,7 @@ cdef void _parse_market_maker_full_single(
     cdef double max_offset_val = market.as_max_reservation_offset
     as_offset = clip(as_offset, -max_offset_val, max_offset_val)
 
-    # Compute old-style skew offset for blending
-    cdef double nn_offset = 0.0
-    cdef double pos_value, max_pv, pr
-    if current_pos != 0 and equity > 0:
-        pos_value = fabs(current_pos) * mid_price
-        max_pv = equity * leverage
-        pr = pos_value / max_pv if max_pv > 0 else 0.0
-        if pr > 1.0:
-            pr = 1.0
-        if current_pos < 0:
-            nn_offset = pr * 0.05
-        else:
-            nn_offset = -pr * 0.05
-
-    # Blend AS and NN offsets
-    cdef double final_offset = (1.0 - blend) * as_offset + blend * nn_offset
+    cdef double final_offset = as_offset
     final_offset = clip(final_offset, -max_offset_val, max_offset_val)
     cdef double reservation_price = mid_price * (1.0 + final_offset)
 

@@ -1673,14 +1673,14 @@ class TestMarketMakerAgentDecide:
         # 创建 mock Brain，设置神经网络输出（44 个值）
         mock_brain = MagicMock(spec=Brain)
         # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights
-        #       + 1 total ratio + 3 AS adjustments (gamma_adj, blend, spread_adj)
+        #       + 1 total ratio + 2 AS adjustments (gamma_adj, spread_adj)
         mock_brain.forward.return_value = (
             [0.0] * 10 +   # bid price offsets
             [0.5] * 10 +   # bid quantity weights (positive = reasonable)
             [0.0] * 10 +   # ask price offsets
             [0.5] * 10 +   # ask quantity weights
             [0.0] +         # total ratio
-            [0.0, -1.0, 0.0]  # gamma_adj=1.0x, blend=0(pure AS), spread_adj=1.25x
+            [0.0, 0.0]  # gamma_adj=geometric mean of adj range, spread_adj=midpoint of adj range
         )
 
         # 创建做市商 Agent 配置
