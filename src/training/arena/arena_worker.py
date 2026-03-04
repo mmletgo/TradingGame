@@ -27,7 +27,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from src.bio.agents.base import ActionType, AgentType
-from src.config.config import Config, NoiseTraderConfig
+from src.config.config import ASConfig, Config, NoiseTraderConfig
 from src.market.adl.adl_manager import ADLCandidate, ADLManager
 from src.market.market_state import NormalizedMarketState
 from src.market.matching.matching_engine import MatchingEngine
@@ -43,6 +43,7 @@ from .arena_state import (
     NoiseTraderAccountState,
     calculate_order_quantity_from_state,
     calculate_skew_factor_from_state,
+    calculate_as_reservation_offset,
 )
 from .execute_worker import NoiseTraderDecision, NoiseTraderTradeResult
 
@@ -569,6 +570,8 @@ def compute_market_state(
     arena: ArenaState,
     buffers: dict[str, NDArray[np.float32]],
     ema_alpha: float,
+    episode_length: int = 1000,
+    as_config: ASConfig | None = None,
 ) -> NormalizedMarketState:
     """计算单个竞技场的归一化市场状态
 
@@ -578,6 +581,8 @@ def compute_market_state(
         arena: 竞技场状态
         buffers: 预分配的市场状态缓冲区
         ema_alpha: EMA 平滑系数
+        episode_length: Episode 总长度（tick 数）
+        as_config: AS 模型配置（可选，用于预计算 AS 参数）
 
     Returns:
         归一化后的市场状态
@@ -671,6 +676,42 @@ def compute_market_state(
         tick_volumes_normalized[-n:] = log_normalize_signed(volumes)
         tick_amounts_normalized[-n:] = log_normalize_signed(amounts, scale=12.0)
 
+    # 预计算 AS 模型参数
+    raw_tick_prices = np.array(arena.tick_history_prices, dtype=np.float64) if arena.tick_history_prices else None
+    as_sigma_val: float = 0.0
+    as_tau_val: float = 1.0
+    as_kappa_val: float = 1.5
+    as_gamma_val: float = 0.1
+    as_gamma_adj_min_val: float = 0.1
+    as_gamma_adj_max_val: float = 10.0
+    as_spread_adj_min_val: float = 0.5
+    as_spread_adj_max_val: float = 2.0
+    as_max_reservation_offset_val: float = 0.05
+
+    if as_config is not None:
+        from src.market.as_calculator import ASCalculator
+
+        if raw_tick_prices is not None and len(raw_tick_prices) >= 2:
+            as_sigma_val = ASCalculator.compute_volatility(
+                raw_tick_prices, as_config.vol_window, as_config.min_sigma, as_config.max_sigma
+            )
+        else:
+            as_sigma_val = as_config.min_sigma
+
+        if arena.tick_history_volumes:
+            raw_volumes = np.array(arena.tick_history_volumes, dtype=np.float64)
+            as_kappa_val = ASCalculator.compute_kappa(raw_volumes, as_config.kappa_base)
+        else:
+            as_kappa_val = as_config.kappa_base
+
+        as_tau_val = max(0.001, (episode_length - arena.tick) / episode_length)
+        as_gamma_val = as_config.gamma
+        as_gamma_adj_min_val = as_config.gamma_adj_min
+        as_gamma_adj_max_val = as_config.gamma_adj_max
+        as_spread_adj_min_val = as_config.spread_adj_min
+        as_spread_adj_max_val = as_config.spread_adj_max
+        as_max_reservation_offset_val = as_config.max_reservation_offset
+
     return NormalizedMarketState(
         mid_price=smooth_mid_price,
         tick_size=tick_size,
@@ -681,6 +722,18 @@ def compute_market_state(
         tick_history_prices=tick_prices_normalized.copy(),
         tick_history_volumes=tick_volumes_normalized.copy(),
         tick_history_amounts=tick_amounts_normalized.copy(),
+        current_tick=arena.tick,
+        episode_length=episode_length,
+        raw_tick_prices=raw_tick_prices,
+        as_sigma=as_sigma_val,
+        as_tau=as_tau_val,
+        as_kappa=as_kappa_val,
+        as_gamma=as_gamma_val,
+        as_gamma_adj_min=as_gamma_adj_min_val,
+        as_gamma_adj_max=as_gamma_adj_max_val,
+        as_spread_adj_min=as_spread_adj_min_val,
+        as_spread_adj_max=as_spread_adj_max_val,
+        as_max_reservation_offset=as_max_reservation_offset_val,
     )
 
 
@@ -1599,7 +1652,11 @@ def _init_mm_all_arenas(
     arena0 = arena_states[0]
 
     # 用第一个竞技场计算市场状态
-    market_state = compute_market_state(arena0, buffers_list[0], ema_alpha)
+    market_state = compute_market_state(
+        arena0, buffers_list[0], ema_alpha,
+        episode_length=config.training.episode_length,
+        as_config=config.as_model,
+    )
     tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
 
     # 收集 MM 状态
@@ -1947,7 +2004,9 @@ def _run_episode_local(
 
             # 计算市场状态
             market_state = compute_market_state(
-                arena, buffers_list[arena_idx], ema_alpha
+                arena, buffers_list[arena_idx], ema_alpha,
+                episode_length=episode_length,
+                as_config=config.as_model,
             )
 
             # 收集活跃 agent（按类型分组）

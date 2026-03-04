@@ -1,8 +1,12 @@
 """做市商 Agent 模块
 
 本模块定义做市商 Agent 类，继承自 Agent 基类。
+支持 AS (Avellaneda-Stoikov) + NN 混合仓位倾斜机制。
 """
 
+from __future__ import annotations
+
+from math import log
 from typing import TYPE_CHECKING, Any
 import logging
 
@@ -15,7 +19,8 @@ _debug_logger.setLevel(logging.WARNING)
 
 from src.bio.agents.base import Agent, ActionType
 from src.bio.brain.brain import Brain
-from src.config.config import AgentConfig, AgentType
+from src.config.config import AgentConfig, AgentType, ASConfig
+from src.market.as_calculator import ASCalculator, ASQuoteParams
 from src.market.market_state import NormalizedMarketState
 from src.market.orderbook.order import Order, OrderSide, OrderType
 from src.market.orderbook.orderbook import OrderBook
@@ -41,6 +46,7 @@ class MarketMakerAgent(Agent):
     代表市场流动性的提供者，初始资产 1000万，杠杆 10 倍。
 
     做市商通过同时维护买卖双边挂单（每边1-10单）为市场提供深度。
+    支持 AS (Avellaneda-Stoikov) + NN 混合仓位倾斜机制。
 
     Attributes:
         agent_id: Agent ID
@@ -48,9 +54,11 @@ class MarketMakerAgent(Agent):
         account: 交易账户
         bid_order_ids: 买单订单ID列表（最多10个）
         ask_order_ids: 卖单订单ID列表（最多10个）
+        _as_calculator: AS 模型计算器（可选）
+        _as_config: AS 模型配置（可选）
 
-    神经网络输入维度: 964 = 604 + 60 挂单信息 + 300 tick 历史数据
-    神经网络输出维度: 41 = 买单价格(10) + 买单数量(10) + 卖单价格(10) + 卖单数量(10) + 总下单比例基准(1)
+    神经网络输入维度: 972 = 604 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征
+    神经网络输出维度: 44 = 买单价格(10) + 买单数量(10) + 卖单价格(10) + 卖单数量(10) + 总下单比例基准(1) + AS调整(3)
     """
 
     # 最小订单数量保证
@@ -61,8 +69,17 @@ class MarketMakerAgent(Agent):
     brain: Brain
     bid_order_ids: list[int]
     ask_order_ids: list[int]
+    _as_calculator: ASCalculator | None
+    _as_config: ASConfig | None
 
-    def __init__(self, agent_id: int, brain: Brain, config: AgentConfig) -> None:
+    def __init__(
+        self,
+        agent_id: int,
+        brain: Brain,
+        config: AgentConfig,
+        *,
+        as_config: ASConfig | None = None,
+    ) -> None:
         """创建做市商 Agent
 
         调用父类构造函数，设置类型为 MARKET_MAKER，初始化买卖挂单列表。
@@ -71,6 +88,7 @@ class MarketMakerAgent(Agent):
             agent_id: Agent ID
             brain: NEAT 神经网络
             config: Agent 配置
+            as_config: AS 模型配置（可选，关键字参数）
         """
         super().__init__(agent_id, AgentType.MARKET_MAKER, brain, config)
 
@@ -78,9 +96,15 @@ class MarketMakerAgent(Agent):
         self.bid_order_ids: list[int] = []
         self.ask_order_ids: list[int] = []
 
-        # 做市商输入更大（964 = 604 + 60 挂单信息 + 300 tick 历史数据）
+        # AS 模型配置和计算器
+        self._as_config: ASConfig | None = as_config
+        self._as_calculator: ASCalculator | None = (
+            ASCalculator(as_config) if as_config is not None else None
+        )
+
+        # 做市商输入更大（972 = 604 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征）
         # tick 历史数据：100 个价格 + 100 个成交量 + 100 个成交额
-        self._input_buffer = np.zeros(964, dtype=np.float64)
+        self._input_buffer = np.zeros(972, dtype=np.float64)
 
     def get_action_space(self) -> list[ActionType]:
         """获取做市商可用动作
@@ -92,19 +116,84 @@ class MarketMakerAgent(Agent):
         """
         return []
 
+    def _fill_as_features(self, market_state: NormalizedMarketState) -> None:
+        """填充 AS 模型特征到输入缓冲区的 [964:972] 区间
+
+        8 个 AS 特征：
+        - [964]: reservation_offset [-0.5, 0.5]
+        - [965]: optimal_half_spread / mid_price [0, 0.1]
+        - [966]: sigma (已 clamp) [0, 0.1]
+        - [967]: tau [0, 1]
+        - [968]: log10(kappa+1)/5 [0, 1]
+        - [969]: inventory_risk (clamped) [-1, 1]
+        - [970]: gamma / gamma_adj_max [0, 1]
+        - [971]: optimal_spread / (sigma+1e-8) (capped) [0, 10]
+
+        Args:
+            market_state: 预计算的归一化市场数据
+        """
+        if (
+            self._as_calculator is not None
+            and self._as_config is not None
+            and market_state.raw_tick_prices is not None
+        ):
+            mid_price = market_state.mid_price
+            sigma = ASCalculator.compute_volatility(
+                market_state.raw_tick_prices,
+                self._as_config.vol_window,
+                self._as_config.min_sigma,
+                self._as_config.max_sigma,
+            )
+            tau = max(
+                0.001,
+                (market_state.episode_length - market_state.current_tick)
+                / market_state.episode_length,
+            )
+            kappa = ASCalculator.compute_kappa(
+                market_state.raw_tick_prices, self._as_config.kappa_base
+            )
+            equity = self.account.get_equity(mid_price)
+            as_params = self._as_calculator.compute(
+                mid_price,
+                self.account.position.quantity,
+                equity,
+                self.account.leverage,
+                sigma,
+                tau,
+                kappa,
+            )
+
+            self._input_buffer[964] = as_params.reservation_offset
+            self._input_buffer[965] = (
+                as_params.optimal_half_spread / mid_price if mid_price > 0 else 0.0
+            )
+            self._input_buffer[966] = sigma
+            self._input_buffer[967] = tau
+            self._input_buffer[968] = np.log10(kappa + 1) / 5.0
+            self._input_buffer[969] = max(-1.0, min(1.0, as_params.inventory_risk))
+            self._input_buffer[970] = (
+                self._as_config.gamma / self._as_config.gamma_adj_max
+            )
+            self._input_buffer[971] = min(
+                10.0, as_params.optimal_spread / (sigma + 1e-8)
+            )
+        else:
+            self._input_buffer[964:972] = 0.0
+
     def observe(
         self, market_state: NormalizedMarketState, orderbook: OrderBook
     ) -> np.ndarray:
         """从预计算的市场状态构建神经网络输入
 
-        做市商覆盖基类方法，使用更大的输入缓冲区（964 = 604 + 60 挂单信息 + 300 tick 历史数据）。
+        做市商覆盖基类方法，使用更大的输入缓冲区
+        （972 = 604 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征）。
 
         Args:
             market_state: 预计算的归一化市场数据
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（964 维 ndarray）
+            神经网络输入向量（972 维 ndarray）
         """
         if _HAS_CYTHON_OBSERVE:
             # 使用 Cython 加速版本
@@ -125,7 +214,7 @@ class MarketMakerAgent(Agent):
                 mid_price, orderbook
             )
 
-            # 调用 Cython 函数填充缓冲区
+            # 调用 Cython 函数填充缓冲区 [0:964]
             fast_observe_market_maker(
                 self._input_buffer,
                 market_state.bid_data,
@@ -141,6 +230,8 @@ class MarketMakerAgent(Agent):
                 position_inputs[3],
                 pending_order_inputs,
             )
+            # 填充 AS 特征 [964:972]
+            self._fill_as_features(market_state)
             return self._input_buffer
         else:
             # 纯 Python 实现：直接复制到预分配数组
@@ -156,6 +247,8 @@ class MarketMakerAgent(Agent):
             self._input_buffer[664:764] = market_state.tick_history_prices
             self._input_buffer[764:864] = market_state.tick_history_volumes
             self._input_buffer[864:964] = market_state.tick_history_amounts
+            # AS 特征 [964:972]
+            self._fill_as_features(market_state)
             return self._input_buffer  # 不调用 .tolist()
 
     def _fill_order_inputs(
@@ -313,12 +406,17 @@ class MarketMakerAgent(Agent):
         """决策下一步动作
 
         做市商默认每 tick 双边挂单，神经网络直接输出价格和数量参数。
-        神经网络输出结构（共 41 个值）：
-        - 输出[0-9]: 买单1-10的价格偏移（-1到1，相对于mid_price）
+        支持 AS (Avellaneda-Stoikov) + NN 混合仓位倾斜机制。
+
+        神经网络输出结构（共 44 个值）：
+        - 输出[0-9]: 买单1-10的价格偏移（-1到1，相对于reservation_price）
         - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1，20单归一化后总和为1.0）
-        - 输出[20-29]: 卖单1-10的价格偏移（-1到1，相对于mid_price）
+        - 输出[20-29]: 卖单1-10的价格偏移（-1到1，相对于reservation_price）
         - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1，20单归一化后总和为1.0）
         - 输出[40]: 总下单比例基准（-1到1，映射到0-1，控制使用多少可用资金下单）
+        - 输出[41]: gamma 调整因子（-1到1，对数映射到 [gamma_adj_min, gamma_adj_max]）
+        - 输出[42]: AS/NN 混合比例（-1到1，映射到 [0, 1]，0=纯AS，1=纯NN）
+        - 输出[43]: spread 调整因子（-1到1，线性映射到 [spread_adj_min, spread_adj_max]）
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -339,9 +437,9 @@ class MarketMakerAgent(Agent):
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
 
-        # 3. 验证输出维度（需要 41 个值）
-        if len(outputs) < 41:
-            raise ValueError(f"神经网络输出维度不足，期望 41，实际 {len(outputs)}")
+        # 3. 验证输出维度（需要 44 个值）
+        if len(outputs) < 44:
+            raise ValueError(f"神经网络输出维度不足，期望 44，实际 {len(outputs)}")
 
         # 4. 获取参考价格并计算仓位信息
         mid_price = market_state.mid_price
@@ -349,18 +447,113 @@ class MarketMakerAgent(Agent):
             mid_price = 100.0
 
         tick_size = market_state.tick_size if market_state.tick_size > 0 else 0.01
-
-        # 计算仓位倾斜因子
-        skew_factor = self._calculate_skew_factor(mid_price)
         position_qty = self.account.position.quantity
 
-        # 向量化收集数量比例
+        # 向量化收集输出
         outputs_arr = np.array(outputs)
+
+        # ===== 解析 AS 调整输出 [41:44] =====
+        gamma_adj_raw: float = float(np.clip(outputs_arr[41], -1, 1))
+        blend_raw: float = float(np.clip(outputs_arr[42], -1, 1))
+        spread_adj_raw: float = float(np.clip(outputs_arr[43], -1, 1))
+
+        # 映射到实际范围
+        if self._as_config is not None:
+            # gamma_adj: [-1,1] -> [gamma_adj_min, gamma_adj_max] (对数刻度)
+            gamma_adj: float = self._as_config.gamma_adj_min * (
+                self._as_config.gamma_adj_max / self._as_config.gamma_adj_min
+            ) ** ((gamma_adj_raw + 1) / 2)
+            # spread_adj: [-1,1] -> [spread_adj_min, spread_adj_max] (线性)
+            spread_adj: float = self._as_config.spread_adj_min + (
+                spread_adj_raw + 1
+            ) / 2 * (self._as_config.spread_adj_max - self._as_config.spread_adj_min)
+        else:
+            gamma_adj = 1.0
+            spread_adj = 1.0
+        # blend: [-1,1] -> [0, 1]（0=纯AS, 1=纯NN旧式倾斜）
+        blend: float = (blend_raw + 1) / 2
+
+        # ===== 计算 reservation price 和最优价差 =====
+        as_half_spread: float = 0.0
+
+        if (
+            self._as_calculator is not None
+            and self._as_config is not None
+            and market_state.raw_tick_prices is not None
+        ):
+            sigma = ASCalculator.compute_volatility(
+                market_state.raw_tick_prices,
+                self._as_config.vol_window,
+                self._as_config.min_sigma,
+                self._as_config.max_sigma,
+            )
+            tau = max(
+                0.001,
+                (market_state.episode_length - market_state.current_tick)
+                / market_state.episode_length,
+            )
+            kappa = ASCalculator.compute_kappa(
+                market_state.raw_tick_prices, self._as_config.kappa_base
+            )
+            equity = self.account.get_equity(mid_price)
+
+            # 使用 NN 调整后的 effective_gamma 内联计算 AS 偏移
+            effective_gamma: float = self._as_config.gamma * gamma_adj
+            max_pos_value = equity * self.account.leverage
+            q_norm: float = (
+                (position_qty * mid_price) / max_pos_value
+                if max_pos_value > 0
+                else 0.0
+            )
+            q_norm = max(-1.0, min(1.0, q_norm))
+            sigma_sq: float = sigma * sigma
+            tau_safe: float = max(0.001, tau)
+            inventory_risk: float = q_norm * effective_gamma * sigma_sq * tau_safe
+            as_offset: float = -inventory_risk
+            as_offset = max(
+                -self._as_config.max_reservation_offset,
+                min(self._as_config.max_reservation_offset, as_offset),
+            )
+
+            # 最优价差
+            kappa_safe: float = max(1e-6, kappa)
+            optimal_spread: float = effective_gamma * sigma_sq * tau_safe + (
+                2.0 / effective_gamma
+            ) * log(1.0 + effective_gamma / kappa_safe)
+            as_half_spread = optimal_spread * 0.5 * spread_adj
+
+            # NN 旧式倾斜偏移（缩放到价格偏移量级）
+            nn_offset: float = self._calculate_skew_factor(mid_price) * 0.05
+
+            # 混合 AS 和 NN 偏移
+            final_offset: float = (1 - blend) * as_offset + blend * nn_offset
+
+        else:
+            # 回退到旧行为
+            skew_factor = self._calculate_skew_factor(mid_price)
+            final_offset = skew_factor * 0.05
+
+        # 限制最终偏移范围
+        max_offset_limit: float = (
+            self._as_config.max_reservation_offset
+            if self._as_config is not None
+            else 0.05
+        )
+        final_offset = max(-max_offset_limit, min(max_offset_limit, final_offset))
+        reservation_price: float = mid_price * (1 + final_offset)
+
+        # 从 AS 价差计算最小偏移 ticks
+        if as_half_spread > 0:
+            min_offset_ticks_val: float = max(1.0, as_half_spread / tick_size)
+        else:
+            min_offset_ticks_val = 1.0
+
+        # ===== 数量权重（AS 通过价格偏移处理倾斜，数量无需倾斜）=====
         bid_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[10:20], -1, 1) + 1) / 2)
         ask_raw_ratios = np.maximum(0.0, (np.clip(outputs_arr[30:40], -1, 1) + 1) / 2)
 
-        # 计算总和并归一化（确保 20 个订单的总比例 = 1.0）
-        total_raw_ratio = bid_raw_ratios.sum() + ask_raw_ratios.sum()
+        # 归一化（确保 20 个订单的总比例 = 1.0）
+        total_raw_ratio: float = float(bid_raw_ratios.sum() + ask_raw_ratios.sum())
         if total_raw_ratio > 0:
             bid_ratios = bid_raw_ratios / total_raw_ratio
             ask_ratios = ask_raw_ratios / total_raw_ratio
@@ -368,14 +561,9 @@ class MarketMakerAgent(Agent):
             bid_ratios = np.zeros(10)
             ask_ratios = np.zeros(10)
 
-        # 应用仓位倾斜
-        bid_ratios, ask_ratios = self._apply_position_skew(
-            bid_ratios, ask_ratios, skew_factor
-        )
-
         # 解析总下单比例基准
         # 输出[40]: -1 到 1，映射到 0.01 到 1
-        total_ratio_base = (
+        total_ratio_base: float = float(
             0.01 + (np.clip(outputs_arr[40], -1, 1) + 1) / 2 * 0.99
         )  # [0.01, 1]
 
@@ -383,20 +571,18 @@ class MarketMakerAgent(Agent):
         bid_ratios = bid_ratios * total_ratio_base
         ask_ratios = ask_ratios * total_ratio_base
 
-        # 价格偏移完全由神经网络决定，映射到 [1, 100] ticks
-        max_offset_ticks = 100.0
-        min_offset_ticks = 1.0
+        # ===== 价格偏移映射到 [min_offset_ticks, min_offset_ticks+99] =====
+        max_offset_ticks: float = min_offset_ticks_val + 99.0
 
         bid_price_offsets = np.clip(outputs_arr[0:10], -1, 1)
-        # [-1, 1] -> [1, 100]
-        bid_price_ticks = min_offset_ticks + (bid_price_offsets + 1) / 2 * (
-            max_offset_ticks - min_offset_ticks
+        bid_price_ticks = min_offset_ticks_val + (bid_price_offsets + 1) / 2 * (
+            max_offset_ticks - min_offset_ticks_val
         )
-        # 舍入到 tick_size 的整数倍，避免浮点数精度问题
-        # 确保价格至少为一个 tick_size，防止出现负价格或零价格
+        # 舍入到 tick_size 的整数倍，以 reservation_price 为中心
         bid_prices = np.maximum(
             tick_size,
-            np.round((mid_price - bid_price_ticks * tick_size) / tick_size) * tick_size,
+            np.round((reservation_price - bid_price_ticks * tick_size) / tick_size)
+            * tick_size,
         )
 
         bid_orders: list[dict[str, float]] = []
@@ -413,15 +599,15 @@ class MarketMakerAgent(Agent):
             if quantity > 0:
                 bid_orders.append({"price": float(bid_prices[i]), "quantity": quantity})
 
-        # 卖单价格偏移完全由神经网络决定
+        # 卖单价格偏移
         ask_price_offsets = np.clip(outputs_arr[20:30], -1, 1)
-        # [-1, 1] -> [1, 100]
-        ask_price_ticks = min_offset_ticks + (ask_price_offsets + 1) / 2 * (
-            max_offset_ticks - min_offset_ticks
+        ask_price_ticks = min_offset_ticks_val + (ask_price_offsets + 1) / 2 * (
+            max_offset_ticks - min_offset_ticks_val
         )
-        # 舍入到 tick_size 的整数倍，避免浮点数精度问题
+        # 舍入到 tick_size 的整数倍，以 reservation_price 为中心
         ask_prices = (
-            np.round((mid_price + ask_price_ticks * tick_size) / tick_size) * tick_size
+            np.round((reservation_price + ask_price_ticks * tick_size) / tick_size)
+            * tick_size
         )
 
         ask_orders: list[dict[str, float]] = []
@@ -453,14 +639,13 @@ class MarketMakerAgent(Agent):
                 buy_available = current_pos_value + max_pos
                 sell_available = max(0, max_pos - current_pos_value)
 
-            # 额外输出 raw ratios 信息，帮助排查
             _debug_logger.warning(
                 f"MM {self.agent_id} 空订单: "
                 f"bid_orders={len(bid_orders)}, ask_orders={len(ask_orders)}, "
                 f"pos={position_qty}, equity={equity:.0f}, "
                 f"pos_value={current_pos_value:.0f}, max_pos={max_pos:.0f}, "
                 f"buy_avail={buy_available:.0f}, sell_avail={sell_available:.0f}, "
-                f"skew={skew_factor:.2f}, "
+                f"reservation={reservation_price:.2f}, blend={blend:.2f}, "
                 f"bid_ratios=[{', '.join(f'{r:.4f}' for r in bid_ratios)}], "
                 f"ask_ratios=[{', '.join(f'{r:.4f}' for r in ask_ratios)}], "
                 f"bid_prices=[{', '.join(f'{p:.1f}' for p in bid_prices)}], "

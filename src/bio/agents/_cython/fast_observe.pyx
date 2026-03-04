@@ -9,7 +9,7 @@
 
 两种 Agent 类型的输入维度：
 - 高级散户（RetailPro）: 907 维
-- 做市商（MarketMaker）: 964 维
+- 做市商（MarketMaker）: 972 维
 """
 
 import numpy as np
@@ -125,7 +125,7 @@ cpdef void fast_observe_market_maker(
     double equity_normalized,
     double[:] pending_order_inputs,
 ) noexcept nogil:
-    """构建做市商的神经网络输入向量（964 维）
+    """构建做市商的神经网络输入向量（972 维）
 
     输入布局：
     - 0-199: 买盘100档（每档2个值：价格归一化 + 数量）
@@ -137,9 +137,10 @@ cpdef void fast_observe_market_maker(
     - 664-763: tick历史价格（100个）
     - 764-863: tick历史成交量（100个）
     - 864-963: tick历史成交额（100个）
+    - 964-971: AS模型特征（8个值，由Python调用方填充）
 
     Args:
-        output_buffer: 预分配的输出缓冲区（964维）
+        output_buffer: 预分配的输出缓冲区（972维）
         bid_data: 买盘数据（200维）
         ask_data: 卖盘数据（200维）
         trade_prices: 成交价格（100维）

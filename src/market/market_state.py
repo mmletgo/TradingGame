@@ -33,3 +33,17 @@ class NormalizedMarketState:
     tick_history_prices: NDArray[np.float32]   # shape: (100,) - tick 历史价格（以第一个价格为基准归一化）
     tick_history_volumes: NDArray[np.float32]  # shape: (100,) - tick 历史成交量（带方向）
     tick_history_amounts: NDArray[np.float32]  # shape: (100,) - tick 历史成交额（带方向）
+    current_tick: int = 0                      # 当前 tick 编号
+    episode_length: int = 1000                 # Episode 总长度
+    raw_tick_prices: NDArray[np.float64] | None = None  # 原始 tick 价格（未归一化）
+
+    # AS 模型预计算参数（每 tick 计算一次，所有做市商共享）
+    as_sigma: float = 0.0                      # 已实现波动率
+    as_tau: float = 1.0                        # 剩余时间比例
+    as_kappa: float = 1.5                      # 订单到达强度
+    as_gamma: float = 0.1                      # 基础风险厌恶系数
+    as_gamma_adj_min: float = 0.1              # NN gamma 调整下限
+    as_gamma_adj_max: float = 10.0             # NN gamma 调整上限
+    as_spread_adj_min: float = 0.5             # NN spread 调整下限
+    as_spread_adj_max: float = 2.0             # NN spread 调整上限
+    as_max_reservation_offset: float = 0.05    # reservation price 最大偏移比例

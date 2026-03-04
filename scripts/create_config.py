@@ -13,6 +13,7 @@ sys.path.insert(0, str(project_root))
 from src.config.config import (
     AgentConfig,
     AgentType,
+    ASConfig,
     Config,
     DemoConfig,
     MarketConfig,
@@ -86,4 +87,5 @@ def create_default_config(
         training=training,
         demo=demo,
         noise_trader=NoiseTraderConfig(),
+        as_model=ASConfig(),
     )

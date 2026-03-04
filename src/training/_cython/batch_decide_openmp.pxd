@@ -78,6 +78,17 @@ cdef struct MarketStateData:
     double* tick_history_volumes    # (100,)
     double* tick_history_amounts    # (100,)
 
+    # AS (Avellaneda-Stoikov) model parameters
+    double as_sigma                 # Pre-computed volatility
+    double as_tau                   # Remaining time ratio
+    double as_kappa                 # Order arrival intensity
+    double as_gamma                 # Base risk aversion from config
+    double as_gamma_adj_min
+    double as_gamma_adj_max
+    double as_spread_adj_min
+    double as_spread_adj_max
+    double as_max_reservation_offset
+
 
 # 单个 Agent 的决策结果
 cdef struct DecisionResult:

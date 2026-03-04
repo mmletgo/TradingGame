@@ -1798,7 +1798,7 @@ def _evolve_single_population(pop: "Population", current_price: float) -> None:
 from src.bio.agents.market_maker import MarketMakerAgent
 from src.bio.agents.retail_pro import RetailProAgent
 from src.bio.brain.brain import Brain
-from src.config.config import AgentConfig, AgentType, Config, TrainingConfig
+from src.config.config import ASConfig, AgentConfig, AgentType, Config, TrainingConfig
 from src.core.log_engine.logger import get_logger
 
 
@@ -1876,6 +1876,7 @@ class Population:
         self.agent_type = agent_type
         self.agent_config = config.agents[agent_type]
         self._training_config: TrainingConfig = config.training  # 用于做市商复合适应度权重
+        self._as_config: ASConfig = config.as_model  # AS 模型配置（做市商构造时传递）
         self.generation = 0
         self.logger = get_logger("population")
         self._executor = None
@@ -1970,7 +1971,10 @@ class Population:
         """
         brain = Brain.from_genome(genome, self.neat_config)
         unique_agent_id = agent_id_offset + idx
-        agent = agent_class(unique_agent_id, brain, self.agent_config)
+        if self.agent_type == AgentType.MARKET_MAKER:
+            agent = agent_class(unique_agent_id, brain, self.agent_config, as_config=self._as_config)
+        else:
+            agent = agent_class(unique_agent_id, brain, self.agent_config)
         return (idx, agent)
 
     def create_agents(
@@ -2009,7 +2013,10 @@ class Population:
             for idx, (genome_id, genome) in enumerate(genomes):
                 brain = Brain.from_genome(genome, self.neat_config)
                 unique_agent_id = agent_id_offset + idx
-                agent = agent_class(unique_agent_id, brain, self.agent_config)
+                if self.agent_type == AgentType.MARKET_MAKER:
+                    agent = agent_class(unique_agent_id, brain, self.agent_config, as_config=self._as_config)
+                else:
+                    agent = agent_class(unique_agent_id, brain, self.agent_config)
                 agents.append(agent)
             return agents
 

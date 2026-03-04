@@ -62,7 +62,7 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 | `account` | Account | 交易账户 |
 | `config` | AgentConfig | Agent 配置对象 |
 | `is_liquidated` | bool | 强平标志，True 表示已被强平，本轮 episode 禁用 |
-| `_input_buffer` | np.ndarray | 预分配的神经网络输入缓冲区（高级散户 907，做市商 964）|
+| `_input_buffer` | np.ndarray | 预分配的神经网络输入缓冲区（高级散户 907，做市商 972）|
 | `_position_buffer` | np.ndarray | 预分配的持仓信息缓冲区（4个值）|
 | `_pending_order_buffer` | np.ndarray | 预分配的挂单信息缓冲区（3个值）|
 | `_order_counter` | int | 订单计数器，用于生成唯一订单ID |
@@ -73,7 +73,7 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 
 #### `__init__(agent_id, agent_type, brain, config)`
 初始化 Agent。预分配三个缓冲区避免内存频繁分配：
-- `_input_buffer`: 907 维（做市商 964）
+- `_input_buffer`: 907 维（做市商 972）
 - `_position_buffer`: 4 维
 - `_pending_order_buffer`: 3 维
 
@@ -89,7 +89,7 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 - 604-606: 挂单信息（3 个值）
 - 607-906: tick 历史数据（100 价格 + 100 成交量 + 100 成交额）
 
-做市商重写此方法使用 964 维缓冲区（包含 60 个挂单信息）。
+做市商重写此方法使用 972 维缓冲区（包含 60 个挂单信息和 8 个 AS 特征）。
 
 #### `_get_position_inputs(mid_price) -> np.ndarray`
 获取持仓信息输入（4 个值）。使用预分配的 `_position_buffer` 避免创建新数组。
@@ -143,7 +143,7 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 
 **注意：** Agent 基类不包含 `decide` 方法。`decide` 方法由各子类根据自己的动作空间实现：
 - **RetailProAgent**: 8 个输出节点，6 种动作
-- **MarketMakerAgent**: 41 个输出节点，直接输出买卖双边订单参数
+- **MarketMakerAgent**: 44 个输出节点，直接输出买卖双边订单参数（含 3 个 AS 调整输出）
 
 各子类重写 `execute_action` 实现特定行为：
 - **RetailProAgent**: PLACE_BID/PLACE_ASK 先撤旧单再挂新单
@@ -197,10 +197,11 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 - `ask_order_ids: list[int]` - 卖单订单ID列表（最多 10 个）
 - `MIN_ORDER_QUANTITY = 1` - 最小订单数量
 - `MIN_RATIO_THRESHOLD = 0.001` - 最小权重阈值（0.1%）
+- `as_config: ASConfig` - AS 模型配置参数（gamma 范围、kappa、sigma 窗口等，通过 `__init__` 的 `as_config` 参数注入）
 
-**observe 方法：** 重写基类方法，使用更大的输入缓冲区（964 维）。
+**observe 方法：** 重写基类方法，使用更大的输入缓冲区（972 维）。
 
-**输入向量结构（964 维）：**
+**输入向量结构（972 维）：**
 - 0-199: 买盘 100 档（价格归一化 + 数量）
 - 200-399: 卖盘 100 档（价格归一化 + 数量）
 - 400-499: 成交价格 100 笔
@@ -210,70 +211,79 @@ Agent 基类是两种 Agent 类型的父类，提供通用的属性和方法。
 - 664-763: tick 历史价格（100 个）
 - 764-863: tick 历史成交量（100 个）
 - 864-963: tick 历史成交额（100 个）
+- 964-971: AS 模型特征（8 个值，见下表）
 
-**decide 方法：** 实现双边挂单的决策逻辑（41 个输出节点）。
+**AS 模型特征（索引 964-971）：**
 
-**神经网络输出（41 个值）：**
-- `[0-9]`: 买单 1-10 价格偏移（-1 到 1，映射到 [1, 100] ticks）
+| 索引 | 名称 | 说明 |
+|------|------|------|
+| 964 | reservation_offset | 保留价格偏移（`(r - mid) / mid`，Avellaneda-Stoikov 公式计算的保留价格与中间价之差的相对值）|
+| 965 | optimal_half_spread / mid_price | 最优半点差比率（AS 公式给出的最优买卖半点差除以中间价）|
+| 966 | sigma | 已实现波动率（近期成交价格的标准差，用于 AS 公式输入）|
+| 967 | tau | 剩余时间比例（当前 tick 距 episode 结束的时间比例，`[0, 1]`）|
+| 968 | kappa | 订单到达率（对数归一化：`log(kappa + 1) / log(kappa_max + 1)`）|
+| 969 | inventory_risk | 库存风险（`gamma * sigma^2 * tau * inventory_ratio`，AS 模型的库存惩罚项）|
+| 970 | gamma / max_gamma | 风险厌恶系数比率（当前 gamma 除以种群最大 gamma）|
+| 971 | spread / (sigma + 1e-8) | 点差/波动率比率（当前报价点差除以已实现波动率，衡量点差相对波动率的水平）|
+
+**decide 方法：** 实现 AS + NN 混合双边挂单的决策逻辑（44 个输出节点）。
+
+**神经网络输出（44 个值）：**
+- `[0-9]`: 买单 1-10 价格偏移（-1 到 1，映射到 [1, 100] ticks，相对 reservation_price）
 - `[10-19]`: 买单 1-10 数量权重（-1 到 1，映射到 [0, 1]）
-- `[20-29]`: 卖单 1-10 价格偏移（-1 到 1，映射到 [1, 100] ticks）
+- `[20-29]`: 卖单 1-10 价格偏移（-1 到 1，映射到 [1, 100] ticks，相对 reservation_price）
 - `[30-39]`: 卖单 1-10 数量权重（-1 到 1，映射到 [0, 1]）
 - `[40]`: 总下单比例基准（-1 到 1，映射到 [0.01, 1.0]）
+- `[41]`: gamma_adjustment（风险厌恶调整乘数，映射到 [0.1, 10.0]，用于缩放 AS 的 gamma 参数）
+- `[42]`: reservation_blend（AS/NN 混合比例，0 = 纯 AS 保留价格，1 = 纯 NN 旧式 skew）
+- `[43]`: spread_adjustment（点差调整乘数，映射到 [0.5, 2.0]，用于缩放 AS 给出的最优点差）
 
 **决策流程：**
 1. 如果已被强平，返回空订单列表
-2. 观察市场，获取神经网络输入
+2. 观察市场，获取神经网络输入（含 AS 特征）
 3. 神经网络前向传播
-4. 计算仓位倾斜因子
-5. 向量化解析数量比例（使用 NumPy 批量处理）
-6. 归一化确保 20 个订单的总比例 = 1.0
-7. 应用仓位倾斜调整买卖权重
+4. AS 模型计算 reservation_price（保留价格）和 optimal_spread（最优点差）：
+   - reservation_price = mid_price - gamma * sigma^2 * tau * inventory_ratio
+   - optimal_spread = gamma * sigma^2 * tau + (2/gamma) * ln(1 + gamma/kappa)
+5. 解析 AS 调整输出（索引 41-43），计算混合报价中心和点差调整系数
+6. 向量化解析数量比例（使用 NumPy 批量处理）
+7. 归一化确保 20 个订单的总比例 = 1.0（**不再**根据仓位 skew 修改数量权重）
 8. 应用总下单比例基准
-9. 解析价格偏移（买单价格 = mid_price - offset * tick_size，卖单价格 = mid_price + offset * tick_size）
-10. 计算每个订单的数量（使用 `_calculate_order_quantity`，统一以 mid_price 作为价格参数，确保买卖双边数量对称）
-
-**仓位倾斜机制：**
-- 多头仓位 -> 卖单权重增加，买单权重减少（倾向平仓）
-- 空头仓位 -> 买单权重增加，卖单权重减少（倾向平仓）
-- 始终保持双边挂单，单边最小权重为 25%
+9. 解析价格偏移（买单价格 = reservation_price - offset * tick_size，卖单价格 = reservation_price + offset * tick_size，报价中心为 reservation_price 而非 mid_price）
+10. 计算每个订单的数量（使用 `_calculate_order_quantity`，统一以 mid_price 作为价格参数）
 
 **execute_action 方法：** 始终执行双边挂单，调用 `_handle_quote` 先撤所有旧单再挂新单。
 
-## 做市商仓位倾斜挂单机制
+## 做市商 AS + NN 混合报价机制
 
-做市商在 `decide()` 方法中实现仓位倾斜逻辑，根据当前持仓动态调整买卖双边的挂单权重比例。
+做市商在 `decide()` 方法中实现 Avellaneda-Stoikov（AS）模型与神经网络（NN）的混合报价逻辑。AS 模型负责计算理论最优报价中心和点差，NN 通过学习决定如何调整 AS 参数并决定具体的价格分布和数量分布。
 
 **核心思路：**
-- 多头仓位 -> 卖单权重增加，买单权重减少（倾向平仓）
-- 空头仓位 -> 买单权重增加，卖单权重减少（倾向平仓）
-- 仓位越大，倾斜程度越大
-- 始终保持双边挂单，只是比例不同
+- AS 模型根据当前库存、波动率、剩余时间等计算 reservation_price（保留价格）作为报价中心
+- 报价点差由 AS 模型的 optimal_spread 乘以 NN 输出的 spread_adjustment 决定
+- 数量权重由 NN 直接输出，**不再**通过仓位 skew 修改（库存管理已由 AS 的 reservation_price 内在化）
+- reservation_blend 输出允许 NN 混合 AS 保留价格与旧式 mid_price skew
 
-**倾斜因子计算：**
+**AS 模型公式：**
 ```python
-pos_ratio = position_value / (equity * leverage)  # 0 = 无仓位，1 = 杠杆满
-skew_factor = -pos_ratio if position_qty > 0 else pos_ratio  # [-1, 1]
+# 保留价格（报价中心偏离 mid_price，随库存增大而偏离以激励减仓）
+reservation_price = mid_price - gamma * sigma**2 * tau * inventory_ratio
+
+# 最优点差（随风险厌恶系数 gamma、波动率、剩余时间增大而扩大）
+optimal_spread = gamma * sigma**2 * tau + (2 / gamma) * math.log(1 + gamma / kappa)
 ```
 
-**权重调整：**
-```python
-bid_multiplier = 1.0 + skew_factor  # 多头时减少买单
-ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
-```
+**NN 调整参数：**
 
-**效果示例：**
+| 输出索引 | 名称 | 映射范围 | 作用 |
+|----------|------|---------|------|
+| 41 | gamma_adjustment | [0.1, 10.0] | 缩放 AS 的风险厌恶系数 gamma |
+| 42 | reservation_blend | [0, 1] | 混合比例（0=纯 AS 保留价格，1=纯 NN 旧式 mid_price skew）|
+| 43 | spread_adjustment | [0.5, 2.0] | 缩放 AS 给出的最优点差 |
 
-| 仓位状态 | 倾斜因子 | 买单权重 | 卖单权重 |
-|----------|----------|----------|----------|
-| 无仓位   | 0.0      | 0.50     | 0.50     |
-| 多头 50% | -0.5     | 0.25     | 0.75     |
-| 多头 100%| -1.0     | 0.10     | 0.90     |
-| 空头 50% | +0.5     | 0.75     | 0.25     |
-| 空头 100%| +1.0     | 0.90     | 0.10     |
+**数量权重：** 由 NN 输出的索引 10-19（买单）和 30-39（卖单）直接决定，归一化后作为各档订单的比例。仓位对数量的影响已通过 AS 的 reservation_price 内在化（库存偏大时 reservation_price 远离 mid_price，使得该方向的挂单更难成交），而不再通过外部乘数调整权重。
 
-**保护机制：** 单边最小权重为 25%（`min_side_weight=0.25`），防止持仓偏斜导致的正反馈循环（极端偏斜时最多 75/25 分配，而非 90/10），确保任何情况下都保持充足的双边挂单。
-
-**做市商默认行为：** 做市商每 tick 必然双边挂单，无需动作选择。风险管理完全通过 skew_factor 调整买卖权重来实现。
+**做市商默认行为：** 做市商每 tick 必然双边挂单，无需动作选择。库存风险管理通过 AS 模型的 reservation_price 偏移实现，神经网络通过调整 gamma、spread 和混合比例来进化出最优做市策略。
 
 ## 输入输出规范
 
@@ -295,7 +305,7 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 
 ### 神经网络输入向量结构对比
 
-| 区间 | 高级散户（907）| 做市商（964）|
+| 区间 | 高级散户（907）| 做市商（972）|
 |------|------------------|-------------|
 | 买盘 | 0-199（100档）| 0-199（100档）|
 | 卖盘 | 200-399（100档）| 200-399（100档）|
@@ -306,16 +316,20 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 | tick 历史价格 | 607-706（100）| 664-763（100）|
 | tick 历史成交量 | 707-806（100）| 764-863（100）|
 | tick 历史成交额 | 807-906（100）| 864-963（100）|
+| AS 特征 | -（无）| 964-971（8）|
 
 ### 神经网络输出向量结构对比
 
-| 索引 | 高级散户（8）| 做市商（41）|
+| 索引 | 高级散户（8）| 做市商（44）|
 |------|---------------------|-------------|
-| 动作类型/价格 | 0-5: 动作得分 | 0-9: 买单价格偏移 |
+| 动作类型/价格 | 0-5: 动作得分 | 0-9: 买单价格偏移（相对 reservation_price）|
 | 价格偏移 | 6: 价格偏移 | 10-19: 买单数量权重 |
-| 数量比例 | 7: 数量比例 | 20-29: 卖单价格偏移 |
+| 数量比例 | 7: 数量比例 | 20-29: 卖单价格偏移（相对 reservation_price）|
 | - | - | 30-39: 卖单数量权重 |
 | - | - | 40: 总下单比例 |
+| - | - | 41: gamma_adjustment（[0.1, 10.0]）|
+| - | - | 42: reservation_blend（[0, 1]）|
+| - | - | 43: spread_adjustment（[0.5, 2.0]）|
 
 ## Cython 加速模块
 
@@ -328,7 +342,7 @@ ask_multiplier = 1.0 - skew_factor  # 多头时增加卖单
 | 函数名 | 功能 | 输入维度 |
 |--------|------|---------|
 | `fast_observe_full()` | 构建高级散户的神经网络输入向量 | 907 |
-| `fast_observe_market_maker()` | 构建做市商的神经网络输入向量 | 964 |
+| `fast_observe_market_maker()` | 构建做市商的神经网络输入向量 | 972 |
 | `get_position_inputs()` | 计算持仓信息输入 | 4 |
 | `get_pending_order_inputs()` | 计算挂单信息输入 | 3 |
 
@@ -372,11 +386,12 @@ else:
 | 订单簿深度 | 100档 | 100档 |
 | 成交历史 | 100笔 | 100笔 |
 | tick 历史 | 100个 | 100个 |
-| 输入维度 | 907 | 964 |
-| 输出维度 | 8 | 41 |
+| 输入维度 | 907 | 972（含 8 个 AS 特征）|
+| 输出维度 | 8 | 44（含 3 个 AS 调整输出）|
 | 动作空间 | 6种 | 双边挂单（无动作选择）|
 | 同时挂单数 | 1个 | 20个（买卖各10个）|
 | 撤单再挂 | 是 | 是（每tick全撤全挂）|
+| 报价中心 | mid_price（偏移）| reservation_price（AS 模型计算）|
 
 ## 重要实现细节
 
@@ -387,7 +402,7 @@ else:
 | Agent 类型 | 缓冲区大小 |
 |-----------|-----------|
 | 高级散户 | 907 维 |
-| 做市商 | 964 维 |
+| 做市商 | 972 维（含 8 个 AS 特征）|
 
 ### 订单 ID 生成
 

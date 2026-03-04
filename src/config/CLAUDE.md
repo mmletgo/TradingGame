@@ -316,6 +316,69 @@ noise_trader = NoiseTraderConfig(
 )
 ```
 
+### ASConfig
+
+Avellaneda-Stoikov 做市商模型配置类，定义基于 AS 模型的做市策略参数。该配置供 NN-AS 混合做市商使用，神经网络输出乘数对 AS 模型的核心参数（gamma 和 spread）进行动态调整。
+
+**属性：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| gamma | float | 0.1 | 基础风险厌恶系数，影响 reservation price 偏离幅度 |
+| kappa_base | float | 1.5 | 基础订单到达率，影响最优报价 spread 宽度 |
+| vol_window | int | 50 | 波动率回看窗口（tick 数） |
+| min_sigma | float | 1e-6 | 波动率下限，防止 sigma=0 导致除零 |
+| max_sigma | float | 0.1 | 波动率上限，防止极端波动导致报价失控 |
+| gamma_adj_min | float | 0.1 | NN 输出的 gamma 调整乘数下限 |
+| gamma_adj_max | float | 10.0 | NN 输出的 gamma 调整乘数上限 |
+| spread_adj_min | float | 0.5 | NN 输出的 spread 调整乘数下限 |
+| spread_adj_max | float | 2.0 | NN 输出的 spread 调整乘数上限 |
+| max_reservation_offset | float | 0.05 | reservation price 相对中间价的最大偏移（±5%） |
+
+**详细说明：**
+
+- **gamma**：AS 模型中的风险厌恶系数（γ），控制做市商对库存风险的敏感度
+  - 值越大，reservation price 偏离中间价越多，倾向于更快减仓
+  - 神经网络通过 `gamma_adj` 乘数对其动态调整：`effective_gamma = gamma × gamma_adj`
+  - `gamma_adj` 被映射到 `[gamma_adj_min, gamma_adj_max]` 区间
+
+- **kappa_base**：基础订单到达率（κ），影响最优报价 spread 的计算
+  - AS 模型最优 spread 公式（简化版）：`spread = γ × σ² × T + (2/γ) × ln(1 + γ/κ)`
+  - 值越大表示订单越容易成交，spread 可设得更窄
+
+- **vol_window**：计算实时波动率 σ 的回看窗口
+  - 使用最近 `vol_window` 个 tick 的对数收益率标准差估计 σ
+  - 波动率被 clamp 到 `[min_sigma, max_sigma]`
+
+- **max_reservation_offset**：reservation price 相对当前中间价的最大偏移比例
+  - reservation price = 中间价 - γ × σ² × q × T（q 为库存量，T 为剩余时间）
+  - 偏移超出 ±5% 时被截断，防止极端库存下报价失真
+
+- **NN 调整乘数范围**（gamma_adj_* / spread_adj_*）：
+  - 神经网络输出经 sigmoid 激活后映射到对应区间
+  - `gamma_adj_min=0.1`：最保守，gamma 缩小至 10%
+  - `gamma_adj_max=10.0`：最激进，gamma 放大 10 倍
+  - `spread_adj_min=0.5`：spread 收窄至 50%
+  - `spread_adj_max=2.0`：spread 放宽至 200%
+
+**使用示例：**
+```python
+from src.config.config import ASConfig
+
+as_cfg = ASConfig(
+    gamma=0.1,
+    kappa_base=1.5,
+    vol_window=50,
+    min_sigma=1e-6,
+    max_sigma=0.1,
+    gamma_adj_min=0.1,
+    gamma_adj_max=10.0,
+    spread_adj_min=0.5,
+    spread_adj_max=2.0,
+    max_reservation_offset=0.05,
+)
+```
+
 ### Config
 
 全局配置类，汇总所有配置项。这是配置系统的顶层入口。
@@ -329,6 +392,7 @@ noise_trader = NoiseTraderConfig(
 | training | TrainingConfig | 必填 | 训练配置 |
 | demo | DemoConfig | 必填 | 演示配置 |
 | noise_trader | NoiseTraderConfig | NoiseTraderConfig() | 噪声交易者配置 |
+| as_model | ASConfig | ASConfig() | Avellaneda-Stoikov 做市商模型配置 |
 
 **使用示例：**
 ```python

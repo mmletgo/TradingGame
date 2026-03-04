@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
-from src.config.config import AgentConfig, AgentType
+from src.config.config import AgentConfig, AgentType, ASConfig
 
 if TYPE_CHECKING:
     from src.bio.agents.base import Agent
@@ -682,6 +682,76 @@ def calculate_skew_factor_from_state(
         return -pos_ratio
     else:
         return pos_ratio
+
+
+def calculate_as_reservation_offset(
+    state: AgentAccountState,
+    mid_price: float,
+    sigma: float,
+    tau: float,
+    kappa: float,
+    as_config: ASConfig,
+    gamma_adj: float = 1.0,
+    blend: float = 0.0,
+    spread_adj: float = 1.0,
+) -> tuple[float, float, float]:
+    """Calculate AS-based reservation price offset and min spread ticks.
+
+    Args:
+        state: Agent account state
+        mid_price: Current mid price
+        sigma: Volatility
+        tau: Remaining time ratio
+        kappa: Order arrival rate
+        as_config: AS model config
+        gamma_adj: NN gamma adjustment multiplier
+        blend: 0=pure AS, 1=pure NN old-style skew
+        spread_adj: NN spread adjustment multiplier
+
+    Returns:
+        (final_offset, reservation_price, min_offset_ticks)
+    """
+    import math
+
+    equity = state.get_equity(mid_price)
+    position_qty = state.position_quantity
+    leverage = state.leverage
+
+    effective_gamma = max(1e-8, as_config.gamma * gamma_adj)
+
+    # AS reservation offset
+    max_pos_value = equity * leverage if equity > 0 else 0.0
+    q_norm: float = 0.0
+    if max_pos_value > 0 and mid_price > 0:
+        q_norm = (position_qty * mid_price) / max_pos_value
+        q_norm = max(-1.0, min(1.0, q_norm))
+
+    sigma_sq = sigma * sigma
+    tau_safe = max(0.001, tau)
+    as_offset = -(q_norm * effective_gamma * sigma_sq * tau_safe)
+    as_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, as_offset))
+
+    # Old-style skew offset for blending
+    nn_offset: float = 0.0
+    if position_qty != 0 and equity > 0:
+        pos_value = abs(position_qty) * mid_price
+        max_pv = equity * leverage
+        pr = min(1.0, pos_value / max_pv) if max_pv > 0 else 0.0
+        nn_offset = pr * 0.05 if position_qty < 0 else -pr * 0.05
+
+    final_offset = (1.0 - blend) * as_offset + blend * nn_offset
+    final_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, final_offset))
+    reservation_price = mid_price * (1.0 + final_offset)
+
+    # AS min offset ticks
+    kappa_safe = max(1e-6, kappa)
+    optimal_spread = effective_gamma * sigma_sq * tau_safe + (2.0 / effective_gamma) * math.log(1.0 + effective_gamma / kappa_safe)
+    as_half_spread = optimal_spread * 0.5 * spread_adj
+    tick_size = 0.01  # Default tick size
+    min_offset_ticks = max(1.0, as_half_spread / tick_size if tick_size > 0 else 1.0)
+    min_offset_ticks = min(100.0, min_offset_ticks)
+
+    return final_offset, reservation_price, min_offset_ticks
 
 
 # ============================================================================

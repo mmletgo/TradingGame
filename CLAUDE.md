@@ -98,7 +98,7 @@ NEAT进化阶段
 | 类型 | 数量 | 初始资金 | 杠杆 | 订单簿深度 | 动作 |
 |------|------|----------|------|-----------|------|
 | 高级散户 | 2,400 (12子种群×200) | 2万 | 1.0x | 100档 | 挂单/撤单/吃单/不动 |
-| 做市商 | 400 (4子种群×100) | 10M | 10.0x | 100档 | 双边挂单（每边1-10单） |
+| 做市商 | 400 (4子种群×100) | 10M | 10.0x | 100档 | 双边挂单（每边1-10单），报价中心使用 AS 模型的 reservation price 而非 mid_price |
 | 噪声交易者 | 200 | 1e18（无限资金） | - | - | 50%概率行动，市价单随机买卖 |
 
 **约束规则：**
@@ -189,7 +189,7 @@ src/
 | 配置 | Agent类型 | 输入节点 | 输出节点 |
 |------|----------|----------|----------|
 | neat_retail_pro.cfg | 高级散户 | 907 | 8 |
-| neat_market_maker.cfg | 做市商 | 964 | 41 |
+| neat_market_maker.cfg | 做市商 | 972 | 44 |
 
 ---
 
@@ -199,7 +199,7 @@ src/
 
 | 模块 | 文件 | 内容 |
 |------|------|------|
-| 市场引擎 | src/market/CLAUDE.md | 订单簿、撮合、账户、ADL |
+| 市场引擎 | src/market/CLAUDE.md | 订单簿、撮合、账户、ADL；market_state.py 新增 9 个 AS 模型预计算字段（reservation_price、optimal_spread、volatility、as_bid_price、as_ask_price、as_bid_depth、as_ask_depth、inventory_ratio、time_ratio） |
 | Agent | src/bio/agents/CLAUDE.md | 两种Agent行为与输入输出 |
 | 神经网络 | src/bio/brain/CLAUDE.md | NEAT封装与前向传播 |
 | 训练引擎 | src/training/CLAUDE.md | Episode循环、强平处理 |
@@ -216,6 +216,7 @@ src/
 - 无法向量化的场景使用 Cython 加速（如订单簿、持仓计算、神经网络前向传播）
 - 严格的 Python 类型定义
 - 所有参数可通过配置文件配置
+- AS 模型参数通过 `ASConfig` 配置，包括库存风险厌恶系数 `gamma`、波动率估计窗口 `volatility_window`、做市时间范围 `T` 等，用于预计算 reservation price 和最优价差，并作为输入特征提供给做市商神经网络
 - 代码修改后必须执行 `./rebuild.sh` 清理缓存并重新编译
 
 ---

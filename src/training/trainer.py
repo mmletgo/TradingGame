@@ -345,6 +345,7 @@ class Trainer:
             pop = Population.__new__(Population)
             pop.agent_type = agent_type
             pop.agent_config = self.config.agents[agent_type]
+            pop._as_config = self.config.as_model
             pop.generation = pop_data["generation"]
             pop.logger = get_logger("population")
             pop.sub_population_id = None
@@ -428,6 +429,7 @@ class Trainer:
             sub_pop = Population.__new__(Population)
             sub_pop.agent_type = agent_type
             sub_pop.agent_config = self.config.agents[agent_type]
+            sub_pop._as_config = self.config.as_model
             sub_pop.generation = sub_pop_data["generation"]
             sub_pop.logger = get_logger("population")
             sub_pop.sub_population_id = sub_idx
@@ -816,7 +818,11 @@ class Trainer:
             # 使用候选清单中的 position_qty（已被之前的 ADL 更新过）
             # 同时也要检查实际仓位，取两者最小值
             candidate_available_qty = abs(candidate.position_qty)
-            actual_position = abs(candidate.participant.account.position.quantity)
+            # 噪声交易者的仓位存储在 account.position_qty 而非 account.position.quantity
+            if candidate.is_noise_trader:
+                actual_position = abs(candidate.participant.account.position_qty)
+            else:
+                actual_position = abs(candidate.participant.account.position.quantity)
             available_qty = min(candidate_available_qty, actual_position)
 
             liquidated_actual_position = abs(liquidated_agent.account.position.quantity)
@@ -827,9 +833,13 @@ class Trainer:
 
             # 更新账户
             liquidated_agent.account.on_adl_trade(trade_qty, adl_price, is_taker=True)
-            candidate.participant.account.on_adl_trade(
-                trade_qty, adl_price, is_taker=False
-            )
+            # 噪声交易者和普通 Agent 的 on_adl_trade 签名不同
+            if candidate.is_noise_trader:
+                candidate.participant.account.on_adl_trade(adl_price, trade_qty)
+            else:
+                candidate.participant.account.on_adl_trade(
+                    trade_qty, adl_price, is_taker=False
+                )
 
             # 更新候选清单中的 position_qty，确保后续 ADL 不会重复使用
             if candidate.position_qty > 0:
@@ -1104,6 +1114,27 @@ class Trainer:
             # 成交额归一化（scale=12）
             tick_amounts_normalized[-n:] = log_normalize_signed(amounts, scale=12.0)
 
+        # 预计算 AS 模型参数（所有做市商共享）
+        from src.market.as_calculator import ASCalculator
+
+        as_config = self.config.as_model
+        raw_tick_prices = np.array(list(self._tick_history_prices), dtype=np.float64) if self._tick_history_prices else None
+
+        if raw_tick_prices is not None and len(raw_tick_prices) >= 2:
+            as_sigma = ASCalculator.compute_volatility(
+                raw_tick_prices, as_config.vol_window, as_config.min_sigma, as_config.max_sigma
+            )
+        else:
+            as_sigma = as_config.min_sigma
+
+        if self._tick_history_volumes:
+            raw_volumes = np.array(list(self._tick_history_volumes), dtype=np.float64)
+            as_kappa = ASCalculator.compute_kappa(raw_volumes, as_config.kappa_base)
+        else:
+            as_kappa = as_config.kappa_base
+
+        as_tau = max(0.001, (self.config.training.episode_length - self.tick) / self.config.training.episode_length)
+
         return NormalizedMarketState(
             mid_price=smooth_mid_price,  # 使用 EMA 平滑后的价格
             tick_size=tick_size,
@@ -1114,6 +1145,18 @@ class Trainer:
             tick_history_prices=tick_prices_normalized.copy(),
             tick_history_volumes=tick_volumes_normalized.copy(),
             tick_history_amounts=tick_amounts_normalized.copy(),
+            current_tick=self.tick,
+            episode_length=self.config.training.episode_length,
+            raw_tick_prices=raw_tick_prices,
+            as_sigma=as_sigma,
+            as_tau=as_tau,
+            as_kappa=as_kappa,
+            as_gamma=as_config.gamma,
+            as_gamma_adj_min=as_config.gamma_adj_min,
+            as_gamma_adj_max=as_config.gamma_adj_max,
+            as_spread_adj_min=as_config.spread_adj_min,
+            as_spread_adj_max=as_config.spread_adj_max,
+            as_max_reservation_offset=as_config.max_reservation_offset,
         )
 
     def _evolve_populations_parallel(self, current_price: float) -> None:
@@ -1542,75 +1585,128 @@ class Trainer:
         mid_price: float,
         tick_size: float,
     ) -> tuple["ActionType", dict[str, Any]]:
-        """解析做市商的神经网络输出
+        """解析做市商的神经网络输出（AS 模型集成版）
 
-        神经网络输出结构（共 41 个值）：
-        - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到1-100 ticks）
+        神经网络输出结构（共 44 个值）：
+        - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到 min_offset ~ min_offset+99 ticks）
         - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1）
-        - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到1-100 ticks）
+        - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到 min_offset ~ min_offset+99 ticks）
         - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
         - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
+        - 输出[41]: gamma 调整因子（-1到1，指数映射到 gamma_adj_min ~ gamma_adj_max）
+        - 输出[42]: AS/NN 混合比例（-1到1，映射到0-1）
+        - 输出[43]: spread 调整因子（-1到1，映射到 spread_adj_min ~ spread_adj_max）
         """
         from src.bio.agents.base import ActionType, fast_round_price, fast_clip
+        from src.market.as_calculator import ASCalculator
+        import math
 
-        # 正确的索引：与 MarketMakerAgent.decide() 和 ParallelArenaTrainer 保持一致
+        as_config = self.config.as_model
+
         bid_price_offsets = output[0:10]
         bid_qty_weights = output[10:20]
         ask_price_offsets = output[20:30]
         ask_qty_weights = output[30:40]
         total_ratio_raw = output[40] if len(output) > 40 else 0.0
 
-        # 总下单比例：映射到 [0.01, 1]，与 MarketMakerAgent.decide() 一致
+        # 总下单比例：映射到 [0.01, 1]
         total_ratio = 0.01 + (fast_clip(total_ratio_raw, -1.0, 1.0) + 1) * 0.5 * 0.99
 
-        # 计算倾斜因子
-        skew_factor = agent._calculate_skew_factor(mid_price)
+        # 解析 AS 调整输出
+        gamma_adj_raw = fast_clip(output[41], -1.0, 1.0) if len(output) > 41 else 0.0
+        blend_raw = fast_clip(output[42], -1.0, 1.0) if len(output) > 42 else -1.0
+        spread_adj_raw = fast_clip(output[43], -1.0, 1.0) if len(output) > 43 else 0.0
 
-        # 应用倾斜到权重
-        bid_weights_sum = sum(max(0, (w + 1) * 0.5) for w in bid_qty_weights)
-        ask_weights_sum = sum(max(0, (w + 1) * 0.5) for w in ask_qty_weights)
-        total_weights = bid_weights_sum + ask_weights_sum
+        # 映射到实际范围
+        gamma_adj: float = as_config.gamma_adj_min * (as_config.gamma_adj_max / as_config.gamma_adj_min) ** ((gamma_adj_raw + 1) / 2)
+        blend: float = (blend_raw + 1) / 2  # [0, 1]
+        spread_adj: float = as_config.spread_adj_min + (spread_adj_raw + 1) / 2 * (as_config.spread_adj_max - as_config.spread_adj_min)
 
-        if total_weights > 0:
-            bid_multiplier = 1.0 + skew_factor
-            ask_multiplier = 1.0 - skew_factor
-            bid_weights_sum *= bid_multiplier
-            ask_weights_sum *= ask_multiplier
-            total_weights = bid_weights_sum + ask_weights_sum
+        # 计算 AS reservation price
+        equity: float = agent.account.get_equity(mid_price)
+        position_qty: int = agent.account.position.quantity
+        leverage: float = agent.account.leverage
 
-        # 构建订单列表（使用字典格式以匹配 _place_quote_orders 期望的输入）
+        # 从历史数据获取 sigma, kappa
+        if self._tick_history_prices:
+            raw_prices = np.array(list(self._tick_history_prices), dtype=np.float64)
+            sigma: float = ASCalculator.compute_volatility(raw_prices, as_config.vol_window, as_config.min_sigma, as_config.max_sigma)
+        else:
+            sigma = as_config.min_sigma
+
+        if self._tick_history_volumes:
+            raw_volumes = np.array(list(self._tick_history_volumes), dtype=np.float64)
+            kappa: float = ASCalculator.compute_kappa(raw_volumes, as_config.kappa_base)
+        else:
+            kappa = as_config.kappa_base
+
+        tau: float = max(0.001, (self.config.training.episode_length - self.tick) / self.config.training.episode_length)
+
+        # 有效 gamma（NN 调整后）
+        effective_gamma: float = as_config.gamma * gamma_adj
+        effective_gamma = max(1e-8, effective_gamma)
+
+        # AS reservation offset
+        max_pos_value: float = equity * leverage if equity > 0 else 0.0
+        q_norm: float = (position_qty * mid_price) / max_pos_value if max_pos_value > 0 and mid_price > 0 else 0.0
+        q_norm = max(-1.0, min(1.0, q_norm))
+        sigma_sq: float = sigma * sigma
+        tau_safe: float = max(0.001, tau)
+        as_offset: float = -(q_norm * effective_gamma * sigma_sq * tau_safe)
+        as_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, as_offset))
+
+        # 旧式倾斜偏移（用于混合）
+        nn_offset: float = 0.0
+        if position_qty != 0 and equity > 0:
+            pos_value: float = abs(position_qty) * mid_price
+            max_pv: float = equity * leverage
+            pr: float = min(1.0, pos_value / max_pv) if max_pv > 0 else 0.0
+            nn_offset = pr * 0.05 if position_qty < 0 else -pr * 0.05
+
+        final_offset: float = (1 - blend) * as_offset + blend * nn_offset
+        final_offset = max(-as_config.max_reservation_offset, min(as_config.max_reservation_offset, final_offset))
+        reservation_price: float = mid_price * (1 + final_offset)
+
+        # AS 最小偏移 ticks
+        kappa_safe: float = max(1e-6, kappa)
+        optimal_spread: float = effective_gamma * sigma_sq * tau_safe + (2.0 / effective_gamma) * math.log(1.0 + effective_gamma / kappa_safe)
+        as_half_spread: float = optimal_spread * 0.5 * spread_adj
+        min_offset_ticks: float = max(1.0, as_half_spread / tick_size if tick_size > 0 else 1.0)
+        min_offset_ticks = min(100.0, min_offset_ticks)
+        max_offset_ticks: float = min_offset_ticks + 99.0
+
+        # 数量权重（无仓位倾斜 — AS 通过价格偏移处理库存风险）
+        bid_weights = np.maximum(0, (np.clip(bid_qty_weights, -1, 1) + 1) * 0.5)
+        ask_weights = np.maximum(0, (np.clip(ask_qty_weights, -1, 1) + 1) * 0.5)
+        total_weights: float = float(bid_weights.sum() + ask_weights.sum())
+
         bid_orders: list[dict[str, float]] = []
         ask_orders: list[dict[str, float]] = []
 
-        # 循环10次，处理10个买单和10个卖单
         for i in range(10):
             # 买单
             offset = fast_clip(bid_price_offsets[i], -1.0, 1.0)
-            ticks = 1 + (offset + 1) * 49.5  # 1-100 ticks
-            price = mid_price - ticks * tick_size
+            ticks: float = min_offset_ticks + (offset + 1) * 0.5 * (max_offset_ticks - min_offset_ticks)
+            price: float = reservation_price - ticks * tick_size
             price = fast_round_price(price, tick_size)
 
-            weight = max(0, (bid_qty_weights[i] + 1) * 0.5)
+            weight: float = float(bid_weights[i])
             if total_weights > 0 and weight > 0:
-                ratio = (weight / total_weights) * total_ratio
-                qty = agent._calculate_order_quantity(
-                    price, ratio, is_buy=True, ref_price=mid_price
-                )
+                ratio: float = (weight / total_weights) * total_ratio
+                qty: int = agent._calculate_order_quantity(price, ratio, is_buy=True, ref_price=mid_price)
                 if qty > 0:
                     bid_orders.append({"price": price, "quantity": float(qty)})
 
             # 卖单
             offset = fast_clip(ask_price_offsets[i], -1.0, 1.0)
-            ticks = 1 + (offset + 1) * 49.5
-            price = mid_price + ticks * tick_size
+            ticks = min_offset_ticks + (offset + 1) * 0.5 * (max_offset_ticks - min_offset_ticks)
+            price = reservation_price + ticks * tick_size
             price = fast_round_price(price, tick_size)
 
-            weight = max(0, (ask_qty_weights[i] + 1) * 0.5)
+            weight = float(ask_weights[i])
             if total_weights > 0 and weight > 0:
                 ratio = (weight / total_weights) * total_ratio
-                qty = agent._calculate_order_quantity(
-                    price, ratio, is_buy=False, ref_price=mid_price
-                )
+                qty = agent._calculate_order_quantity(price, ratio, is_buy=False, ref_price=mid_price)
                 if qty > 0:
                     ask_orders.append({"price": price, "quantity": float(qty)})
 

@@ -18,6 +18,7 @@
 src/market/
 ├── __init__.py              # 模块导出（NormalizedMarketState）
 ├── market_state.py          # 归一化市场状态数据类
+├── as_calculator.py         # AS (Avellaneda-Stoikov) 最优做市模型计算器
 ├── orderbook/               # 订单簿模块（Cython 加速）
 │   ├── order.py            # 订单数据模型（Order, OrderSide, OrderType）
 │   ├── orderbook.pyx       # 订单簿实现（PriceLevel, OrderBook）
@@ -66,6 +67,17 @@ src/market/
 - `tick_history_volumes: NDArray[np.float32]` - Tick 历史成交量归一化（带方向），shape (100,)，正=taker 买入为主，最新数据在末尾
 - `tick_history_amounts: NDArray[np.float32]` - Tick 历史成交额归一化（带方向），shape (100,)，正=taker 买入为主，最新数据在末尾
 
+**AS 模型预计算字段（供做市商 Agent 使用）：**
+- `as_sigma: float` - 价格波动率（对数收益率标准差）
+- `as_tau: float` - 剩余时间（归一化到 [0, 1]，episode 开始时为 1，结束时趋近 0）
+- `as_kappa: float` - 订单到达强度代理（基于近期成交量）
+- `as_gamma: float` - 风险厌恶系数（来自配置）
+- `as_gamma_adj_min: float` - gamma 调整后的最小值（用于输入归一化）
+- `as_gamma_adj_max: float` - gamma 调整后的最大值（用于输入归一化）
+- `as_spread_adj_min: float` - 最优价差调整后的最小值（用于输入归一化）
+- `as_spread_adj_max: float` - 最优价差调整后的最大值（用于输入归一化）
+- `as_max_reservation_offset: float` - 最大 reservation price 偏移量（用于输入归一化）
+
 **归一化方法：**
 - 价格归一化：`(price - mid_price) / mid_price`，范围约 [-0.1, 0.1]
 - 数量归一化：`log10(quantity + 1) / 10`，将 1e10 压缩到约 1.0
@@ -74,7 +86,50 @@ src/market/
 - Tick 历史成交量归一化：`sign(vol) * log10(|vol| + 1) / 10`
 - Tick 历史成交额归一化：`sign(amt) * log10(|amt| + 1) / 12`
 
-### 2. 订单簿模块（orderbook/）
+### 2. AS 计算器模块（as_calculator.py）
+
+**ASQuoteParams** - AS 模型计算结果数据类
+
+```python
+@dataclass
+class ASQuoteParams:
+    reservation_price: float    # 保留价格（做市商参考中间价）
+    reservation_offset: float   # reservation price 相对 mid 的偏移量
+    optimal_spread: float       # AS 最优全价差
+    optimal_half_spread: float  # AS 最优半价差
+    sigma: float                # 价格波动率（对数收益率标准差）
+    tau: float                  # 剩余时间（归一化）
+    kappa: float                # 订单到达强度代理
+    inventory_risk: float       # 库存风险项（q_norm × γ × σ² × τ）
+```
+
+**ASCalculator** - AS 模型计算器类
+
+核心方法：
+- `compute_volatility(price_history: list[float]) -> float` - 计算价格波动率（对数收益率标准差）
+- `compute_kappa(recent_volumes: list[float]) -> float` - 计算订单到达强度代理（基于近期成交量）
+- `compute(mid: float, inventory: int, max_inventory: int, price_history: list[float], recent_volumes: list[float], tau: float) -> ASQuoteParams` - 执行完整 AS 模型计算，返回 ASQuoteParams
+
+**核心公式：**
+```
+reservation_price = mid × (1 - q_norm × γ × σ² × τ)
+optimal_spread    = γσ²τ + (2/γ) × ln(1 + γ/κ)
+optimal_half_spread = optimal_spread / 2
+```
+
+其中：
+- `q_norm` = `inventory / max_inventory`，归一化库存，范围 [-1, 1]
+- `γ`（gamma）= 风险厌恶系数，来自配置
+- `σ`（sigma）= 价格波动率
+- `τ`（tau）= 剩余时间（归一化）
+- `κ`（kappa）= 订单到达强度代理
+
+**设计说明：**
+- ASCalculator 在每个 tick 由 Trainer 调用，结果预先存入 NormalizedMarketState
+- 做市商 Agent 读取 NormalizedMarketState 中的 AS 字段，将其作为辅助输入
+- 做市商神经网络学习如何利用 AS 信号调整其挂单偏移和价差
+
+### 3. 订单簿模块（orderbook/）
 
 详见 [src/market/orderbook/CLAUDE.md](orderbook/CLAUDE.md)
 
@@ -95,7 +150,7 @@ src/market/
 | get_mid_price | O(1) | 两次 O(1) 查询 |
 | get_depth | O(levels) | 利用有序性，避免排序 |
 
-### 3. 撮合引擎模块（matching/）
+### 4. 撮合引擎模块（matching/）
 
 详见 [src/market/matching/CLAUDE.md](matching/CLAUDE.md)
 
@@ -119,7 +174,7 @@ src/market/
 | 做市商 | -0.0001 (负万1) | 0.0001 (万1) | Maker rebate |
 | 噪声交易者 | 0 | 0 | 免手续费 |
 
-### 4. 账户管理模块（account/）
+### 5. 账户管理模块（account/）
 
 详见 [src/market/account/CLAUDE.md](account/CLAUDE.md)
 
@@ -141,7 +196,7 @@ src/market/
 - 保证金率：`margin_ratio = equity / (|quantity| x current_price)`
 - 强平触发条件：`margin_ratio < maintenance_margin_rate`
 
-### 5. ADL 自动减仓模块（adl/）
+### 6. ADL 自动减仓模块（adl/）
 
 详见 [src/market/adl/CLAUDE.md](adl/CLAUDE.md)
 
@@ -174,7 +229,7 @@ src/market/
    - 循环与候选成交
    - 兜底处理（强制清零）
 
-### 6. 噪声交易者模块（noise_trader/）
+### 7. 噪声交易者模块（noise_trader/）
 
 详见 [src/market/noise_trader/CLAUDE.md](noise_trader/CLAUDE.md)
 
@@ -342,6 +397,7 @@ Trainer（训练引擎）
 
 ```python
 from src.market import NormalizedMarketState
+from src.market.as_calculator import ASCalculator, ASQuoteParams
 from src.market.orderbook import Order, OrderSide, OrderType, OrderBook
 from src.market.matching import MatchingEngine, FastMatchingEngine, Trade, FastTrade, fast_match_orders
 from src.market.account import Account, FastAccount, Position

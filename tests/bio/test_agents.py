@@ -1670,15 +1670,17 @@ class TestMarketMakerAgentDecide:
 
     def test_decide_quote_action(self):
         """测试做市商决策返回 HOLD 动作和双边订单"""
-        # 创建 mock Brain，设置神经网络输出（41 个值）
+        # 创建 mock Brain，设置神经网络输出（44 个值）
         mock_brain = MagicMock(spec=Brain)
-        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights + 1 total ratio
+        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights
+        #       + 1 total ratio + 3 AS adjustments (gamma_adj, blend, spread_adj)
         mock_brain.forward.return_value = (
             [0.0] * 10 +   # bid price offsets
             [0.5] * 10 +   # bid quantity weights (positive = reasonable)
             [0.0] * 10 +   # ask price offsets
             [0.5] * 10 +   # ask quantity weights
-            [0.0]           # total ratio
+            [0.0] +         # total ratio
+            [0.0, -1.0, 0.0]  # gamma_adj=1.0x, blend=0(pure AS), spread_adj=1.25x
         )
 
         # 创建做市商 Agent 配置
@@ -1731,7 +1733,7 @@ class TestMarketMakerAgentDecide:
         """测试神经网络输出维度不足时抛出异常"""
         # 创建 mock Brain，设置输出维度不足
         mock_brain = MagicMock(spec=Brain)
-        mock_brain.forward.return_value = np.array([0.0] * 10)  # 只有 10 个输出，需要 41 个
+        mock_brain.forward.return_value = np.array([0.0] * 10)  # 只有 10 个输出，需要 44 个
 
         # 创建做市商 Agent 配置
         config = AgentConfig(
@@ -1763,20 +1765,22 @@ class TestMarketMakerAgentDecide:
             assert False, "应该抛出 ValueError"
         except ValueError as e:
             assert "神经网络输出维度不足" in str(e)
-            assert "41" in str(e)
+            assert "44" in str(e)
             assert "10" in str(e)
 
     def test_decide_generates_orders_at_different_prices(self):
         """测试生成的订单在不同价位"""
-        # 创建 mock Brain，设置不同的价格偏移（41 个值）
+        # 创建 mock Brain，设置不同的价格偏移（44 个值）
         mock_brain = MagicMock(spec=Brain)
-        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights + 1 total ratio
+        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights
+        #       + 1 total ratio + 3 AS adjustments
         outputs = (
             [-0.8, -0.6, -0.4, -0.2, 0.0, -0.8, -0.6, -0.4, -0.2, 0.0] +  # 10 bid price offsets
             [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5] +           # 10 bid qty weights
             [0.0, 0.2, 0.4, 0.6, 0.8, 0.0, 0.2, 0.4, 0.6, 0.8] +           # 10 ask price offsets
             [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5] +           # 10 ask qty weights
-            [0.0]                                                              # total ratio
+            [0.0] +                                                            # total ratio
+            [0.0, -1.0, 0.0]                                                  # AS adjustments
         )
         mock_brain.forward.return_value = outputs
 
@@ -1823,15 +1827,17 @@ class TestMarketMakerAgentDecide:
 
     def test_decide_normalizes_quantity_ratios(self):
         """测试数量比例归一化（20个订单的总比例不超过1.0）"""
-        # 创建 mock Brain，设置所有数量权重为最大值（41 个值）
+        # 创建 mock Brain，设置所有数量权重为最大值（44 个值）
         mock_brain = MagicMock(spec=Brain)
-        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights + 1 total ratio
+        # 结构：10 bid price offsets + 10 bid qty weights + 10 ask price offsets + 10 ask qty weights
+        #       + 1 total ratio + 3 AS adjustments
         outputs = (
             [0.0] * 10 +   # bid price offsets
             [1.0] * 10 +   # bid qty weights (all max)
             [0.0] * 10 +   # ask price offsets
             [1.0] * 10 +   # ask qty weights (all max)
-            [0.0]           # total ratio
+            [0.0] +         # total ratio
+            [0.0, -1.0, 0.0]  # AS adjustments
         )
         mock_brain.forward.return_value = outputs
 

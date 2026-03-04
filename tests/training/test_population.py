@@ -69,6 +69,9 @@ class TestPopulationCreateAgents:
         """测试创建做市商 Agent"""
         # 设置种群类型为做市商
         self.population.agent_type = AgentType.MARKET_MAKER
+        # 设置 AS 模型配置（做市商构造时需要）
+        from src.config.config import ASConfig
+        self.population._as_config = ASConfig()
         # 更新配置为做市商配置
         self.population.agent_config = AgentConfig(
             count=100,
