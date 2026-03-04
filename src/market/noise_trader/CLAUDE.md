@@ -313,6 +313,15 @@ for trader in noise_traders:
 | `quantity_mu` | float | 12.0 | 对数正态分布 mu 参数 |
 | `quantity_sigma` | float | 1.0 | 对数正态分布 sigma 参数 |
 | `episode_bias_range` | float | 0.15 | Episode 级买入概率偏置范围 |
+| `mean_reversion_strength` | float | 2.0 | 价格回归力度系数（死区外每1%偏离的buy_prob调整量） |
+| `mean_reversion_dead_zone` | float | 0.01 | 死区比例（±1%），死区内无回归力 |
+
+**带死区的阈值式价格回归：**
+- 防止价格单向漂移的正反馈循环（MM仓位倾斜→深度不均→价格进一步漂移）
+- 死区内（|偏离| ≤ dead_zone）：`tick_buy_prob = episode_buy_prob`，价格自由运动，允许趋势
+- 死区外（|偏离| > dead_zone）：`tick_buy_prob = episode_buy_prob - strength × excess`，其中 `excess = deviation_pct - sign × dead_zone`
+- tick_buy_prob 被 clamp 到 [0.1, 0.9] 范围
+- 该回归在 `arena_worker.py` 的 `compute_noise_trader_decisions()` 和 `trainer.py` 的 `run_tick()` 中实现
 
 **下单量分布说明：**
 - 使用对数正态分布 `lognormvariate(mu, sigma)`

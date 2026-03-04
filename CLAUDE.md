@@ -139,9 +139,14 @@ mm_fitness = α × pnl + γ × volume_score
 市场随机性提供者（不参与NEAT进化）：
 
 - 200个独立噪声交易者，各自每 tick 以 50% 概率行动
-- 行动时按 `buy_probability` 概率买入，通过市价单撮合
-- 每个 Episode 开始时，每个竞技场独立生成随机偏置：`buy_probability = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
-- `episode_bias_range` 默认 0.15，即 buy_prob ∈ [0.35, 0.65]
+- 行动时按 `tick_buy_prob` 概率买入，通过市价单撮合
+- 每个 Episode 开始时，每个竞技场独立生成随机偏置：`episode_buy_prob = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
+- `episode_bias_range` 默认 0.15，即 episode_buy_prob ∈ [0.35, 0.65]
+- **带死区的阈值式价格回归**：防止价格单向漂移的正反馈循环
+  - 死区内（|偏离| ≤ 1%）：`tick_buy_prob = episode_buy_prob`（自由运动，允许趋势）
+  - 死区外（|偏离| > 1%）：`tick_buy_prob = episode_buy_prob - strength × (deviation - sign × dead_zone)`
+  - `mean_reversion_strength` 默认 2.0，`mean_reversion_dead_zone` 默认 0.01（±1%）
+  - tick_buy_prob 被 clamp 到 [0.1, 0.9] 范围
 - 下单量：`max(1, int(lognormvariate(mu=12.0, sigma=1.0)))`
 - 无限资金（1e18），不触发强平检查
 - 手续费为 0

@@ -133,6 +133,8 @@ class NoiseTraderConfig:
     quantity_mu: float = 12.0
     quantity_sigma: float = 1.0
     episode_bias_range: float = 0.15  # Episode 级买入概率偏置范围，buy_prob ∈ [0.5-range, 0.5+range]
+    mean_reversion_strength: float = 2.0    # 价格回归力度系数（死区外每1%偏离的buy_prob调整量）
+    mean_reversion_dead_zone: float = 0.01  # 死区比例（±1%），死区内无回归力
 
 
 @dataclass

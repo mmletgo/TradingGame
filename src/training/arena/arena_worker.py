@@ -529,15 +529,20 @@ def update_trade_accounts(
 def compute_noise_trader_decisions(
     arena: ArenaState, noise_trader_config: NoiseTraderConfig,
     buy_probability: float = 0.5,
+    smooth_mid_price: float = 0.0,
+    initial_price: float = 0.0,
 ) -> list[NoiseTraderDecision]:
     """计算噪声交易者决策
 
     调用 NoiseTraderAccountState.decide() 获取决策，转换为 NoiseTraderDecision 格式。
+    支持带死区的阈值式价格回归：死区内 buy_prob 不变，超出死区后逐渐施加回归力。
 
     Args:
         arena: 竞技场状态
         noise_trader_config: 噪声交易者配置
-        buy_probability: 买入概率（默认0.5，即无偏置）
+        buy_probability: Episode 级买入概率（默认0.5，即无偏置）
+        smooth_mid_price: 当前 EMA 平滑价格（用于计算价格偏离）
+        initial_price: 初始价格（回归锚点）
 
     Returns:
         噪声交易者决策列表（仅包含需要行动的噪声交易者）
@@ -547,10 +552,23 @@ def compute_noise_trader_decisions(
     if not arena.noise_trader_states:
         return decisions
 
+    # 带死区的阈值式回归：计算 tick 级 buy_prob
+    tick_buy_prob = buy_probability
+    strength = noise_trader_config.mean_reversion_strength
+    dead_zone = noise_trader_config.mean_reversion_dead_zone
+    if initial_price > 0 and smooth_mid_price > 0 and strength > 0:
+        deviation_pct = (smooth_mid_price - initial_price) / initial_price
+        abs_dev = abs(deviation_pct)
+        if abs_dev > dead_zone:
+            sign = 1.0 if deviation_pct > 0 else -1.0
+            excess = deviation_pct - sign * dead_zone
+            tick_buy_prob = buy_probability - strength * excess
+            tick_buy_prob = max(0.1, min(0.9, tick_buy_prob))
+
     for nt_state in arena.noise_trader_states.values():
         should_act, direction, quantity = nt_state.decide(
             noise_trader_config.action_probability,
-            buy_probability,
+            tick_buy_prob,
         )
 
         if should_act and direction != 0 and quantity > 0:
@@ -1940,9 +1958,11 @@ def _run_episode_local(
             # 强平检查（三阶段，本地执行）
             handle_liquidations(arena, current_price)
 
-            # 噪声交易者决策
+            # 噪声交易者决策（带死区的阈值式回归）
             noise_decisions = compute_noise_trader_decisions(
-                arena, noise_trader_config, episode_buy_probabilities[arena_idx]
+                arena, noise_trader_config, episode_buy_probabilities[arena_idx],
+                smooth_mid_price=arena.smooth_mid_price,
+                initial_price=config.market.initial_price,
             )
 
             # 计算市场状态

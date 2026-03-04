@@ -2098,9 +2098,21 @@ class Trainer:
 
         atomic_actions: list[AtomicAction] = []
 
-        # 1. 噪声交易者决策与执行
+        # 1. 噪声交易者决策与执行（带死区的阈值式回归）
+        tick_buy_prob = self._episode_buy_probability
+        nt_cfg = self.config.noise_trader
+        initial_price = self.config.market.initial_price
+        if initial_price > 0 and self._smooth_mid_price > 0 and nt_cfg.mean_reversion_strength > 0:
+            deviation_pct = (self._smooth_mid_price - initial_price) / initial_price
+            abs_dev = abs(deviation_pct)
+            if abs_dev > nt_cfg.mean_reversion_dead_zone:
+                sign = 1.0 if deviation_pct > 0 else -1.0
+                excess = deviation_pct - sign * nt_cfg.mean_reversion_dead_zone
+                tick_buy_prob = self._episode_buy_probability - nt_cfg.mean_reversion_strength * excess
+                tick_buy_prob = max(0.1, min(0.9, tick_buy_prob))
+
         for nt in self.noise_traders:
-            should_act, direction, quantity = nt.decide(self._episode_buy_probability)
+            should_act, direction, quantity = nt.decide(tick_buy_prob)
             if should_act:
                 trades = nt.execute(direction, quantity, self.matching_engine)
                 for trade in trades:
