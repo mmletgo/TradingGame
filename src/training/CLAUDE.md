@@ -219,7 +219,7 @@ Worker 配置数据类。
 - `_execute_adl(liquidated_agent, remaining_qty, current_price, is_long)` - 执行 ADL 自动减仓；正确处理噪声交易者（调用 `on_adl_trade` 而非 `account.on_trade`，接口签名不同于 Account）和 `position_qty` 属性访问（噪声交易者直接暴露 `.position_qty`，而非 `.position.quantity`）
 - `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件
 - `_compute_normalized_market_state()` - 向量化计算归一化市场状态，同时预计算 AS 模型参数（sigma、tau、kappa）并填充到 `NormalizedMarketState` 对应字段，供做市商观测使用
-- `_parse_market_maker_output(outputs)` - 解析做市商神经网络输出（输出维度 44），使用 AS 模型计算 reservation_price（基于预计算的 sigma、tau、kappa 以及神经网络输出的 q、gamma），再以 reservation_price 为中心偏移生成双边挂单价格
+- `_parse_market_maker_output(outputs)` - 解析做市商神经网络输出（输出维度 43），使用 AS 模型计算 reservation_price（基于预计算的 sigma、tau、kappa 以及神经网络输出的 gamma），再以 reservation_price 为中心偏移生成双边挂单价格
 - `run_tick()` - 执行单个 tick
 - `run_episode()` - 运行完整 episode
 - `train()` - 主训练循环
@@ -394,7 +394,7 @@ class AtomicAction:
 
 **维度常量（做市商）：**
 - `INPUT_DIM_MARKET_MAKER = 972`（原 964，新增 8 个 AS 模型特征字段）
-- `OUTPUT_DIM_MARKET_MAKER = 44`（原 41，新增 3 个 AS 模型输出字段：q、gamma、spread_scale）
+- `OUTPUT_DIM_MARKET_MAKER = 43`（原 41，新增 2 个 AS 模型输出字段：gamma、spread_scale）
 
 **MarketStateData 结构体新增 AS 字段（共 9 个）：**
 - `as_sigma` - 已实现波动率（历史成交价格标准差）
@@ -410,7 +410,7 @@ class AtomicAction:
 **关键内部函数：**
 - `_extract_market_state(market_state_data, normalized_state)` - 从 `NormalizedMarketState` 提取市场状态，包含 AS 参数字段的提取（索引 964-971 对应 8 个 AS 特征）
 - `_observe_market_maker_single(state_data, market_data, buf, offset)` - 在输入向量索引 964-971 处填充 AS 模型特征（sigma、tau、kappa、q、inventory_skew、urgency、as_reservation_price_norm、as_spread_half_norm）
-- `_parse_market_maker_full_single(output, market_data, state_data)` - 从神经网络 44 维输出解析做市商决策；其中输出索引 41-43 对应 AS 模型参数（q_override、gamma_override、spread_scale），结合预计算的 sigma、tau、kappa 使用 AS 公式计算 reservation_price，再生成双边报价
+- `_parse_market_maker_full_single(output, market_data, state_data)` - 从神经网络 43 维输出解析做市商决策；其中输出索引 41-42 对应 AS 模型参数（gamma_override、spread_scale），结合预计算的 sigma、tau、kappa 使用 AS 公式计算 reservation_price，再生成双边报价
 
 **缓存类方法：**
 - `update_networks(networks)` - 从 Python 网络对象提取数据到 C 结构
@@ -497,7 +497,7 @@ class AtomicAction:
 
 不同 Agent 类型使用不同的 NEAT 配置文件：
 - `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，8 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（972 个输入节点，44 个输出节点）
+- `config/neat_market_maker.cfg` - 做市商（972 个输入节点，43 个输出节点）
 
 **关键配置参数（防止种群灭绝）：**
 - `reset_on_extinction = True`
