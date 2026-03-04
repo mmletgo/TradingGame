@@ -1500,13 +1500,17 @@ class ParallelArenaTrainer:
             for i in range(agent_config.count):
                 genome = genome_list[i % len(genome_list)]
                 brain = Brain.from_genome(genome, neat_config)
-                agent = agent_class(agent_id_offset + i, brain, agent_config)
+                if agent_type == AgentType.MARKET_MAKER:
+                    agent = agent_class(agent_id_offset + i, brain, agent_config, as_config=self.config.as_model)
+                else:
+                    agent = agent_class(agent_id_offset + i, brain, agent_config)
                 agents.append(agent)
 
             # 创建简化的 Population 对象
             pop = Population.__new__(Population)
             pop.agent_type = agent_type
             pop.agent_config = agent_config
+            pop._as_config = self.config.as_model
             pop.generation = 0
             pop.logger = get_logger("population")
             pop._executor = None

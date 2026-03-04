@@ -100,7 +100,7 @@ Numba JIT 加速的高频数学函数模块。
 | 做市商 | α × adjusted_pnl + γ × volume（α=0.7, γ=0.3） |
 
 **关键方法：**
-- `create_agents(genomes)` - 从基因组列表创建 Agent（小批量串行，大批量并行）
+- `create_agents(genomes)` - 从基因组列表创建 Agent（小批量串行，大批量并行）；创建做市商时额外传递 `as_config` 参数，用于初始化 AS 模型配置
 - `evaluate(current_price)` - 评估种群适应度并排序
 - `evolve(current_price)` - 执行一代 NEAT 进化，异常时自动重置种群
 - `evolve_with_cached_fitness(current_price)` - 使用缓存的适应度进行进化
@@ -216,9 +216,10 @@ Worker 配置数据类。
 - `_build_execution_order()` - 构建 Agent 执行顺序列表
 - `_cancel_agent_orders(agent)` - 撤销指定 Agent 的所有挂单
 - `_execute_liquidation_market_order(agent)` - 执行强平市价单
-- `_execute_adl(liquidated_agent, remaining_qty, current_price, is_long)` - 执行 ADL 自动减仓
+- `_execute_adl(liquidated_agent, remaining_qty, current_price, is_long)` - 执行 ADL 自动减仓；正确处理噪声交易者（调用 `on_adl_trade` 而非 `account.on_trade`，接口签名不同于 Account）和 `position_qty` 属性访问（噪声交易者直接暴露 `.position_qty`，而非 `.position.quantity`）
 - `_should_end_episode_early()` - O(1) 检查是否满足提前结束条件
-- `_compute_normalized_market_state()` - 向量化计算归一化市场状态
+- `_compute_normalized_market_state()` - 向量化计算归一化市场状态，同时预计算 AS 模型参数（sigma、tau、kappa）并填充到 `NormalizedMarketState` 对应字段，供做市商观测使用
+- `_parse_market_maker_output(outputs)` - 解析做市商神经网络输出（输出维度 44），使用 AS 模型计算 reservation_price（基于预计算的 sigma、tau、kappa 以及神经网络输出的 q、gamma），再以 reservation_price 为中心偏移生成双边挂单价格
 - `run_tick()` - 执行单个 tick
 - `run_episode()` - 运行完整 episode
 - `train()` - 主训练循环
@@ -391,6 +392,26 @@ class AtomicAction:
 
 将网络数据提取从每次决策移到进化后一次性完成。
 
+**维度常量（做市商）：**
+- `INPUT_DIM_MARKET_MAKER = 972`（原 964，新增 8 个 AS 模型特征字段）
+- `OUTPUT_DIM_MARKET_MAKER = 44`（原 41，新增 3 个 AS 模型输出字段：q、gamma、spread_scale）
+
+**MarketStateData 结构体新增 AS 字段（共 9 个）：**
+- `as_sigma` - 已实现波动率（历史成交价格标准差）
+- `as_tau` - 剩余时间（episode 剩余比例）
+- `as_kappa` - 订单到达强度（单位时间内做市商成交次数估计）
+- `as_gamma` - 风险厌恶系数参考（配置默认值，归一化后）
+- `as_reservation_price` - AS 保留价格（由主进程预计算，供参考）
+- `as_q` - 做市商当前净头寸（归一化）
+- `as_spread_half` - AS 最优半价差（由主进程预计算，供参考）
+- `as_inventory_skew` - 库存偏斜系数（`q × sigma² × tau`）
+- `as_urgency` - 紧迫度（随剩余时间减少而增大，`1 - tau`）
+
+**关键内部函数：**
+- `_extract_market_state(market_state_data, normalized_state)` - 从 `NormalizedMarketState` 提取市场状态，包含 AS 参数字段的提取（索引 964-971 对应 8 个 AS 特征）
+- `_observe_market_maker_single(state_data, market_data, buf, offset)` - 在输入向量索引 964-971 处填充 AS 模型特征（sigma、tau、kappa、q、inventory_skew、urgency、as_reservation_price_norm、as_spread_half_norm）
+- `_parse_market_maker_full_single(output, market_data, state_data)` - 从神经网络 44 维输出解析做市商决策；其中输出索引 41-43 对应 AS 模型参数（q_override、gamma_override、spread_scale），结合预计算的 sigma、tau、kappa 使用 AS 公式计算 reservation_price，再生成双边报价
+
 **缓存类方法：**
 - `update_networks(networks)` - 从 Python 网络对象提取数据到 C 结构
 - `update_networks_from_numpy(*packed_arrays)` - 直接从 packed numpy 数组填充 C 结构，跳过中间 Python 对象创建（FastFeedForwardNetwork），性能从 ~40s 降至 ~2-5s。使用 `alloc_batch_network_data_exact` 精确分配内存（按实际总量而非 max × num_networks），分配失败时保留旧数据并记录错误
@@ -465,6 +486,7 @@ class AtomicAction:
 - `src.config.config` - 配置类
 - `src.core.log_engine` - 日志系统
 - `src.market.adl` - ADL 管理器
+- `src.market.as_calculator` - AS 模型计算器（Avellaneda-Stoikov 模型，计算 reservation_price 和最优价差）
 - `src.market.matching` - 撮合引擎
 - `src.market.orderbook` - 订单簿
 - `src.market.noise_trader` - 噪声交易者
@@ -475,7 +497,7 @@ class AtomicAction:
 
 不同 Agent 类型使用不同的 NEAT 配置文件：
 - `config/neat_retail_pro.cfg` - 高级散户（907 个输入节点，8 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（934 个输入节点，41 个输出节点）
+- `config/neat_market_maker.cfg` - 做市商（972 个输入节点，44 个输出节点）
 
 **关键配置参数（防止种群灭绝）：**
 - `reset_on_extinction = True`

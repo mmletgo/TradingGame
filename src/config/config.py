@@ -138,6 +138,35 @@ class NoiseTraderConfig:
 
 
 @dataclass
+class ASConfig:
+    """Avellaneda-Stoikov 最优做市模型配置
+
+    Attributes:
+        gamma: 基础风险厌恶系数
+        kappa_base: 基础订单到达率
+        vol_window: 波动率回看窗口 (ticks)
+        min_sigma: 波动率下限
+        max_sigma: 波动率上限
+        gamma_adj_min: NN gamma 调整下限（乘数）
+        gamma_adj_max: NN gamma 调整上限（乘数）
+        spread_adj_min: NN spread 调整下限（乘数）
+        spread_adj_max: NN spread 调整上限（乘数）
+        max_reservation_offset: reservation price 最大偏移比例
+    """
+
+    gamma: float = 0.1
+    kappa_base: float = 1.5
+    vol_window: int = 50
+    min_sigma: float = 1e-6
+    max_sigma: float = 0.1
+    gamma_adj_min: float = 0.1
+    gamma_adj_max: float = 10.0
+    spread_adj_min: float = 0.5
+    spread_adj_max: float = 2.0
+    max_reservation_offset: float = 0.05
+
+
+@dataclass
 class Config:
     """
     全局配置
@@ -150,6 +179,7 @@ class Config:
         training: 训练配置
         demo: 演示配置
         noise_trader: 噪声交易者配置
+        as_model: AS 最优做市模型配置
     """
 
     market: MarketConfig
@@ -157,3 +187,4 @@ class Config:
     training: TrainingConfig
     demo: DemoConfig
     noise_trader: NoiseTraderConfig = field(default_factory=NoiseTraderConfig)
+    as_model: ASConfig = field(default_factory=ASConfig)

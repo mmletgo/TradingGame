@@ -16,7 +16,7 @@
 
 from libc.stdlib cimport malloc, free, calloc
 from libc.string cimport memset, memcpy
-from libc.math cimport tanh, exp, fabs, fmax, fmin, log10, sin
+from libc.math cimport tanh, exp, fabs, fmax, fmin, log10, sin, log, sqrt
 cimport openmp
 from cython.parallel cimport prange, parallel
 cimport numpy as np
@@ -53,9 +53,9 @@ DEF AGENT_MARKET_MAKER = 3
 
 # 输入/输出维度
 DEF INPUT_DIM_FULL = 907
-DEF INPUT_DIM_MARKET_MAKER = 964
+DEF INPUT_DIM_MARKET_MAKER = 972
 DEF OUTPUT_DIM_FULL = 8
-DEF OUTPUT_DIM_MARKET_MAKER = 41
+DEF OUTPUT_DIM_MARKET_MAKER = 44
 
 # 动作类型（高级散户共用6种动作）
 DEF ACTION_HOLD = 0
@@ -392,6 +392,17 @@ cdef MarketStateData* alloc_market_state_data() noexcept:
     data.mid_price = 0.0
     data.tick_size = 0.0
 
+    # AS model parameters (default values)
+    data.as_sigma = 0.0
+    data.as_tau = 0.0
+    data.as_kappa = 0.0
+    data.as_gamma = 0.0
+    data.as_gamma_adj_min = 0.0
+    data.as_gamma_adj_max = 0.0
+    data.as_spread_adj_min = 0.0
+    data.as_spread_adj_max = 0.0
+    data.as_max_reservation_offset = 0.0
+
     data.bid_data = <double*>calloc(200, sizeof(double))
     data.ask_data = <double*>calloc(200, sizeof(double))
     data.trade_prices = <double*>calloc(100, sizeof(double))
@@ -711,6 +722,17 @@ cdef void _extract_market_state(object market_state, MarketStateData* data):
         data.tick_history_volumes[i] = <double>tick_history_volumes[i]
         data.tick_history_amounts[i] = <double>tick_history_amounts[i]
 
+    # 提取 AS 模型参数
+    data.as_sigma = market_state.as_sigma
+    data.as_tau = market_state.as_tau
+    data.as_kappa = market_state.as_kappa
+    data.as_gamma = market_state.as_gamma
+    data.as_gamma_adj_min = market_state.as_gamma_adj_min
+    data.as_gamma_adj_max = market_state.as_gamma_adj_max
+    data.as_spread_adj_min = market_state.as_spread_adj_min
+    data.as_spread_adj_max = market_state.as_spread_adj_max
+    data.as_max_reservation_offset = market_state.as_max_reservation_offset
+
 
 # ============================================================================
 # 批量观察函数 (nogil)
@@ -920,7 +942,7 @@ cdef void _observe_market_maker_single(
     double initial_balance,
     double leverage,
 ) noexcept nogil:
-    """构建做市商的神经网络输入向量（964 维）
+    """构建做市商的神经网络输入向量（972 维）
 
     输入布局：
     - 0-199: 买盘100档（每档2个值：价格归一化 + 数量）
@@ -932,6 +954,7 @@ cdef void _observe_market_maker_single(
     - 664-763: tick历史价格（100个）
     - 764-863: tick历史成交量（100个）
     - 864-963: tick历史成交额（100个）
+    - 964-971: AS模型特征（8个值）
     """
     cdef int i
     cdef double mid_price = market.mid_price
@@ -992,6 +1015,48 @@ cdef void _observe_market_maker_single(
     for i in range(100):
         output[864 + i] = market.tick_history_amounts[i]
 
+    # AS features (8 values) at indices 964-971
+    cdef double as_sigma = market.as_sigma
+    cdef double as_tau = market.as_tau
+    cdef double as_kappa = market.as_kappa
+    cdef double as_gamma = market.as_gamma
+
+    # Compute q_norm for reservation offset
+    cdef double max_pos_value_as = equity * leverage
+    cdef double q_norm_as = 0.0
+    if max_pos_value_as > 0 and mid_price > 0:
+        q_norm_as = (pos_qty * mid_price) / max_pos_value_as
+        if q_norm_as > 1.0:
+            q_norm_as = 1.0
+        elif q_norm_as < -1.0:
+            q_norm_as = -1.0
+
+    cdef double sigma_sq_obs = as_sigma * as_sigma
+    cdef double inventory_risk_as = q_norm_as * as_gamma * sigma_sq_obs * as_tau
+    cdef double reservation_offset_as = -inventory_risk_as
+    # Clamp
+    if reservation_offset_as > 0.5:
+        reservation_offset_as = 0.5
+    elif reservation_offset_as < -0.5:
+        reservation_offset_as = -0.5
+
+    # Optimal half spread
+    cdef double kappa_safe_obs = as_kappa if as_kappa > 1e-6 else 1e-6
+    cdef double optimal_spread_obs = 0.0
+    cdef double optimal_half_spread = 0.0
+    if as_gamma > 0:
+        optimal_spread_obs = as_gamma * sigma_sq_obs * as_tau + (2.0 / as_gamma) * log(1.0 + as_gamma / kappa_safe_obs)
+        optimal_half_spread = optimal_spread_obs * 0.5
+
+    output[964] = reservation_offset_as  # [-0.5, 0.5]
+    output[965] = optimal_half_spread / mid_price if mid_price > 0 else 0.0  # [0, 0.1]
+    output[966] = as_sigma  # [0, 0.1]
+    output[967] = as_tau  # [0, 1]
+    output[968] = log10(as_kappa + 1) / 5.0  # [0, 1]
+    output[969] = clip(inventory_risk_as, -1.0, 1.0)  # [-1, 1]
+    output[970] = as_gamma / market.as_gamma_adj_max if market.as_gamma_adj_max > 0 else 0.0  # [0, 1]
+    output[971] = clip(optimal_spread_obs / (as_sigma + 1e-8), 0.0, 10.0)  # [0, 10]
+
 
 cdef void batch_observe_market_maker_nogil(
     BatchAgentState* agents,
@@ -999,7 +1064,7 @@ cdef void batch_observe_market_maker_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建做市商的神经网络输入向量（964 维）"""
+    """批量构建做市商的神经网络输入向量（972 维）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 10000000.0  # 做市商初始资金
@@ -1058,7 +1123,7 @@ cdef void batch_observe_market_maker_multi_market_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建做市商的神经网络输入向量（支持多市场状态）"""
+    """批量构建做市商的神经网络输入向量（972 维，支持多市场状态）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 10000000.0
@@ -1392,12 +1457,15 @@ cdef void _parse_market_maker_single(
 ) noexcept nogil:
     """解析做市商的神经网络输出
 
-    输出结构（41个值）：
+    输出结构（44个值）：
     - [0-9]: 买单价格偏移（10个买单）
     - [10-19]: 买单数量权重（10个买单）
     - [20-29]: 卖单价格偏移（10个卖单）
     - [30-39]: 卖单数量权重（10个卖单）
     - [40]: 总下单比例基准
+    - [41]: gamma_adj（AS风险厌恶调整）
+    - [42]: blend（AS/NN混合比例）
+    - [43]: spread_adj（价差调整）
 
     做市商始终执行 QUOTE 动作，价格和数量信息存储在 result 中供后续处理。
     """
@@ -1472,109 +1540,6 @@ cdef void batch_parse_market_maker_multi_market_nogil(
 # 做市商完整解析函数（直接返回订单数据）
 # ============================================================================
 
-cdef inline double _calculate_skew_factor(
-    double equity,
-    double leverage,
-    double position_qty,
-    double mid_price
-) noexcept nogil:
-    """计算做市商仓位倾斜因子
-
-    与 Python 端 calculate_skew_factor_from_state 逻辑完全一致。
-
-    Returns:
-        倾斜因子，范围 [-1, 1]
-    """
-    if equity <= 0:
-        return 0.0
-
-    if position_qty == 0:
-        return 0.0
-
-    cdef double position_value = fabs(position_qty) * mid_price
-    cdef double max_position_value = equity * leverage
-    cdef double pos_ratio
-
-    if max_position_value > 0:
-        pos_ratio = position_value / max_position_value
-        if pos_ratio > 1.0:
-            pos_ratio = 1.0
-    else:
-        pos_ratio = 0.0
-
-    if position_qty > 0:
-        return -pos_ratio
-    else:
-        return pos_ratio
-
-
-cdef inline void _apply_position_skew_nogil(
-    double* bid_ratios,
-    double* ask_ratios,
-    double skew_factor,
-    double min_side_weight
-) noexcept nogil:
-    """应用仓位倾斜到买卖权重（与 Python 端逻辑完全一致）
-
-    直接修改传入的数组，无需返回值。
-    """
-    cdef double bid_multiplier = 1.0 + skew_factor
-    cdef double ask_multiplier = 1.0 - skew_factor
-    cdef int i
-    cdef double total_bid = 0.0
-    cdef double total_ask = 0.0
-    cdef double total
-    cdef double bid_side_ratio, ask_side_ratio
-    cdef double target_bid_total, target_ask_total
-    cdef double bid_adjusted[10]
-    cdef double ask_adjusted[10]
-
-    # 计算调整后的权重
-    for i in range(10):
-        bid_adjusted[i] = bid_ratios[i] * bid_multiplier
-        ask_adjusted[i] = ask_ratios[i] * ask_multiplier
-        total_bid = total_bid + bid_adjusted[i]
-        total_ask = total_ask + ask_adjusted[i]
-
-    total = total_bid + total_ask
-
-    if total <= 0:
-        # 平均分配
-        for i in range(10):
-            bid_ratios[i] = 0.1
-            ask_ratios[i] = 0.1
-        return
-
-    bid_side_ratio = total_bid / total
-    ask_side_ratio = total_ask / total
-
-    # 确保每边至少有 min_side_weight
-    if bid_side_ratio < min_side_weight:
-        target_bid_total = min_side_weight
-        target_ask_total = 1.0 - min_side_weight
-    elif ask_side_ratio < min_side_weight:
-        target_ask_total = min_side_weight
-        target_bid_total = 1.0 - min_side_weight
-    else:
-        target_bid_total = bid_side_ratio
-        target_ask_total = ask_side_ratio
-
-    # 归一化并应用目标比例
-    if total_bid > 0:
-        for i in range(10):
-            bid_ratios[i] = bid_adjusted[i] / total_bid * target_bid_total
-    else:
-        for i in range(10):
-            bid_ratios[i] = target_bid_total / 10
-
-    if total_ask > 0:
-        for i in range(10):
-            ask_ratios[i] = ask_adjusted[i] / total_ask * target_ask_total
-    else:
-        for i in range(10):
-            ask_ratios[i] = target_ask_total / 10
-
-
 cdef void _parse_market_maker_full_single(
     int agent_idx,
     double* nn_output,
@@ -1582,18 +1547,21 @@ cdef void _parse_market_maker_full_single(
     BatchAgentState* agents,
     double mid_price,
     double tick_size,
+    MarketStateData* market,
 ) noexcept nogil:
-    """解析做市商的神经网络输出并直接生成订单数据
+    """解析做市商的神经网络输出并直接生成订单数据（AS 模型版本）
 
-    神经网络输出结构（共 41 个值）：
-    - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到1-100 ticks）
+    神经网络输出结构（共 44 个值）：
+    - 输出[0-9]: 买单1-10的价格偏移（-1到1，映射到 min_offset ~ max_offset ticks）
     - 输出[10-19]: 买单1-10的数量权重（-1到1，映射到0-1）
-    - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到1-100 ticks）
+    - 输出[20-29]: 卖单1-10的价格偏移（-1到1，映射到 min_offset ~ max_offset ticks）
     - 输出[30-39]: 卖单1-10的数量权重（-1到1，映射到0-1）
     - 输出[40]: 总下单比例基准（-1到1，映射到0.01-1）
+    - 输出[41]: gamma_adj（-1到1，log-scale映射到[gamma_adj_min, gamma_adj_max]）
+    - 输出[42]: blend（-1到1，映射到[0,1]，0=纯AS，1=纯NN旧式倾斜）
+    - 输出[43]: spread_adj（-1到1，映射到[spread_adj_min, spread_adj_max]）
     """
     cdef double MAX_ORDER_QUANTITY = 100000000.0
-    cdef double MIN_SIDE_WEIGHT = 0.25
     cdef int MM_MIN_ORDER_QUANTITY = 1  # 最小订单数量
     cdef double MM_MIN_RATIO_THRESHOLD = 0.001  # 最小权重阈值 (0.1%)
 
@@ -1601,7 +1569,6 @@ cdef void _parse_market_maker_full_single(
     cdef double bid_ratios[10]
     cdef double ask_ratios[10]
     cdef double total_raw_ratio, total_ratio_raw, total_ratio_clipped, total_ratio
-    cdef double skew_factor
     cdef double equity, leverage, max_pos_value, current_pos, current_pos_value
     cdef double avail_buy, avail_sell
     cdef double offset, ticks, price, ratio, qty_raw
@@ -1619,37 +1586,102 @@ cdef void _parse_market_maker_full_single(
     if equity <= 0:
         return
 
-    # 计算权重比例（从神经网络输出）
+    # === AS Model computation ===
+    cdef double as_gamma = market.as_gamma
+    cdef double as_sigma = market.as_sigma
+    cdef double as_tau = market.as_tau
+    cdef double as_kappa = market.as_kappa
+
+    # Parse NN AS adjustment outputs
+    cdef double gamma_adj_raw = clip(nn_output[41], -1.0, 1.0)
+    cdef double blend_raw = clip(nn_output[42], -1.0, 1.0)
+    cdef double spread_adj_raw = clip(nn_output[43], -1.0, 1.0)
+
+    # gamma_adj: log-scale mapping [gamma_adj_min, gamma_adj_max]
+    cdef double gmin = market.as_gamma_adj_min
+    cdef double gmax = market.as_gamma_adj_max
+    cdef double gamma_adj = 1.0
+    if gmin > 0 and gmax > gmin:
+        gamma_adj = gmin * exp(log(gmax / gmin) * (gamma_adj_raw + 1.0) * 0.5)
+
+    # blend: [0, 1], 0=pure AS, 1=pure NN old-style skew
+    cdef double blend = (blend_raw + 1.0) * 0.5
+
+    # spread_adj: [spread_adj_min, spread_adj_max]
+    cdef double smin = market.as_spread_adj_min
+    cdef double smax = market.as_spread_adj_max
+    cdef double spread_adj = smin + (spread_adj_raw + 1.0) * 0.5 * (smax - smin)
+
+    # Compute effective gamma
+    cdef double effective_gamma = as_gamma * gamma_adj
+    if effective_gamma < 1e-8:
+        effective_gamma = 1e-8
+
+    # Compute AS reservation offset
+    cdef double max_pos_value_as = equity * leverage
+    cdef double q_norm = 0.0
+    if max_pos_value_as > 0 and mid_price > 0:
+        q_norm = (current_pos * mid_price) / max_pos_value_as
+        q_norm = clip(q_norm, -1.0, 1.0)
+
+    cdef double sigma_sq = as_sigma * as_sigma
+    cdef double tau_safe = as_tau if as_tau > 0.001 else 0.001
+    cdef double as_offset = -(q_norm * effective_gamma * sigma_sq * tau_safe)
+    cdef double max_offset_val = market.as_max_reservation_offset
+    as_offset = clip(as_offset, -max_offset_val, max_offset_val)
+
+    # Compute old-style skew offset for blending
+    cdef double nn_offset = 0.0
+    cdef double pos_value, max_pv, pr
+    if current_pos != 0 and equity > 0:
+        pos_value = fabs(current_pos) * mid_price
+        max_pv = equity * leverage
+        pr = pos_value / max_pv if max_pv > 0 else 0.0
+        if pr > 1.0:
+            pr = 1.0
+        if current_pos < 0:
+            nn_offset = pr * 0.05
+        else:
+            nn_offset = -pr * 0.05
+
+    # Blend AS and NN offsets
+    cdef double final_offset = (1.0 - blend) * as_offset + blend * nn_offset
+    final_offset = clip(final_offset, -max_offset_val, max_offset_val)
+    cdef double reservation_price = mid_price * (1.0 + final_offset)
+
+    # Compute AS min offset ticks
+    cdef double kappa_safe = as_kappa if as_kappa > 1e-6 else 1e-6
+    cdef double optimal_spread = effective_gamma * sigma_sq * tau_safe + (2.0 / effective_gamma) * log(1.0 + effective_gamma / kappa_safe)
+    cdef double as_half_spread = optimal_spread * 0.5 * spread_adj
+    cdef double min_offset_ticks_d = as_half_spread / tick_size if tick_size > 0 else 1.0
+    if min_offset_ticks_d < 1.0:
+        min_offset_ticks_d = 1.0
+    if min_offset_ticks_d > 100.0:
+        min_offset_ticks_d = 100.0
+
+    # Parse quantity weights (NO position skew - AS handles via price offset)
     total_raw_ratio = 0.0
     for i in range(10):
-        # bid_qty_weights[i] = nn_output[10+i]
         bid_ratios[i] = (clip(nn_output[10 + i], -1.0, 1.0) + 1.0) * 0.5
         if bid_ratios[i] < 0:
             bid_ratios[i] = 0
         total_raw_ratio = total_raw_ratio + bid_ratios[i]
 
-        # ask_qty_weights[i] = nn_output[30+i]
         ask_ratios[i] = (clip(nn_output[30 + i], -1.0, 1.0) + 1.0) * 0.5
         if ask_ratios[i] < 0:
             ask_ratios[i] = 0
         total_raw_ratio = total_raw_ratio + ask_ratios[i]
 
-    # 归一化
     if total_raw_ratio > 0:
         for i in range(10):
             bid_ratios[i] = bid_ratios[i] / total_raw_ratio
             ask_ratios[i] = ask_ratios[i] / total_raw_ratio
     else:
-        # 全部为零，平均分配
         for i in range(10):
             bid_ratios[i] = 0.05
             ask_ratios[i] = 0.05
 
-    # 应用仓位倾斜
-    skew_factor = _calculate_skew_factor(equity, leverage, current_pos, mid_price)
-    _apply_position_skew_nogil(bid_ratios, ask_ratios, skew_factor, MIN_SIDE_WEIGHT)
-
-    # 总下单比例
+    # Apply total_ratio (same as before)
     total_ratio_raw = nn_output[40]
     total_ratio_clipped = clip(total_ratio_raw, -1.0, 1.0)
     total_ratio = 0.01 + (total_ratio_clipped + 1) * 0.5 * 0.99
@@ -1676,17 +1708,18 @@ cdef void _parse_market_maker_full_single(
     else:
         avail_sell = current_pos_value + max_pos_value
 
-    # 生成订单
+    # 生成订单（使用 reservation_price 和 AS min_offset_ticks）
     num_bid = 0
     num_ask = 0
+    cdef double max_offset_ticks = min_offset_ticks_d + 99.0
 
     for i in range(10):
         # 买单处理
         ratio = bid_ratios[i]
         if ratio > 0:
             offset = clip(nn_output[i], -1.0, 1.0)
-            ticks = 1 + (offset + 1) * 49.5
-            price = mid_price - ticks * tick_size
+            ticks = min_offset_ticks_d + (offset + 1) * 0.5 * (max_offset_ticks - min_offset_ticks_d)
+            price = reservation_price - ticks * tick_size
             price = round_price(price, tick_size)
             if price > 0:
                 qty_raw = avail_buy * ratio / mid_price
@@ -1705,8 +1738,8 @@ cdef void _parse_market_maker_full_single(
         ratio = ask_ratios[i]
         if ratio > 0:
             offset = clip(nn_output[20 + i], -1.0, 1.0)
-            ticks = 1 + (offset + 1) * 49.5
-            price = mid_price + ticks * tick_size
+            ticks = min_offset_ticks_d + (offset + 1) * 0.5 * (max_offset_ticks - min_offset_ticks_d)
+            price = reservation_price + ticks * tick_size
             price = round_price(price, tick_size)
             if price > 0:
                 qty_raw = avail_sell * ratio / mid_price
@@ -1734,7 +1767,7 @@ cdef void batch_parse_market_maker_full_multi_market_nogil(
     int num_agents,
     int num_threads
 ) noexcept nogil:
-    """批量解析做市商的神经网络输出（完整版本，直接返回订单数据）"""
+    """批量解析做市商的神经网络输出（完整版本，直接返回订单数据，AS 模型）"""
     cdef int i
     cdef int market_idx
     cdef double mid_price, tick_size
@@ -1743,7 +1776,7 @@ cdef void batch_parse_market_maker_full_multi_market_nogil(
         market_idx = market_indices[i]
         mid_price = markets[market_idx].mid_price
         tick_size = markets[market_idx].tick_size
-        _parse_market_maker_full_single(i, &nn_outputs[i, 0], &mm_orders[i], agents, mid_price, tick_size)
+        _parse_market_maker_full_single(i, &nn_outputs[i, 0], &mm_orders[i], agents, mid_price, tick_size, markets[market_idx])
 
 
 # ============================================================================
@@ -1858,7 +1891,7 @@ def batch_decide_market_maker(
     market_state,
     int num_threads=0,
 ) -> list:
-    """批量决策入口 - 做市商版本 (964维输入, 41维输出)
+    """批量决策入口 - 做市商版本 (972维输入, 44维输出)
 
     Args:
         networks: FastFeedForwardNetwork 列表
@@ -1930,7 +1963,7 @@ def batch_decide_market_maker(
         batch_forward_nogil(batch_networks, inputs_view, outputs_view, buffers, num_threads)
 
     # 做市商返回原始神经网络输出，由调用方进行完整解析
-    # 因为做市商解析需要调用 Agent 方法（_calculate_skew_factor, _calculate_order_quantity）
+    # 因为做市商解析需要 AS 模型参数和 Agent 状态
     cdef list result_list = []
     cdef int i
     cdef double mid_price = market_state.mid_price
@@ -2227,7 +2260,7 @@ cdef class BatchNetworkCache:
 
         Args:
             num_networks: 网络数量
-            cache_type: 类型 (1=full 907维, 2=market_maker 964维)
+            cache_type: 类型 (1=full 907维, 2=market_maker 972维)
             num_threads: OpenMP 线程数，0 表示自动检测
             max_arenas: 最大竞技场数量（用于预分配多竞技场缓冲区）
             max_tasks_per_arena: 每竞技场最大任务数，0 表示使用 num_networks
