@@ -166,10 +166,23 @@ class LeagueTrainer(ParallelArenaTrainer):
         evolution_results: dict[tuple[AgentType, int], tuple],
         deserialize_genomes: bool = False,
     ) -> None:
-        """Override: 进化结果更新前保存 per-sub-pop 网络参数供里程碑写入 networks.npz"""
+        """Override: 进化结果更新前保存 per-sub-pop 网络参数供里程碑写入 networks.npz
+
+        冻结物种不参与进化（不在 evolution_results 中），但里程碑保存仍需其
+        per-subpop 网络参数以写入 networks.npz，避免后续加载时走昂贵的
+        _reconstruct_network_data 回退路径。
+        """
         per_subpop: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] = {}
         for (agent_type, sub_pop_id), (_, network_params_data, _) in evolution_results.items():
             per_subpop.setdefault(agent_type, {})[sub_pop_id] = network_params_data
+
+        # 保留冻结物种的 per-subpop 网络参数（冻结物种不进化，网络不变）
+        if self.league_config.freeze_on_convergence:
+            for agent_type, state in self._freeze_states.items():
+                if state.is_frozen and agent_type not in per_subpop:
+                    if agent_type in self._per_subpop_network_params:
+                        per_subpop[agent_type] = self._per_subpop_network_params[agent_type]
+
         self._per_subpop_network_params = per_subpop
         super()._update_populations_from_evolution(evolution_results, deserialize_genomes)
 
@@ -1039,7 +1052,17 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._milestone_thread.start()
 
         # 闭包已捕获 network_data_map 引用，释放实例属性减少内存占用
-        self._per_subpop_network_params = {}
+        # 保留冻结物种的 per-subpop 参数（冻结物种不进化，需跨轮次复用）
+        if self.league_config.freeze_on_convergence:
+            frozen_types: set[AgentType] = {
+                at for at, s in self._freeze_states.items() if s.is_frozen
+            }
+            self._per_subpop_network_params = {
+                at: data for at, data in self._per_subpop_network_params.items()
+                if at in frozen_types
+            }
+        else:
+            self._per_subpop_network_params = {}
 
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
