@@ -142,11 +142,11 @@ mm_fitness = α × pnl + γ × volume_score
 - 行动时按 `tick_buy_prob` 概率买入，通过市价单撮合
 - 每个 Episode 开始时，每个竞技场独立生成随机偏置：`episode_buy_prob = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
 - `episode_bias_range` 默认 0.15，即 episode_buy_prob ∈ [0.35, 0.65]
-- **带死区的阈值式价格回归**：防止价格单向漂移的正反馈循环
-  - 死区内（|偏离| ≤ 1%）：`tick_buy_prob = episode_buy_prob`（自由运动，允许趋势）
-  - 死区外（|偏离| > 1%）：`tick_buy_prob = episode_buy_prob - strength × (deviation - sign × dead_zone)`
-  - `mean_reversion_strength` 默认 2.0，`mean_reversion_dead_zone` 默认 0.01（±1%）
-  - tick_buy_prob 被 clamp 到 [0.1, 0.9] 范围
+- **Ornstein-Uhlenbeck 随机过程**：buy_prob 本身作为随机过程演化，防止价格漂移同时避免产生可预测的确定性模式
+  - 每 tick 更新：`buy_prob[t+1] = buy_prob[t] + θ × (μ - buy_prob[t]) + σ × ε`，其中 μ = episode_buy_prob，ε ~ N(0,1)
+  - `ou_theta` 默认 0.035（每 tick 回归 3.5% 的偏差），`ou_sigma` 默认 0.04（噪声强度）
+  - buy_prob 被 clamp 到 [0.1, 0.9] 范围
+  - 相比确定性均值回归，OU 过程允许临时趋势存在，且回归路径不可预测
 - 下单量：`max(1, int(lognormvariate(mu=12.0, sigma=1.0)))`
 - 无限资金（1e18），不触发强平检查
 - 手续费为 0

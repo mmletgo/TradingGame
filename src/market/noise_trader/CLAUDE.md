@@ -313,15 +313,16 @@ for trader in noise_traders:
 | `quantity_mu` | float | 12.0 | 对数正态分布 mu 参数 |
 | `quantity_sigma` | float | 1.0 | 对数正态分布 sigma 参数 |
 | `episode_bias_range` | float | 0.15 | Episode 级买入概率偏置范围 |
-| `mean_reversion_strength` | float | 2.0 | 价格回归力度系数（死区外每1%偏离的buy_prob调整量） |
-| `mean_reversion_dead_zone` | float | 0.01 | 死区比例（±1%），死区内无回归力 |
+| `ou_theta` | float | 0.035 | OU 过程均值回归速度（每 tick 回归 3.5% 的偏差） |
+| `ou_sigma` | float | 0.04 | OU 过程噪声强度 |
 
-**带死区的阈值式价格回归：**
-- 防止价格单向漂移的正反馈循环（MM仓位倾斜→深度不均→价格进一步漂移）
-- 死区内（|偏离| ≤ dead_zone）：`tick_buy_prob = episode_buy_prob`，价格自由运动，允许趋势
-- 死区外（|偏离| > dead_zone）：`tick_buy_prob = episode_buy_prob - strength × excess`，其中 `excess = deviation_pct - sign × dead_zone`
-- tick_buy_prob 被 clamp 到 [0.1, 0.9] 范围
-- 该回归在 `arena_worker.py` 的 `compute_noise_trader_decisions()` 和 `trainer.py` 的 `run_tick()` 中实现
+**Ornstein-Uhlenbeck 随机过程：**
+- buy_prob 本身作为 OU 随机过程演化，防止价格漂移同时避免产生可预测的确定性模式
+- 每 tick 更新：`buy_prob[t+1] = buy_prob[t] + θ × (μ - buy_prob[t]) + σ × ε`，其中 μ = episode_buy_prob，ε ~ N(0,1)
+- buy_prob 被 clamp 到 [0.1, 0.9] 范围
+- 相比确定性均值回归，OU 过程允许临时趋势存在，且回归路径不可预测，PR 无法学到固定的反转模式
+- OU 状态在 `trainer.py` 的 `_ou_buy_prob` 和 `arena_state.py` 的 `ArenaState.ou_buy_prob` 中维护
+- 每个 episode 开始时 `ou_buy_prob` 初始化为 `episode_buy_prob`
 
 **下单量分布说明：**
 - 使用对数正态分布 `lognormvariate(mu, sigma)`

@@ -456,6 +456,7 @@ class ArenaState:
     end_reason: str | None = None
     end_tick: int = 0
     consecutive_one_sided_ticks: int = 0  # 连续单边订单簿 tick 计数
+    ou_buy_prob: float = 0.5  # OU 过程当前 buy_prob 值
 
     # 扁平化数组（进化后初始化，用于向量化强平检查）
     _num_agents: int = 0

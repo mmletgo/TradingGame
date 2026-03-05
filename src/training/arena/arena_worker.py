@@ -529,20 +529,16 @@ def update_trade_accounts(
 def compute_noise_trader_decisions(
     arena: ArenaState, noise_trader_config: NoiseTraderConfig,
     buy_probability: float = 0.5,
-    smooth_mid_price: float = 0.0,
-    initial_price: float = 0.0,
 ) -> list[NoiseTraderDecision]:
     """计算噪声交易者决策
 
     调用 NoiseTraderAccountState.decide() 获取决策，转换为 NoiseTraderDecision 格式。
-    支持带死区的阈值式价格回归：死区内 buy_prob 不变，超出死区后逐渐施加回归力。
+    buy_probability 由调用方通过 OU 过程更新后传入。
 
     Args:
         arena: 竞技场状态
         noise_trader_config: 噪声交易者配置
-        buy_probability: Episode 级买入概率（默认0.5，即无偏置）
-        smooth_mid_price: 当前 EMA 平滑价格（用于计算价格偏离）
-        initial_price: 初始价格（回归锚点）
+        buy_probability: 经 OU 过程更新后的买入概率
 
     Returns:
         噪声交易者决策列表（仅包含需要行动的噪声交易者）
@@ -552,18 +548,7 @@ def compute_noise_trader_decisions(
     if not arena.noise_trader_states:
         return decisions
 
-    # 带死区的阈值式回归：计算 tick 级 buy_prob
     tick_buy_prob = buy_probability
-    strength = noise_trader_config.mean_reversion_strength
-    dead_zone = noise_trader_config.mean_reversion_dead_zone
-    if initial_price > 0 and smooth_mid_price > 0 and strength > 0:
-        deviation_pct = (smooth_mid_price - initial_price) / initial_price
-        abs_dev = abs(deviation_pct)
-        if abs_dev > dead_zone:
-            sign = 1.0 if deviation_pct > 0 else -1.0
-            excess = deviation_pct - sign * dead_zone
-            tick_buy_prob = buy_probability - strength * excess
-            tick_buy_prob = max(0.1, min(0.9, tick_buy_prob))
 
     for nt_state in arena.noise_trader_states.values():
         should_act, direction, quantity = nt_state.decide(
@@ -1981,6 +1966,10 @@ def _run_episode_local(
         for _ in arena_states
     ]
 
+    # 初始化每个竞技场的 OU 过程状态
+    for arena_idx, arena in enumerate(arena_states):
+        arena.ou_buy_prob = episode_buy_probabilities[arena_idx]
+
     # 2. MM 初始化
     _init_mm_all_arenas(
         arena_states, caches, type_groups, config, buffers_list, ema_alpha
@@ -2014,11 +2003,14 @@ def _run_episode_local(
             # 强平检查（三阶段，本地执行）
             handle_liquidations(arena, current_price)
 
-            # 噪声交易者决策（带死区的阈值式回归）
+            # OU 过程更新 buy_prob
+            if noise_trader_config.ou_theta > 0:
+                arena.ou_buy_prob += noise_trader_config.ou_theta * (episode_buy_probabilities[arena_idx] - arena.ou_buy_prob) + noise_trader_config.ou_sigma * random.gauss(0, 1)
+                arena.ou_buy_prob = max(0.1, min(0.9, arena.ou_buy_prob))
+
+            # 噪声交易者决策
             noise_decisions = compute_noise_trader_decisions(
-                arena, noise_trader_config, episode_buy_probabilities[arena_idx],
-                smooth_mid_price=arena.smooth_mid_price,
-                initial_price=config.market.initial_price,
+                arena, noise_trader_config, arena.ou_buy_prob,
             )
 
             # 计算市场状态

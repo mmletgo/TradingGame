@@ -213,6 +213,7 @@ class Trainer:
         # 噪声交易者
         self.noise_traders: list[NoiseTrader] = []
         self._episode_buy_probability: float = 0.5
+        self._ou_buy_prob: float = 0.5
         self._price_history: deque[float] = deque(maxlen=1000)  # 价格历史，自动管理长度
 
         # Tick 历史数据（用于 Agent 输入特征）
@@ -2184,18 +2185,12 @@ class Trainer:
 
         atomic_actions: list[AtomicAction] = []
 
-        # 1. 噪声交易者决策与执行（带死区的阈值式回归）
-        tick_buy_prob = self._episode_buy_probability
+        # 1. 噪声交易者决策与执行（OU 过程更新 buy_prob）
         nt_cfg = self.config.noise_trader
-        initial_price = self.config.market.initial_price
-        if initial_price > 0 and self._smooth_mid_price > 0 and nt_cfg.mean_reversion_strength > 0:
-            deviation_pct = (self._smooth_mid_price - initial_price) / initial_price
-            abs_dev = abs(deviation_pct)
-            if abs_dev > nt_cfg.mean_reversion_dead_zone:
-                sign = 1.0 if deviation_pct > 0 else -1.0
-                excess = deviation_pct - sign * nt_cfg.mean_reversion_dead_zone
-                tick_buy_prob = self._episode_buy_probability - nt_cfg.mean_reversion_strength * excess
-                tick_buy_prob = max(0.1, min(0.9, tick_buy_prob))
+        if nt_cfg.ou_theta > 0:
+            self._ou_buy_prob += nt_cfg.ou_theta * (self._episode_buy_probability - self._ou_buy_prob) + nt_cfg.ou_sigma * random.gauss(0, 1)
+            self._ou_buy_prob = max(0.1, min(0.9, self._ou_buy_prob))
+        tick_buy_prob = self._ou_buy_prob
 
         for nt in self.noise_traders:
             should_act, direction, quantity = nt.decide(tick_buy_prob)
@@ -2679,6 +2674,7 @@ class Trainer:
         # Episode 级随机方向偏置
         bias_range = self.config.noise_trader.episode_bias_range
         self._episode_buy_probability = 0.5 + random.uniform(-bias_range, bias_range)
+        self._ou_buy_prob = self._episode_buy_probability
 
         # 2. 运行 episode_length 个 tick
         for _ in range(episode_length):
