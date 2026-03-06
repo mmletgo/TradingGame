@@ -210,7 +210,7 @@ def create_noise_traders(config: "NoiseTraderConfig") -> list[NoiseTrader]:
 
 | 特性 | 鲶鱼（旧） | 噪声交易者（新） |
 |------|-----------|----------------|
-| 数量 | 3个，三种策略 | 100个，统一随机 |
+| 数量 | 3个，三种策略 | 200个，统一随机 |
 | 资金 | 有限资金，会被强平 | 无限资金，不强平 |
 | 影响 | 强平后 episode 结束 | 不影响 episode |
 | 吃单方式 | 吃盘口前1档 | 按分布采样数量 |
@@ -252,7 +252,7 @@ from src.market.noise_trader import create_noise_traders, NoiseTrader
 from src.config.config import NoiseTraderConfig
 
 # 使用工厂函数创建
-config = NoiseTraderConfig(count=100)
+config = NoiseTraderConfig(count=200)
 noise_traders = create_noise_traders(config)
 
 # 或手动创建单个噪声交易者

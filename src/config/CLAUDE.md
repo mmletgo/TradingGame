@@ -104,7 +104,7 @@ Agent 配置类，定义特定类型 Agent 的交易参数。
 
 | Agent 类型 | 数量 | 初始资金 | 杠杆 | 维持保证金率 | 挂单费率 | 吃单费率 |
 |-----------|------|---------|------|------------|---------|---------|
-| 高级散户 (RETAIL_PRO) | 2,400 | 2万 | 1.0 | 0.5 | 0.0002 (万2) | 0.0005 (万5) |
+| 高级散户 (RETAIL_PRO) | 2,400 | 2万 | 10.0 | 0.05 | 0.0002 (万2) | 0.0005 (万5) |
 | 做市商 (MARKET_MAKER) | 400 | 1,000万 (10M) | 10.0 | 0.05 | -0.0001 (负万1) | 0.0001 (万1) |
 
 **详细说明：**
@@ -122,8 +122,8 @@ Agent 配置类，定义特定类型 Agent 的交易参数。
 
 - **maintenance_margin_rate**：维持保证金率
   - 公式：`强平触发条件 = 净值 / 持仓市值 < 维持保证金率`
-  - 当前配置：所有 Agent 均为 0.5
-  - 做市商的特殊计算：`0.5 / leverage`（确保杠杆调整后强平价格合理）
+  - 当前配置：高级散户 0.05，做市商 0.05
+  - 做市商的计算：`0.5 / leverage`（当 leverage=10.0 时为 0.05）
 
 - **maker_fee_rate**：挂单手续费率
   - 高级散户：万2（0.0002）
@@ -141,8 +141,8 @@ from src.config.config import AgentConfig, AgentType
 retail_pro_config = AgentConfig(
     count=2400,
     initial_balance=20000.0,
-    leverage=1.0,
-    maintenance_margin_rate=0.5,
+    leverage=10.0,
+    maintenance_margin_rate=0.05,
     maker_fee_rate=0.0002,
     taker_fee_rate=0.0005,
 )
@@ -414,16 +414,16 @@ agents = {
     AgentType.RETAIL_PRO: AgentConfig(
         count=2400,
         initial_balance=20000.0,
-        leverage=1.0,
-        maintenance_margin_rate=0.5,
+        leverage=10.0,
+        maintenance_margin_rate=0.05,
         maker_fee_rate=0.0002,
         taker_fee_rate=0.0005,
     ),
     AgentType.MARKET_MAKER: AgentConfig(
         count=400,
         initial_balance=10_000_000.0,
-        leverage=1.0,
-        maintenance_margin_rate=0.5,
+        leverage=10.0,
+        maintenance_margin_rate=0.05,
         maker_fee_rate=-0.0001,
         taker_fee_rate=0.0001,
     ),
@@ -459,7 +459,7 @@ NEAT 配置文件位于项目根目录的 `config/` 文件夹下，每种 Agent 
 | 文件名 | 对应 Agent | 输入节点 | 输出节点 | 隐藏节点 | 种群大小 |
 |--------|----------|---------|---------|---------|---------|
 | neat_retail_pro.cfg | 高级散户 | 907 | 8 | 10 | 200 |
-| neat_market_maker.cfg | 做市商 | 934 | 41 | 10 | 100 |
+| neat_market_maker.cfg | 做市商 | 972 | 43 | 10 | 150 |
 
 ### 输入输出节点说明
 
@@ -477,25 +477,28 @@ NEAT 配置文件位于项目根目录的 `config/` 文件夹下，每种 Agent 
   - 总计：200 + 200 + 100 + 100 + 4 + 3 + 100 + 100 + 100 = 907
 - 输出：与动作空间对应，8个
 
-**做市商 (MARKET_MAKER) - 934 输入，41 输出：**
+**做市商 (MARKET_MAKER) - 972 输入，43 输出：**
 - 输入：
   - 100档买盘价格归一化(100) + 100档买盘数量归一化(100) = 200
   - 100档卖盘价格归一化(100) + 100档卖盘数量归一化(100) = 200
   - 100笔成交价格归一化(100)
   - 100笔成交数量归一化(100)
   - 持仓信息(4)
-  - 挂单信息(30)：当前挂单信息 + 历史挂单记录
+  - 挂单信息(60)：10买单×3 + 10卖单×3
   - tick历史价格归一化(100)
   - tick历史成交量归一化(100)
   - tick历史成交额归一化(100)
-  - 总计：200 + 200 + 100 + 100 + 4 + 30 + 100 + 100 + 100 = 934
+  - AS模型特征(8)
+  - 总计：200 + 200 + 100 + 100 + 4 + 60 + 100 + 100 + 100 + 8 = 972
 - 输出：
-  - 买单价格权重(5)：5个价格档位的权重
-  - 买单数量权重(5)：5个数量档位的权重
-  - 卖单价格权重(5)：5个价格档位的权重
-  - 卖单数量权重(5)：5个数量档位的权重
+  - 买单价格偏移(10)：10个买单的价格偏移（相对 reservation_price）
+  - 买单数量权重(10)：10个买单的数量权重
+  - 卖单价格偏移(10)：10个卖单的价格偏移（相对 reservation_price）
+  - 卖单数量权重(10)：10个卖单的数量权重
   - 总下单比例基准(1)：整体下单量比例
-  - 总计：5 + 5 + 5 + 5 + 1 = 21（注释错误，实际应为21，非41）
+  - gamma_adjustment(1)：AS模型gamma调整乘数 [0.1, 10.0]
+  - spread_adjustment(1)：AS模型spread调整乘数 [0.5, 2.0]
+  - 总计：10 + 10 + 10 + 10 + 1 + 1 + 1 = 43
 
 ### NEAT 配置文件格式
 
@@ -581,16 +584,16 @@ agents = {
     AgentType.RETAIL_PRO: AgentConfig(
         count=2400,
         initial_balance=20000.0,
-        leverage=1.0,
-        maintenance_margin_rate=0.5,
+        leverage=10.0,
+        maintenance_margin_rate=0.05,
         maker_fee_rate=0.0002,
         taker_fee_rate=0.0005,
     ),
     AgentType.MARKET_MAKER: AgentConfig(
         count=400,
         initial_balance=10_000_000.0,
-        leverage=1.0,
-        maintenance_margin_rate=0.5,
+        leverage=10.0,
+        maintenance_margin_rate=0.05,
         maker_fee_rate=-0.0001,
         taker_fee_rate=0.0001,
     ),
@@ -638,7 +641,7 @@ config = Config(
   - 做市商：1,000万 - 5,000万
 
 - **leverage**：
-  - 高级散户：1.0（无杠杆）
+  - 高级散户：10.0（高杠杆交易）
   - 做市商：10.0（提供深厚流动性）
 
 - **maintenance_margin_rate**：

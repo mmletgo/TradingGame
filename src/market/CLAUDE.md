@@ -373,7 +373,7 @@ Trainer（训练引擎）
 
 ### NoiseTraderConfig
 
-- `count: int` - 噪声交易者数量（默认 100）
+- `count: int` - 噪声交易者数量（默认 200）
 - `action_probability: float` - 每个 tick 行动概率（默认 0.5）
 - `quantity_mu: float` - 对数正态分布 mu 参数
 - `quantity_sigma: float` - 对数正态分布 sigma 参数
