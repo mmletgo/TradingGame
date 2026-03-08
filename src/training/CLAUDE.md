@@ -87,17 +87,17 @@ Numba JIT 加速的高频数学函数模块。
 - 执行 NEAT 进化算法
 - 重置 Agent 账户状态
 
-**适应度计算公式（调整后净值）：**
+**适应度计算公式（纯已实现 PnL + 对称持仓成本）：**
 
-使用调整后净值防止未实现盈利导致价格单向漂移：
-- `adjusted_equity = balance + min(0, unrealized_pnl)`
-- 盈利持仓：未实现收益不计入
-- 亏损持仓：未实现亏损照常计入
+使用多空对称公式，防止进化产生方向性偏好导致价格单边漂移：
+- `fitness = (balance - initial) / initial - λ × |position_qty × current_price| / initial`
+- 纯 balance：仅基于已实现 PnL，多空完全对称
+- 持仓成本：对多头和空头施加相同惩罚，激励关闭持仓
 
-| 种群类型 | 适应度公式 |
-|---------|-----------|
-| 高级散户 | (adjusted_equity - initial) / initial |
-| 做市商 | α × adjusted_pnl + γ × volume（α=0.7, γ=0.3） |
+| 种群类型 | 适应度公式 | 持仓成本权重 λ |
+|---------|-----------|---------------|
+| 高级散户 | (balance - initial) / initial - λ × \|qty × price\| / initial | 0.02 |
+| 做市商 | α × pnl + γ × volume（α=0.7, γ=0.3），pnl 使用同样公式 | 0.005 |
 
 **关键方法：**
 - `create_agents(genomes)` - 从基因组列表创建 Agent（小批量串行，大批量并行）；创建做市商时额外传递 `as_config` 参数，用于初始化 AS 模型配置

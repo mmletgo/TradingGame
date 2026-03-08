@@ -107,17 +107,18 @@ NEAT进化阶段
 - 所有操作在最新价 ±100 个最小变动单位内
 - 噪声交易者：不触发强平，零手续费，下单量服从对数正态分布
 
-### 适应度计算（调整后净值）
+### 适应度计算（纯已实现 PnL + 对称持仓成本）
 
-所有 Agent 的适应度使用调整后净值公式，防止未实现盈利导致的价格单向漂移：
+所有 Agent 的适应度使用多空对称公式，防止进化产生方向性偏好导致价格单边漂移：
 
 ```
-adjusted_equity = balance + min(0, unrealized_pnl)
-fitness = (adjusted_equity - initial) / initial
+fitness = (balance - initial) / initial - λ × |position_qty × current_price| / initial
 ```
 
-- **盈利持仓**：未实现收益不计入，fitness 仅基于已实现 PnL
-- **亏损持仓**：未实现亏损照常计入
+- **纯 balance**：仅基于已实现 PnL（已完成的交易），多空完全对称
+- **持仓成本**：`λ × |position_qty × price| / initial`，对多头和空头施加相同惩罚，激励关闭持仓
+- **散户** `position_cost_weight`（λ）默认 0.02
+- **做市商** `mm_position_cost_weight`（λ）默认 0.005（做市商需持仓做市，惩罚更小）
 
 ### 做市商复合适应度
 
@@ -129,7 +130,7 @@ mm_fitness = α × pnl + γ × volume_score
 
 | 组件 | 权重 | 计算方式 | 范围 | 激励方向 |
 |------|------|---------|------|---------|
-| `pnl` | α=0.7 | `(adjusted_equity - initial) / initial` | [-1, 0] | 盈利能力（仅已实现） |
+| `pnl` | α=0.7 | `(balance - initial) / initial - λ × \|qty × price\| / initial` | [-1, 0] | 盈利能力（纯已实现 + 持仓成本） |
 | `volume_score` | γ=0.3 | `maker_volume / (max_maker_volume_in_pop + 1)` | [0, 1) | 做市成交量 |
 
 权重可通过 `TrainingConfig` 的 `mm_fitness_pnl_weight` 和 `mm_fitness_volume_weight` 参数配置。

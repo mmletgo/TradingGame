@@ -171,6 +171,8 @@ retail_pro_config = AgentConfig(
 | episodes_per_arena | int | 50 | 每个竞技场运行的 episode 数 |
 | mm_fitness_pnl_weight | float | 0.7 | 做市商复合适应度中 PnL 收益率权重 alpha |
 | mm_fitness_volume_weight | float | 0.3 | 做市商复合适应度中 Maker 成交量权重 gamma |
+| position_cost_weight | float | 0.02 | 散户持仓成本权重（对称持仓惩罚） |
+| mm_position_cost_weight | float | 0.005 | 做市商持仓成本权重（做市商需持仓做市，权重更小） |
 
 **详细说明：**
 
@@ -222,6 +224,12 @@ retail_pro_config = AgentConfig(
   - `mm_fitness_volume_weight`（gamma=0.3）：Maker 成交量，激励实际做市
   - 两个权重之和应为 1.0
   - 公式：`mm_fitness = alpha * pnl + gamma * volume_score`
+
+- **持仓成本权重**（position_cost_weight / mm_position_cost_weight）：
+  - 适应度公式：`fitness = (balance - initial) / initial - λ × |qty × price| / initial`
+  - `position_cost_weight`（λ=0.02）：散户持仓成本，惩罚持仓不平仓
+  - `mm_position_cost_weight`（λ=0.005）：做市商持仓成本，权重更小（做市商需持仓做市）
+  - 完全多空对称：多头和空头施加相同惩罚，防止进化产生方向性偏好
 
 **使用示例：**
 ```python
