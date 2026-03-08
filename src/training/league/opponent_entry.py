@@ -175,23 +175,29 @@ class OpponentEntry:
         if genomes_path.exists():
             # 【内存泄漏修复】使用 with 上下文管理器确保 NpzFile 关闭，
             # 并用 np.array() 拷贝独立数组（脱离 mmap 引用）
-            with np.load(genomes_path) as genome_arrays:
-                # 解析子种群 ID
-                sub_pop_ids: set[int] = set()
-                for key in genome_arrays.files:
-                    match = re.match(r"^sub_(\d+)_keys$", key)
-                    if match:
-                        sub_pop_id = int(match.group(1))
-                        sub_pop_ids.add(sub_pop_id)
+            try:
+                with np.load(genomes_path) as genome_arrays:
+                    # 解析子种群 ID
+                    sub_pop_ids: set[int] = set()
+                    for key in genome_arrays.files:
+                        match = re.match(r"^sub_(\d+)_keys$", key)
+                        if match:
+                            sub_pop_id = int(match.group(1))
+                            sub_pop_ids.add(sub_pop_id)
 
-                genome_data = {}
-                for sub_pop_id in sorted(sub_pop_ids):
-                    keys = np.array(genome_arrays[f"sub_{sub_pop_id}_keys"])
-                    fitnesses = np.array(genome_arrays[f"sub_{sub_pop_id}_fitnesses"])
-                    meta = np.array(genome_arrays[f"sub_{sub_pop_id}_metadata"])
-                    nodes = np.array(genome_arrays[f"sub_{sub_pop_id}_nodes"])
-                    conns = np.array(genome_arrays[f"sub_{sub_pop_id}_conns"])
-                    genome_data[sub_pop_id] = (keys, fitnesses, meta, nodes, conns)
+                    genome_data = {}
+                    for sub_pop_id in sorted(sub_pop_ids):
+                        keys = np.array(genome_arrays[f"sub_{sub_pop_id}_keys"])
+                        fitnesses = np.array(genome_arrays[f"sub_{sub_pop_id}_fitnesses"])
+                        meta = np.array(genome_arrays[f"sub_{sub_pop_id}_metadata"])
+                        nodes = np.array(genome_arrays[f"sub_{sub_pop_id}_nodes"])
+                        conns = np.array(genome_arrays[f"sub_{sub_pop_id}_conns"])
+                        genome_data[sub_pop_id] = (keys, fitnesses, meta, nodes, conns)
+            except (EOFError, OSError, ValueError) as e:
+                logging.getLogger("league").warning(
+                    f"genomes.npz 损坏或为空: {genomes_path}, 错误: {e}"
+                )
+                genome_data = None
         else:
             logging.getLogger("league").warning(
                 f"genomes.npz 不存在: {genomes_path}，genome_data 将为 None"
@@ -202,48 +208,60 @@ class OpponentEntry:
         if load_networks:
             networks_path = entry_dir / "networks.npz"
             if networks_path.exists():
-                with np.load(networks_path) as network_arrays:
-                    network_data = {}
-                    # 从 network_arrays 解析 sub_pop_ids
-                    net_sub_pop_ids: set[int] = set()
-                    for key in network_arrays.files:
-                        if key.startswith("sub_") and key.endswith("_headers"):
-                            net_sub_pop_id = int(key.split("_")[1])
-                            net_sub_pop_ids.add(net_sub_pop_id)
-                    for sub_pop_id in sorted(net_sub_pop_ids):
-                        prefix = f"sub_{sub_pop_id}_"
-                        header_key = f"{prefix}headers"
-                        if header_key not in network_arrays:
-                            logging.getLogger("league").warning(
-                                f"networks.npz 中缺少 sub_pop_id={sub_pop_id} 的数据，跳过"
+                try:
+                    with np.load(networks_path) as network_arrays:
+                        network_data = {}
+                        # 从 network_arrays 解析 sub_pop_ids
+                        net_sub_pop_ids: set[int] = set()
+                        for key in network_arrays.files:
+                            if key.startswith("sub_") and key.endswith("_headers"):
+                                net_sub_pop_id = int(key.split("_")[1])
+                                net_sub_pop_ids.add(net_sub_pop_id)
+                        for sub_pop_id in sorted(net_sub_pop_ids):
+                            prefix = f"sub_{sub_pop_id}_"
+                            header_key = f"{prefix}headers"
+                            if header_key not in network_arrays:
+                                logging.getLogger("league").warning(
+                                    f"networks.npz 中缺少 sub_pop_id={sub_pop_id} 的数据，跳过"
+                                )
+                                continue
+                            network_data[sub_pop_id] = (
+                                np.array(network_arrays[f"{prefix}headers"]),
+                                np.array(network_arrays[f"{prefix}input_keys"]),
+                                np.array(network_arrays[f"{prefix}output_keys"]),
+                                np.array(network_arrays[f"{prefix}node_ids"]),
+                                np.array(network_arrays[f"{prefix}biases"]),
+                                np.array(network_arrays[f"{prefix}responses"]),
+                                np.array(network_arrays[f"{prefix}act_types"]),
+                                np.array(network_arrays[f"{prefix}conn_indptr"]),
+                                np.array(network_arrays[f"{prefix}conn_sources"]),
+                                np.array(network_arrays[f"{prefix}conn_weights"]),
+                                np.array(network_arrays[f"{prefix}output_indices"]),
                             )
-                            continue
-                        network_data[sub_pop_id] = (
-                            np.array(network_arrays[f"{prefix}headers"]),
-                            np.array(network_arrays[f"{prefix}input_keys"]),
-                            np.array(network_arrays[f"{prefix}output_keys"]),
-                            np.array(network_arrays[f"{prefix}node_ids"]),
-                            np.array(network_arrays[f"{prefix}biases"]),
-                            np.array(network_arrays[f"{prefix}responses"]),
-                            np.array(network_arrays[f"{prefix}act_types"]),
-                            np.array(network_arrays[f"{prefix}conn_indptr"]),
-                            np.array(network_arrays[f"{prefix}conn_sources"]),
-                            np.array(network_arrays[f"{prefix}conn_weights"]),
-                            np.array(network_arrays[f"{prefix}output_indices"]),
-                        )
+                except (EOFError, OSError, ValueError) as e:
+                    logging.getLogger("league").warning(
+                        f"networks.npz 损坏或为空: {networks_path}, 错误: {e}，将尝试从基因组重建"
+                    )
+                    network_data = None
 
         # 4. 加载预进化适应度（如果有）
         pre_evolution_fitness: dict[int, np.ndarray] | None = None
         if metadata.has_pre_evolution_fitness:
             fitness_path = entry_dir / "pre_evolution_fitness.npz"
             if fitness_path.exists():
-                with np.load(fitness_path) as fitness_arrays:
-                    pre_evolution_fitness = {}
-                    for key in fitness_arrays.files:
-                        match = re.match(r"^sub_(\d+)_fitness$", key)
-                        if match:
-                            sub_pop_id = int(match.group(1))
-                            pre_evolution_fitness[sub_pop_id] = np.array(fitness_arrays[key])
+                try:
+                    with np.load(fitness_path) as fitness_arrays:
+                        pre_evolution_fitness = {}
+                        for key in fitness_arrays.files:
+                            match = re.match(r"^sub_(\d+)_fitness$", key)
+                            if match:
+                                sub_pop_id = int(match.group(1))
+                                pre_evolution_fitness[sub_pop_id] = np.array(fitness_arrays[key])
+                except (EOFError, OSError, ValueError) as e:
+                    logging.getLogger("league").warning(
+                        f"pre_evolution_fitness.npz 损坏或为空: {fitness_path}, 错误: {e}"
+                    )
+                    pre_evolution_fitness = None
 
         return cls(
             metadata=metadata,

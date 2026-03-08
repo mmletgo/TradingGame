@@ -363,7 +363,7 @@ class SharedNetworkMetadata:
 - **合并 extract+pack**：网络参数提取和打包合并为 `_extract_and_pack_all_network_params`，减少中间对象
 - **优化拓扑计算**：使用 `fast_feed_forward_layers_optimized`（邻接表），大网络加速显著
 - **延迟反序列化 + numpy->C 管线**：跳过中间 Python 对象
-- **做市商初始化批量推理复用**：Worker 内部 Episode 开始时所有竞技场状态相同，只对一个竞技场进行一次 BatchNetworkCache 批量推理，将结果复用到所有竞技场
+- **做市商初始化批量推理复用**：Worker 内部 Episode 开始时所有竞技场状态相同，只对一个竞技场进行一次 BatchNetworkCache 批量推理，将结果复用到所有竞技场。复用时每个竞技场的每个 MM 独立添加 ±5 ticks 的随机价格扰动，确保各竞技场初始订单簿结构不同
 - **Worker 内部 OpenMP 推理**：每个 Worker 使用独立的 BatchNetworkCache 进行 per-arena 批量推理
 - **共享内存零拷贝**：网络参数通过共享内存同步，Worker 直接访问共享内存中的网络数据
 

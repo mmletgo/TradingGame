@@ -1707,13 +1707,25 @@ def _init_mm_all_arenas(
                 ask_orders.append({"price": price, "quantity": qty})
         mm_orders.append((agent_id, bid_orders, ask_orders))
 
-    # 在每个竞技场执行
+    # 在每个竞技场执行（每个竞技场独立添加价格扰动，避免初始订单簿完全相同）
     for arena in arena_states:
         for agent_id, bid_orders, ask_orders in mm_orders:
             agent_state = arena.agent_states.get(agent_id)
             if agent_state is None:
                 continue
-            _execute_mm_init_orders(arena, agent_state, bid_orders, ask_orders)
+            # 每个 MM 在每个竞技场独立添加 ±5 ticks 的价格扰动
+            price_jitter: float = random.uniform(-5, 5) * tick_size
+            jittered_bids: list[dict[str, float]] = [
+                {"price": round(round((o["price"] + price_jitter) / tick_size) * tick_size, 10),
+                 "quantity": o["quantity"]}
+                for o in bid_orders
+            ]
+            jittered_asks: list[dict[str, float]] = [
+                {"price": round(round((o["price"] + price_jitter) / tick_size) * tick_size, 10),
+                 "quantity": o["quantity"]}
+                for o in ask_orders
+            ]
+            _execute_mm_init_orders(arena, agent_state, jittered_bids, jittered_asks)
 
         # 更新 smooth_mid_price
         mid = arena.matching_engine._orderbook.get_mid_price()
