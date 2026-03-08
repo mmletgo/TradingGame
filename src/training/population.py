@@ -2085,22 +2085,19 @@ class Population:
         if self.agent_type == AgentType.MARKET_MAKER:
             return self._evaluate_market_maker(current_price, n)
 
-        # 非做市商：纯收益率适应度
+        # 非做市商：纯已实现 PnL + 对称持仓成本
         # 1. 收集所有 Agent 的账户数据到 numpy 数组
         balances = np.array([a.account.balance for a in self.agents])
         quantities = np.array([a.account.position.quantity for a in self.agents])
-        avg_prices = np.array([a.account.position.avg_price for a in self.agents])
         initial_balances = np.array([a.account.initial_balance for a in self.agents])
 
-        # 2. 向量化计算未实现盈亏: (current_price - avg_price) * quantity
-        unrealized_pnl = (current_price - avg_prices) * quantities
+        # 2. 纯已实现 PnL 收益率: (balance - initial) / initial
+        fitnesses = (balances - initial_balances) / initial_balances
 
-        # 3. 调整后净值: balance + min(0, unrealized_pnl)
-        # 盈利持仓不计入，亏损持仓计入
-        adjusted_equities = balances + np.minimum(0.0, unrealized_pnl)
-
-        # 4. 向量化计算收益率: (adjusted_equity - initial) / initial
-        fitnesses = (adjusted_equities - initial_balances) / initial_balances
+        # 3. 对称持仓成本: λ × |position_qty × current_price| / initial
+        if self._training_config.position_cost_weight > 0:
+            position_values = np.abs(quantities * current_price)
+            fitnesses -= self._training_config.position_cost_weight * position_values / initial_balances
 
         # 5. 获取从高到低的排序索引
         sorted_indices = np.argsort(fitnesses)[::-1]
@@ -2132,12 +2129,13 @@ class Population:
         volume_arr = np.zeros(n, dtype=np.float64)
 
         for idx, agent in enumerate(self.agents):
-            # PnL 收益率（调整后：仅计入已实现收益 + 未实现亏损）
-            unrealized_pnl = (current_price - agent.account.position.avg_price) * agent.account.position.quantity
-            adjusted_equity = agent.account.balance + min(0.0, unrealized_pnl)
+            # PnL 收益率（纯已实现 PnL + 对称持仓成本）
             initial = agent.account.initial_balance
             if initial > 0:
-                pnl_arr[idx] = (adjusted_equity - initial) / initial
+                pnl_arr[idx] = (agent.account.balance - initial) / initial
+                if self._training_config.mm_position_cost_weight > 0:
+                    pos_value = abs(agent.account.position.quantity * current_price)
+                    pnl_arr[idx] -= self._training_config.mm_position_cost_weight * pos_value / initial
 
             # Maker 成交量（原始值，后续归一化）
             volume_arr[idx] = float(agent.account.maker_volume)

@@ -1778,6 +1778,7 @@ def _collect_fitness_all_arenas(
                 infos,
                 current_price,
                 mm_fitness_weights,
+                config,
             )
 
             # 累积到汇总
@@ -1816,6 +1817,7 @@ def _calculate_fitness_for_sub_pop(
     infos: list[AgentInfo],
     current_price: float,
     mm_fitness_weights: tuple[float, float],
+    config: Config,
 ) -> NDArray[np.float32]:
     """计算单个子种群的适应度
 
@@ -1824,6 +1826,7 @@ def _calculate_fitness_for_sub_pop(
         infos: 子种群的 Agent 信息列表
         current_price: 当前价格
         mm_fitness_weights: 做市商适应度权重 (alpha, gamma)
+        config: 全局配置
 
     Returns:
         适应度数组
@@ -1843,12 +1846,14 @@ def _calculate_fitness_for_sub_pop(
             state = arena.agent_states.get(info.agent_id)
             if state is None:
                 continue
-            # 调整后净值：仅计入已实现收益 + 未实现亏损
-            unrealized_pnl = (current_price - state.position_avg_price) * state.position_quantity
-            adjusted_equity = state.balance + min(0.0, unrealized_pnl)
+            # PnL 收益率（纯已实现 PnL + 对称持仓成本）
             initial = state.initial_balance
             if initial > 0:
-                pnl_arr[idx] = (adjusted_equity - initial) / initial
+                pnl_arr[idx] = (state.balance - initial) / initial
+                mm_pcw = config.training.mm_position_cost_weight
+                if mm_pcw > 0:
+                    pos_value = abs(state.position_quantity * current_price)
+                    pnl_arr[idx] -= mm_pcw * pos_value / initial
             volume_arr[idx] = float(state.maker_volume)
 
         max_volume = float(np.max(volume_arr)) if len(volume_arr) > 0 else 0.0
@@ -1863,12 +1868,14 @@ def _calculate_fitness_for_sub_pop(
             state = arena.agent_states.get(info.agent_id)
             if state is None:
                 continue
-            # 调整后净值：仅计入已实现收益 + 未实现亏损
-            unrealized_pnl = (current_price - state.position_avg_price) * state.position_quantity
-            adjusted_equity = state.balance + min(0.0, unrealized_pnl)
+            # 纯已实现 PnL + 对称持仓成本
             initial = state.initial_balance
             if initial > 0:
-                fitnesses[idx] = (adjusted_equity - initial) / initial
+                fitnesses[idx] = (state.balance - initial) / initial
+                pcw = config.training.position_cost_weight
+                if pcw > 0:
+                    pos_value = abs(state.position_quantity * current_price)
+                    fitnesses[idx] -= pcw * pos_value / initial
         return fitnesses
 
 

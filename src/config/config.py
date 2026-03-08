@@ -82,6 +82,8 @@ class TrainingConfig:
         episodes_per_arena: 每个竞技场运行的 episode 数（默认 50）
         mm_fitness_pnl_weight: 做市商复合适应度中 PnL 收益率的权重 α（默认 0.7）
         mm_fitness_volume_weight: 做市商复合适应度中 Maker 成交量的权重 γ（默认 0.3）
+        position_cost_weight: 散户持仓成本权重（默认 0.02），惩罚持仓不平仓
+        mm_position_cost_weight: 做市商持仓成本权重（默认 0.005），做市商需持仓做市故权重更小
     """
 
     episode_length: int
@@ -105,6 +107,9 @@ class TrainingConfig:
     # mm_fitness = α × pnl + γ × volume_score
     mm_fitness_pnl_weight: float = 0.7        # α: PnL 收益率
     mm_fitness_volume_weight: float = 0.3      # γ: Maker 成交量
+    # 持仓成本权重（对称的 position size penalty）
+    position_cost_weight: float = 0.02       # 散户持仓成本权重
+    mm_position_cost_weight: float = 0.005   # 做市商持仓成本权重（做市商需持仓做市，权重更小）
 
 
 @dataclass
