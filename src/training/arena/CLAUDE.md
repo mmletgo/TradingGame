@@ -257,7 +257,7 @@ class EpisodeResult:
 
 | 方法 | 描述 |
 |------|------|
-| `start()` | 启动所有 Worker 进程 |
+| `start()` | 启动所有 Worker 进程，支持 CPU 亲和性绑定（`enable_cpu_affinity`） |
 | `update_networks(network_params)` | 发送新网络参数给所有 Worker |
 | `attach_shared_networks(metadata_map)` | 发送共享内存元数据给所有 Worker |
 | `update_agent_infos(agent_infos)` | 更新所有 Worker 的 agent_infos（重建内部缓存） |
@@ -299,6 +299,7 @@ _run_episode_local()
 | `aggregate_tick_trades()` | 聚合 tick 成交量/额 |
 | `update_episode_price_stats_from_trades()` | 更新价格统计 |
 | `execute_tick_local()` | 本地原子动作执行 |
+| `_get_physical_core_ids()` | 获取每个物理核心对应的第一个逻辑 CPU ID（用于 CPU 亲和性绑定） |
 
 ---
 

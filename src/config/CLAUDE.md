@@ -173,6 +173,7 @@ retail_pro_config = AgentConfig(
 | mm_fitness_volume_weight | float | 0.3 | 做市商复合适应度中 Maker 成交量权重 gamma |
 | position_cost_weight | float | 0.02 | 散户持仓成本权重（对称持仓惩罚） |
 | mm_position_cost_weight | float | 0.005 | 做市商持仓成本权重（做市商需持仓做市，权重更小） |
+| enable_cpu_affinity | bool | True | 是否将 Arena Worker 进程绑定到独立的物理 CPU 核心 |
 
 **详细说明：**
 
@@ -230,6 +231,12 @@ retail_pro_config = AgentConfig(
   - `position_cost_weight`（λ=0.02）：散户持仓成本，惩罚持仓不平仓
   - `mm_position_cost_weight`（λ=0.005）：做市商持仓成本，权重更小（做市商需持仓做市）
   - 完全多空对称：多头和空头施加相同惩罚，防止进化产生方向性偏好
+
+- **CPU 亲和性**（enable_cpu_affinity）：
+  - 启用后，ArenaWorkerPool 启动时将每个 Worker 进程绑定到独立的物理 CPU 核心
+  - 通过读取 `/sys/devices/system/cpu/cpuN/topology/` 区分物理核心和超线程逻辑核心
+  - 当物理核心数少于 Worker 数时自动跳过绑定并输出警告
+  - 避免核心迁移带来的 CPU 缓存失效开销
 
 **使用示例：**
 ```python

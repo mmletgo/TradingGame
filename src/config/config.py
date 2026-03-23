@@ -110,6 +110,8 @@ class TrainingConfig:
     # 持仓成本权重（对称的 position size penalty）
     position_cost_weight: float = 0.02       # 散户持仓成本权重
     mm_position_cost_weight: float = 0.005   # 做市商持仓成本权重（做市商需持仓做市，权重更小）
+    # CPU 亲和性
+    enable_cpu_affinity: bool = True  # 是否将 Arena Worker 进程绑定到独立的物理 CPU 核心
 
 
 @dataclass

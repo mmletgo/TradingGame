@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Sequence
 import numpy as np
 
 from src.config.config import AgentConfig, AgentType, ASConfig
+from src.market.matching.trade import Trade
 
 if TYPE_CHECKING:
     from src.bio.agents.base import Agent
@@ -87,9 +88,9 @@ class AgentAccountState:
         bid_order_ids: list[int] = []
         ask_order_ids: list[int] = []
         if hasattr(agent, 'bid_order_ids'):
-            bid_order_ids = list(agent.bid_order_ids)
+            bid_order_ids = list(agent.bid_order_ids)  # type: ignore[attr-defined]
         if hasattr(agent, 'ask_order_ids'):
-            ask_order_ids = list(agent.ask_order_ids)
+            ask_order_ids = list(agent.ask_order_ids)  # type: ignore[attr-defined]
 
         return cls(
             agent_id=agent.agent_id,
@@ -442,7 +443,7 @@ class ArenaState:
     adl_manager: "ADLManager"
     agent_states: dict[int, AgentAccountState]
     noise_trader_states: dict[int, NoiseTraderAccountState]
-    recent_trades: deque[object] = field(default_factory=lambda: deque(maxlen=100))
+    recent_trades: deque[Trade] = field(default_factory=lambda: deque(maxlen=100))
     price_history: deque[float] = field(default_factory=lambda: deque(maxlen=1000))
     tick_history_prices: deque[float] = field(default_factory=lambda: deque(maxlen=100))
     tick_history_volumes: deque[float] = field(default_factory=lambda: deque(maxlen=100))
@@ -498,7 +499,14 @@ class ArenaState:
             state: Agent 账户状态
             idx: 状态在数组中的索引
         """
-        if self._balances is None:
+        if (
+            self._balances is None
+            or self._position_quantities is None
+            or self._position_avg_prices is None
+            or self._leverages is None
+            or self._maintenance_margins is None
+            or self._is_liquidated_flags is None
+        ):
             return
         self._balances[idx] = state.balance
         self._position_quantities[idx] = state.position_quantity

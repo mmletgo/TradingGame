@@ -1319,6 +1319,9 @@ def _create_worker_caches(
             if agent_type == AgentType.MARKET_MAKER
             else CACHE_TYPE_FULL
         )
+        assert BatchNetworkCache is not None, (
+            "BatchNetworkCache 不可用，请先编译 Cython 模块: ./rebuild.sh"
+        )
         caches[agent_type] = BatchNetworkCache(count, cache_type, 1)  # OMP_THREADS=1
 
     return caches
@@ -1860,7 +1863,7 @@ def _calculate_fitness_for_sub_pop(
         norm_volume = volume_arr / (max_volume + 1.0)
 
         alpha, gamma = mm_fitness_weights
-        return alpha * pnl_arr + gamma * norm_volume
+        return (alpha * pnl_arr + gamma * norm_volume).astype(np.float32)
     else:
         # 非 MM：纯收益率
         fitnesses = np.zeros(n, dtype=np.float32)
@@ -2377,6 +2380,48 @@ def arena_worker_main(
 
 
 # ============================================================================
+# CPU 亲和性辅助函数
+# ============================================================================
+
+
+def _get_physical_core_ids() -> list[int]:
+    """获取每个物理核心对应的第一个逻辑 CPU ID
+
+    通过读取 /sys/devices/system/cpu/cpuN/topology/ 下的信息，
+    区分物理核心和超线程逻辑核心，返回每个物理核心的第一个逻辑 CPU ID。
+
+    Returns:
+        每个物理核心对应的第一个逻辑 CPU ID 列表，按 CPU ID 升序排列。
+        如果无法读取拓扑信息，回退到 os.sched_getaffinity(0) 返回所有可用 CPU。
+    """
+    physical_cores: list[int] = []
+    seen_cores: set[tuple[int, int]] = set()
+
+    cpu_id = 0
+    while True:
+        pkg_path = f"/sys/devices/system/cpu/cpu{cpu_id}/topology/physical_package_id"
+        core_path = f"/sys/devices/system/cpu/cpu{cpu_id}/topology/core_id"
+        try:
+            with open(pkg_path) as f:
+                pkg_id = int(f.read().strip())
+            with open(core_path) as f:
+                core_id = int(f.read().strip())
+            key = (pkg_id, core_id)
+            if key not in seen_cores:
+                seen_cores.add(key)
+                physical_cores.append(cpu_id)
+            cpu_id += 1
+        except (FileNotFoundError, ValueError):
+            break
+
+    if physical_cores:
+        return physical_cores
+
+    # 回退：无法读取拓扑信息，返回所有可用 CPU
+    return sorted(os.sched_getaffinity(0))
+
+
+# ============================================================================
 # ArenaWorkerPool 管理类
 # ============================================================================
 
@@ -2443,6 +2488,20 @@ class ArenaWorkerPool:
         if self._is_started:
             return
 
+        # 计算 CPU 亲和性绑定
+        core_assignments: list[set[int]] | None = None
+        if self._config.training.enable_cpu_affinity:
+            physical_cores = _get_physical_core_ids()
+            if len(physical_cores) >= self._num_workers:
+                core_assignments = [
+                    {physical_cores[w]} for w in range(self._num_workers)
+                ]
+            else:
+                self._logger.warning(
+                    f"物理核心数({len(physical_cores)})少于 Worker 数"
+                    f"({self._num_workers})，跳过 CPU 亲和性绑定"
+                )
+
         for w in range(self._num_workers):
             cmd_queue: Queue = Queue()  # type: ignore[type-arg]
             self._cmd_queues.append(cmd_queue)
@@ -2460,13 +2519,33 @@ class ArenaWorkerPool:
                 daemon=True,
             )
             p.start()
+
+            # 设置 CPU 亲和性
+            worker_pid = p.pid
+            if core_assignments is not None and worker_pid is not None:
+                try:
+                    os.sched_setaffinity(worker_pid, core_assignments[w])
+                except OSError as e:
+                    self._logger.warning(
+                        f"Worker {w} CPU 亲和性设置失败: {e}"
+                    )
+
             self._workers.append(p)
 
         self._is_started = True
-        self._logger.info(
-            f"ArenaWorkerPool 已启动: {self._num_workers} 个 Worker, "
-            f"{self._num_arenas} 个竞技场"
-        )
+
+        if core_assignments is not None:
+            pinned_cores = [next(iter(c)) for c in core_assignments]
+            self._logger.info(
+                f"ArenaWorkerPool 已启动: {self._num_workers} 个 Worker, "
+                f"{self._num_arenas} 个竞技场, "
+                f"CPU 绑定: {pinned_cores}"
+            )
+        else:
+            self._logger.info(
+                f"ArenaWorkerPool 已启动: {self._num_workers} 个 Worker, "
+                f"{self._num_arenas} 个竞技场"
+            )
 
     def update_networks(
         self,

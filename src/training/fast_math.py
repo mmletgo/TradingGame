@@ -4,13 +4,17 @@
 提供对数归一化等高频数学运算的加速实现。
 """
 
-from typing import Callable
+from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 
-# 类型别名
-LogNormalizeFunc = Callable[[NDArray[np.float32], float], NDArray[np.float32]]
+
+# 类型协议（支持默认参数）
+class LogNormalizeFunc(Protocol):
+    def __call__(
+        self, arr: NDArray[np.float32], scale: float = 10.0
+    ) -> NDArray[np.float32]: ...
 
 
 def _log_normalize_unsigned_numpy(
