@@ -185,6 +185,7 @@ src/
 │   ├── trainer.py      # 训练协调器
 │   ├── arena/          # 多竞技场并行训练模块
 │   └── league/         # 联盟训练模块
+├── rl/             # RL 训练模块（NEAT→PyTorch 转换、PPO 微调）
 ├── ui/             # DearPyGui可视化
 ├── analysis/       # 演示分析器
 └── config/         # 配置管理
@@ -211,6 +212,7 @@ src/
 | 训练引擎 | src/training/CLAUDE.md | Episode循环、强平处理 |
 | 多竞技场 | src/training/arena/CLAUDE.md | 并行训练、适应度汇总 |
 | 联盟训练 | src/training/league/CLAUDE.md | 联盟训练机制 |
+| RL 训练 | src/rl/CLAUDE.md | NEAT→PyTorch 转换器、RL 配置、一致性验证 |
 | 噪声交易者 | src/market/noise_trader/CLAUDE.md | 噪声交易者机制详解 |
 | ADL | src/market/adl/CLAUDE.md | 自动减仓机制 |
 
