@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--episode-length",
         type=int,
-        default=100,
-        help="每个 episode 的 tick 数（默认 100）",
+        default=500,
+        help="每个 episode 的 tick 数（默认 500）",
     )
 
     # 联盟训练配置
