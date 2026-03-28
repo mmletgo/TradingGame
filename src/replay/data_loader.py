@@ -101,7 +101,11 @@ class DataLoader:
         dates: list[str],
         label: str,
     ) -> pd.DataFrame:
-        """从多个日期目录加载 parquet 文件并合并
+        """从多个日期加载 parquet 文件并合并
+
+        支持两种路径格式：
+        - 扁平格式: {base_dir}/{date}.parquet（百度网盘下载）
+        - 嵌套格式: {base_dir}/{date}/*.parquet（Monitor 直接录制）
 
         Args:
             base_dir: 数据类型基础目录 (orderbooks/trades 下的 exchange/pair)
@@ -114,9 +118,20 @@ class DataLoader:
         frames: list[pd.DataFrame] = []
 
         for date_str in dates:
+            # 优先尝试扁平格式: {date}.parquet
+            flat_file = base_dir / f"{date_str}.parquet"
+            if flat_file.exists():
+                try:
+                    df = pd.read_parquet(flat_file, use_threads=False)
+                    frames.append(df)
+                except Exception as e:
+                    logger.warning("读取 %s 失败: %s", flat_file, e)
+                continue
+
+            # 回退到嵌套格式: {date}/*.parquet
             date_dir = base_dir / date_str
             if not date_dir.exists():
-                logger.debug("%s 目录不存在: %s", label, date_dir)
+                logger.debug("%s 数据不存在: %s", label, date_str)
                 continue
 
             parquet_files = sorted(date_dir.glob("*.parquet"))
@@ -176,16 +191,22 @@ class DataLoader:
         return snapshots
 
     def _df_to_trades(self, df: pd.DataFrame) -> list[MarketTrade]:
-        """将 DataFrame 转为 MarketTrade 列表（向量化提取）"""
+        """将 DataFrame 转为 MarketTrade 列表（向量化提取，过滤无效数据）"""
         contract_size = self._config.contract_size
 
-        timestamps: np.ndarray = df["timestamp"].values.astype(np.int64)
-        prices: np.ndarray = df["price"].values.astype(np.float64)
-        amounts: np.ndarray = df["amount"].values.astype(np.float64) * contract_size
-        sides: np.ndarray = df["side"].values  # object array of strings
+        # 过滤零价格/零数量的无效成交
+        valid_mask = (df["price"] > 0) & (df["amount"] > 0)
+        df_valid = df[valid_mask]
+        if len(df_valid) < len(df):
+            logger.info("过滤无效成交: %d / %d", len(df) - len(df_valid), len(df))
+
+        timestamps: np.ndarray = df_valid["timestamp"].values.astype(np.int64)
+        prices: np.ndarray = df_valid["price"].values.astype(np.float64)
+        amounts: np.ndarray = df_valid["amount"].values.astype(np.float64) * contract_size
+        sides: np.ndarray = df_valid["side"].values  # object array of strings
 
         trades: list[MarketTrade] = []
-        n = len(df)
+        n = len(df_valid)
         for i in range(n):
             trades.append(
                 MarketTrade(

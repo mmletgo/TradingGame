@@ -22,7 +22,7 @@ class NEATNetwork(nn.Module):
     """精确复刻 NEAT 前馈网络的 PyTorch 模块
 
     网络按拓扑排序的层级依次计算每个节点：
-    output_i = activation(sum(w_ij * x_j) + bias_i) * response_i
+    output_i = activation(bias_i + response_i * sum(w_ij * x_j))
 
     其中 activation 统一为 tanh（项目中所有 NEAT 配置的 activation_default = tanh，
     activation_mutate_rate = 0.0）。
@@ -66,8 +66,8 @@ class NEATNetwork(nn.Module):
         ]
 
         # 存储偏置和响应为 Parameter（支持梯度）
-        biases = torch.zeros(len(node_order))
-        responses = torch.ones(len(node_order))
+        biases = torch.zeros(len(node_order), dtype=torch.float64)
+        responses = torch.ones(len(node_order), dtype=torch.float64)
         for i, nid in enumerate(node_order):
             biases[i] = node_biases.get(nid, 0.0)
             responses[i] = node_responses.get(nid, 1.0)
@@ -89,9 +89,9 @@ class NEATNetwork(nn.Module):
             self._node_connections.append(node_conns)
 
         self.weights = nn.Parameter(
-            torch.tensor(weights_list, dtype=torch.float32)
+            torch.tensor(weights_list, dtype=torch.float64)
             if weights_list
-            else torch.empty(0, dtype=torch.float32)
+            else torch.empty(0, dtype=torch.float64)
         )
 
         # 预计算用于向量化 forward 的索引
@@ -131,10 +131,10 @@ class NEATNetwork(nn.Module):
         batch_size: int = x.shape[0]
         device: torch.device = x.device
 
-        # 初始化所有节点值
-        values = torch.zeros(batch_size, self._num_nodes, device=device)
+        # 初始化所有节点值（使用 float64 匹配 NEAT 精度）
+        values = torch.zeros(batch_size, self._num_nodes, device=device, dtype=torch.float64)
         # 填充输入节点
-        values[:, : len(self._input_ids)] = x
+        values[:, : len(self._input_ids)] = x.to(torch.float64)
 
         # 按拓扑顺序计算每个节点
         input_count: int = len(self._input_ids)
@@ -151,10 +151,11 @@ class NEATNetwork(nn.Module):
             else:
                 agg = torch.zeros(batch_size, device=device)
 
-            # activation(agg + bias) * response
-            values[:, node_idx] = (
-                torch.tanh(agg + self.biases[i]) * self.responses[i]
-            )
+            # NEAT 公式: tanh(clip(2.5 * (bias + response * sum(w*x)), -60, 60))
+            # neat-python 的 tanh_activation 先乘 2.5 再 clamp 到 [-60, 60]
+            pre_act = 2.5 * (self.biases[i] + self.responses[i] * agg)
+            pre_act = torch.clamp(pre_act, -60.0, 60.0)
+            values[:, node_idx] = torch.tanh(pre_act)
 
         # 提取输出节点
         output_idxs = torch.tensor(
@@ -431,7 +432,7 @@ class NEATtoPyTorchConverter:
                 )
 
                 # PyTorch 前向传播
-                torch_input = torch.tensor(inputs, dtype=torch.float32)
+                torch_input = torch.tensor(inputs, dtype=torch.float64)
                 torch_output: np.ndarray = pytorch_net(torch_input).numpy()
 
                 if not np.allclose(neat_output, torch_output, atol=atol):
