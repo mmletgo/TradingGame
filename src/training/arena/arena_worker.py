@@ -2215,6 +2215,12 @@ def arena_worker_main(
     # 设置环境
     os.environ["OMP_NUM_THREADS"] = "1"
 
+    # 重新播种随机数生成器，避免 fork 后所有 Worker 产生相同序列
+    import random as _random
+    _worker_seed = os.getpid() * 1000 + worker_id
+    _random.seed(_worker_seed)
+    np.random.seed(_worker_seed % (2**32))
+
     worker_logger = logging.getLogger(f"ArenaWorker-{worker_id}")
     worker_logger.info(
         f"Worker {worker_id} 启动，负责竞技场: {arena_ids}"
