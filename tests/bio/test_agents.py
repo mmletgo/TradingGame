@@ -284,8 +284,8 @@ class TestRetailProAgentDecide:
         """测试 HOLD 动作决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：HOLD (index 0) 值最大，9 个输出
-        mock_brain.forward.return_value = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=-0.9 → HOLD (bin 0)
+        mock_brain.forward.return_value = np.array([-0.9, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -324,9 +324,9 @@ class TestRetailProAgentDecide:
         """测试 PLACE_BID 动作决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：PLACE_BID (index 1) 值最大
-        # outputs[6]=价格偏移 -0.5（低于中间价），outputs[7]=数量比例 0.0（较小数量）
-        mock_brain.forward.return_value = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=-0.5 → PLACE_BID (bin 1)
+        # outputs[1]=价格偏移 -0.5（低于中间价），outputs[2]=数量比例 0.0（较小数量）
+        mock_brain.forward.return_value = np.array([-0.5, -0.5, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -370,9 +370,9 @@ class TestRetailProAgentDecide:
         """测试 PLACE_ASK 动作决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：PLACE_ASK (index 2) 值最大
-        # outputs[6]=价格偏移 0.5（高于中间价），outputs[7]=数量比例 0.0（较小数量）
-        mock_brain.forward.return_value = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=-0.17 → PLACE_ASK (bin 2)
+        # outputs[1]=价格偏移 0.5（高于中间价），outputs[2]=数量比例 0.0（较小数量）
+        mock_brain.forward.return_value = np.array([-0.17, 0.5, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -416,8 +416,8 @@ class TestRetailProAgentDecide:
         """测试 CANCEL 动作决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：CANCEL (index 3) 值最大
-        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=0.17 → CANCEL (bin 3)
+        mock_brain.forward.return_value = np.array([0.17, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -456,8 +456,8 @@ class TestRetailProAgentDecide:
         """测试 MARKET_BUY 动作决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：MARKET_BUY (index 4) 值最大
-        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=0.5 → MARKET_BUY (bin 4)
+        mock_brain.forward.return_value = np.array([0.5, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -498,8 +498,8 @@ class TestRetailProAgentDecide:
         """测试 MARKET_SELL 动作决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：MARKET_SELL (index 5) 值最大，数量比例 0.0
-        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=0.9 → MARKET_SELL (bin 5)，数量比例 0.0
+        mock_brain.forward.return_value = np.array([0.9, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -540,8 +540,8 @@ class TestRetailProAgentDecide:
         """测试神经网络输出维度不足时抛出异常"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：只有 3 个值，少于 8 个
-        mock_brain.forward.return_value = np.array([0.1, 0.2, 0.3])
+        # 设置神经网络输出：只有 2 个值，少于 3 个
+        mock_brain.forward.return_value = np.array([0.1, 0.2])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -579,8 +579,8 @@ class TestRetailProAgentDecide:
         """测试有持仓时的 MARKET_SELL 决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：MARKET_SELL (index 5) 值最大，数量比例 0.0
-        mock_brain.forward.return_value = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=0.9 → MARKET_SELL (bin 5)，数量比例 0.0
+        mock_brain.forward.return_value = np.array([0.9, 0.0, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(
@@ -630,9 +630,9 @@ class TestRetailProAgentDecide:
         """测试订单簿为空时的决策"""
         # 创建 mock Brain
         mock_brain = MagicMock(spec=Brain)
-        # 设置神经网络输出：PLACE_BID (index 1) 值最大
-        # outputs[6]=价格偏移 -0.5（低于中间价），outputs[7]=数量比例 0.0（较小数量）
-        mock_brain.forward.return_value = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0])
+        # 设置神经网络输出：3 个输出，action_value=-0.5 → PLACE_BID (bin 1)
+        # outputs[1]=价格偏移 -0.5（低于中间价），outputs[2]=数量比例 0.0（较小数量）
+        mock_brain.forward.return_value = np.array([-0.5, -0.5, 0.0])
 
         # 创建 Agent 配置
         config = AgentConfig(

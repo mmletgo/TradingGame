@@ -1522,7 +1522,7 @@ class Trainer:
                 agent, output, mid_price, tick_size
             )
         else:
-            # 散户/高级散户/庄家：9 个输出
+            # 散户/高级散户/庄家：3 个输出
             return self._parse_retail_output(
                 agent, output, mid_price, tick_size, agent_type
             )
@@ -1538,14 +1538,14 @@ class Trainer:
         """解析散户/高级散户/庄家的神经网络输出"""
         from src.bio.agents.base import ActionType, fast_argmax, fast_round_price, fast_clip
 
-        # 解析动作类型（统一使用 6 个动作）
-        num_actions = 6
-        action_idx = fast_argmax(output, 0, num_actions)
+        # 解析动作类型（单输出等宽分 6 bin）
+        action_value = fast_clip(output[0], -1.0, 1.0)
+        action_idx = min(5, int((action_value + 1.0) * 3.0))
         action = ActionType(action_idx)
 
         # 解析参数
-        price_offset_norm = fast_clip(output[6], -1.0, 1.0)
-        quantity_ratio_norm = fast_clip(output[7], -1.0, 1.0)
+        price_offset_norm = fast_clip(output[1], -1.0, 1.0)
+        quantity_ratio_norm = fast_clip(output[2], -1.0, 1.0)
         quantity_ratio = (quantity_ratio_norm + 1) * 0.5
 
         params: dict[str, Any] = {}

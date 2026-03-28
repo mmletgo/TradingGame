@@ -54,7 +54,7 @@ DEF AGENT_MARKET_MAKER = 3
 # 输入/输出维度
 DEF INPUT_DIM_FULL = 527
 DEF INPUT_DIM_MARKET_MAKER = 592
-DEF OUTPUT_DIM_FULL = 8
+DEF OUTPUT_DIM_FULL = 3
 DEF OUTPUT_DIM_MARKET_MAKER = 43
 
 # 动作类型（高级散户共用6种动作）
@@ -1279,10 +1279,10 @@ cdef void _parse_retail_single(
 ) noexcept nogil:
     """解析高级散户的神经网络输出，并计算实际订单数量
 
-    输出结构（8个值）：
-    - [0-5]: 动作类型得分（6种动作）
-    - [6]: 价格偏移（-1 到 1）
-    - [7]: 数量比例（-1 到 1）
+    输出结构（3个值）：
+    - [0]: 动作选择（-1 到 1，等宽分 6 个 bin）
+    - [1]: 价格偏移（-1 到 1）
+    - [2]: 数量比例（-1 到 1）
 
     动作类型（统一6种）：
     - 0: HOLD
@@ -1297,6 +1297,7 @@ cdef void _parse_retail_single(
 
     # 所有变量声明必须在函数开头
     cdef int action_idx
+    cdef double action_value
     cdef double price_offset_norm
     cdef double quantity_ratio_norm
     cdef double quantity_ratio
@@ -1309,12 +1310,15 @@ cdef void _parse_retail_single(
     cdef double calc_price, raw_quantity
     cdef int quantity
 
-    # 统一使用6种动作
-    action_idx = argmax(nn_output, 0, 6)
+    # 单输出等宽分 6 bin 选动作
+    action_value = clip(nn_output[0], -1.0, 1.0)
+    action_idx = <int>((action_value + 1.0) * 3.0)
+    if action_idx > 5:
+        action_idx = 5
 
-    # 解析参数（索引已调整）
-    price_offset_norm = clip(nn_output[6], -1.0, 1.0)
-    quantity_ratio_norm = clip(nn_output[7], -1.0, 1.0)
+    # 解析参数
+    price_offset_norm = clip(nn_output[1], -1.0, 1.0)
+    quantity_ratio_norm = clip(nn_output[2], -1.0, 1.0)
     quantity_ratio = (quantity_ratio_norm + 1.0) * 0.5
 
     # 设置结果默认值
@@ -1768,7 +1772,7 @@ def batch_decide_full(
     market_state,
     int num_threads=0,
 ) -> list:
-    """批量决策入口 - 完整版本 (527维输入, 8维输出)
+    """批量决策入口 - 完整版本 (527维输入, 3维输出)
 
     用于高级散户。
 

@@ -194,7 +194,7 @@ src/
 
 | 配置 | Agent类型 | 输入节点 | 输出节点 |
 |------|----------|----------|----------|
-| neat_retail_pro.cfg | 高级散户 | 527 | 8 |
+| neat_retail_pro.cfg | 高级散户 | 527 | 3 |
 | neat_market_maker.cfg | 做市商 | 592 | 43 |
 
 ---

@@ -27,7 +27,7 @@ TradingGame_refactor/
 ├── rebuild.sh                # 一键清理缓存和重新编译
 │
 ├── config/                   # NEAT 配置文件目录
-│   ├── neat_retail_pro.cfg   # 高级散户 NEAT 配置（907输入，8输出）
+│   ├── neat_retail_pro.cfg   # 高级散户 NEAT 配置（527输入，3输出）
 │   └── neat_market_maker.cfg # 做市商 NEAT 配置（964输入，41输出）
 │
 ├── scripts/                  # 启动脚本
@@ -88,14 +88,10 @@ TradingGame_refactor/
 
 ### 神经网络输出说明
 
-**高级散户（8个输出）：**
-- 0: HOLD（不动）
-- 1: PLACE_BID（挂买单）
-- 2: PLACE_ASK（挂卖单）
-- 3: CANCEL（撤单）
-- 4: MARKET_BUY（市价买入）
-- 5: MARKET_SELL（市价卖出）
-- 6-7: 保留
+**高级散户（3个输出）：**
+- 0: 动作选择（-1到1，等宽分6 bin：HOLD/PLACE_BID/PLACE_ASK/CANCEL/MARKET_BUY/MARKET_SELL）
+- 1: 价格偏移（-1到1，映射到 ±100 ticks）
+- 2: 数量比例（-1到1，映射到 [0, 1.0] 可用购买力比例）
 
 **做市商（41个输出）：**
 - 0: 清仓所有持仓

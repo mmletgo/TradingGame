@@ -452,7 +452,7 @@ TradingGame/
 │   ├── demo_ui.py                # 演示模式
 │   └── create_config.py          # 默认配置创建函数
 ├── config/                       # NEAT配置文件
-│   ├── neat_retail_pro.cfg       # 高级散户（907输入，8输出，pop_size=200）
+│   ├── neat_retail_pro.cfg       # 高级散户（527输入，3输出，pop_size=200）
 │   └── neat_market_maker.cfg     # 做市商（972输入，43输出，pop_size=150）
 ├── checkpoints/                  # 检查点
 ├── logs/                         # 日志

@@ -23,7 +23,7 @@ def create_test_agent(agent_class, agent_id: int = 0):
     mock_brain = MagicMock()
 
     # 设置 mock 返回值
-    mock_brain.forward.return_value = np.array([0, 0, 0, 0, 0, 0, 0.0, 0.0], dtype=np.float64)  # 6个动作得分 + 价格偏移 + 数量比例
+    mock_brain.forward.return_value = np.array([-0.9, 0.0, 0.0], dtype=np.float64)  # 动作选择 + 价格偏移 + 数量比例
 
     # 创建 Agent 配置（注意：参数名与现有测试保持一致）
     config = AgentConfig(
@@ -166,8 +166,8 @@ class TestSingleSideOrderbook:
             inputs = agent.observe(market_state, orderbook)
             outputs = agent.brain.forward(inputs)
 
-            # 验证输出维度（8个值：6个动作 + 价格偏移 + 数量比例）
-            assert len(outputs) == 8, f"期望输出维度8，实际{len(outputs)}"
+            # 验证输出维度（3个值：动作选择 + 价格偏移 + 数量比例）
+            assert len(outputs) == 3, f"期望输出维度3，实际{len(outputs)}"
 
             # 验证输出都是数值（不是 NaN 或 Inf）
             assert np.all(np.isfinite(outputs)), "神经网络输出包含 NaN 或 Inf"

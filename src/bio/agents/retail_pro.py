@@ -2,7 +2,7 @@
 
 本模块定义高级散户 Agent 类，继承自 Agent 基类。
 与普通散户不同，高级散户可以看到完整的5档订单簿和100笔成交。
-高级散户实现了散户动作空间的 decide 方法（9个输出，7种动作）。
+高级散户实现了散户动作空间的 decide 方法（3个输出，6种动作）。
 """
 
 from typing import TYPE_CHECKING, Any
@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 from src.bio.agents.base import (
     ActionType,
     Agent,
-    fast_argmax,
     fast_round_price,
     fast_clip,
 )
@@ -76,12 +75,12 @@ class RetailProAgent(Agent):
         """决策下一步动作（接收预计算的市场状态）
 
         观察市场状态，通过神经网络前向传播，解析输出为动作类型和参数。
-        此方法实现了散户/高级散户通用的决策逻辑（8个输出节点，6种动作）。
+        此方法实现了散户/高级散户通用的决策逻辑（3个输出节点，6种动作）。
 
         神经网络输出结构：
-        - 输出[0-5]: 6 种动作类型的得分（选择最大值）
-        - 输出[6]: 价格偏移（归一化值，-1 到 1，相对于 mid_price）
-        - 输出[7]: 数量比例（归一化值，0 到 1，相对于可用购买力）
+        - 输出[0]: 动作选择（-1 到 1，等宽分 6 个 bin 选择动作类型）
+        - 输出[1]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
+        - 输出[2]: 数量比例（-1 到 1，映射到 [0, 1.0] 可用购买力比例）
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -103,19 +102,20 @@ class RetailProAgent(Agent):
         # 2. 神经网络前向传播
         outputs = self.brain.forward(inputs)
 
-        # 3. 验证输出维度（至少需要 8 个值：6个动作 + 价格偏移 + 数量比例）
-        if len(outputs) < 8:
-            raise ValueError(f"神经网络输出维度不足，期望 8，实际 {len(outputs)}")
+        # 3. 验证输出维度（至少需要 3 个值：动作选择 + 价格偏移 + 数量比例）
+        if len(outputs) < 3:
+            raise ValueError(f"神经网络输出维度不足，期望 3，实际 {len(outputs)}")
 
-        # 4. 解析动作类型（选择前 6 个输出中值最大的索引）
-        action_idx = fast_argmax(outputs, 0, 6)
+        # 4. 解析动作类型（单输出等宽分 6 bin）
+        action_value = fast_clip(outputs[0], -1.0, 1.0)
+        action_idx = min(5, int((action_value + 1.0) * 3.0))
         action = ActionType(action_idx)
 
         # 5. 解析参数（由神经网络决定）
-        # 输出[6]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
-        # 输出[7]: 数量比例（-1 到 1，映射到 0.1-1.0 的购买力比例）
-        price_offset_norm = fast_clip(outputs[6], -1.0, 1.0)
-        quantity_ratio_norm = fast_clip(outputs[7], -1.0, 1.0)
+        # 输出[1]: 价格偏移（-1 到 1，映射到 ±100 个 tick）
+        # 输出[2]: 数量比例（-1 到 1，映射到 [0, 1.0] 的购买力比例）
+        price_offset_norm = fast_clip(outputs[1], -1.0, 1.0)
+        quantity_ratio_norm = fast_clip(outputs[2], -1.0, 1.0)
 
         # 获取参考价格
         mid_price = market_state.mid_price

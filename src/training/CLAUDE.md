@@ -496,7 +496,7 @@ class AtomicAction:
 ## NEAT 配置
 
 不同 Agent 类型使用不同的 NEAT 配置文件：
-- `config/neat_retail_pro.cfg` - 高级散户（527 个输入节点，8 个输出节点）
+- `config/neat_retail_pro.cfg` - 高级散户（527 个输入节点，3 个输出节点）
 - `config/neat_market_maker.cfg` - 做市商（592 个输入节点，43 个输出节点）
 
 **关键配置参数（防止种群灭绝）：**
