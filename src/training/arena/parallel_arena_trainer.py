@@ -205,14 +205,14 @@ class ParallelArenaTrainer:
         """创建共享的种群（神经网络）"""
         self.logger.info("正在创建种群...")
 
-        # RETAIL_PRO: 12个子种群
+        # RETAIL_PRO: 10个子种群
         self.populations[AgentType.RETAIL_PRO] = SubPopulationManager(
-            self.config, AgentType.RETAIL_PRO, sub_count=12
+            self.config, AgentType.RETAIL_PRO, sub_count=10
         )
 
-        # MARKET_MAKER: 4个子种群
+        # MARKET_MAKER: 6个子种群
         self.populations[AgentType.MARKET_MAKER] = SubPopulationManager(
-            self.config, AgentType.MARKET_MAKER, sub_count=4
+            self.config, AgentType.MARKET_MAKER, sub_count=6
         )
 
         self.logger.info(f"种群创建完成: {len(self.populations)} 种类型")
@@ -413,10 +413,10 @@ class ParallelArenaTrainer:
         worker_configs: list[WorkerConfig] = []
 
         # 子种群数量硬编码（与 _create_populations 保持一致）
-        # RETAIL_PRO: 12 个子种群
-        # MARKET_MAKER: 4 个子种群
-        retail_pro_sub_count = 12
-        mm_sub_count = 4
+        # RETAIL_PRO: 10 个子种群
+        # MARKET_MAKER: 6 个子种群
+        retail_pro_sub_count = 10
+        mm_sub_count = 6
 
         # RETAIL_PRO Workers
         retail_pro_total = self.config.agents[AgentType.RETAIL_PRO].count

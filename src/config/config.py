@@ -74,12 +74,12 @@ class TrainingConfig:
         enable_parallel_evolution: 是否启用并行进化（默认 True）
         enable_parallel_decision: 是否启用并行决策（默认 True）
         enable_parallel_creation: 是否启用并行创建（默认 True）
-        openmp_threads: OpenMP 并行线程数（默认 16，建议设为物理核心数）
+        openmp_threads: OpenMP 并行线程数（默认 1，建议设为物理核心数）
         random_seed: 随机种子（默认 None，表示不固定）
-        retail_pro_sub_population_count: 高级散户子种群数量（默认 12）
+        retail_pro_sub_population_count: 高级散户子种群数量（默认 10）
         evolution_interval: 每多少个 episode 进化一次（默认 10）
-        num_arenas: 竞技场数量（默认 2）
-        episodes_per_arena: 每个竞技场运行的 episode 数（默认 50）
+        num_arenas: 竞技场数量（默认 16）
+        episodes_per_arena: 每个竞技场运行的 episode 数（默认 4）
         mm_fitness_pnl_weight: 做市商复合适应度中 PnL 收益率的权重 α（默认 0.7）
         mm_fitness_volume_weight: 做市商复合适应度中 Maker 成交量的权重 γ（默认 0.3）
         position_cost_weight: 散户持仓成本权重（默认 0.02），惩罚持仓不平仓
@@ -94,15 +94,15 @@ class TrainingConfig:
     enable_parallel_evolution: bool = True
     enable_parallel_decision: bool = True
     enable_parallel_creation: bool = True
-    openmp_threads: int = 16  # 默认 16，建议设为物理核心数
+    openmp_threads: int = 1  # 默认 1，建议设为物理核心数
     random_seed: int | None = None
     # 高级散户子种群配置
-    retail_pro_sub_population_count: int = 12
+    retail_pro_sub_population_count: int = 10
     # 进化间隔配置
     evolution_interval: int = 10
     # 多竞技场配置
-    num_arenas: int = 2
-    episodes_per_arena: int = 50
+    num_arenas: int = 16
+    episodes_per_arena: int = 4
     # 做市商复合适应度权重（α+γ=1.0）
     # mm_fitness = α × pnl + γ × volume_score
     mm_fitness_pnl_weight: float = 0.7        # α: PnL 收益率

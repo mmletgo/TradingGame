@@ -160,8 +160,8 @@ class ArenaState:
 多竞技场并行训练器。主进程职责：创建种群、NEAT 进化、网络参数同步、检查点管理。tick 循环完全委托给 `ArenaWorkerPool`。
 
 **种群配置（2 种类型）：**
-- RETAIL_PRO: 12 个子种群（SubPopulationManager）
-- MARKET_MAKER: 4 个子种群（SubPopulationManager）
+- RETAIL_PRO: 10 个子种群（SubPopulationManager）
+- MARKET_MAKER: 6 个子种群（SubPopulationManager）
 
 **主要方法：**
 
@@ -358,7 +358,7 @@ class SharedNetworkMetadata:
 
 - **Episode 级并行**：Worker 进程独立运行完整 episode，消除 tick 级 IPC 同步开销
 - **向量化强平检查**：Worker 内部使用 NumPy 批量计算保证金率
-- **并行进化**：RETAIL_PRO 12 子种群 + MARKET_MAKER 4 子种群并行进化
+- **并行进化**：RETAIL_PRO 10 子种群 + MARKET_MAKER 6 子种群并行进化
 - **Lite 进化模式**：Worker 跳过基因组序列化，仅在 checkpoint 保存时按需同步
 - **跳过 brain 更新**：并行竞技场模式下主进程不更新 Agent brain（ArenaWorker 使用 BatchNetworkCache）
 - **合并 extract+pack**：网络参数提取和打包合并为 `_extract_and_pack_all_network_params`，减少中间对象

@@ -24,8 +24,8 @@
 定义系统中两种 AI Agent 的类型枚举，继承自 `str` 和 `Enum`，支持字符串比较。
 
 **枚举值：**
-- `RETAIL_PRO` - 高级散户：数量 2,400（12子种群×200），资金 2万，可看到深层订单簿（5档）
-- `MARKET_MAKER` - 做市商：数量 400（4子种群×100），资金 1,000万，必须双边挂单提供流动性
+- `RETAIL_PRO` - 高级散户：数量 2,400（10子种群×240），资金 2万，可看到深层订单簿（5档）
+- `MARKET_MAKER` - 做市商：数量 600（6子种群×100），资金 1,000万，必须双边挂单提供流动性
 
 **使用示例：**
 ```python
@@ -105,13 +105,13 @@ Agent 配置类，定义特定类型 Agent 的交易参数。
 | Agent 类型 | 数量 | 初始资金 | 杠杆 | 维持保证金率 | 挂单费率 | 吃单费率 |
 |-----------|------|---------|------|------------|---------|---------|
 | 高级散户 (RETAIL_PRO) | 2,400 | 2万 | 10.0 | 0.05 | 0.0002 (万2) | 0.0005 (万5) |
-| 做市商 (MARKET_MAKER) | 400 | 1,000万 (10M) | 10.0 | 0.05 | -0.0001 (负万1) | 0.0001 (万1) |
+| 做市商 (MARKET_MAKER) | 600 | 1,000万 (10M) | 10.0 | 0.05 | -0.0001 (负万1) | 0.0001 (万1) |
 
 **详细说明：**
 
 - **count**：该类型 Agent 的种群数量
-  - 高级散户 2,400（12子种群×200），代表交易者群体
-  - 做市商 400（4子种群×100），提供足够的流动性
+  - 高级散户 2,400（10子种群×240），代表交易者群体
+  - 做市商 600（6子种群×100），提供足够的流动性
 
 - **initial_balance**：初始资金（单位：元）
   - 高级散户：2万
@@ -163,12 +163,12 @@ retail_pro_config = AgentConfig(
 | enable_parallel_evolution | bool | True | 是否启用并行进化 |
 | enable_parallel_decision | bool | True | 是否启用并行决策 |
 | enable_parallel_creation | bool | True | 是否启用并行创建 |
-| openmp_threads | int | 16 | OpenMP 并行线程数（Cython 神经网络推理，建议设为物理核心数） |
+| openmp_threads | int | 1 | OpenMP 并行线程数（Cython 神经网络推理，建议设为物理核心数） |
 | random_seed | int \| None | None | 随机种子（None 表示不固定） |
-| retail_pro_sub_population_count | int | 12 | 高级散户子种群数量 |
+| retail_pro_sub_population_count | int | 10 | 高级散户子种群数量 |
 | evolution_interval | int | 10 | 每多少个 episode 进化一次 |
-| num_arenas | int | 2 | 竞技场数量（多竞技场模式） |
-| episodes_per_arena | int | 50 | 每个竞技场运行的 episode 数 |
+| num_arenas | int | 16 | 竞技场数量（多竞技场模式） |
+| episodes_per_arena | int | 4 | 每个竞技场运行的 episode 数 |
 | mm_fitness_pnl_weight | float | 0.7 | 做市商复合适应度中 PnL 收益率权重 alpha |
 | mm_fitness_volume_weight | float | 0.3 | 做市商复合适应度中 Maker 成交量权重 gamma |
 | position_cost_weight | float | 0.02 | 散户持仓成本权重（对称持仓惩罚） |

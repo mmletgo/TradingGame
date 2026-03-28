@@ -328,7 +328,7 @@ class Trainer:
                     )
                 elif agent_type == AgentType.MARKET_MAKER:
                     self.populations[agent_type] = SubPopulationManager(
-                        self.config, agent_type, sub_count=4,
+                        self.config, agent_type, sub_count=6,
                     )
                 continue
 
@@ -563,7 +563,7 @@ class Trainer:
                 rp_agents_per_sub
             ))
 
-        mm_sub_count = 4  # 做市商固定4个子种群
+        mm_sub_count = 6  # 做市商固定6个子种群
         mm_agents_per_sub = self.config.agents[AgentType.MARKET_MAKER].count // mm_sub_count
         for i in range(mm_sub_count):
             worker_configs.append(WorkerConfig(
@@ -589,15 +589,15 @@ class Trainer:
             self.episode = checkpoint.get("episode", 0)
         else:
             # 创建全新种群（每个种群内部的Agent创建是并行的）
-            # RETAIL_PRO: 12个子种群
+            # RETAIL_PRO: 10个子种群
             self.populations[AgentType.RETAIL_PRO] = SubPopulationManager(
                 self.config, AgentType.RETAIL_PRO,
                 sub_count=self.config.training.retail_pro_sub_population_count,
             )
 
-            # MARKET_MAKER: 4个子种群
+            # MARKET_MAKER: 6个子种群
             self.populations[AgentType.MARKET_MAKER] = SubPopulationManager(
-                self.config, AgentType.MARKET_MAKER, sub_count=4
+                self.config, AgentType.MARKET_MAKER, sub_count=6
             )
 
         # 创建撮合引擎

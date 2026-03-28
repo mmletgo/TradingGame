@@ -136,8 +136,8 @@ Numba JIT 加速的高频数学函数模块。
 通用子种群管理器，将种群拆分为多个独立子种群进行进化。
 
 **支持的种群类型：**
-- `AgentType.RETAIL_PRO` - 高级散户（12子种群×200）
-- `AgentType.MARKET_MAKER` - 做市商（4子种群×100）
+- `AgentType.RETAIL_PRO` - 高级散户（10子种群×240）
+- `AgentType.MARKET_MAKER` - 做市商（6子种群×100）
 
 **设计目标：**
 - 减少单个 NEAT 种群的规模，优化进化性能
@@ -433,7 +433,7 @@ class AtomicAction:
 - 加速比：约 5.1x
 
 **OpenMP 线程数配置：**
-- 通过 `TrainingConfig.openmp_threads` 配置（默认 16，建议设为物理核心数）
+- 通过 `TrainingConfig.openmp_threads` 配置（默认 1，建议设为物理核心数）
 
 ---
 

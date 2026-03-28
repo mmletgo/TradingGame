@@ -59,7 +59,7 @@ def create_default_config(
             taker_fee_rate=0.0005,  # 万5
         ),
         AgentType.MARKET_MAKER: AgentConfig(
-            count=400,
+            count=600,
             initial_balance=maker_initial_balance,
             leverage=maker_leverage,
             maintenance_margin_rate=0.5 / maker_leverage,

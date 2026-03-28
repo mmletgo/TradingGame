@@ -378,8 +378,8 @@ def _process_trades(self, trades: list[Trade]) -> None:
 
 | 配置文件 | Agent类型 | 输入节点 | 输出节点 | 初始隐藏节点 | 种群大小 |
 |---------|----------|----------|----------|-------------|---------|
-| neat_retail_pro.cfg | 高级散户 | 527 | 8 | 10 | 200 |
-| neat_market_maker.cfg | 做市商 | 592 | 43 | 10 | 150 |
+| neat_retail_pro.cfg | 高级散户 | 527 | 8 | 10 | 240 |
+| neat_market_maker.cfg | 做市商 | 592 | 43 | 10 | 100 |
 
 ### 关键配置参数
 
