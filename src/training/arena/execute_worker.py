@@ -164,8 +164,8 @@ class ArenaExecuteResult:
 
     Attributes:
         arena_id: 竞技场 ID
-        bid_depth: 买盘深度数据，shape (100, 2) - (price, quantity)
-        ask_depth: 卖盘深度数据，shape (100, 2) - (price, quantity)
+        bid_depth: 买盘深度数据，shape (5, 2) - (price, quantity)
+        ask_depth: 卖盘深度数据，shape (5, 2) - (price, quantity)
         last_price: 最新成交价
         mid_price: 中间价
         trades: 成交列表，每个元素格式:
@@ -179,10 +179,10 @@ class ArenaExecuteResult:
 
     arena_id: int
     bid_depth: NDArray[np.float64] = field(
-        default_factory=lambda: np.zeros((100, 2), dtype=np.float64)
+        default_factory=lambda: np.zeros((5, 2), dtype=np.float64)
     )
     ask_depth: NDArray[np.float64] = field(
-        default_factory=lambda: np.zeros((100, 2), dtype=np.float64)
+        default_factory=lambda: np.zeros((5, 2), dtype=np.float64)
     )
     last_price: float = 0.0
     mid_price: float = 0.0
@@ -1067,20 +1067,20 @@ def _get_depth_arrays(orderbook: Any) -> tuple[NDArray[np.float64], NDArray[np.f
         orderbook: OrderBook 实例
 
     Returns:
-        (bid_depth, ask_depth)，各 shape (100, 2)
+        (bid_depth, ask_depth)，各 shape (5, 2)
     """
-    depth = orderbook.get_depth(levels=100)
-    bid_depth = np.zeros((100, 2), dtype=np.float64)
-    ask_depth = np.zeros((100, 2), dtype=np.float64)
+    depth = orderbook.get_depth(levels=5)
+    bid_depth = np.zeros((5, 2), dtype=np.float64)
+    ask_depth = np.zeros((5, 2), dtype=np.float64)
 
     for i, (price, qty) in enumerate(depth.get("bids", [])):
-        if i >= 100:
+        if i >= 5:
             break
         bid_depth[i, 0] = price
         bid_depth[i, 1] = qty
 
     for i, (price, qty) in enumerate(depth.get("asks", [])):
-        if i >= 100:
+        if i >= 5:
             break
         ask_depth[i, 0] = price
         ask_depth[i, 1] = qty

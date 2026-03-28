@@ -20,8 +20,8 @@ def create_mock_market_state(mid_price: float = 100.0, tick_size: float = 0.1) -
     return NormalizedMarketState(
         mid_price=mid_price,
         tick_size=tick_size,
-        bid_data=np.zeros(200, dtype=np.float32),
-        ask_data=np.zeros(200, dtype=np.float32),
+        bid_data=np.zeros(10, dtype=np.float32),
+        ask_data=np.zeros(10, dtype=np.float32),
         trade_prices=np.zeros(100, dtype=np.float32),
         trade_quantities=np.zeros(100, dtype=np.float32),
         tick_history_prices=np.zeros(100, dtype=np.float32),
@@ -147,8 +147,8 @@ class TestAgentObserve:
         market_state = NormalizedMarketState(
             mid_price=100.0,
             tick_size=0.01,
-            bid_data=np.array([0.1, 10.0] * 100, dtype=np.float32),  # 100档买盘
-            ask_data=np.array([-0.1, 10.0] * 100, dtype=np.float32),  # 100档卖盘
+            bid_data=np.array([0.1, 10.0] * 5, dtype=np.float32),  # 5档买盘
+            ask_data=np.array([-0.1, 10.0] * 5, dtype=np.float32),  # 5档卖盘
             trade_prices=trade_prices,
             trade_quantities=trade_quantities,
             tick_history_prices=np.zeros(100, dtype=np.float32),
@@ -164,12 +164,12 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
-        expected_length = 200 + 200 + 200 + 4 + 3 + 300
+        # 10 买盘 + 10 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
+        expected_length = 10 + 10 + 200 + 4 + 3 + 300
         assert len(inputs) == expected_length
 
         # 验证成交数据（价格在前100个，数量在后100个）
-        trade_start_idx = 200 + 200  # 跳过订单簿深度数据
+        trade_start_idx = 10 + 10  # 跳过订单簿深度数据
         # 前100个是价格（使用容差比较，因为是 float32）
         assert abs(inputs[trade_start_idx + 0] - (-0.001)) < 1e-6  # 第一笔成交价格
         assert abs(inputs[trade_start_idx + 1] - 0.001) < 1e-6     # 第二笔成交价格
@@ -214,12 +214,12 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度（固定长度）
-        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
-        expected_length = 200 + 200 + 200 + 4 + 3 + 300
+        # 10 买盘 + 10 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
+        expected_length = 10 + 10 + 200 + 4 + 3 + 300
         assert len(inputs) == expected_length
 
         # 验证持仓状态（在末尾附近）
-        position_start_idx = 200 + 200 + 200
+        position_start_idx = 10 + 10 + 200
         assert inputs[position_start_idx + 0] == 0.0  # 持仓归一化
         assert inputs[position_start_idx + 1] == 0.0  # 持仓均价归一化
         assert inputs[position_start_idx + 2] == 1.0  # 余额归一化（10000/10000 = 1.0）
@@ -264,12 +264,12 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        # 200 买盘 + 200 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
-        expected_length = 200 + 200 + 200 + 4 + 3 + 300
+        # 10 买盘 + 10 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
+        expected_length = 10 + 10 + 200 + 4 + 3 + 300
         assert len(inputs) == expected_length
 
         # 验证持仓数据（在持仓部分）
-        position_start_idx = 200 + 200 + 200
+        position_start_idx = 10 + 10 + 200
         # 持仓归一化 = position_value / (equity * leverage)
         # position_value = 100 * 100 = 10000
         # equity = 10000 (balance)
@@ -1765,7 +1765,7 @@ class TestMarketMakerAgentDecide:
             assert False, "应该抛出 ValueError"
         except ValueError as e:
             assert "神经网络输出维度不足" in str(e)
-            assert "44" in str(e)
+            assert "43" in str(e)
             assert "10" in str(e)
 
     def test_decide_generates_orders_at_different_prices(self):

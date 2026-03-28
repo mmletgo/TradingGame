@@ -16,8 +16,8 @@ class NormalizedMarketState:
     Attributes:
         mid_price: 中间价（用于归一化计算的参考价格）
         tick_size: 最小价格变动单位
-        bid_data: 买盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
-        ask_data: 卖盘数据，shape (200,)，100档 × 2（价格归一化 + 数量）
+        bid_data: 买盘数据，shape (depth*2,)，depth档 × 2（价格归一化 + 数量）
+        ask_data: 卖盘数据，shape (depth*2,)，depth档 × 2（价格归一化 + 数量）
         trade_prices: 成交价格归一化，shape (100,)
         trade_quantities: 成交数量（带方向），shape (100,)，正数表示taker是买方，负数表示taker是卖方
         tick_history_prices: Tick 历史价格（以第一个价格为基准归一化），shape (100,)，最新数据在末尾
@@ -26,8 +26,8 @@ class NormalizedMarketState:
     """
     mid_price: float
     tick_size: float
-    bid_data: NDArray[np.float32]      # shape: (200,)
-    ask_data: NDArray[np.float32]      # shape: (200,)
+    bid_data: NDArray[np.float32]      # shape: (depth*2,)
+    ask_data: NDArray[np.float32]      # shape: (depth*2,)
     trade_prices: NDArray[np.float32]  # shape: (100,)
     trade_quantities: NDArray[np.float32]  # shape: (100,)
     tick_history_prices: NDArray[np.float32]   # shape: (100,) - tick 历史价格（以第一个价格为基准归一化）

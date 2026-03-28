@@ -43,7 +43,7 @@ def create_default_config(
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
         ema_alpha=0.9,
     )
     maker_initial_balance = 10_000_000.0  # 做市商初始资金 10M

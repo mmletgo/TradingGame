@@ -192,7 +192,7 @@ class TestPopulationInit:
                 initial_price=100.0,
                 tick_size=0.01,
                 lot_size=1.0,
-                depth=100,
+                depth=5,
             ),
             agents={
                 AgentType.RETAIL_PRO: retail_pro_config,
@@ -540,7 +540,7 @@ class TestPopulationEvolve:
                 initial_price=100.0,
                 tick_size=0.01,
                 lot_size=1.0,
-                depth=100,
+                depth=5,
             ),
             agents={
                 AgentType.RETAIL_PRO: retail_pro_config,
@@ -750,7 +750,7 @@ class TestPopulationResetAgents:
                 initial_price=100.0,
                 tick_size=0.01,
                 lot_size=1.0,
-                depth=100,
+                depth=5,
             ),
             agents={
                 AgentType.RETAIL_PRO: retail_pro_config,

@@ -68,7 +68,7 @@ COMMAND_REGION_SIZE = (
 )
 
 # Result Region 各区域大小
-DEPTH_SIZE = 100 * 2 * 8  # float64[100, 2]
+DEPTH_SIZE = 5 * 2 * 8  # float64[5, 2]
 TRADES_SIZE = MAX_TRADES * 8 * 8  # float64[MAX_TRADES × 8]
 PENDING_UPDATES_SIZE = MAX_PENDING_UPDATES * 2 * 8  # int64[MAX_PENDING_UPDATES × 2]
 MM_ORDER_IDS_SIZE = MAX_MM_AGENTS * (1 + MAX_ORDERS_PER_MM * 2) * 8  # int64[...]
@@ -493,13 +493,13 @@ class ArenaResultView:
         )
 
         self._bid_depth = np.ndarray(
-            shape=(100, 2),
+            shape=(5, 2),
             dtype=np.float64,
             buffer=buffer,
             offset=bid_depth_offset,
         )
         self._ask_depth = np.ndarray(
-            shape=(100, 2),
+            shape=(5, 2),
             dtype=np.float64,
             buffer=buffer,
             offset=ask_depth_offset,
@@ -590,8 +590,8 @@ class ArenaResultView:
         """设置订单簿深度
 
         Args:
-            bid: 买盘深度，shape (100, 2)
-            ask: 卖盘深度，shape (100, 2)
+            bid: 买盘深度，shape (5, 2)
+            ask: 卖盘深度，shape (5, 2)
         """
         np.copyto(self._bid_depth, bid)
         np.copyto(self._ask_depth, ask)
@@ -1075,8 +1075,8 @@ def _test_basic() -> None:
     # 测试深度数据
     bid_depth = np.array([[10000.0, 100], [9999.0, 200]], dtype=np.float64)
     ask_depth = np.array([[10001.0, 150], [10002.0, 250]], dtype=np.float64)
-    bid_full = np.zeros((100, 2), dtype=np.float64)
-    ask_full = np.zeros((100, 2), dtype=np.float64)
+    bid_full = np.zeros((5, 2), dtype=np.float64)
+    ask_full = np.zeros((5, 2), dtype=np.float64)
     bid_full[:2] = bid_depth
     ask_full[:2] = ask_depth
     result_view.set_depth(bid_full, ask_full)

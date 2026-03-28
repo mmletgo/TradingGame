@@ -822,7 +822,7 @@ def test_get_best_ask_ignores_bids():
 
 
 def test_get_depth_default_levels():
-    """测试获取完整深度（默认100档）"""
+    """测试获取完整深度（默认5档）"""
     book = OrderBook()
     order1 = Order(
         order_id=1,
@@ -937,8 +937,8 @@ def test_get_depth_insufficient_levels():
     book.add_order(order1)
     book.add_order(order2)
 
-    # 请求100档，但只有1档
-    depth = book.get_depth(levels=100)
+    # 请求5档，但只有1档
+    depth = book.get_depth(levels=5)
 
     assert len(depth["bids"]) == 1
     assert len(depth["asks"]) == 1

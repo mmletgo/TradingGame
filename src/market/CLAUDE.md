@@ -59,8 +59,8 @@ src/market/
 **属性：**
 - `mid_price: float` - 中间价（用于归一化计算的参考价格）
 - `tick_size: float` - 最小价格变动单位
-- `bid_data: NDArray[np.float32]` - 买盘数据，shape (200,)，100档 x 2（价格归一化 + 数量归一化）
-- `ask_data: NDArray[np.float32]` - 卖盘数据，shape (200,)，100档 x 2（价格归一化 + 数量归一化）
+- `bid_data: NDArray[np.float32]` - 买盘数据，shape (10,)，5档 x 2（价格归一化 + 数量归一化）
+- `ask_data: NDArray[np.float32]` - 卖盘数据，shape (10,)，5档 x 2（价格归一化 + 数量归一化）
 - `trade_prices: NDArray[np.float32]` - 成交价格归一化，shape (100,)
 - `trade_quantities: NDArray[np.float32]` - 成交数量归一化（带方向），shape (100,)，正数表示 taker 是买方，负数表示 taker 是卖方
 - `tick_history_prices: NDArray[np.float32]` - Tick 历史价格归一化，shape (100,)，以第一个 tick 价格为基准，最新数据在末尾

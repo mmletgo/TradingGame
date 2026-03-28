@@ -608,7 +608,7 @@ def compute_market_state(
     tick_size = orderbook.tick_size
 
     # 直接从本地 orderbook 获取深度
-    bid_depth, ask_depth = orderbook.get_depth_numpy(levels=100)
+    bid_depth, ask_depth = orderbook.get_depth_numpy(levels=5)
 
     # 获取并清零缓冲区
     bid_data = buffers["bid_data"]
@@ -1442,8 +1442,8 @@ def _create_market_state_buffers() -> dict[str, NDArray[np.float32]]:
         预分配的缓冲区字典
     """
     return {
-        "bid_data": np.zeros(200, dtype=np.float32),
-        "ask_data": np.zeros(200, dtype=np.float32),
+        "bid_data": np.zeros(10, dtype=np.float32),
+        "ask_data": np.zeros(10, dtype=np.float32),
         "trade_prices": np.zeros(100, dtype=np.float32),
         "trade_quantities": np.zeros(100, dtype=np.float32),
         "tick_prices": np.zeros(100, dtype=np.float32),

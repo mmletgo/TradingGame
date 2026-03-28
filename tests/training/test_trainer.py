@@ -52,7 +52,7 @@ def mock_config() -> Config:
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
 
     agent_config = AgentConfig(

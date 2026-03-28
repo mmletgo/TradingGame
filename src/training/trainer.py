@@ -227,8 +227,8 @@ class Trainer:
 
         # 预分配市场状态缓冲区（性能优化）
         self._market_state_buffers: dict[str, NDArray[np.float32]] = {
-            'bid_data': np.zeros(200, dtype=np.float32),
-            'ask_data': np.zeros(200, dtype=np.float32),
+            'bid_data': np.zeros(10, dtype=np.float32),
+            'ask_data': np.zeros(10, dtype=np.float32),
             'trade_prices': np.zeros(100, dtype=np.float32),
             'trade_quantities': np.zeros(100, dtype=np.float32),
             'tick_prices': np.zeros(100, dtype=np.float32),
@@ -1035,7 +1035,7 @@ class Trainer:
         tick_size = orderbook.tick_size
 
         # 使用 get_depth_numpy 直接获取 NumPy 数组
-        bid_depth, ask_depth = orderbook.get_depth_numpy(levels=100)
+        bid_depth, ask_depth = orderbook.get_depth_numpy(levels=5)
 
         # 获取并清零缓冲区
         bid_data = self._market_state_buffers['bid_data']
@@ -1054,8 +1054,8 @@ class Trainer:
         tick_volumes_normalized.fill(0)
         tick_amounts_normalized.fill(0)
 
-        # 向量化买盘：100档 × 2 = 200（使用平滑价格归一化）
-        # bid_depth shape: (100, 2), 列0=价格, 列1=数量
+        # 向量化买盘：5档 × 2 = 10（使用平滑价格归一化）
+        # bid_depth shape: (5, 2), 列0=价格, 列1=数量
         bid_prices = bid_depth[:, 0]
         bid_qtys = bid_depth[:, 1]
         # 找到有效档位数（价格 > 0）
@@ -1068,7 +1068,7 @@ class Trainer:
             # 数量使用对数归一化
             bid_data[1 : n_bids * 2 : 2] = log_normalize_unsigned(bid_qtys[:n_bids])
 
-        # 向量化卖盘：100档 × 2 = 200（使用平滑价格归一化）
+        # 向量化卖盘：5档 × 2 = 10（使用平滑价格归一化）
         ask_prices = ask_depth[:, 0]
         ask_qtys = ask_depth[:, 1]
         ask_valid_mask = ask_prices > 0

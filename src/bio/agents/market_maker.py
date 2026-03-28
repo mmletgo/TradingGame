@@ -57,7 +57,7 @@ class MarketMakerAgent(Agent):
         _as_calculator: AS 模型计算器（可选）
         _as_config: AS 模型配置（可选）
 
-    神经网络输入维度: 972 = 604 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征
+    神经网络输入维度: 592 = 224 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征
     神经网络输出维度: 43 = 买单价格(10) + 买单数量(10) + 卖单价格(10) + 卖单数量(10) + 总下单比例基准(1) + AS调整(2)
     """
 
@@ -102,9 +102,9 @@ class MarketMakerAgent(Agent):
             ASCalculator(as_config) if as_config is not None else None
         )
 
-        # 做市商输入更大（972 = 604 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征）
+        # 做市商输入更大（592 = 224 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征）
         # tick 历史数据：100 个价格 + 100 个成交量 + 100 个成交额
-        self._input_buffer = np.zeros(972, dtype=np.float64)
+        self._input_buffer = np.zeros(592, dtype=np.float64)
 
     def get_action_space(self) -> list[ActionType]:
         """获取做市商可用动作
@@ -117,17 +117,17 @@ class MarketMakerAgent(Agent):
         return []
 
     def _fill_as_features(self, market_state: NormalizedMarketState) -> None:
-        """填充 AS 模型特征到输入缓冲区的 [964:972] 区间
+        """填充 AS 模型特征到输入缓冲区的 [584:592] 区间
 
         8 个 AS 特征：
-        - [964]: reservation_offset [-0.5, 0.5]
-        - [965]: optimal_half_spread / mid_price [0, 0.1]
-        - [966]: sigma (已 clamp) [0, 0.1]
-        - [967]: tau [0, 1]
-        - [968]: log10(kappa+1)/5 [0, 1]
-        - [969]: inventory_risk (clamped) [-1, 1]
-        - [970]: gamma / gamma_adj_max [0, 1]
-        - [971]: optimal_spread / (sigma+1e-8) (capped) [0, 10]
+        - [584]: reservation_offset [-0.5, 0.5]
+        - [585]: optimal_half_spread / mid_price [0, 0.1]
+        - [586]: sigma (已 clamp) [0, 0.1]
+        - [587]: tau [0, 1]
+        - [588]: log10(kappa+1)/5 [0, 1]
+        - [589]: inventory_risk (clamped) [-1, 1]
+        - [590]: gamma / gamma_adj_max [0, 1]
+        - [591]: optimal_spread / (sigma+1e-8) (capped) [0, 10]
 
         Args:
             market_state: 预计算的归一化市场数据
@@ -163,22 +163,22 @@ class MarketMakerAgent(Agent):
                 kappa,
             )
 
-            self._input_buffer[964] = as_params.reservation_offset
-            self._input_buffer[965] = (
+            self._input_buffer[584] = as_params.reservation_offset
+            self._input_buffer[585] = (
                 as_params.optimal_half_spread / mid_price if mid_price > 0 else 0.0
             )
-            self._input_buffer[966] = sigma
-            self._input_buffer[967] = tau
-            self._input_buffer[968] = np.log10(kappa + 1) / 5.0
-            self._input_buffer[969] = max(-1.0, min(1.0, as_params.inventory_risk))
-            self._input_buffer[970] = (
+            self._input_buffer[586] = sigma
+            self._input_buffer[587] = tau
+            self._input_buffer[588] = np.log10(kappa + 1) / 5.0
+            self._input_buffer[589] = max(-1.0, min(1.0, as_params.inventory_risk))
+            self._input_buffer[590] = (
                 self._as_config.gamma / self._as_config.gamma_adj_max
             )
-            self._input_buffer[971] = min(
+            self._input_buffer[591] = min(
                 10.0, as_params.optimal_spread / (sigma + 1e-8)
             )
         else:
-            self._input_buffer[964:972] = 0.0
+            self._input_buffer[584:592] = 0.0
 
     def observe(
         self, market_state: NormalizedMarketState, orderbook: OrderBook
@@ -186,14 +186,14 @@ class MarketMakerAgent(Agent):
         """从预计算的市场状态构建神经网络输入
 
         做市商覆盖基类方法，使用更大的输入缓冲区
-        （972 = 604 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征）。
+        （592 = 224 + 60 挂单信息 + 300 tick 历史数据 + 8 AS 特征）。
 
         Args:
             market_state: 预计算的归一化市场数据
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（972 维 ndarray）
+            神经网络输入向量（592 维 ndarray）
         """
         if _HAS_CYTHON_OBSERVE:
             # 使用 Cython 加速版本
@@ -214,7 +214,7 @@ class MarketMakerAgent(Agent):
                 mid_price, orderbook
             )
 
-            # 调用 Cython 函数填充缓冲区 [0:964]
+            # 调用 Cython 函数填充缓冲区 [0:584]
             fast_observe_market_maker(
                 self._input_buffer,
                 market_state.bid_data,
@@ -230,24 +230,24 @@ class MarketMakerAgent(Agent):
                 position_inputs[3],
                 pending_order_inputs,
             )
-            # 填充 AS 特征 [964:972]
+            # 填充 AS 特征 [584:592]
             self._fill_as_features(market_state)
             return self._input_buffer
         else:
             # 纯 Python 实现：直接复制到预分配数组
-            self._input_buffer[:200] = market_state.bid_data
-            self._input_buffer[200:400] = market_state.ask_data
-            self._input_buffer[400:500] = market_state.trade_prices
-            self._input_buffer[500:600] = market_state.trade_quantities
-            self._input_buffer[600:604] = self._get_position_inputs(market_state.mid_price)
-            self._input_buffer[604:664] = self._get_pending_order_inputs(
+            self._input_buffer[:10] = market_state.bid_data
+            self._input_buffer[10:20] = market_state.ask_data
+            self._input_buffer[20:120] = market_state.trade_prices
+            self._input_buffer[120:220] = market_state.trade_quantities
+            self._input_buffer[220:224] = self._get_position_inputs(market_state.mid_price)
+            self._input_buffer[224:284] = self._get_pending_order_inputs(
                 market_state.mid_price, orderbook
             )
             # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
-            self._input_buffer[664:764] = market_state.tick_history_prices
-            self._input_buffer[764:864] = market_state.tick_history_volumes
-            self._input_buffer[864:964] = market_state.tick_history_amounts
-            # AS 特征 [964:972]
+            self._input_buffer[284:384] = market_state.tick_history_prices
+            self._input_buffer[384:484] = market_state.tick_history_volumes
+            self._input_buffer[484:584] = market_state.tick_history_amounts
+            # AS 特征 [584:592]
             self._fill_as_features(market_state)
             return self._input_buffer  # 不调用 .tolist()
 

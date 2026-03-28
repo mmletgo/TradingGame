@@ -63,7 +63,7 @@ class UIDataSnapshot:
     last_price: float
     mid_price: float
 
-    # 订单簿100档
+    # 订单簿5档
     bids: list[tuple[float, float]]  # [(price, qty), ...]
     asks: list[tuple[float, float]]
 
@@ -139,7 +139,7 @@ class UIDataCollector:
         """
         # 获取订单簿和价格
         orderbook = trainer.matching_engine._orderbook
-        depth = orderbook.get_depth(100)
+        depth = orderbook.get_depth(5)
 
         # 价格图表使用 tick 结束后的实际价格（与盘口一致）
         last_price = orderbook.last_price

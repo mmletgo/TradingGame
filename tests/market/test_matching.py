@@ -12,7 +12,7 @@ def test_matching_engine_init_normal():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
 
     engine = MatchingEngine(config)
@@ -31,7 +31,7 @@ def test_matching_engine_init_different_configs():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine1 = MatchingEngine(config1)
     assert engine1._orderbook.tick_size == 0.01
@@ -53,7 +53,7 @@ def test_matching_engine_multiple_engines():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
 
     engine1 = MatchingEngine(config)
@@ -75,7 +75,7 @@ def test_calculate_fee_retail_maker():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -97,7 +97,7 @@ def test_calculate_fee_retail_taker():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -119,7 +119,7 @@ def test_calculate_fee_whale():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -141,7 +141,7 @@ def test_calculate_fee_market_maker():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -163,7 +163,7 @@ def test_calculate_fee_unregistered_agent():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -181,7 +181,7 @@ def test_calculate_fee_zero_amount():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -201,7 +201,7 @@ def test_register_agent():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -224,7 +224,7 @@ def test_multiple_agents_different_rates():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -265,7 +265,7 @@ def test_match_limit_order_buy_with_asks():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -332,7 +332,7 @@ def test_match_limit_order_sell_with_bids():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -399,7 +399,7 @@ def test_match_limit_order_no_match():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -446,7 +446,7 @@ def test_match_limit_order_partial_fill():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -496,7 +496,7 @@ def test_match_limit_order_multiple_price_levels():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -577,7 +577,7 @@ def test_match_limit_order_empty_orderbook():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -612,7 +612,7 @@ def test_match_limit_order_fully_filled():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -666,7 +666,7 @@ def test_match_limit_order_orderbook_quantity():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -719,7 +719,7 @@ def test_match_market_order_buy_fully_filled():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -780,7 +780,7 @@ def test_match_market_order_sell_fully_filled():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -840,7 +840,7 @@ def test_match_market_order_buy_partial_fill():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -894,7 +894,7 @@ def test_match_market_order_sell_partial_fill():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -948,7 +948,7 @@ def test_match_market_order_empty_orderbook():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -985,7 +985,7 @@ def test_match_market_order_multiple_price_levels():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -1068,7 +1068,7 @@ def test_match_market_order_taker_fee():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -1116,7 +1116,7 @@ def test_process_order_limit_order():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -1163,7 +1163,7 @@ def test_process_order_market_order():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -1208,7 +1208,7 @@ def test_process_order_no_trade():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -1242,7 +1242,7 @@ def test_process_order_multiple_trades():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 
@@ -1299,7 +1299,7 @@ def test_process_order_partial_fill():
         initial_price=100.0,
         tick_size=0.01,
         lot_size=1.0,
-        depth=100,
+        depth=5,
     )
     engine = MatchingEngine(config)
 

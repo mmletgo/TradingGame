@@ -52,8 +52,8 @@ DEF AGENT_RETAIL_PRO = 1
 DEF AGENT_MARKET_MAKER = 3
 
 # 输入/输出维度
-DEF INPUT_DIM_FULL = 907
-DEF INPUT_DIM_MARKET_MAKER = 972
+DEF INPUT_DIM_FULL = 527
+DEF INPUT_DIM_MARKET_MAKER = 592
 DEF OUTPUT_DIM_FULL = 8
 DEF OUTPUT_DIM_MARKET_MAKER = 43
 
@@ -403,8 +403,8 @@ cdef MarketStateData* alloc_market_state_data() noexcept:
     data.as_spread_adj_max = 0.0
     data.as_max_reservation_offset = 0.0
 
-    data.bid_data = <double*>calloc(200, sizeof(double))
-    data.ask_data = <double*>calloc(200, sizeof(double))
+    data.bid_data = <double*>calloc(10, sizeof(double))
+    data.ask_data = <double*>calloc(10, sizeof(double))
     data.trade_prices = <double*>calloc(100, sizeof(double))
     data.trade_quantities = <double*>calloc(100, sizeof(double))
     data.tick_history_prices = <double*>calloc(100, sizeof(double))
@@ -700,7 +700,7 @@ cdef void _extract_market_state(object market_state, MarketStateData* data):
     bid_data = market_state.bid_data
     ask_data = market_state.ask_data
 
-    for i in range(200):
+    for i in range(10):
         data.bid_data[i] = <double>bid_data[i]
         data.ask_data[i] = <double>ask_data[i]
 
@@ -844,18 +844,18 @@ cdef void _observe_full_single(
     double initial_balance,
     double leverage,
 ) noexcept nogil:
-    """构建高级散户的神经网络输入向量（907 维）
+    """构建高级散户的神经网络输入向量（527 维）
 
     输入布局：
-    - 0-199: 买盘100档（每档2个值：价格归一化 + 数量）
-    - 200-399: 卖盘100档（每档2个值：价格归一化 + 数量）
-    - 400-499: 最近100笔成交价格
-    - 500-599: 最近100笔成交数量
-    - 600-603: 持仓信息（4个值）
-    - 604-606: 挂单信息（3个值）
-    - 607-706: tick历史价格（100个）
-    - 707-806: tick历史成交量（100个）
-    - 807-906: tick历史成交额（100个）
+    - 0-9: 买盘5档（每档2个值：价格归一化 + 数量）
+    - 10-19: 卖盘5档（每档2个值：价格归一化 + 数量）
+    - 20-119: 最近100笔成交价格
+    - 120-219: 最近100笔成交数量
+    - 220-223: 持仓信息（4个值）
+    - 224-226: 挂单信息（3个值）
+    - 227-326: tick历史价格（100个）
+    - 327-426: tick历史成交量（100个）
+    - 427-526: tick历史成交额（100个）
     """
     cdef int i
     cdef double mid_price = market.mid_price
@@ -865,57 +865,57 @@ cdef void _observe_full_single(
     cdef double unrealized_pnl = agents.unrealized_pnl[agent_idx]
     cdef double equity = balance + unrealized_pnl
 
-    # 买盘100档（200个值）
-    for i in range(200):
+    # 买盘5档（10个值）
+    for i in range(10):
         output[i] = market.bid_data[i]
 
-    # 卖盘100档（200个值）
-    for i in range(200):
-        output[200 + i] = market.ask_data[i]
+    # 卖盘5档（10个值）
+    for i in range(10):
+        output[10 + i] = market.ask_data[i]
 
     # 最近100笔成交价格
     for i in range(100):
-        output[400 + i] = market.trade_prices[i]
+        output[20 + i] = market.trade_prices[i]
 
     # 最近100笔成交数量
     for i in range(100):
-        output[500 + i] = market.trade_quantities[i]
+        output[120 + i] = market.trade_quantities[i]
 
     # 持仓信息（4个值）
     cdef double position_value = fabs(pos_qty) * mid_price
     if equity > 0 and leverage > 0:
-        output[600] = position_value / (equity * leverage)
+        output[220] = position_value / (equity * leverage)
     else:
-        output[600] = 0.0
+        output[220] = 0.0
 
     if pos_qty == 0 or mid_price == 0:
-        output[601] = 0.0
+        output[221] = 0.0
     else:
-        output[601] = (pos_avg_price - mid_price) / mid_price
+        output[221] = (pos_avg_price - mid_price) / mid_price
 
     if initial_balance > 0:
-        output[602] = balance / initial_balance
-        output[603] = equity / initial_balance
+        output[222] = balance / initial_balance
+        output[223] = equity / initial_balance
     else:
-        output[602] = 0.0
-        output[603] = 0.0
+        output[222] = 0.0
+        output[223] = 0.0
 
     # 挂单信息（3个值）- 简化处理
-    output[604] = 0.0
-    output[605] = 0.0
-    output[606] = 0.0
+    output[224] = 0.0
+    output[225] = 0.0
+    output[226] = 0.0
 
     # tick历史价格（100个）
     for i in range(100):
-        output[607 + i] = market.tick_history_prices[i]
+        output[227 + i] = market.tick_history_prices[i]
 
     # tick历史成交量（100个）
     for i in range(100):
-        output[707 + i] = market.tick_history_volumes[i]
+        output[327 + i] = market.tick_history_volumes[i]
 
     # tick历史成交额（100个）
     for i in range(100):
-        output[807 + i] = market.tick_history_amounts[i]
+        output[427 + i] = market.tick_history_amounts[i]
 
 
 cdef void batch_observe_full_nogil(
@@ -924,7 +924,7 @@ cdef void batch_observe_full_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建高级散户的神经网络输入向量（907 维）"""
+    """批量构建高级散户的神经网络输入向量（527 维）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 100000.0  # 默认值，高级散户
@@ -942,19 +942,19 @@ cdef void _observe_market_maker_single(
     double initial_balance,
     double leverage,
 ) noexcept nogil:
-    """构建做市商的神经网络输入向量（972 维）
+    """构建做市商的神经网络输入向量（592 维）
 
     输入布局：
-    - 0-199: 买盘100档（每档2个值：价格归一化 + 数量）
-    - 200-399: 卖盘100档（每档2个值：价格归一化 + 数量）
-    - 400-499: 最近100笔成交价格
-    - 500-599: 最近100笔成交数量
-    - 600-603: 持仓信息（4个值）
-    - 604-663: 挂单信息（60个值：10买单+10卖单，每单3个值）
-    - 664-763: tick历史价格（100个）
-    - 764-863: tick历史成交量（100个）
-    - 864-963: tick历史成交额（100个）
-    - 964-971: AS模型特征（8个值）
+    - 0-9: 买盘5档（每档2个值：价格归一化 + 数量）
+    - 10-19: 卖盘5档（每档2个值：价格归一化 + 数量）
+    - 20-119: 最近100笔成交价格
+    - 120-219: 最近100笔成交数量
+    - 220-223: 持仓信息（4个值）
+    - 224-283: 挂单信息（60个值：10买单+10卖单，每单3个值）
+    - 284-383: tick历史价格（100个）
+    - 384-483: tick历史成交量（100个）
+    - 484-583: tick历史成交额（100个）
+    - 584-591: AS模型特征（8个值）
     """
     cdef int i
     cdef double mid_price = market.mid_price
@@ -964,58 +964,58 @@ cdef void _observe_market_maker_single(
     cdef double unrealized_pnl = agents.unrealized_pnl[agent_idx]
     cdef double equity = balance + unrealized_pnl
 
-    # 买盘100档（200个值）
-    for i in range(200):
+    # 买盘5档（10个值）
+    for i in range(10):
         output[i] = market.bid_data[i]
 
-    # 卖盘100档（200个值）
-    for i in range(200):
-        output[200 + i] = market.ask_data[i]
+    # 卖盘5档（10个值）
+    for i in range(10):
+        output[10 + i] = market.ask_data[i]
 
     # 最近100笔成交价格
     for i in range(100):
-        output[400 + i] = market.trade_prices[i]
+        output[20 + i] = market.trade_prices[i]
 
     # 最近100笔成交数量
     for i in range(100):
-        output[500 + i] = market.trade_quantities[i]
+        output[120 + i] = market.trade_quantities[i]
 
     # 持仓信息（4个值）
     cdef double position_value = fabs(pos_qty) * mid_price
     if equity > 0 and leverage > 0:
-        output[600] = position_value / (equity * leverage)
+        output[220] = position_value / (equity * leverage)
     else:
-        output[600] = 0.0
+        output[220] = 0.0
 
     if pos_qty == 0 or mid_price == 0:
-        output[601] = 0.0
+        output[221] = 0.0
     else:
-        output[601] = (pos_avg_price - mid_price) / mid_price
+        output[221] = (pos_avg_price - mid_price) / mid_price
 
     if initial_balance > 0:
-        output[602] = balance / initial_balance
-        output[603] = equity / initial_balance
+        output[222] = balance / initial_balance
+        output[223] = equity / initial_balance
     else:
-        output[602] = 0.0
-        output[603] = 0.0
+        output[222] = 0.0
+        output[223] = 0.0
 
     # 挂单信息（60个值）- 简化处理，全部置零
     for i in range(60):
-        output[604 + i] = 0.0
+        output[224 + i] = 0.0
 
     # tick历史价格（100个）
     for i in range(100):
-        output[664 + i] = market.tick_history_prices[i]
+        output[284 + i] = market.tick_history_prices[i]
 
     # tick历史成交量（100个）
     for i in range(100):
-        output[764 + i] = market.tick_history_volumes[i]
+        output[384 + i] = market.tick_history_volumes[i]
 
     # tick历史成交额（100个）
     for i in range(100):
-        output[864 + i] = market.tick_history_amounts[i]
+        output[484 + i] = market.tick_history_amounts[i]
 
-    # AS features (8 values) at indices 964-971
+    # AS features (8 values) at indices 584-591
     cdef double as_sigma = market.as_sigma
     cdef double as_tau = market.as_tau
     cdef double as_kappa = market.as_kappa
@@ -1048,14 +1048,14 @@ cdef void _observe_market_maker_single(
         optimal_spread_obs = as_gamma * sigma_sq_obs * as_tau + (2.0 / as_gamma) * log(1.0 + as_gamma / kappa_safe_obs)
         optimal_half_spread = optimal_spread_obs * 0.5
 
-    output[964] = reservation_offset_as  # [-0.5, 0.5]
-    output[965] = optimal_half_spread / mid_price if mid_price > 0 else 0.0  # [0, 0.1]
-    output[966] = as_sigma  # [0, 0.1]
-    output[967] = as_tau  # [0, 1]
-    output[968] = log10(as_kappa + 1) / 5.0  # [0, 1]
-    output[969] = clip(inventory_risk_as, -1.0, 1.0)  # [-1, 1]
-    output[970] = as_gamma / market.as_gamma_adj_max if market.as_gamma_adj_max > 0 else 0.0  # [0, 1]
-    output[971] = clip(optimal_spread_obs / (as_sigma + 1e-8), 0.0, 10.0)  # [0, 10]
+    output[584] = reservation_offset_as  # [-0.5, 0.5]
+    output[585] = optimal_half_spread / mid_price if mid_price > 0 else 0.0  # [0, 0.1]
+    output[586] = as_sigma  # [0, 0.1]
+    output[587] = as_tau  # [0, 1]
+    output[588] = log10(as_kappa + 1) / 5.0  # [0, 1]
+    output[589] = clip(inventory_risk_as, -1.0, 1.0)  # [-1, 1]
+    output[590] = as_gamma / market.as_gamma_adj_max if market.as_gamma_adj_max > 0 else 0.0  # [0, 1]
+    output[591] = clip(optimal_spread_obs / (as_sigma + 1e-8), 0.0, 10.0)  # [0, 10]
 
 
 cdef void batch_observe_market_maker_nogil(
@@ -1064,7 +1064,7 @@ cdef void batch_observe_market_maker_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建做市商的神经网络输入向量（972 维）"""
+    """批量构建做市商的神经网络输入向量（592 维）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 10000000.0  # 做市商初始资金
@@ -1123,7 +1123,7 @@ cdef void batch_observe_market_maker_multi_market_nogil(
     double[:, :] outputs,
     int num_threads
 ) noexcept nogil:
-    """批量构建做市商的神经网络输入向量（972 维，支持多市场状态）"""
+    """批量构建做市商的神经网络输入向量（592 维，支持多市场状态）"""
     cdef int num_agents = agents.num_agents
     cdef int i
     cdef double initial_balance = 10000000.0
@@ -1768,7 +1768,7 @@ def batch_decide_full(
     market_state,
     int num_threads=0,
 ) -> list:
-    """批量决策入口 - 完整版本 (907维输入, 8维输出)
+    """批量决策入口 - 完整版本 (527维输入, 8维输出)
 
     用于高级散户。
 
@@ -1870,7 +1870,7 @@ def batch_decide_market_maker(
     market_state,
     int num_threads=0,
 ) -> list:
-    """批量决策入口 - 做市商版本 (972维输入, 44维输出)
+    """批量决策入口 - 做市商版本 (592维输入, 44维输出)
 
     Args:
         networks: FastFeedForwardNetwork 列表
@@ -2239,7 +2239,7 @@ cdef class BatchNetworkCache:
 
         Args:
             num_networks: 网络数量
-            cache_type: 类型 (1=full 907维, 2=market_maker 972维)
+            cache_type: 类型 (1=full 527维, 2=market_maker 592维)
             num_threads: OpenMP 线程数，0 表示自动检测
             max_arenas: 最大竞技场数量（用于预分配多竞技场缓冲区）
             max_tasks_per_arena: 每竞技场最大任务数，0 表示使用 num_networks

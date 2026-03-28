@@ -41,16 +41,16 @@ def create_test_agent(agent_class, agent_id: int = 0):
 
 def create_market_state_with_only_bids():
     """创建只有买盘的市场状态"""
-    # 买盘数据：10档买单，从99.0向下
-    bid_data = np.zeros(200, dtype=np.float32)
-    for i in range(10):
-        price = 99.0 - i * 1.0  # 99, 98, 97, ..., 90
+    # 买盘数据：5档买单，从99.0向下
+    bid_data = np.zeros(10, dtype=np.float32)
+    for i in range(5):
+        price = 99.0 - i * 1.0  # 99, 98, 97, 96, 95
         quantity = 100 + i * 10  # 100, 110, 120, ...
         bid_data[i * 2] = (price - 100.0) / 100.0  # 价格归一化
         bid_data[i * 2 + 1] = np.log10(quantity + 1) / 10.0  # 数量归一化
 
     # 卖盘数据：全空
-    ask_data = np.zeros(200, dtype=np.float32)
+    ask_data = np.zeros(10, dtype=np.float32)
 
     return NormalizedMarketState(
         mid_price=100.0,
@@ -68,12 +68,12 @@ def create_market_state_with_only_bids():
 def create_market_state_with_only_asks():
     """创建只有卖盘的市场状态"""
     # 买盘数据：全空
-    bid_data = np.zeros(200, dtype=np.float32)
+    bid_data = np.zeros(10, dtype=np.float32)
 
-    # 卖盘数据：10档卖单，从101.0到110.0
-    ask_data = np.zeros(200, dtype=np.float32)
-    for i in range(10):
-        price = 101.0 + i * 1.0  # 101, 102, 103, ...
+    # 卖盘数据：5档卖单，从101.0到105.0
+    ask_data = np.zeros(10, dtype=np.float32)
+    for i in range(5):
+        price = 101.0 + i * 1.0  # 101, 102, 103, 104, 105
         quantity = 100 + i * 10  # 100, 110, 120, ...
         ask_data[i * 2] = (price - 100.0) / 100.0  # 价格归一化
         ask_data[i * 2 + 1] = np.log10(quantity + 1) / 10.0  # 数量归一化
@@ -96,8 +96,8 @@ def create_market_state_empty():
     return NormalizedMarketState(
         mid_price=100.0,
         tick_size=0.01,
-        bid_data=np.zeros(200, dtype=np.float32),
-        ask_data=np.zeros(200, dtype=np.float32),
+        bid_data=np.zeros(10, dtype=np.float32),
+        ask_data=np.zeros(10, dtype=np.float32),
         trade_prices=np.zeros(100, dtype=np.float32),
         trade_quantities=np.zeros(100, dtype=np.float32),
         tick_history_prices=np.zeros(100, dtype=np.float32),
@@ -119,14 +119,14 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度（高级散户使用完整的607维输入）
-        assert inputs.shape == (907,), f"期望输入维度907，实际{inputs.shape}"
+        assert inputs.shape == (527,), f"期望输入维度527，实际{inputs.shape}"
 
         # 验证买盘数据被正确填充
         assert inputs[0] != 0.0, "买盘价格应该被填充"
         assert inputs[1] != 0.0, "买盘数量应该被填充"
 
         # 验证卖盘数据为空
-        assert np.all(inputs[200:400] == 0.0), "卖盘数据应该全为0"
+        assert np.all(inputs[10:20] == 0.0), "卖盘数据应该全为0"
 
         # 测试 decide 方法是否正常工作
         action, params = agent.decide(market_state, orderbook)
@@ -142,14 +142,14 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度
-        assert inputs.shape == (907,), f"期望输入维度907，实际{inputs.shape}"
+        assert inputs.shape == (527,), f"期望输入维度527，实际{inputs.shape}"
 
         # 验证买盘数据为空
-        assert np.all(inputs[0:200] == 0.0), "买盘数据应该全为0"
+        assert np.all(inputs[0:10] == 0.0), "买盘数据应该全为0"
 
         # 验证卖盘数据被正确填充
-        assert inputs[200] != 0.0, "卖盘价格应该被填充"
-        assert inputs[201] != 0.0, "卖盘数量应该被填充"
+        assert inputs[10] != 0.0, "卖盘价格应该被填充"
+        assert inputs[11] != 0.0, "卖盘数量应该被填充"
 
         # 测试 decide 方法是否正常工作
         action, params = agent.decide(market_state, orderbook)
@@ -180,8 +180,8 @@ class TestSingleSideOrderbook:
         market_state = NormalizedMarketState(
             mid_price=0.001,  # 极小的中间价
             tick_size=0.01,
-            bid_data=np.zeros(200, dtype=np.float32),
-            ask_data=np.zeros(200, dtype=np.float32),
+            bid_data=np.zeros(10, dtype=np.float32),
+            ask_data=np.zeros(10, dtype=np.float32),
             trade_prices=np.zeros(100, dtype=np.float32),
             trade_quantities=np.zeros(100, dtype=np.float32),
             tick_history_prices=np.zeros(100, dtype=np.float32),
