@@ -16,6 +16,12 @@ if TYPE_CHECKING:
 from src.training.league.opponent_pool import OpponentPool
 from src.training.league.opponent_pool_manager import OpponentPoolManager, LEAGUE_AGENT_TYPES
 
+# 对手类型映射：历史对手池类型 → 实际与之对阵的当前代 agent 类型
+_OPPONENT_TYPE_MAP: dict[AgentType, AgentType] = {
+    AgentType.MARKET_MAKER: AgentType.RETAIL_PRO,
+    AgentType.RETAIL_PRO: AgentType.MARKET_MAKER,
+}
+
 
 @dataclass
 class HybridSamplingResult:
@@ -269,8 +275,9 @@ class HybridArenaAllocator:
         # 获取全池 PFSP 权重（L8: 复用 index_entries，避免重复调用 list_entries()）
         pool_entries: list[dict[str, Any]] = index_entries
         strategy: str = self.config.sampling_strategy
+        opponent_type: AgentType = _OPPONENT_TYPE_MAP.get(pool.agent_type, pool.agent_type)
         weights: np.ndarray = pool.compute_weights(
-            pool_entries, strategy, pool.agent_type, current_generation
+            pool_entries, strategy, opponent_type, current_generation
         )
 
         # 建立 entry_id -> 权重索引映射

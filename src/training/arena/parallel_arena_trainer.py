@@ -600,7 +600,7 @@ class ParallelArenaTrainer:
         # 1. 运行所有竞技场的所有 episode
         arena_start = time.perf_counter()
         arena_fitnesses: list[dict[tuple[AgentType, int], np.ndarray]] = []
-        episode_counts: list[int] = []
+        arena_participations: list[dict[tuple[AgentType, int], int]] = []
 
         assert self._arena_worker_pool is not None
 
@@ -615,10 +615,10 @@ class ParallelArenaTrainer:
                     episode_length=self.config.training.episode_length,
                 )
 
-                # 汇总 fitness
-                episode_fitness = self._aggregate_worker_fitness(results)
+                # 汇总 fitness 和参与计数
+                episode_fitness, episode_participation = self._aggregate_worker_fitness(results)
                 arena_fitnesses.append(episode_fitness)
-                episode_counts.append(self.multi_config.num_arenas)
+                arena_participations.append(episode_participation)
 
                 # League 训练钩子：per-arena fitness
                 for result in results:
@@ -649,13 +649,13 @@ class ParallelArenaTrainer:
 
         stats["arena_run_time"] = time.perf_counter() - arena_start
 
-        # 2. 汇总适应度
-        avg_fitness = self._collect_fitness_all_arenas(arena_fitnesses, episode_counts)
+        # 2. 汇总适应度（按实际参与数平均，修复适应度稀释 bug）
+        avg_fitness = self._collect_fitness_all_arenas(arena_fitnesses, arena_participations)
 
         # 【内存泄漏修复】汇总后清理 arena_fitnesses（包含多个 episode 的适应度数据）
-        episodes_this_round = sum(episode_counts)
+        episodes_this_round = self.multi_config.episodes_per_arena * self.multi_config.num_arenas
         del arena_fitnesses
-        del episode_counts
+        del arena_participations
 
         # 3. 执行 NEAT 进化
         evolve_start = time.perf_counter()
@@ -738,23 +738,26 @@ class ParallelArenaTrainer:
 
     def _aggregate_worker_fitness(
         self, results: list[EpisodeResult]
-    ) -> dict[tuple[AgentType, int], np.ndarray]:
-        """汇总所有 Worker 的 fitness 结果
+    ) -> tuple[dict[tuple[AgentType, int], np.ndarray], dict[tuple[AgentType, int], int]]:
+        """汇总所有 Worker 的 fitness 和参与计数
 
         Args:
             results: 各 Worker 返回的 EpisodeResult 列表
 
         Returns:
-            按 (AgentType, sub_pop_id) 汇总的适应度字典
+            (accumulated_fitness, participation_counts) 元组
         """
         accumulated: dict[tuple[AgentType, int], np.ndarray] = {}
+        participation: dict[tuple[AgentType, int], int] = {}
         for result in results:
             for key, fitness_arr in result.accumulated_fitness.items():
                 if key not in accumulated:
                     accumulated[key] = fitness_arr.copy()
                 else:
                     accumulated[key] += fitness_arr
-        return accumulated
+            for key, count in result.participation_counts.items():
+                participation[key] = participation.get(key, 0) + count
+        return accumulated, participation
 
     def _build_episode_stats_from_results(
         self, results: list[EpisodeResult], ep_idx: int
@@ -828,12 +831,31 @@ class ParallelArenaTrainer:
     def _collect_fitness_all_arenas(
         self,
         arena_fitnesses: list[dict[tuple[AgentType, int], np.ndarray]],
-        episode_counts: list[int],
+        arena_participations: list[dict[tuple[AgentType, int], int]],
     ) -> dict[tuple[AgentType, int], np.ndarray]:
-        """收集并汇总所有竞技场的适应度"""
-        return FitnessAggregator.aggregate_simple_average(
-            arena_fitnesses, episode_counts
-        )
+        """收集并汇总所有竞技场的适应度（按实际参与数平均）
+
+        每个 sub_pop 使用其实际参与的竞技场数量作为分母，
+        避免被排除的竞技场产生的 0 值稀释适应度。
+        """
+        total_fitness: dict[tuple[AgentType, int], np.ndarray] = {}
+        total_participation: dict[tuple[AgentType, int], int] = {}
+
+        for fitness, participation in zip(arena_fitnesses, arena_participations):
+            for key, arr in fitness.items():
+                if key not in total_fitness:
+                    total_fitness[key] = arr.copy()
+                else:
+                    total_fitness[key] += arr
+            for key, count in participation.items():
+                total_participation[key] = total_participation.get(key, 0) + count
+
+        result: dict[tuple[AgentType, int], np.ndarray] = {}
+        for key, arr in total_fitness.items():
+            count = total_participation.get(key, 1)
+            result[key] = arr / max(count, 1)
+
+        return result
 
     def _build_fitness_map(
         self,

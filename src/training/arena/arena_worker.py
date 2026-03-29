@@ -153,12 +153,14 @@ class EpisodeResult:
         per_arena_fitness: 每个竞技场独立的适应度（供 league trainer 使用），
             key 为 arena_id，value 为 {AgentType: fitness_array}
         arena_stats: 每个竞技场的统计信息
+        participation_counts: 每个 sub_pop 实际参与的竞技场数量（用于正确平均）
     """
 
     worker_id: int
     accumulated_fitness: dict[tuple[AgentType, int], NDArray[np.float32]]
     per_arena_fitness: dict[int, dict[AgentType, NDArray[np.float32]]]
     arena_stats: dict[int, ArenaEpisodeStats]
+    participation_counts: dict[tuple[AgentType, int], int] = field(default_factory=dict)
 
 
 # ============================================================================
@@ -1844,24 +1846,28 @@ def _collect_fitness_all_arenas(
     agent_infos_by_sub_pop: dict[tuple[AgentType, int], list[AgentInfo]],
     mm_fitness_weights: tuple[float, float],
     config: Config,
+    per_arena_agent_infos_by_sub_pop: list[dict[tuple[AgentType, int], list[AgentInfo]]] | None = None,
 ) -> EpisodeResult:
     """收集所有竞技场的适应度
 
     Args:
         worker_id: Worker ID
         arena_states: 竞技场状态列表
-        agent_infos_by_sub_pop: 按 (agent_type, sub_pop_id) 分组的 agent 信息
+        agent_infos_by_sub_pop: 按 (agent_type, sub_pop_id) 分组的 agent 信息（全局）
         mm_fitness_weights: 做市商适应度权重 (alpha, gamma)
         config: 全局配置
+        per_arena_agent_infos_by_sub_pop: 每个竞技场独立的 sub_pop 分组（按 arena_states 顺序），
+            为 None 时使用全局 agent_infos_by_sub_pop（向后兼容）
 
     Returns:
         EpisodeResult 汇总结果
     """
     accumulated: dict[tuple[AgentType, int], NDArray[np.float32]] = {}
+    participation_counts: dict[tuple[AgentType, int], int] = {}
     per_arena_fitness: dict[int, dict[AgentType, NDArray[np.float32]]] = {}
     arena_stats: dict[int, ArenaEpisodeStats] = {}
 
-    for arena in arena_states:
+    for arena_idx, arena in enumerate(arena_states):
         current_price = arena.matching_engine._orderbook.last_price
         if current_price <= 0:
             mid = arena.matching_engine._orderbook.get_mid_price()
@@ -1871,7 +1877,14 @@ def _collect_fitness_all_arenas(
 
         arena_fitness_by_type: dict[AgentType, NDArray[np.float32]] = {}
 
-        for key, infos in agent_infos_by_sub_pop.items():
+        # 使用 per-arena 分组（如果有），否则使用全局分组
+        sub_pop_grouping: dict[tuple[AgentType, int], list[AgentInfo]] = (
+            per_arena_agent_infos_by_sub_pop[arena_idx]
+            if per_arena_agent_infos_by_sub_pop is not None
+            else agent_infos_by_sub_pop
+        )
+
+        for key, infos in sub_pop_grouping.items():
             agent_type, sub_pop_id = key
             fitness_arr = _calculate_fitness_for_sub_pop(
                 arena,
@@ -1886,6 +1899,9 @@ def _collect_fitness_all_arenas(
                 accumulated[key] = fitness_arr.copy()
             else:
                 accumulated[key] += fitness_arr
+
+            # 跟踪参与计数
+            participation_counts[key] = participation_counts.get(key, 0) + 1
 
             # 按 AgentType 汇总（供 league trainer 使用）
             if agent_type not in arena_fitness_by_type:
@@ -1909,6 +1925,7 @@ def _collect_fitness_all_arenas(
         accumulated_fitness=accumulated,
         per_arena_fitness=per_arena_fitness,
         arena_stats=arena_stats,
+        participation_counts=participation_counts,
     )
 
 
@@ -1989,7 +2006,7 @@ def _merge_episode_results(
 ) -> EpisodeResult:
     """合并多个 episode 的结果
 
-    适应度使用累加（后续由主进程除以总 episode 数取平均）。
+    适应度使用累加（后续由主进程除以实际参与数取平均）。
 
     Args:
         worker_id: Worker ID
@@ -2026,11 +2043,18 @@ def _merge_episode_results(
         for arena_id, stats in result.arena_stats.items():
             merged_stats[arena_id] = stats
 
+    # 合并 participation_counts
+    merged_participation: dict[tuple[AgentType, int], int] = {}
+    for result in results:
+        for key, count in result.participation_counts.items():
+            merged_participation[key] = merged_participation.get(key, 0) + count
+
     return EpisodeResult(
         worker_id=worker_id,
         accumulated_fitness=merged_accumulated,
         per_arena_fitness=merged_per_arena,
         arena_stats=merged_stats,
+        participation_counts=merged_participation,
     )
 
 
@@ -2055,6 +2079,7 @@ def _run_episode_local(
     noise_trader_config: NoiseTraderConfig,
     per_arena_type_groups: dict[int, dict[AgentType, tuple[list[int], NDArray[np.int32]]]] | None = None,
     per_arena_pop_total_counts: dict[int, dict[AgentType, int]] | None = None,
+    per_arena_agent_infos_by_sub_pop: list[dict[tuple[AgentType, int], list[AgentInfo]]] | None = None,
 ) -> EpisodeResult:
     """Worker 独立运行一个 episode 的完整逻辑
 
@@ -2074,6 +2099,7 @@ def _run_episode_local(
         noise_trader_config: 噪声交易者配置
         per_arena_type_groups: 每个竞技场独立的 type_groups，为 None 时使用全局 type_groups
         per_arena_pop_total_counts: 每个竞技场独立的 pop_total_counts，为 None 时使用全局 pop_total_counts
+        per_arena_agent_infos_by_sub_pop: 每个竞技场独立的 sub_pop 分组，为 None 时使用全局分组
 
     Returns:
         EpisodeResult 结果
@@ -2296,6 +2322,7 @@ def _run_episode_local(
         agent_infos_by_sub_pop,
         mm_fitness_weights,
         config,
+        per_arena_agent_infos_by_sub_pop=per_arena_agent_infos_by_sub_pop,
     )
 
 
@@ -2375,6 +2402,7 @@ def arena_worker_main(
     # Per-arena 数据结构（初始为 None，update_agent_infos 时可能设置）
     per_arena_type_groups: dict[int, dict[AgentType, tuple[list[int], NDArray[np.int32]]]] | None = None
     per_arena_pop_total_counts: dict[int, dict[AgentType, int]] | None = None
+    per_arena_agent_infos_by_sub_pop: list[dict[tuple[AgentType, int], list[AgentInfo]]] | None = None
 
     worker_logger.info(f"Worker {worker_id} 初始化完成")
 
@@ -2449,6 +2477,14 @@ def arena_worker_main(
                 pop_total_counts = _compute_pop_total_counts(agent_infos)
                 agent_infos_by_sub_pop = _group_agent_infos_by_sub_pop(agent_infos)
 
+                # 构建 per-arena 的 sub_pop 分组（用于适应度收集时避免稀释）
+                if per_arena_infos is not None:
+                    per_arena_agent_infos_by_sub_pop = [
+                        _group_agent_infos_by_sub_pop(infos) for infos in per_arena_infos
+                    ]
+                else:
+                    per_arena_agent_infos_by_sub_pop = None
+
                 # 清理旧的共享内存附着
                 for shm_mem in shm_attachments.values():
                     try:
@@ -2481,6 +2517,7 @@ def arena_worker_main(
                         noise_trader_config=noise_trader_config,
                         per_arena_type_groups=per_arena_type_groups,
                         per_arena_pop_total_counts=per_arena_pop_total_counts,
+                        per_arena_agent_infos_by_sub_pop=per_arena_agent_infos_by_sub_pop,
                     )
                     all_results.append(result)
 
