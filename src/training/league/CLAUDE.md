@@ -45,8 +45,8 @@
 | 竞技场类型 | 散户 | 做市商 | 噪声交易者 |
 |-----------|------|--------|-----------|
 | 纯竞技场 | 当代 2,400 | 当代 600 | 300 |
-| 散户挑战赛 | 当代 2,400 | 当代 600 + 历史 1 entry（600） | 300 |
-| MM 挑战赛 | 当代 2,400 + 历史 1 entry（2,400） | 当代 600 | 300 |
+| 散户挑战赛 | 当代 2,400 | 历史 1 entry（600），排除当代 MM | 300 |
+| MM 挑战赛 | 历史 1 entry（2,400），排除当代散户 | 当代 600 | 300 |
 
 每个挑战赛竞技场仅包含 1 个历史 entry 的全量 agent，6 个 entry 通过 round-robin 分配到 6 个竞技场（1:1 映射）。
 
@@ -161,9 +161,10 @@ p(opponent) ∝ f(win_rate) × recency_factor × exploration_bonus
 
 **胜率跟踪：**
 - `win_rates` 和 `match_counts` 存储在 `pool_index.json` 的每个条目中
-- key 格式为 `vs_{AgentType.value}`（如 `vs_RETAIL_PRO`）
+- key 格式为 `vs_{对手类型.value}`（如历史 MM 的 key 为 `vs_RETAIL_PRO`，因为它对阵的是当代散户）
+- 对手类型映射通过 `_OPPONENT_TYPE_MAP`：历史 MM → `RETAIL_PRO`，历史散户 → `MARKET_MAKER`
 - 更新方式：EMA 平滑，`win_rate = (1 - α) × old + α × outcome`
-- outcome 定义：当前代同类型 Agent 平均适应度 > 0 即为"赢"（1.0）
+- outcome 定义：当前代**对阵方**（非同类型）Agent 平均适应度 > 0 即为"赢"（1.0）
 - 设计意图：采用二元 outcome（0/1）是 PFSP 的标准做法，简化胜率计算同时保持有效的优先级排序
 
 ---
@@ -212,7 +213,7 @@ class PerArenaAllocation:
 **采样策略（带新鲜度约束的 PFSP 加权采样）：**
 1. 仅遍历 `LEAGUE_AGENT_TYPES`，对每种类型独立采样 `num_historical_generations` 个历史 entries
 2. 将对手池按代数排序，分为"最近 1/3（向上取整）"和"全池"
-3. 使用 `pool.compute_weights()` 获取配置策略（默认 PFSP）的采样权重
+3. 使用 `pool.compute_weights()` 获取配置策略（默认 PFSP）的采样权重，`target_type` 使用 `_OPPONENT_TYPE_MAP` 映射后的对手类型（历史 MM 池 → `RETAIL_PRO`，历史散户池 → `MARKET_MAKER`）
 4. `freshness_ratio <= 0` 时 `n_recent = 0`（全部从全池采样）；否则 `n_recent = max(1, n_total * freshness_ratio)`
 5. 采样不足补偿：若最近池实际采样数不足 n_recent，差额补偿到全池采样数
 6. 从全池（排除已选）中按 PFSP 权重无放回采样剩余数量
@@ -319,11 +320,12 @@ class GenerationalComparisonStats:
 （每个挑战赛竞技场仅使用其中 1 个 entry 的 agent，通过 PerArenaAllocation 控制）
 ```
 
-**预进化适应度机制：**
-- `_build_fitness_map()` 在 NEAT 进化前被调用，在此缓存 `avg_fitness` 到 `self._pre_evolution_fitness`
-- `_save_milestone()` 保存里程碑时，将 `_pre_evolution_fitness` 按 AgentType 分组后传给 `OpponentPoolManager.add_snapshot()`
+**预进化数据一致性机制：**
+- `_build_fitness_map()` 在 NEAT 进化前被调用，同时缓存 `_pre_evolution_fitness`（适应度）和 `_pre_evolution_per_subpop_network_params`（网络参数）
+- 两者索引一致：`fitness[i]` 和 `network_params[i]` 对应同一个进化前的 agent
+- `_save_milestone()` 优先使用预进化网络参数写入 `networks.npz`，确保与 `pre_evolution_fitness.npz` 索引对齐
 - 预进化适应度通过 `OpponentEntry.pre_evolution_fitness` 字段持久化到 `pre_evolution_fitness.npz`
-- 解决问题：里程碑保存的是进化后基因组，新生成 offspring fitness 为 None，仅幸存精英有有效 fitness，导致精英选择样本池被严重缩小
+- 解决问题：（1）进化后新 offspring 无 fitness，精英选择样本池被严重缩小；（2）进化前后种群排列不同，fitness 和 network 索引不对齐
 
 **精英网络提取（模块级函数）：**
 - `extract_elite_networks(pre_evolution_fitness, network_data, elite_ratio, genome_data)` - 从历史 entry 中提取网络参数

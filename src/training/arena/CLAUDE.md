@@ -171,7 +171,7 @@ class ArenaState:
 | `run_round()` | 运行一轮训练：调用 ArenaWorkerPool.run_episodes() 运行所有 episode，汇总 fitness，执行 NEAT 进化，同步新网络 |
 | `_build_agent_infos()` | 从 populations 构建 AgentInfo 列表（供 ArenaWorkerPool 使用） |
 | `_sync_networks_to_workers()` | 将网络参数（packed numpy）同步到所有 Arena Workers |
-| `_aggregate_worker_fitness()` | 汇总所有 Worker 的 fitness 结果 |
+| `_aggregate_worker_fitness()` | 汇总所有 Worker 的 fitness 和参与计数，返回 `(fitness_dict, participation_dict)` |
 | `_build_episode_stats_from_results()` | 从 Worker 结果构建 episode 统计信息 |
 | `setup_for_testing(populations_data)` | 测试模式初始化（不使用 ArenaWorkerPool） |
 | `save_checkpoint(path)` / `load_checkpoint(path)` | 检查点管理（保存前自动从 Worker 同步基因组数据） |
@@ -184,7 +184,7 @@ class ArenaState:
    ├─ _aggregate_worker_fitness() - 汇总 Worker 返回的 fitness
    ├─ _on_arena_fitness_collected() - League 训练钩子
    └─ episode_callback() - 回调
-2. _collect_fitness_all_arenas() - 跨 episode 平均 fitness
+2. _collect_fitness_all_arenas() - 跨 episode 按实际参与数平均 fitness（防适应度稀释）
 3. NEAT 进化（lite 模式：跳过基因组序列化，仅返回网络参数和 species 数据）
 4. _update_populations_from_evolution() - 更新种群（跳过 brain 更新，仅缓存网络参数）
 5. _update_network_caches() - 更新主进程网络缓存（不清除 _cached_network_params_data，由后续 _sync_networks_to_workers 消费）
@@ -253,6 +253,7 @@ class EpisodeResult:
     accumulated_fitness: dict[tuple[AgentType, int], NDArray[np.float32]]  # 累积适应度
     per_arena_fitness: dict[int, dict[AgentType, NDArray[np.float32]]]    # 每竞技场适应度
     arena_stats: dict[int, ArenaEpisodeStats]                             # 竞技场统计
+    participation_counts: dict[tuple[AgentType, int], int]                # 每 sub_pop 实际参与的竞技场数
 ```
 
 ### ArenaWorkerPool (arena_worker.py)
