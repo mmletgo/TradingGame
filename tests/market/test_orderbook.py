@@ -1,47 +1,27 @@
 """
 测试订单簿模块
+
+适配 C++ 容器重写后的 OrderBook/PriceLevel：
+- PriceLevel 的 add_order/remove_order 为 cdef 方法，无法从 Python 直接调用
+- OrderBook 不再有 bids/asks 属性（原来是 SortedDict）
+- 通过 OrderBook 公共 API 间接测试 PriceLevel 行为
 """
 
 import pytest
-from collections import OrderedDict
+import numpy as np
 
 from src.market.orderbook.orderbook import PriceLevel, OrderBook
 from src.market.orderbook.order import Order, OrderSide, OrderType
 
 
+# ============================================================
+# PriceLevel 测试（通过 OrderBook 间接测试）
+# ============================================================
+
+
 def test_create_price_level():
-    """测试创建价格档位"""
-    level = PriceLevel(price=100.5)
-
-    assert level.price == 100.5
-    assert isinstance(level.orders, OrderedDict)
-    assert len(level.orders) == 0
-    assert level.total_quantity == 0
-
-
-def test_create_price_level_zero():
-    """测试创建价格为0的档位"""
-    level = PriceLevel(price=0.0)
-
-    assert level.price == 0.0
-    assert isinstance(level.orders, OrderedDict)
-    assert len(level.orders) == 0
-    assert level.total_quantity == 0
-
-
-def test_create_price_level_negative():
-    """测试创建负价格档位（虽然实际场景不会）"""
-    level = PriceLevel(price=-10.0)
-
-    assert level.price == -10.0
-    assert isinstance(level.orders, OrderedDict)
-    assert len(level.orders) == 0
-    assert level.total_quantity == 0
-
-
-def test_add_order_single():
-    """测试添加单个订单"""
-    level = PriceLevel(price=100.5)
+    """测试创建价格档位 - 通过 OrderBook 添加订单后检查深度"""
+    book = OrderBook()
     order = Order(
         order_id=1,
         agent_id=100,
@@ -50,17 +30,74 @@ def test_add_order_single():
         price=100.5,
         quantity=10,
     )
+    book.add_order(order)
 
-    level.add_order(order)
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
+    assert depth["bids"][0] == (100.5, 10)
 
-    assert len(level.orders) == 1
-    assert level.orders[1] is order
-    assert level.total_quantity == 10
+
+def test_create_price_level_zero():
+    """测试价格为 0 的档位"""
+    book = OrderBook()
+    order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=0.0,
+        quantity=5,
+    )
+    book.add_order(order)
+
+    assert 1 in book.order_map
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
+    assert depth["bids"][0][0] == 0.0
+    assert depth["bids"][0][1] == 5
+
+
+def test_create_price_level_negative():
+    """测试负价格档位（虽然实际场景不会）"""
+    book = OrderBook()
+    order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=-10.0,
+        quantity=3,
+    )
+    book.add_order(order)
+
+    assert 1 in book.order_map
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
+    assert depth["bids"][0][0] == -10.0
+    assert depth["bids"][0][1] == 3
+
+
+def test_add_order_single():
+    """测试添加单个订单到同一价格档位"""
+    book = OrderBook()
+    order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.5,
+        quantity=10,
+    )
+    book.add_order(order)
+
+    assert 1 in book.order_map
+    depth = book.get_depth()
+    assert depth["bids"][0] == (100.5, 10)
 
 
 def test_add_order_multiple():
-    """测试添加多个订单"""
-    level = PriceLevel(price=100.0)
+    """测试添加多个订单到同一价格档位"""
+    book = OrderBook()
     order1 = Order(
         order_id=1,
         agent_id=100,
@@ -86,22 +123,23 @@ def test_add_order_multiple():
         quantity=7,
     )
 
-    level.add_order(order1)
-    level.add_order(order2)
-    level.add_order(order3)
+    book.add_order(order1)
+    book.add_order(order2)
+    book.add_order(order3)
 
-    assert len(level.orders) == 3
-    # 验证 FIFO 顺序
-    orders_list = list(level.orders.values())
-    assert orders_list[0] is order1
-    assert orders_list[1] is order2
-    assert orders_list[2] is order3
-    assert level.total_quantity == 27
+    # 验证所有订单都存在
+    assert 1 in book.order_map
+    assert 2 in book.order_map
+    assert 3 in book.order_map
+    # 同一价格的订单数量应该聚合
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
+    assert depth["bids"][0] == (100.0, 27)  # 5 + 15 + 7
 
 
 def test_remove_order_exists():
-    """测试移除存在的订单"""
-    level = PriceLevel(price=100.0)
+    """测试移除存在的订单（通过 cancel_order）"""
+    book = OrderBook()
     order1 = Order(
         order_id=1,
         agent_id=100,
@@ -119,22 +157,23 @@ def test_remove_order_exists():
         quantity=20,
     )
 
-    level.add_order(order1)
-    level.add_order(order2)
+    book.add_order(order1)
+    book.add_order(order2)
 
-    # 移除中间的订单
-    removed = level.remove_order(order_id=1)
+    # 移除订单 1
+    result = book.cancel_order(order_id=1)
 
-    assert removed is order1
-    assert len(level.orders) == 1
-    assert 1 not in level.orders
-    assert 2 in level.orders
-    assert level.total_quantity == 20
+    assert result is True
+    assert 1 not in book.order_map
+    assert 2 in book.order_map
+    # 档位总量应该只剩 order2 的 20
+    depth = book.get_depth()
+    assert depth["bids"][0] == (100.0, 20)
 
 
 def test_remove_order_not_exists():
     """测试移除不存在的订单"""
-    level = PriceLevel(price=100.0)
+    book = OrderBook()
     order1 = Order(
         order_id=1,
         agent_id=100,
@@ -143,31 +182,29 @@ def test_remove_order_not_exists():
         price=100.0,
         quantity=10,
     )
-
-    level.add_order(order1)
+    book.add_order(order1)
 
     # 移除不存在的订单
-    removed = level.remove_order(order_id=999)
+    result = book.cancel_order(order_id=999)
 
-    assert removed is None
-    assert len(level.orders) == 1
-    assert level.total_quantity == 10
+    assert result is None
+    assert 1 in book.order_map
+    depth = book.get_depth()
+    assert depth["bids"][0] == (100.0, 10)
 
 
 def test_remove_order_empty():
-    """测试从空价格档位移除订单"""
-    level = PriceLevel(price=100.0)
+    """测试从空订单簿移除订单"""
+    book = OrderBook()
 
-    removed = level.remove_order(order_id=1)
+    result = book.cancel_order(order_id=1)
 
-    assert removed is None
-    assert len(level.orders) == 0
-    assert level.total_quantity == 0
+    assert result is None
 
 
 def test_remove_order_fifo_preserved():
-    """测试移除订单后 FIFO 顺序保持正确"""
-    level = PriceLevel(price=100.0)
+    """测试移除订单后剩余订单数量正确"""
+    book = OrderBook()
     order1 = Order(
         order_id=1,
         agent_id=100,
@@ -193,31 +230,34 @@ def test_remove_order_fifo_preserved():
         quantity=7,
     )
 
-    level.add_order(order1)
-    level.add_order(order2)
-    level.add_order(order3)
+    book.add_order(order1)
+    book.add_order(order2)
+    book.add_order(order3)
 
     # 移除中间订单
-    level.remove_order(order_id=2)
+    book.cancel_order(order_id=2)
 
-    # 验证剩余订单的 FIFO 顺序
-    orders_list = list(level.orders.values())
-    assert len(orders_list) == 2
-    assert orders_list[0] is order1
-    assert orders_list[1] is order3
-    assert level.total_quantity == 12  # 5 + 7
+    # 验证剩余订单
+    assert 1 in book.order_map
+    assert 2 not in book.order_map
+    assert 3 in book.order_map
+    # 总量 = 5 + 7 = 12
+    depth = book.get_depth()
+    assert depth["bids"][0] == (100.0, 12)
 
 
 def test_get_volume_empty():
-    """测试空档位返回0"""
+    """测试空订单簿通过 PriceLevel.get_volume 返回 0（通过 OrderBook 间接测试）"""
+    # PriceLevel 可以直接创建，但无法添加订单（add_order 是 cdef）
+    # 直接验证初始状态
     level = PriceLevel(price=100.0)
-
     assert level.get_volume() == 0
+    assert level.total_quantity == 0
 
 
 def test_get_volume_with_orders():
-    """测试有订单返回总量"""
-    level = PriceLevel(price=100.0)
+    """测试有订单时 PriceLevel 总量正确（通过 OrderBook 间接测试）"""
+    book = OrderBook()
     order1 = Order(
         order_id=1,
         agent_id=100,
@@ -235,32 +275,45 @@ def test_get_volume_with_orders():
         quantity=20,
     )
 
-    level.add_order(order1)
-    level.add_order(order2)
+    book.add_order(order1)
+    book.add_order(order2)
 
-    assert level.get_volume() == 30
+    # 验证深度反映的总量
+    depth = book.get_depth()
+    assert depth["bids"][0] == (100.0, 30)
+
+
+# ============================================================
+# OrderBook 创建测试
+# ============================================================
 
 
 def test_create_orderbook_default():
     """测试创建空订单簿（默认 tick_size）"""
     book = OrderBook()
 
-    assert book.bids == {}
-    assert book.asks == {}
     assert book.order_map == {}
     assert book.last_price == 0.0
     assert book.tick_size == 0.01
+    # 空订单簿无最优价
+    assert book.get_best_bid() is None
+    assert book.get_best_ask() is None
 
 
 def test_create_orderbook_custom_tick():
     """测试创建订单簿（自定义 tick_size）"""
     book = OrderBook(tick_size=0.01)
 
-    assert book.bids == {}
-    assert book.asks == {}
     assert book.order_map == {}
     assert book.last_price == 0.0
     assert book.tick_size == 0.01
+    assert book.get_best_bid() is None
+    assert book.get_best_ask() is None
+
+
+# ============================================================
+# OrderBook 添加订单测试
+# ============================================================
 
 
 def test_add_order_buy():
@@ -277,16 +330,19 @@ def test_add_order_buy():
 
     book.add_order(order)
 
-    # 验证买盘有该价格档位
-    assert 100.0 in book.bids
-    assert len(book.bids) == 1
-    assert book.bids[100.0].price == 100.0
-    assert book.bids[100.0].total_quantity == 10
-    # 验证订单映射
+    # 验证最优买价
+    assert book.get_best_bid() == 100.0
+    # 验证订单存在
     assert 1 in book.order_map
-    assert book.order_map[1] is order
-    # 验证卖盘为空
-    assert len(book.asks) == 0
+    # 验证 order_map 快照
+    om = book.order_map
+    assert 1 in om
+    assert om[1].price == 100.0
+    assert om[1].quantity == 10
+    # 验证深度
+    depth = book.get_depth()
+    assert depth["bids"] == [(100.0, 10)]
+    assert depth["asks"] == []
 
 
 def test_add_order_sell():
@@ -303,16 +359,19 @@ def test_add_order_sell():
 
     book.add_order(order)
 
-    # 验证卖盘有该价格档位
-    assert 100.0 in book.asks
-    assert len(book.asks) == 1
-    assert book.asks[100.0].price == 100.0
-    assert book.asks[100.0].total_quantity == 10
-    # 验证订单映射
+    # 验证最优卖价
+    assert book.get_best_ask() == 100.0
+    # 验证订单存在
     assert 1 in book.order_map
-    assert book.order_map[1] is order
-    # 验证买盘为空
-    assert len(book.bids) == 0
+    # 验证 order_map 快照
+    om = book.order_map
+    assert 1 in om
+    assert om[1].price == 100.0
+    assert om[1].quantity == 10
+    # 验证深度
+    depth = book.get_depth()
+    assert depth["bids"] == []
+    assert depth["asks"] == [(100.0, 10)]
 
 
 def test_add_order_existing_level():
@@ -338,14 +397,11 @@ def test_add_order_existing_level():
     book.add_order(order1)
     book.add_order(order2)
 
-    # 验证只有一个价格档位
-    assert len(book.bids) == 1
-    assert 100.0 in book.bids
-    # 验证档位总量
-    assert book.bids[100.0].total_quantity == 30
-    # 验证档位中有两个订单
-    assert len(book.bids[100.0].orders) == 2
-    # 验证订单映射
+    # 验证只有一个价格档位，总量为 30
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
+    assert depth["bids"][0] == (100.0, 30)
+    # 验证两个订单都存在
     assert 1 in book.order_map
     assert 2 in book.order_map
 
@@ -382,15 +438,13 @@ def test_add_order_different_prices():
     book.add_order(order2)
     book.add_order(order3)
 
-    # 验证有三个价格档位
-    assert len(book.bids) == 3
-    assert 100.0 in book.bids
-    assert 99.5 in book.bids
-    assert 100.5 in book.bids
-    # 验证每个档位的数量
-    assert book.bids[100.0].total_quantity == 10
-    assert book.bids[99.5].total_quantity == 20
-    assert book.bids[100.5].total_quantity == 15
+    # 验证有三个价格档位（买盘深度从高到低）
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 3
+    # 按价格从高到低排列
+    assert depth["bids"][0] == (100.5, 15)
+    assert depth["bids"][1] == (100.0, 10)
+    assert depth["bids"][2] == (99.5, 20)
 
 
 def test_add_order_both_sides():
@@ -417,15 +471,19 @@ def test_add_order_both_sides():
     book.add_order(sell_order)
 
     # 验证买卖盘都正确
-    assert len(book.bids) == 1
-    assert len(book.asks) == 1
-    assert 100.0 in book.bids
-    assert 100.0 in book.asks
-    assert book.bids[100.0].total_quantity == 10
-    assert book.asks[100.0].total_quantity == 20
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
+    assert len(depth["asks"]) == 1
+    assert depth["bids"][0] == (100.0, 10)
+    assert depth["asks"][0] == (100.0, 20)
     # 验证订单映射
     assert 1 in book.order_map
     assert 2 in book.order_map
+
+
+# ============================================================
+# OrderBook 撤单测试
+# ============================================================
 
 
 def test_cancel_order_exists_buy():
@@ -444,10 +502,11 @@ def test_cancel_order_exists_buy():
     # 撤销订单
     cancelled = book.cancel_order(order_id=1)
 
-    # 验证返回的订单
-    assert cancelled is order
-    # 验证买盘空了（档位被删除）
-    assert len(book.bids) == 0
+    # 验证撤单成功
+    assert cancelled is True
+    # 验证买盘空了
+    depth = book.get_depth()
+    assert depth["bids"] == []
     # 验证订单映射被移除
     assert 1 not in book.order_map
 
@@ -468,10 +527,11 @@ def test_cancel_order_exists_sell():
     # 撤销订单
     cancelled = book.cancel_order(order_id=1)
 
-    # 验证返回的订单
-    assert cancelled is order
-    # 验证卖盘空了（档位被删除）
-    assert len(book.asks) == 0
+    # 验证撤单成功
+    assert cancelled is True
+    # 验证卖盘空了
+    depth = book.get_depth()
+    assert depth["asks"] == []
     # 验证订单映射被移除
     assert 1 not in book.order_map
 
@@ -496,7 +556,8 @@ def test_cancel_order_not_exists():
     assert cancelled is None
     # 验证原订单还在
     assert 1 in book.order_map
-    assert len(book.bids) == 1
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
 
 
 def test_cancel_order_multiple_same_price():
@@ -534,13 +595,12 @@ def test_cancel_order_multiple_same_price():
     # 撤销中间的订单
     cancelled = book.cancel_order(order_id=2)
 
-    # 验证返回的订单
-    assert cancelled is order2
-    # 验证档位还存在（还有其他订单）
-    assert 100.0 in book.bids
-    assert len(book.bids) == 1
-    # 验证档位总量正确
-    assert book.bids[100.0].total_quantity == 25  # 10 + 15
+    # 验证撤单成功
+    assert cancelled is True
+    # 验证档位还存在（还有其他订单），总量 = 10 + 15 = 25
+    depth = book.get_depth()
+    assert len(depth["bids"]) == 1
+    assert depth["bids"][0] == (100.0, 25)
     # 验证订单映射
     assert 1 in book.order_map
     assert 2 not in book.order_map
@@ -574,11 +634,17 @@ def test_cancel_order_removes_level_if_empty():
     book.cancel_order(order_id=1)
 
     # 验证买盘档位被删除
-    assert 100.0 not in book.bids
-    assert len(book.bids) == 0
+    assert book.get_best_bid() is None
+    depth = book.get_depth()
+    assert depth["bids"] == []
     # 验证卖盘档位还在
-    assert 101.0 in book.asks
-    assert len(book.asks) == 1
+    assert book.get_best_ask() == 101.0
+    assert len(depth["asks"]) == 1
+
+
+# ============================================================
+# 最优买价测试
+# ============================================================
 
 
 def test_get_best_bid_with_orders():
@@ -701,6 +767,11 @@ def test_get_best_bid_ignores_asks():
     assert book.get_best_bid() == 99.0
 
 
+# ============================================================
+# 最优卖价测试
+# ============================================================
+
+
 def test_get_best_ask_with_orders():
     """测试有卖单时返回最低卖价"""
     book = OrderBook()
@@ -821,8 +892,13 @@ def test_get_best_ask_ignores_bids():
     assert book.get_best_ask() == 101.0
 
 
+# ============================================================
+# 深度查询测试
+# ============================================================
+
+
 def test_get_depth_default_levels():
-    """测试获取完整深度（默认5档）"""
+    """测试获取完整深度（默认档位数）"""
     book = OrderBook()
     order1 = Order(
         order_id=1,
@@ -1028,6 +1104,11 @@ def test_get_depth_aggregates_same_price():
     assert depth["bids"][1] == (99.5, 15)
 
 
+# ============================================================
+# 中间价测试
+# ============================================================
+
+
 def test_get_mid_price_normal():
     """测试正常计算中间价"""
     book = OrderBook()
@@ -1169,3 +1250,127 @@ def test_get_mid_price_multiple_levels():
     # 最优买价 100.0，最优卖价 101.0
     # 中间价 = (100.0 + 101.0) / 2 = 100.5
     assert book.get_mid_price() == 100.5
+
+
+# ============================================================
+# order_map 订单存在性测试
+# ============================================================
+
+
+def test_order_map_exists():
+    """测试检查存在的订单"""
+    book = OrderBook()
+    order = Order(
+        order_id=42,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=10,
+    )
+    book.add_order(order)
+
+    assert 42 in book.order_map
+
+
+def test_order_map_not_exists():
+    """测试检查不存在的订单"""
+    book = OrderBook()
+
+    assert 999 not in book.order_map
+
+
+def test_order_map_after_cancel():
+    """测试撤单后订单从 order_map 中消失"""
+    book = OrderBook()
+    order = Order(
+        order_id=1,
+        agent_id=100,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=100.0,
+        quantity=10,
+    )
+    book.add_order(order)
+    assert 1 in book.order_map
+
+    book.cancel_order(order_id=1)
+    assert 1 not in book.order_map
+
+
+# ============================================================
+# get_depth_numpy 测试
+# ============================================================
+
+
+def test_get_depth_numpy_basic():
+    """测试 NumPy 格式的深度查询"""
+    book = OrderBook()
+    book.add_order(Order(
+        order_id=1, agent_id=100,
+        side=OrderSide.BUY, order_type=OrderType.LIMIT,
+        price=100.0, quantity=10,
+    ))
+    book.add_order(Order(
+        order_id=2, agent_id=101,
+        side=OrderSide.SELL, order_type=OrderType.LIMIT,
+        price=101.0, quantity=15,
+    ))
+
+    bid_data, ask_data = book.get_depth_numpy(levels=5)
+
+    # shape 应该是 (5, 2)
+    assert bid_data.shape == (5, 2)
+    assert ask_data.shape == (5, 2)
+    # 第一档买盘
+    assert bid_data[0, 0] == 100.0
+    assert bid_data[0, 1] == 10
+    # 第一档卖盘
+    assert ask_data[0, 0] == 101.0
+    assert ask_data[0, 1] == 15
+    # 未填充的档位为 0
+    assert bid_data[1, 0] == 0.0
+    assert ask_data[1, 0] == 0.0
+
+
+def test_get_depth_numpy_empty():
+    """测试空订单簿的 NumPy 深度"""
+    book = OrderBook()
+
+    bid_data, ask_data = book.get_depth_numpy(levels=3)
+
+    assert bid_data.shape == (3, 2)
+    assert ask_data.shape == (3, 2)
+    assert np.all(bid_data == 0)
+    assert np.all(ask_data == 0)
+
+
+# ============================================================
+# clear 测试
+# ============================================================
+
+
+def test_clear_orderbook():
+    """测试清空订单簿"""
+    book = OrderBook()
+    book.add_order(Order(
+        order_id=1, agent_id=100,
+        side=OrderSide.BUY, order_type=OrderType.LIMIT,
+        price=100.0, quantity=10,
+    ))
+    book.add_order(Order(
+        order_id=2, agent_id=101,
+        side=OrderSide.SELL, order_type=OrderType.LIMIT,
+        price=101.0, quantity=20,
+    ))
+
+    book.clear()
+
+    assert book.get_best_bid() is None
+    assert book.get_best_ask() is None
+    assert 1 not in book.order_map
+    assert 2 not in book.order_map
+    assert book.order_map == {}
+    depth = book.get_depth()
+    assert depth["bids"] == []
+    assert depth["asks"] == []

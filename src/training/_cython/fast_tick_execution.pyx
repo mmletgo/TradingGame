@@ -282,7 +282,14 @@ cpdef tuple execute_tick_cython(
         return ([], 0.0, 0.0)
 
     # ====== 缓存引用 ======
-    cdef FastMatchingEngine me = <FastMatchingEngine>arena.matching_engine
+    # 支持 MatchingEngine(Python 包装层) 和 FastMatchingEngine(Cython) 两种类型
+    cdef object _me_obj = arena.matching_engine
+    cdef FastMatchingEngine me
+    if isinstance(_me_obj, FastMatchingEngine):
+        me = <FastMatchingEngine>_me_obj
+    else:
+        # MatchingEngine 包装层，取内部的 _fast 属性
+        me = <FastMatchingEngine>_me_obj._fast
     cdef OrderBook orderbook = <OrderBook>me._orderbook
     cdef dict agent_states = arena.agent_states
     cdef dict noise_trader_states = arena.noise_trader_states

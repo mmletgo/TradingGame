@@ -320,8 +320,10 @@ def test_match_limit_order_buy_with_asks():
     # 买单应该完全成交
     assert buy_order.filled_quantity == 8.0
 
-    # 卖单 1 应该还剩 2.0
-    assert sell_order1.filled_quantity == 8.0
+    # 卖单 1 的 filled_quantity 由内部 COrder 管理，Python Order 对象不再同步
+    # 验证卖单 1 在订单簿中还有 2.0 的剩余量
+    depth = engine._orderbook.get_depth_numpy(levels=5)
+    assert depth[1][0, 1] == 2.0  # 卖盘第一档数量应为 2
 
 
 def test_match_limit_order_sell_with_bids():
@@ -387,8 +389,10 @@ def test_match_limit_order_sell_with_bids():
     # 卖单应该完全成交
     assert sell_order.filled_quantity == 7.0
 
-    # 买单 1 应该还剩 3.0
-    assert buy_order1.filled_quantity == 7.0
+    # 买单 1 的 filled_quantity 由内部 COrder 管理，Python Order 对象不再同步
+    # 验证买单 1 在订单簿中还有 3.0 的剩余量
+    depth = engine._orderbook.get_depth_numpy(levels=5)
+    assert depth[0][0, 1] == 3.0  # 买盘第一档数量应为 3
 
 
 def test_match_limit_order_no_match():
@@ -565,8 +569,10 @@ def test_match_limit_order_multiple_price_levels():
     # 买单应该完全成交
     assert buy_order.filled_quantity == 10.0
 
-    # 卖单 3 应该还剩 2.0
-    assert sell_order3.filled_quantity == 3.0
+    # 卖单 3 的 filled_quantity 由内部 COrder 管理，Python Order 对象不再同步
+    # 验证卖单 3 在订单簿中还有 2.0 的剩余量
+    depth = engine._orderbook.get_depth_numpy(levels=5)
+    assert depth[1][0, 1] == 2.0  # 卖盘第一档数量应为 2
 
 
 def test_match_limit_order_empty_orderbook():
@@ -704,8 +710,9 @@ def test_match_limit_order_orderbook_quantity():
     assert depth["bids"][0][0] == 101.0  # 价格
     assert depth["bids"][0][1] == 7.0  # 数量应该是剩余数量
 
-    # 验证 price_level 的 total_quantity 也是正确的
-    assert engine._orderbook.bids[101.0].total_quantity == 7.0
+    # 验证 total_quantity 通过深度数据（C++ map 不再暴露 bids 属性）
+    bid_depth, _ = engine._orderbook.get_depth_numpy(levels=5)
+    assert bid_depth[0, 1] == 7.0  # 第一档数量应为 7
 
 
 # ==================== match_market_order 相关测试 ====================
@@ -1054,8 +1061,10 @@ def test_match_market_order_multiple_price_levels():
     # 市价买单应该完全成交
     assert market_buy.filled_quantity == 10.0
 
-    # 卖单 3 应该还剩 2.0
-    assert sell_order3.filled_quantity == 3.0
+    # 卖单 3 的 filled_quantity 由内部 COrder 管理，Python Order 对象不再同步
+    # 验证卖单 3 在订单簿中还有 2.0 的剩余量
+    depth = engine._orderbook.get_depth_numpy(levels=5)
+    assert depth[1][0, 1] == 2.0  # 卖盘第一档数量应为 2
     assert 3 in engine._orderbook.order_map  # sell_order3 仍在订单簿中
     assert engine._orderbook.get_best_ask() == 100.7
 

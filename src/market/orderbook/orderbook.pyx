@@ -464,25 +464,69 @@ cdef class OrderBook:
 
     @property
     def order_map(self):
-        """返回 Python dict 快照，供非热路径兼容使用。
+        """返回代理对象，支持 .get(order_id) 和 in 操作符。
 
-        注意：这是一个快照，修改返回的 dict 不会影响订单簿。
+        不构建完整 dict，每次 get() 只查找单个订单。
         """
-        from src.market.orderbook.order import Order, OrderSide, OrderType
-        result = {}
-        cdef unordered_map[long long, COrder*].iterator it = self.order_map_cpp.begin()
-        cdef COrder* order
-        while it != self.order_map_cpp.end():
-            order = deref(it).second
-            py_order = Order(
-                order_id=order.order_id,
-                agent_id=order.agent_id,
-                side=OrderSide(order.side),
-                order_type=OrderType(order.order_type),
-                price=order.price,
-                quantity=order.quantity,
-            )
-            py_order.filled_quantity = order.filled_quantity
-            result[order.order_id] = py_order
-            inc(it)
+        return _OrderMapProxy(self)
+
+    def get_order_count(self):
+        """获取订单簿中的订单数量"""
+        return self.order_map_cpp.size()
+
+    def get_order_info(self, long long order_id):
+        """获取单个订单的信息，返回轻量级对象或 None"""
+        cdef unordered_map[long long, COrder*].iterator it = self.order_map_cpp.find(order_id)
+        if it == self.order_map_cpp.end():
+            return None
+        cdef COrder* order = deref(it).second
+        return _COrderProxy(order.order_id, order.agent_id, order.side,
+                            order.order_type, order.price, order.quantity,
+                            order.filled_quantity)
+
+
+class _COrderProxy:
+    """COrder 的轻量级 Python 代理，避免创建完整 Order 对象"""
+    __slots__ = ('order_id', 'agent_id', 'side', 'order_type', 'price',
+                 'quantity', 'filled_quantity')
+
+    def __init__(self, order_id, agent_id, side, order_type, price, quantity, filled_quantity):
+        self.order_id = order_id
+        self.agent_id = agent_id
+        self.side = side
+        self.order_type = order_type
+        self.price = price
+        self.quantity = quantity
+        self.filled_quantity = filled_quantity
+
+
+class _OrderMapProxy:
+    """order_map 的代理，支持 .get() 和 __contains__ 操作"""
+    __slots__ = ('_orderbook',)
+
+    def __init__(self, orderbook):
+        self._orderbook = orderbook
+
+    def get(self, order_id, default=None):
+        result = self._orderbook.get_order_info(order_id)
+        return result if result is not None else default
+
+    def __contains__(self, order_id):
+        return self._orderbook.get_order_info(order_id) is not None
+
+    def __getitem__(self, order_id):
+        result = self._orderbook.get_order_info(order_id)
+        if result is None:
+            raise KeyError(order_id)
         return result
+
+    def __len__(self):
+        return self._orderbook.get_order_count()
+
+    def __bool__(self):
+        return self._orderbook.get_order_count() > 0
+
+    def __eq__(self, other):
+        if isinstance(other, dict):
+            return len(self) == len(other) and (len(other) == 0 or all(k in self for k in other))
+        return NotImplemented

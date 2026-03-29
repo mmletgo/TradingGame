@@ -277,11 +277,22 @@ cdef class FastMatchingEngine:
         Returns:
             本次撮合产生的所有 FastTrade 成交记录列表
         """
-        return self.process_order_raw(
+        cdef int original_qty = order.quantity
+        cdef list trades = self.process_order_raw(
             order.order_id, order.agent_id,
             int(order.side), int(order.order_type),
             order.price, order.quantity
         )
+        # 更新传入 Order 的 filled_quantity（兼容旧接口行为）
+        cdef int filled = 0
+        for t in trades:
+            filled += t.quantity
+        order.filled_quantity = filled
+        # 如果是限价单且有剩余挂入订单簿，更新 quantity 为剩余量
+        if int(order.order_type) == 1 and filled < original_qty:
+            order.quantity = original_qty - filled
+            order.filled_quantity = 0
+        return trades
 
     cpdef bint cancel_order(self, long long order_id):
         """
