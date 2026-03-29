@@ -60,7 +60,7 @@ from .arena_state import (
     ArenaState,
     NoiseTraderAccountState,
 )
-from .arena_worker import AgentInfo, ArenaWorkerPool, EpisodeResult
+from .arena_worker import AgentInfo, ArenaEpisodeStats, ArenaWorkerPool, EpisodeResult
 from .fitness_aggregator import FitnessAggregator
 from .shared_network_memory import SharedNetworkMemory, SharedNetworkMetadata
 
@@ -597,65 +597,57 @@ class ParallelArenaTrainer:
         round_start = time.perf_counter()
         stats: dict[str, Any] = {}
 
-        # 1. 运行所有竞技场的所有 episode
+        # 1. 所有 Worker 批量运行全部 episode（消除 episode 间同步屏障）
+        #    每个 Worker 内部连续运行 episodes_per_arena 个 episode，
+        #    每个 episode 独立生成随机参数（episode_buy_prob、OU 初始状态等），
+        #    Worker 内部合并结果后一次性返回。
         arena_start = time.perf_counter()
-        arena_fitnesses: list[dict[tuple[AgentType, int], np.ndarray]] = []
-        arena_participations: list[dict[tuple[AgentType, int], int]] = []
 
         assert self._arena_worker_pool is not None
+
+        num_episodes: int = self.multi_config.episodes_per_arena
 
         # 禁用GC，避免 tick 期间的 GC 停顿导致性能抖动
         gc.disable()
 
         try:
-            for ep_idx in range(self.multi_config.episodes_per_arena):
-                # Workers 独立运行一个 episode
-                results: list[EpisodeResult] = self._arena_worker_pool.run_episodes(
-                    num_episodes=1,
-                    episode_length=self.config.training.episode_length,
-                )
-
-                # 汇总 fitness 和参与计数
-                episode_fitness, episode_participation = self._aggregate_worker_fitness(results)
-                arena_fitnesses.append(episode_fitness)
-                arena_participations.append(episode_participation)
-
-                # League 训练钩子：per-arena fitness
-                for result in results:
-                    for arena_id, per_type_fitness in result.per_arena_fitness.items():
-                        for agent_type, fitness_arr in per_type_fitness.items():
-                            self._on_arena_fitness_collected(
-                                arena_id, agent_type, fitness_arr, 0.0
-                            )
-
-                # Episode 回调
-                if episode_callback is not None:
-                    episode_stats = self._build_episode_stats_from_results(
-                        results, ep_idx
-                    )
-                    episode_callback(episode_stats)
-
-                # GC 策略：每个 episode 清理年轻代，每 10 个 episode 清理全部并释放内存
-                if (ep_idx + 1) % 10 == 0:
-                    gc.collect(0)
-                    gc.collect(1)
-                    gc.collect(2)
-                    malloc_trim()
-                else:
-                    gc.collect(0)
+            results: list[EpisodeResult] = self._arena_worker_pool.run_episodes(
+                num_episodes=num_episodes,
+                episode_length=self.config.training.episode_length,
+            )
         finally:
-            # 确保 GC 重新启用
             gc.enable()
+
+        # 汇总 fitness 和参与计数（Worker 已内部合并多 episode）
+        merged_fitness, merged_participation = self._aggregate_worker_fitness(results)
+
+        # League 训练钩子：per-arena fitness
+        for result in results:
+            for arena_id, per_type_fitness in result.per_arena_fitness.items():
+                for agent_type, fitness_arr in per_type_fitness.items():
+                    self._on_arena_fitness_collected(
+                        arena_id, agent_type, fitness_arr, 0.0
+                    )
+
+        # Episode 回调：逐 episode 回调，从 per_episode_arena_stats 恢复每个 episode 的统计
+        if episode_callback is not None:
+            self._invoke_per_episode_callbacks(
+                results, num_episodes, episode_callback
+            )
+
+        # GC 清理
+        gc.collect(0)
 
         stats["arena_run_time"] = time.perf_counter() - arena_start
 
-        # 2. 汇总适应度（按实际参与数平均，修复适应度稀释 bug）
-        avg_fitness = self._collect_fitness_all_arenas(arena_fitnesses, arena_participations)
+        # 2. 汇总适应度（按实际参与数平均）
+        avg_fitness = self._collect_fitness_all_arenas(
+            [merged_fitness], [merged_participation]
+        )
 
-        # 【内存泄漏修复】汇总后清理 arena_fitnesses（包含多个 episode 的适应度数据）
-        episodes_this_round = self.multi_config.episodes_per_arena * self.multi_config.num_arenas
-        del arena_fitnesses
-        del arena_participations
+        episodes_this_round = num_episodes * self.multi_config.num_arenas
+        del merged_fitness
+        del merged_participation
 
         # 3. 执行 NEAT 进化
         evolve_start = time.perf_counter()
@@ -804,6 +796,69 @@ class ParallelArenaTrainer:
             "arena_end_reasons": end_reasons,
             "arena_end_ticks": end_ticks,
         }
+
+    def _invoke_per_episode_callbacks(
+        self,
+        results: list[EpisodeResult],
+        num_episodes: int,
+        episode_callback: Callable[[dict[str, Any]], None],
+    ) -> None:
+        """从批量运行的结果中恢复逐 episode 统计并逐个回调
+
+        Worker 批量运行多个 episode 后，per_episode_arena_stats 保存了每个
+        episode 的竞技场统计。本方法将各 Worker 的同一 episode 索引的数据
+        合并，逐个 episode 调用 episode_callback。
+
+        单 episode 时直接使用 arena_stats（per_episode_arena_stats 为空）。
+        """
+        if num_episodes <= 1:
+            # 单 episode：直接使用 arena_stats
+            stats = self._build_episode_stats_from_results(results, 0)
+            episode_callback(stats)
+            return
+
+        for ep_idx in range(num_episodes):
+            high_prices: list[float] = []
+            low_prices: list[float] = []
+            arena_ticks: list[int] = []
+            end_reasons: list[str | None] = []
+            end_ticks: list[int] = []
+
+            for result in results:
+                # per_episode_arena_stats[ep_idx] 是该 Worker 第 ep_idx 个 episode 的
+                # {arena_id: ArenaEpisodeStats} 字典
+                if ep_idx < len(result.per_episode_arena_stats):
+                    ep_stats = result.per_episode_arena_stats[ep_idx]
+                else:
+                    # 回退：使用最终 arena_stats
+                    ep_stats = result.arena_stats
+
+                for _arena_id, arena_stat in ep_stats.items():
+                    high_prices.append(arena_stat.high_price)
+                    low_prices.append(arena_stat.low_price)
+                    arena_ticks.append(arena_stat.end_tick)
+                    end_reasons.append(arena_stat.end_reason)
+                    end_ticks.append(arena_stat.end_tick)
+
+            global_high = max(high_prices) if high_prices else 0.0
+            global_low = min(low_prices) if low_prices else 0.0
+            global_episode = (
+                self.generation * self.multi_config.episodes_per_arena + ep_idx + 1
+            )
+
+            episode_callback({
+                "episode": global_episode,
+                "episode_in_round": ep_idx + 1,
+                "generation": self.generation,
+                "num_arenas": self.multi_config.num_arenas,
+                "high_price": global_high,
+                "low_price": global_low,
+                "arena_high_prices": high_prices,
+                "arena_low_prices": low_prices,
+                "arena_ticks": arena_ticks,
+                "arena_end_reasons": end_reasons,
+                "arena_end_ticks": end_ticks,
+            })
 
     # ========================================================================
     # 适应度汇总和进化

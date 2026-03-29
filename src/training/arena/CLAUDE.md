@@ -179,17 +179,19 @@ class ArenaState:
 
 **训练轮次流程（run_round）：**
 ```
-1. 循环 episodes_per_arena 次：
-   ├─ ArenaWorkerPool.run_episodes() - Workers 独立运行完整 episode
-   ├─ _aggregate_worker_fitness() - 汇总 Worker 返回的 fitness
-   ├─ _on_arena_fitness_collected() - League 训练钩子
-   └─ episode_callback() - 回调
-2. _collect_fitness_all_arenas() - 跨 episode 按实际参与数平均 fitness（防适应度稀释）
-3. NEAT 进化（lite 模式：跳过基因组序列化，仅返回网络参数和 species 数据）
-4. _update_populations_from_evolution() - 更新种群（跳过 brain 更新，仅缓存网络参数）
-5. _update_network_caches() - 更新主进程网络缓存（不清除 _cached_network_params_data，由后续 _sync_networks_to_workers 消费）
-6. _refresh_agent_states() - 刷新 Agent 状态
-7. _sync_networks_to_workers() - 同步新网络到 Workers
+1. ArenaWorkerPool.run_episodes(num_episodes=episodes_per_arena)
+   ├─ 所有 Worker 批量运行全部 episode（消除 episode 间同步屏障）
+   ├─ 每个 Worker 内部连续运行 episodes_per_arena 个 episode
+   ├─ 每个 episode 独立生成随机参数（episode_buy_prob、OU 初始状态等）
+   └─ Worker 内部合并多 episode 结果后一次性返回
+2. _aggregate_worker_fitness() - 汇总 Worker 返回的 fitness
+3. _on_arena_fitness_collected() - League 训练钩子
+4. _collect_fitness_all_arenas() - 按实际参与数平均 fitness（防适应度稀释）
+5. NEAT 进化（lite 模式：跳过基因组序列化，仅返回网络参数和 species 数据）
+6. _update_populations_from_evolution() - 更新种群（跳过 brain 更新，仅缓存网络参数）
+7. _update_network_caches() - 更新主进程网络缓存（不清除 _cached_network_params_data，由后续 _sync_networks_to_workers 消费）
+8. _refresh_agent_states() - 刷新 Agent 状态
+9. _sync_networks_to_workers() - 同步新网络到 Workers
 ```
 
 **共享内存同步机制：**

@@ -152,8 +152,11 @@ class EpisodeResult:
             key 为 (AgentType, sub_pop_id)，value 为适应度数组
         per_arena_fitness: 每个竞技场独立的适应度（供 league trainer 使用），
             key 为 arena_id，value 为 {AgentType: fitness_array}
-        arena_stats: 每个竞技场的统计信息
+        arena_stats: 每个竞技场的统计信息（最后一个 episode）
         participation_counts: 每个 sub_pop 实际参与的竞技场数量（用于正确平均）
+        per_episode_arena_stats: 每个 episode 的竞技场统计信息列表，
+            外层 list 长度 = num_episodes，内层 dict 按 arena_id 索引。
+            单 episode 时为空（直接使用 arena_stats）。
     """
 
     worker_id: int
@@ -161,6 +164,7 @@ class EpisodeResult:
     per_arena_fitness: dict[int, dict[AgentType, NDArray[np.float32]]]
     arena_stats: dict[int, ArenaEpisodeStats]
     participation_counts: dict[tuple[AgentType, int], int] = field(default_factory=dict)
+    per_episode_arena_stats: list[dict[int, ArenaEpisodeStats]] = field(default_factory=list)
 
 
 # ============================================================================
@@ -2021,6 +2025,7 @@ def _merge_episode_results(
     merged_accumulated: dict[tuple[AgentType, int], NDArray[np.float32]] = {}
     merged_per_arena: dict[int, dict[AgentType, NDArray[np.float32]]] = {}
     merged_stats: dict[int, ArenaEpisodeStats] = {}
+    all_episode_stats: list[dict[int, ArenaEpisodeStats]] = []
 
     for result in results:
         for key, fitness_arr in result.accumulated_fitness.items():
@@ -2029,7 +2034,7 @@ def _merge_episode_results(
             else:
                 merged_accumulated[key] += fitness_arr
 
-        # per_arena_fitness: 取最后一个 episode 的（或累加）
+        # per_arena_fitness: 累加
         for arena_id, fitness_by_type in result.per_arena_fitness.items():
             if arena_id not in merged_per_arena:
                 merged_per_arena[arena_id] = {}
@@ -2039,9 +2044,10 @@ def _merge_episode_results(
                 else:
                     merged_per_arena[arena_id][agent_type] += fitness_arr
 
-        # arena_stats: 取最后一个 episode 的
+        # arena_stats: 保留最后一个 episode 的到 merged_stats，同时收集每个 episode 的
         for arena_id, stats in result.arena_stats.items():
             merged_stats[arena_id] = stats
+        all_episode_stats.append(result.arena_stats)
 
     # 合并 participation_counts
     merged_participation: dict[tuple[AgentType, int], int] = {}
@@ -2055,6 +2061,7 @@ def _merge_episode_results(
         per_arena_fitness=merged_per_arena,
         arena_stats=merged_stats,
         participation_counts=merged_participation,
+        per_episode_arena_stats=all_episode_stats,
     )
 
 
