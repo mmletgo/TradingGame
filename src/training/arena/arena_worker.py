@@ -59,10 +59,11 @@ except ImportError:
 
 # Cython tick 执行加速模块
 try:
-    from src.training._cython.fast_tick_execution import execute_tick_cython
+    from src.training._cython.fast_tick_execution import execute_tick_cython as _execute_tick_cython
     HAS_FAST_TICK_EXECUTION = True
 except ImportError:
     HAS_FAST_TICK_EXECUTION = False
+    _execute_tick_cython = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -744,6 +745,7 @@ def compute_market_state(
 
     # Tick 历史价格归一化（使用 ring buffer）
     tick_arrays = arena.get_tick_history_arrays()
+    raw_tick_volumes_f64: np.ndarray | None = None
     if tick_arrays is not None:
         raw_tick_prices_f64, raw_tick_volumes_f64, raw_tick_amounts_f64 = tick_arrays
         hist_prices = raw_tick_prices_f64.astype(np.float32)
@@ -781,7 +783,7 @@ def compute_market_state(
         else:
             as_sigma_val = as_config.min_sigma
 
-        if tick_arrays is not None:
+        if tick_arrays is not None and raw_tick_volumes_f64 is not None:
             as_kappa_val = ASCalculator.compute_kappa(raw_tick_volumes_f64, as_config.kappa_base)
         else:
             as_kappa_val = as_config.kappa_base
@@ -2253,6 +2255,10 @@ def _run_episode_local(
                 arena.ou_buy_prob = max(0.1, min(0.9, arena.ou_buy_prob))
 
             # === Profiler: 噪声交易者决策 ===
+            noise_ids: NDArray[np.int64] | None = None
+            noise_dirs: NDArray[np.int32] | None = None
+            noise_qtys: NDArray[np.int32] | None = None
+            noise_decisions: list[NoiseTraderDecision] | None = None
             if HAS_FAST_TICK_EXECUTION:
                 noise_ids, noise_dirs, noise_qtys = compute_noise_trader_decisions_vectorized(
                     arena, noise_trader_config, arena.ou_buy_prob,
@@ -2369,9 +2375,9 @@ def _run_episode_local(
             t_inference_mm += _t6 - _t5
 
             # === Profiler: tick 执行 ===
-            if HAS_FAST_TICK_EXECUTION:
+            if HAS_FAST_TICK_EXECUTION and _execute_tick_cython is not None and noise_ids is not None and noise_dirs is not None and noise_qtys is not None:
                 # Cython 加速路径
-                tick_trades, volume, amount = execute_tick_cython(
+                tick_trades, volume, amount = _execute_tick_cython(
                     arena=arena,
                     retail_decisions=retail_decisions_arr,
                     retail_agent_ids=retail_agent_ids_arr,
@@ -2383,6 +2389,10 @@ def _run_episode_local(
                 )
             else:
                 # 原有 Python 路径
+                if noise_decisions is None:
+                    noise_decisions = compute_noise_trader_decisions(
+                        arena, noise_trader_config, arena.ou_buy_prob,
+                    )
                 tick_trades = execute_tick_local(
                     arena=arena,
                     retail_decisions=retail_decisions_arr,
