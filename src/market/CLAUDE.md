@@ -19,16 +19,17 @@ src/market/
 ├── __init__.py              # 模块导出（NormalizedMarketState）
 ├── market_state.py          # 归一化市场状态数据类
 ├── as_calculator.py         # AS (Avellaneda-Stoikov) 最优做市模型计算器
-├── orderbook/               # 订单簿模块（Cython 加速）
-│   ├── order.py            # 订单数据模型（Order, OrderSide, OrderType）
-│   ├── orderbook.pyx       # 订单簿实现（PriceLevel, OrderBook）
+├── orderbook/               # 订单簿模块（Cython + C++ 加速）
+│   ├── order.py            # 订单数据模型（Order, OrderSide, OrderType，非热路径）
+│   ├── orderbook.pxd       # 订单簿 C 级别类型声明（COrder, PriceLevel, OrderBook）
+│   ├── orderbook.pyx       # 订单簿实现（C++ std::map + 侵入式链表 + unordered_map）
 │   └── CLAUDE.md           # 订单簿模块文档
 ├── matching/               # 撮合引擎模块
-│   ├── __init__.py         # 模块导出（尝试导入 Cython 版本）
-│   ├── trade.py            # 成交记录数据类（Trade）
-│   ├── matching_engine.py  # 撮合引擎（Python 实现）
-│   ├── fast_matching.pxd   # Cython 声明文件
-│   ├── fast_matching.pyx   # 撮合引擎（Cython 实现：FastTrade, FastMatchingEngine, fast_match_orders）
+│   ├── __init__.py         # 模块导出（MatchingEngine = FastMatchingEngine 别名）
+│   ├── trade.py            # 成交记录数据类（Trade，非热路径）
+│   ├── matching_engine.py  # 撮合引擎兼容层（内部委托 FastMatchingEngine）
+│   ├── fast_matching.pxd   # Cython + C++ 声明文件
+│   ├── fast_matching.pyx   # 撮合引擎核心实现（Cython + C++，直接操作 COrder）
 │   └── CLAUDE.md           # 撮合引擎模块文档
 ├── account/                # 账户管理模块
 │   ├── __init__.py         # 模块导出（Position, Account, FastAccount）
