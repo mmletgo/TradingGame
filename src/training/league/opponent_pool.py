@@ -165,6 +165,10 @@ class OpponentPool:
             "match_counts": entry.metadata.match_counts,
             "created_at": entry.metadata.created_at,
         }
+        # 去重：恢复训练场景下可能出现相同 entry_id，先移除旧记录
+        self._index["entries"] = [
+            e for e in self._index["entries"] if e["entry_id"] != entry_id
+        ]
         self._index["entries"].append(entry_meta)
         self.save_index()
         self._invalidate_cache()

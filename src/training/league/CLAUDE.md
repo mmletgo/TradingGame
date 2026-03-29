@@ -129,7 +129,7 @@ entry_dir/
 单个 Agent 类型的对手池管理器。
 
 **主要方法：**
-- `add_entry(entry)`：添加对手条目
+- `add_entry(entry)`：添加对手条目（自动去重：若索引中已有同 entry_id 的记录则先移除，防止恢复训练时重复）
 - `sample_opponents(n, strategy, target_type, current_generation)`：采样对手
 - `sample_opponents_batch(n, strategy, target_type, current_generation)`：批量采样 n 个不重复对手
 - `compute_weights(entries, strategy, target_type, current_generation)`：统一计算各策略的采样权重（公开方法，供 arena_allocator 调用）
@@ -159,13 +159,17 @@ p(opponent) ∝ f(win_rate) × recency_factor × exploration_bonus
 - exploration_bonus = max(1.0, bonus / sqrt(match_count + 1))（未交战对手高权重）
 ```
 
-**胜率跟踪：**
+**胜率跟踪（Per-Arena 粒度）：**
 - `win_rates` 和 `match_counts` 存储在 `pool_index.json` 的每个条目中
 - key 格式为 `vs_{对手类型.value}`（如历史 MM 的 key 为 `vs_RETAIL_PRO`，因为它对阵的是当代散户）
-- 对手类型映射通过 `_OPPONENT_TYPE_MAP`：历史 MM → `RETAIL_PRO`，历史散户 → `MARKET_MAKER`
+- 对手类型映射通过 `_OPPONENT_TYPE_MAP`（定义在 `arena_allocator.py`，`league_trainer.py` 从中导入）：历史 MM → `RETAIL_PRO`，历史散户 → `MARKET_MAKER`
 - 更新方式：EMA 平滑，`win_rate = (1 - α) × old + α × outcome`
-- outcome 定义：当前代**对阵方**（非同类型）Agent 平均适应度 > 0 即为"赢"（1.0）
-- 设计意图：采用二元 outcome（0/1）是 PFSP 的标准做法，简化胜率计算同时保持有效的优先级排序
+- outcome 定义（Per-Arena）：基于该 entry 实际参与的挑战赛竞技场中，当代**对阵方**的平均适应度 > 0 即为"赢"（1.0）
+  - 散户挑战赛：用该竞技场中当代散户的平均适应度判断对历史 MM entry 的胜负
+  - MM 挑战赛：用该竞技场中当代 MM 的平均适应度判断对历史散户 entry 的胜负
+  - 同一 entry 可能通过 round-robin 分配到多个竞技场，取各竞技场 outcome 的平均值
+- 通过 `_on_arena_fitness_collected` 钩子缓存 per-arena 适应度数据，供胜率更新使用
+- 设计意图：per-arena 粒度的 outcome 使 PFSP 能区分不同历史对手的难度，避免全局平均导致所有同类型 entry 胜率趋同
 
 ---
 
@@ -278,9 +282,8 @@ class GenerationalComparisonStats:
    └─ _sync_networks_to_workers() override 合并历史参数
 7. 计算代际适应度对比（使用进化前代数）
 8. 检查冻结/解冻（使用进化前代数）
-9. 同步基因组 + 按 milestone_interval 间隔保存里程碑
-9.5. 等待里程碑后台线程完成（防止与步骤10/11竞态）
-10. 更新历史对手胜率（含 avg_fitnesses 回退逻辑）
+9. 同步基因组 + 按 milestone_interval 间隔保存里程碑（同步执行）
+10. 更新历史对手胜率（基于 per-arena 适应度，逐 entry 计算 outcome）
 11. 清理对手池
 ```
 
@@ -299,9 +302,10 @@ class GenerationalComparisonStats:
 | `_prepare_historical_agents()` | 加载历史 entries → 按需从基因组重建网络参数 → extract_elite_networks → 构建 AgentInfo 列表 |
 | `_compute_generational_comparison()` | 过滤当前代适应度（sub_pop_id < 1000）→ 代际对比 |
 | `_update_populations_from_evolution()` | Override: 保存 per-sub-pop 网络参数到 `_per_subpop_network_params` 后调用父类 |
-| `_update_historical_win_rates()` | 根据当前代平均适应度 > 0 判断胜负，更新对手池 |
+| `_on_arena_fitness_collected()` | Override: 缓存 per-arena 适应度到 `_per_arena_fitness_cache`，供胜率更新使用 |
+| `_update_historical_win_rates()` | 基于 per-arena 适应度逐 entry 计算 outcome，更新对手池胜率 |
 | `_check_freeze_thaw()` | 未冻结→收敛检查→冻结；已冻结→每代复评（双维度）→解冻 |
-| `_save_milestone()` | 异步保存里程碑（附带预进化适应度） |
+| `_save_milestone()` | 同步保存里程碑（附带预进化适应度，使用预进化基因组缓存确保 genome/network/fitness 对齐） |
 | `_collect_genome_data()` | 收集所有种群的基因组数据，供 `_save_milestone()` 和 `save_checkpoint()` 复用 |
 | `_sync_genomes_if_needed()` | 从 Worker 同步基因组数据（checkpoint/milestone 保存前） |
 
@@ -321,11 +325,14 @@ class GenerationalComparisonStats:
 ```
 
 **预进化数据一致性机制：**
-- `_build_fitness_map()` 在 NEAT 进化前被调用，同时缓存 `_pre_evolution_fitness`（适应度）和 `_pre_evolution_per_subpop_network_params`（网络参数）
-- 两者索引一致：`fitness[i]` 和 `network_params[i]` 对应同一个进化前的 agent
-- `_save_milestone()` 优先使用预进化网络参数写入 `networks.npz`，确保与 `pre_evolution_fitness.npz` 索引对齐
+- `_build_fitness_map()` 在 NEAT 进化前被调用，同时缓存三项数据：
+  - `_pre_evolution_genome_cache`（基因组数据，通过 `_collect_genome_data()` 获取）
+  - `_pre_evolution_fitness`（适应度）
+  - `_pre_evolution_per_subpop_network_params`（网络参数，使用深拷贝确保独立于后续进化结果）
+- 三者索引一致：`genome[i]`、`fitness[i]` 和 `network_params[i]` 对应同一个进化前的 agent
+- `_save_milestone()` 优先使用预进化缓存的基因组、网络参数和适应度，确保里程碑中三者完全对齐
 - 预进化适应度通过 `OpponentEntry.pre_evolution_fitness` 字段持久化到 `pre_evolution_fitness.npz`
-- 解决问题：（1）进化后新 offspring 无 fitness，精英选择样本池被严重缩小；（2）进化前后种群排列不同，fitness 和 network 索引不对齐
+- 解决问题：（1）进化后新 offspring 无 fitness，精英选择样本池被严重缩小；（2）进化前后种群排列不同，genome/fitness/network 索引不对齐
 
 **精英网络提取（模块级函数）：**
 - `extract_elite_networks(pre_evolution_fitness, network_data, elite_ratio, genome_data)` - 从历史 entry 中提取网络参数
@@ -566,7 +573,7 @@ network_data: dict[int, tuple[np.ndarray, ...]] | None  # 延迟加载
 
 - `_prepare_historical_agents()`：加载 entry 后立即清理 `genome_data`/`network_data`/`pre_evolution_fitness`
 - `_sync_genomes_if_needed()` 在 `run_round()` 中里程碑保存前统一从 Worker 同步基因组
-- `_save_milestone()` 数据收集在主线程完成，I/O 操作在后台守护线程异步执行。里程碑保存时传入 `_per_subpop_network_params` 作为 `network_data_map`，写入 `networks.npz`，后续加载历史对手时直接使用，无需 `_reconstruct_network_data` 重建
+- `_save_milestone()` 同步执行（数据收集和 I/O 均在主线程完成，消除线程安全隐患）。里程碑保存时优先使用 `_pre_evolution_genome_cache` 和 `_pre_evolution_per_subpop_network_params`，确保 genome/network/fitness 三者对齐
 - `save_checkpoint()` 先调用 `_sync_genomes_if_needed()` 兜底，主线程序列化后删除中间变量，文件写入在后台线程执行
 - 每代执行轻量级 NEAT 历史清理（`_cleanup_neat_history_light`）
 - 每 5 代清理对手池内存缓存 + gc.collect + malloc_trim
@@ -577,7 +584,7 @@ network_data: dict[int, tuple[np.ndarray, ...]] | None  # 延迟加载
 | 时机 | 清理操作 |
 |------|---------|
 | 精英提取后 | 清理 entry 的 genome_data/network_data/pre_evolution_fitness |
-| 里程碑保存后 | 删除序列化中间变量 |
+| 里程碑保存后 | 删除序列化中间变量 + 清理 `_pre_evolution_genome_cache` |
 | 检查点序列化后 | 删除 checkpoint_data + gc.collect，文件写入异步 |
 | 每代 | 轻量级 NEAT 历史清理（genome_to_species、stagnation、ancestors） |
 | 每 5 代 | 对手池 clear_memory_cache + gc.collect + malloc_trim |
@@ -600,6 +607,7 @@ network_data: dict[int, tuple[np.ndarray, ...]] | None  # 延迟加载
 | 去掉 gzip 压缩 | `np.savez` 替代 `np.savez_compressed` | 写入速度提升 3-5 倍 |
 | 多线程并行写入 | `ThreadPoolExecutor` 并行各 AgentType | 多类型写入时间趋近最慢的单类型 |
 | checkpoint 异步写盘 | 主线程 `pickle.dumps` 后后台线程写文件 | 训练主循环不再阻塞于磁盘 I/O |
+| 里程碑同步保存 | `_save_milestone` 在主线程同步执行 | 消除 `pool_manager` 线程安全隐患，代价可忽略（npz 文件较小） |
 
 ---
 

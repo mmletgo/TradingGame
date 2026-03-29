@@ -5,42 +5,15 @@
 from __future__ import annotations
 
 import math
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-# ---- 项目根目录加入 sys.path ----
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-# ---- Mock 掉触发 Cython 的模块（在 import league 模块前） ----
-# 注意：主仓库中有编译好的 .so 文件，需要在 Cython 模块被导入前 mock
-# 才能防止类型检查错误
-for _mod_name in [
-    'src.market.account.position',
-    'src.market.account.fast_account',
-    'src.market.matching.fast_matching',
-    'src.market.orderbook.orderbook',
-    'src.training._cython.batch_decide_openmp',
-    'src.training._cython.fast_execution',
-    'src.bio.brain.fast_network',
-    'src.bio.agents._cython.fast_decide',
-    'src.bio.agents._cython.fast_observe',
-]:
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
-
 from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.opponent_pool import OpponentPool
-from src.training.league.opponent_pool_manager import OpponentPoolManager
-from src.training.league.arena_allocator import (
-    HybridArenaAllocator,
-    HybridSamplingResult,
-)
+from src.training.league.opponent_pool_manager import OpponentPoolManager  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

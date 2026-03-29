@@ -18,7 +18,7 @@ from src.core.log_engine.logger import get_logger
 from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
 from src.training.arena.arena_worker import AgentInfo
 from src.training.arena.shared_network_memory import SharedNetworkMemory, SharedNetworkMetadata
-from src.training.league.arena_allocator import HybridArenaAllocator, HybridSamplingResult, PerArenaAllocation
+from src.training.league.arena_allocator import HybridArenaAllocator, HybridSamplingResult, PerArenaAllocation, _OPPONENT_TYPE_MAP
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.league_fitness import (
     HybridFitnessAggregator,
@@ -42,12 +42,6 @@ try:
     _libc: CDLL | None = CDLL("libc.so.6")
 except OSError:
     _libc = None
-
-# 对手类型映射：历史对手池类型 → 实际与之对阵的当前代 agent 类型
-_OPPONENT_TYPE_MAP: dict[AgentType, AgentType] = {
-    AgentType.MARKET_MAKER: AgentType.RETAIL_PRO,   # 历史 MM 对阵当代散户
-    AgentType.RETAIL_PRO: AgentType.MARKET_MAKER,    # 历史散户对阵当代 MM
-}
 
 
 @dataclass
@@ -100,6 +94,9 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._current_sampling_result: HybridSamplingResult | None = None
         self._per_arena_allocation: PerArenaAllocation | None = None
 
+        # Per-arena 适应度缓存（用于 per-entry 胜率更新）
+        self._per_arena_fitness_cache: dict[int, dict[AgentType, np.ndarray]] = {}
+
         # 统计
         self._last_injection_generation: int = 0
 
@@ -120,8 +117,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 预进化适应度缓存（供里程碑保存使用）
         self._pre_evolution_fitness: dict[tuple[AgentType, int], np.ndarray] = {}
 
-        # 里程碑异步保存
-        self._milestone_thread: threading.Thread | None = None
+        # 检查点异步保存
         self._checkpoint_thread: threading.Thread | None = None
         self._milestone_save_failed: bool = False
 
@@ -133,6 +129,13 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 预进化网络参数缓存（与 _pre_evolution_fitness 索引一致，供里程碑保存使用）
         self._pre_evolution_per_subpop_network_params: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] = {}
+
+        # 预进化基因组数据缓存（与 _pre_evolution_fitness 和 _pre_evolution_per_subpop_network_params 对齐）
+        self._pre_evolution_genome_cache: tuple[
+            dict[AgentType, dict[int, tuple]],
+            dict[AgentType, int],
+            dict[AgentType, int],
+        ] | None = None
 
     def setup(self) -> None:
         """初始化
@@ -170,6 +173,16 @@ class LeagueTrainer(ParallelArenaTrainer):
         if self._current_historical_agent_infos:
             infos.extend(self._current_historical_agent_infos)
         return infos
+
+    def _on_arena_fitness_collected(
+        self,
+        arena_id: int,
+        agent_type: AgentType,
+        fitness: np.ndarray,
+        current_price: float,
+    ) -> None:
+        """Override: 缓存 per-arena 适应度，用于 per-entry 胜率更新"""
+        self._per_arena_fitness_cache.setdefault(arena_id, {})[agent_type] = fitness
 
     def _update_populations_from_evolution(
         self,
@@ -308,10 +321,16 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         在进化前缓存预进化适应度供里程碑保存使用。
         """
+        # 缓存预进化基因组数据（此时基因组尚未进化，与 fitness/network 对齐）
+        self._pre_evolution_genome_cache = self._collect_genome_data()
+
         # 缓存预进化网络参数（此时 _per_subpop_network_params 是上轮进化后=本轮进化前的参数）
         # 与 _pre_evolution_fitness 索引一致，供里程碑保存使用
         self._pre_evolution_per_subpop_network_params = {
-            at: dict(subpop_params)
+            at: {
+                sp_id: tuple(arr.copy() for arr in params)
+                for sp_id, params in subpop_params.items()
+            }
             for at, subpop_params in self._per_subpop_network_params.items()
         }
 
@@ -558,6 +577,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._current_sampling_result = None
         self._current_historical_agent_infos = []
         self._current_historical_params = {}
+        self._per_arena_fitness_cache = {}
         self._per_arena_allocation = None
 
         # 2. 采样历史对手
@@ -641,10 +661,6 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._sync_genomes_if_needed()
         if self.generation > 0 and self.generation % self.league_config.milestone_interval == 0:
             self._save_milestone()
-
-        # 等待里程碑后台保存完成（防止与步骤9/10的对手池操作竞态）
-        if self._milestone_thread is not None and self._milestone_thread.is_alive():
-            self._milestone_thread.join()
 
         # H2: 里程碑保存失败时跳过步骤9-10，避免操作不一致的对手池
         if self._milestone_save_failed:
@@ -793,48 +809,65 @@ class LeagueTrainer(ParallelArenaTrainer):
     def _update_historical_win_rates(
         self, round_stats: dict[str, Any]
     ) -> None:
-        """更新历史对手的胜率（EMA 平滑）
+        """更新历史对手的胜率（基于 per-arena 适应度，EMA 平滑）
 
-        根据当前代平均适应度判断胜负：
-        - 当前代同类型 Agent 平均适应度 > 0 → outcome = 1.0（击败历史对手）
-        - 否则 → outcome = 0.0
+        根据每个挑战赛竞技场中当代对阵方的平均适应度判断胜负：
+        - 散户挑战赛: 用该竞技场中当代散户的平均适应度判断对历史 MM entry 的胜负
+        - MM 挑战赛: 用该竞技场中当代 MM 的平均适应度判断对历史散户 entry 的胜负
+        同一 entry 可能分配到多个竞技场（round-robin），取各竞技场 outcome 的平均值。
         """
-        if self._current_sampling_result is None or self.pool_manager is None:
+        if (
+            self._current_sampling_result is None
+            or self.pool_manager is None
+            or self._per_arena_allocation is None
+        ):
             return
 
-        current_avg = round_stats.get("current_avg_fitness")
-        if not isinstance(current_avg, dict):
-            # M10: 回退——从 avg_fitnesses 计算当前代平均适应度
-            avg_fitnesses = round_stats.get("avg_fitnesses")
-            if not isinstance(avg_fitnesses, dict):
-                return
-            collected: dict[AgentType, list[np.ndarray]] = {}
-            for (agent_type_key, sub_pop_id), arr in avg_fitnesses.items():
-                if sub_pop_id < 1000 and isinstance(arr, np.ndarray) and len(arr) > 0:
-                    collected.setdefault(agent_type_key, []).append(arr)
-            current_avg = {
-                at: float(np.mean(np.concatenate(arrs)))
-                for at, arrs in collected.items()
-            }
-            if not current_avg:
-                return
-
         ema_alpha: float = self.league_config.pfsp_win_rate_ema_alpha
+        alloc = self._per_arena_allocation
 
-        for agent_type, entry_ids in self._current_sampling_result.sampled_entries.items():
-            # 对手类型：历史对手池类型 → 实际与之对阵的当前代类型
-            opponent_type: AgentType = _OPPONENT_TYPE_MAP.get(agent_type, agent_type)
-            avg_fitness: float = current_avg.get(opponent_type, 0.0)
-            outcome: float = 1.0 if avg_fitness > 0 else 0.0
+        # 收集每个 entry 在各竞技场的 outcome
+        entry_outcomes: dict[tuple[AgentType, str], list[float]] = {}
 
-            pool = self.pool_manager.get_pool(agent_type)
-            for entry_id in entry_ids:
-                pool.update_entry_win_rate(
-                    entry_id=entry_id,
-                    target_type=opponent_type,
-                    outcome=outcome,
-                    ema_alpha=ema_alpha,
-                )
+        # 散户挑战赛：历史 MM entry，对阵方是当代散户
+        for arena_id in alloc.retail_challenge_arena_ids:
+            entry_id: str | None = alloc.arena_entry_ids.get(arena_id)
+            if entry_id is None:
+                continue
+            arena_fitness = self._per_arena_fitness_cache.get(arena_id, {})
+            opponent_fitness: np.ndarray | None = arena_fitness.get(AgentType.RETAIL_PRO)
+            if opponent_fitness is None or len(opponent_fitness) == 0:
+                continue
+            outcome: float = 1.0 if float(np.mean(opponent_fitness)) > 0 else 0.0
+            entry_outcomes.setdefault(
+                (AgentType.MARKET_MAKER, entry_id), []
+            ).append(outcome)
+
+        # MM 挑战赛：历史散户 entry，对阵方是当代 MM
+        for arena_id in alloc.mm_challenge_arena_ids:
+            entry_id = alloc.arena_entry_ids.get(arena_id)
+            if entry_id is None:
+                continue
+            arena_fitness = self._per_arena_fitness_cache.get(arena_id, {})
+            opponent_fitness = arena_fitness.get(AgentType.MARKET_MAKER)
+            if opponent_fitness is None or len(opponent_fitness) == 0:
+                continue
+            outcome = 1.0 if float(np.mean(opponent_fitness)) > 0 else 0.0
+            entry_outcomes.setdefault(
+                (AgentType.RETAIL_PRO, entry_id), []
+            ).append(outcome)
+
+        # 更新胜率：同一 entry 多个竞技场取平均 outcome
+        for (pool_type, entry_id), outcomes in entry_outcomes.items():
+            avg_outcome: float = sum(outcomes) / len(outcomes)
+            opponent_type: AgentType = _OPPONENT_TYPE_MAP.get(pool_type, pool_type)
+            pool = self.pool_manager.get_pool(pool_type)
+            pool.update_entry_win_rate(
+                entry_id=entry_id,
+                target_type=opponent_type,
+                outcome=avg_outcome,
+                ema_alpha=ema_alpha,
+            )
 
     def _check_freeze_thaw(
         self, round_stats: dict[str, Any], generation: int | None = None
@@ -1006,22 +1039,21 @@ class LeagueTrainer(ParallelArenaTrainer):
         return genome_data_map, sub_pop_counts, agent_counts
 
     def _save_milestone(self) -> None:
-        """保存里程碑到对手池（异步）
+        """保存里程碑到对手池（同步）
 
-        数据收集在主线程完成（访问 populations），
-        实际 I/O 操作在后台线程执行。
+        数据收集和 I/O 操作均在主线程完成，避免线程安全问题。
         """
         if self.pool_manager is None:
             return
 
-        # 等待上一次异步保存完成
-        if self._milestone_thread is not None and self._milestone_thread.is_alive():
-            self._milestone_thread.join()
-
         self.logger.info(f"保存里程碑: 第 {self.generation} 代")
 
         # === 数据收集（主线程，快速） ===
-        genome_data_map, sub_pop_counts, agent_counts = self._collect_genome_data()
+        # 使用预进化缓存的基因组数据（与 fitness/network 对齐）
+        if self._pre_evolution_genome_cache is not None:
+            genome_data_map, sub_pop_counts, agent_counts = self._pre_evolution_genome_cache
+        else:
+            genome_data_map, sub_pop_counts, agent_counts = self._collect_genome_data()
         fitness_map: dict[AgentType, float] = {}
 
         for agent_type in self.populations:
@@ -1063,36 +1095,25 @@ class LeagueTrainer(ParallelArenaTrainer):
             else (self._per_subpop_network_params if self._per_subpop_network_params else None)
         )
 
-        # === 异步 I/O（后台线程） ===
-        generation = self.generation
-        pool_manager = self.pool_manager
+        # === 同步保存（避免后台线程访问 pool_manager 的线程安全问题） ===
+        try:
+            self.pool_manager.add_snapshot(
+                generation=self.generation,
+                genome_data_map=genome_data_map,
+                network_data_map=network_data_map,
+                fitness_map=fitness_map,
+                source="main_agents",
+                add_reason="milestone",
+                sub_population_counts=sub_pop_counts,
+                agent_counts=agent_counts,
+                pre_evolution_fitness_map=pre_evolution_fitness_map if pre_evolution_fitness_map else None,
+            )
+        except Exception:
+            import traceback
+            self.logger.error(f"里程碑保存失败 (gen {self.generation}): {traceback.format_exc()}")
+            self._milestone_save_failed = True
 
-        def _do_save() -> None:
-            try:
-                pool_manager.add_snapshot(
-                    generation=generation,
-                    genome_data_map=genome_data_map,
-                    network_data_map=network_data_map,
-                    fitness_map=fitness_map,
-                    source="main_agents",
-                    add_reason="milestone",
-                    sub_population_counts=sub_pop_counts,
-                    agent_counts=agent_counts,
-                    pre_evolution_fitness_map=pre_evolution_fitness_map if pre_evolution_fitness_map else None,
-                )
-            except Exception:
-                import traceback
-                self.logger.error(f"里程碑保存失败 (gen {generation}): {traceback.format_exc()}")
-                self._milestone_save_failed = True
-
-        self._milestone_thread = threading.Thread(
-            target=_do_save,
-            daemon=True,
-            name=f"milestone_save_gen{generation}",
-        )
-        self._milestone_thread.start()
-
-        # 闭包已捕获 network_data_map 引用，释放实例属性减少内存占用
+        # 释放实例属性减少内存占用
         # 保留冻结物种的 per-subpop 参数（冻结物种不进化，需跨轮次复用）
         if self.league_config.freeze_on_convergence:
             frozen_types: set[AgentType] = {
@@ -1110,6 +1131,9 @@ class LeagueTrainer(ParallelArenaTrainer):
             self._per_subpop_network_params = {}
             self._pre_evolution_per_subpop_network_params = {}
 
+        # 清理预进化基因组缓存
+        self._pre_evolution_genome_cache = None
+
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
 
@@ -1122,10 +1146,6 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 等待上一次 checkpoint 线程完成
         if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
             self._checkpoint_thread.join()
-
-        # 等待异步里程碑保存完成（避免与检查点保存冲突）
-        if self._milestone_thread is not None and self._milestone_thread.is_alive():
-            self._milestone_thread.join()
 
         # 确保基因组数据已同步（run_round 中通常已调用，此为安全兜底）
         self._sync_genomes_if_needed()
@@ -1319,13 +1339,6 @@ class LeagueTrainer(ParallelArenaTrainer):
 
     def stop(self) -> None:
         """停止训练并清理资源"""
-        # 等待异步里程碑保存完成
-        if self._milestone_thread is not None and self._milestone_thread.is_alive():
-            self.logger.info("等待里程碑保存完成...")
-            self._milestone_thread.join(timeout=30.0)
-            if self._milestone_thread.is_alive():
-                self.logger.warning("里程碑保存线程在 30s 超时后仍在运行")
-
         # 等待异步检查点保存完成
         if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
             self.logger.info("等待检查点保存完成...")
