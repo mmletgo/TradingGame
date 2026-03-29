@@ -43,6 +43,12 @@ try:
 except OSError:
     _libc = None
 
+# 对手类型映射：历史对手池类型 → 实际与之对阵的当前代 agent 类型
+_OPPONENT_TYPE_MAP: dict[AgentType, AgentType] = {
+    AgentType.MARKET_MAKER: AgentType.RETAIL_PRO,   # 历史 MM 对阵当代散户
+    AgentType.RETAIL_PRO: AgentType.MARKET_MAKER,    # 历史散户对阵当代 MM
+}
+
 
 @dataclass
 class SpeciesFreezeState:
@@ -124,6 +130,9 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 每轮进化后缓存 per-sub-pop 网络参数，供 _save_milestone 写入 networks.npz
         self._per_subpop_network_params: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] = {}
+
+        # 预进化网络参数缓存（与 _pre_evolution_fitness 索引一致，供里程碑保存使用）
+        self._pre_evolution_per_subpop_network_params: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] = {}
 
     def setup(self) -> None:
         """初始化
@@ -299,6 +308,13 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         在进化前缓存预进化适应度供里程碑保存使用。
         """
+        # 缓存预进化网络参数（此时 _per_subpop_network_params 是上轮进化后=本轮进化前的参数）
+        # 与 _pre_evolution_fitness 索引一致，供里程碑保存使用
+        self._pre_evolution_per_subpop_network_params = {
+            at: dict(subpop_params)
+            for at, subpop_params in self._per_subpop_network_params.items()
+        }
+
         # 缓存预进化适应度（在 NEAT 进化前调用，此时 avg_fitness 是当前代的真实适应度）
         self._pre_evolution_fitness = {
             key: arr.copy() for key, arr in avg_fitness.items()
@@ -806,14 +822,16 @@ class LeagueTrainer(ParallelArenaTrainer):
         ema_alpha: float = self.league_config.pfsp_win_rate_ema_alpha
 
         for agent_type, entry_ids in self._current_sampling_result.sampled_entries.items():
-            avg_fitness: float = current_avg.get(agent_type, 0.0)
+            # 对手类型：历史对手池类型 → 实际与之对阵的当前代类型
+            opponent_type: AgentType = _OPPONENT_TYPE_MAP.get(agent_type, agent_type)
+            avg_fitness: float = current_avg.get(opponent_type, 0.0)
             outcome: float = 1.0 if avg_fitness > 0 else 0.0
 
             pool = self.pool_manager.get_pool(agent_type)
             for entry_id in entry_ids:
                 pool.update_entry_win_rate(
                     entry_id=entry_id,
-                    target_type=agent_type,
+                    target_type=opponent_type,
                     outcome=outcome,
                     ema_alpha=ema_alpha,
                 )
@@ -1038,9 +1056,11 @@ class LeagueTrainer(ParallelArenaTrainer):
                     pre_evolution_fitness_map[agent_type] = {}
                 pre_evolution_fitness_map[agent_type][sub_pop_id] = fitness_arr
 
-        # === 网络参数收集 ===
+        # === 网络参数收集（优先使用预进化参数，与 pre_evolution_fitness 索引一致）===
         network_data_map: dict[AgentType, dict[int, tuple[np.ndarray, ...]]] | None = (
-            self._per_subpop_network_params if self._per_subpop_network_params else None
+            self._pre_evolution_per_subpop_network_params
+            if self._pre_evolution_per_subpop_network_params
+            else (self._per_subpop_network_params if self._per_subpop_network_params else None)
         )
 
         # === 异步 I/O（后台线程） ===
@@ -1082,8 +1102,13 @@ class LeagueTrainer(ParallelArenaTrainer):
                 at: data for at, data in self._per_subpop_network_params.items()
                 if at in frozen_types
             }
+            self._pre_evolution_per_subpop_network_params = {
+                at: data for at, data in self._pre_evolution_per_subpop_network_params.items()
+                if at in frozen_types
+            }
         else:
             self._per_subpop_network_params = {}
+            self._pre_evolution_per_subpop_network_params = {}
 
     def save_checkpoint(self, path: str) -> None:
         """保存检查点
