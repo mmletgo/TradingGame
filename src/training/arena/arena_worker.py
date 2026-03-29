@@ -2447,9 +2447,9 @@ def _run_episode_local(
         if all_ended:
             break
 
-    # Profiler 输出
+    # Profiler 输出（仅 DEBUG 级别）
     if tick_count > 0:
-        _logger.info(
+        _logger.debug(
             f"Worker-{worker_id} tick profile (avg ms, {tick_count} ticks): "
             f"liquidation={t_liquidation/tick_count*1000:.2f}, "
             f"noise={t_noise/tick_count*1000:.2f}, "
