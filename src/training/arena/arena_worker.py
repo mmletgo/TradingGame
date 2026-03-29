@@ -57,6 +57,13 @@ except ImportError:
     HAS_OPENMP_DECIDE = False
     BatchNetworkCache = None  # type: ignore
 
+# Cython tick 执行加速模块
+try:
+    from src.training._cython.fast_tick_execution import execute_tick_cython
+    HAS_FAST_TICK_EXECUTION = True
+except ImportError:
+    HAS_FAST_TICK_EXECUTION = False
+
 logger = logging.getLogger(__name__)
 
 # 做市商最小订单常量（与 parallel_arena_trainer.py 保持一致）
@@ -592,6 +599,53 @@ def compute_noise_trader_decisions(
     return decisions
 
 
+def compute_noise_trader_decisions_vectorized(
+    arena: ArenaState,
+    noise_trader_config: NoiseTraderConfig,
+    buy_probability: float = 0.5,
+) -> tuple[NDArray[np.int64], NDArray[np.int32], NDArray[np.int32]]:
+    """向量化噪声交易者决策
+
+    Returns:
+        (trader_ids, directions, quantities) — 仅包含活跃的噪声交易者
+    """
+    if not arena.noise_trader_states:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.int32), np.array([], dtype=np.int32)
+
+    n = len(arena.noise_trader_states)
+    # 预缓存 trader_ids
+    if arena._noise_trader_ids_array is None:
+        arena._noise_trader_ids_array = np.array(
+            list(arena.noise_trader_states.keys()), dtype=np.int64
+        )
+    trader_ids_all = arena._noise_trader_ids_array
+
+    # 获取 mu/sigma（从第一个噪声交易者获取）
+    first_nt = next(iter(arena.noise_trader_states.values()))
+    mu = first_nt.config_quantity_mu
+    sigma = first_nt.config_quantity_sigma
+
+    # 批量生成随机数
+    action_rolls = np.random.random(n)
+    direction_rolls = np.random.random(n)
+    quantities = np.maximum(1, np.random.lognormal(mu, sigma, n)).astype(np.int32)
+
+    # 向量化过滤
+    active_mask = action_rolls < noise_trader_config.action_probability
+    directions = np.where(direction_rolls < buy_probability, 1, -1).astype(np.int32)
+
+    # 提取活跃交易者
+    active_indices = np.where(active_mask)[0]
+    if len(active_indices) == 0:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.int32), np.array([], dtype=np.int32)
+
+    return (
+        trader_ids_all[active_indices],
+        directions[active_indices],
+        quantities[active_indices],
+    )
+
+
 def compute_market_state(
     arena: ArenaState,
     buffers: dict[str, NDArray[np.float32]],
@@ -688,11 +742,13 @@ def compute_market_state(
             ) / smooth_mid_price
         trade_quantities[:n_trades] = log_normalize_signed(qtys_arr)
 
-    # Tick 历史价格归一化
-    if arena.tick_history_prices:
-        hist_prices = np.array(arena.tick_history_prices, dtype=np.float32)
-        volumes = np.array(arena.tick_history_volumes, dtype=np.float32)
-        amounts = np.array(arena.tick_history_amounts, dtype=np.float32)
+    # Tick 历史价格归一化（使用 ring buffer）
+    tick_arrays = arena.get_tick_history_arrays()
+    if tick_arrays is not None:
+        raw_tick_prices_f64, raw_tick_volumes_f64, raw_tick_amounts_f64 = tick_arrays
+        hist_prices = raw_tick_prices_f64.astype(np.float32)
+        volumes = raw_tick_volumes_f64.astype(np.float32)
+        amounts = raw_tick_amounts_f64.astype(np.float32)
         n = len(hist_prices)
 
         base_price = hist_prices[0]
@@ -702,8 +758,9 @@ def compute_market_state(
         tick_volumes_normalized[-n:] = log_normalize_signed(volumes)
         tick_amounts_normalized[-n:] = log_normalize_signed(amounts, scale=12.0)
 
-    # 预计算 AS 模型参数
-    raw_tick_prices = np.array(arena.tick_history_prices, dtype=np.float64) if arena.tick_history_prices else None
+        raw_tick_prices = raw_tick_prices_f64  # 直接使用 float64 版本
+    else:
+        raw_tick_prices = None
     as_sigma_val: float = 0.0
     as_tau_val: float = 1.0
     as_kappa_val: float = 1.5
@@ -724,9 +781,8 @@ def compute_market_state(
         else:
             as_sigma_val = as_config.min_sigma
 
-        if arena.tick_history_volumes:
-            raw_volumes = np.array(arena.tick_history_volumes, dtype=np.float64)
-            as_kappa_val = ASCalculator.compute_kappa(raw_volumes, as_config.kappa_base)
+        if tick_arrays is not None:
+            as_kappa_val = ASCalculator.compute_kappa(raw_tick_volumes_f64, as_config.kappa_base)
         else:
             as_kappa_val = as_config.kappa_base
 
@@ -741,13 +797,13 @@ def compute_market_state(
     return NormalizedMarketState(
         mid_price=smooth_mid_price,
         tick_size=tick_size,
-        bid_data=bid_data.copy(),
-        ask_data=ask_data.copy(),
-        trade_prices=trade_prices.copy(),
-        trade_quantities=trade_quantities.copy(),
-        tick_history_prices=tick_prices_normalized.copy(),
-        tick_history_volumes=tick_volumes_normalized.copy(),
-        tick_history_amounts=tick_amounts_normalized.copy(),
+        bid_data=bid_data,
+        ask_data=ask_data,
+        trade_prices=trade_prices,
+        trade_quantities=trade_quantities,
+        tick_history_prices=tick_prices_normalized,
+        tick_history_volumes=tick_volumes_normalized,
+        tick_history_amounts=tick_amounts_normalized,
         current_tick=arena.tick,
         episode_length=episode_length,
         raw_tick_prices=raw_tick_prices,
@@ -797,7 +853,7 @@ def check_early_end(
 
 
 def aggregate_tick_trades(tick_trades: list[Trade]) -> tuple[float, float]:
-    """聚合本 tick 的成交量和成交额
+    """聚合本 tick 的成交量和成交额（单次遍历优化）
 
     Args:
         tick_trades: 本 tick 的成交列表
@@ -808,12 +864,20 @@ def aggregate_tick_trades(tick_trades: list[Trade]) -> tuple[float, float]:
     if not tick_trades:
         return 0.0, 0.0
 
-    buy_volume = sum(t.quantity for t in tick_trades if t.is_buyer_taker)
-    sell_volume = sum(t.quantity for t in tick_trades if not t.is_buyer_taker)
-    buy_amount = sum(t.price * t.quantity for t in tick_trades if t.is_buyer_taker)
-    sell_amount = sum(
-        t.price * t.quantity for t in tick_trades if not t.is_buyer_taker
-    )
+    buy_volume: int = 0
+    sell_volume: int = 0
+    buy_amount: float = 0.0
+    sell_amount: float = 0.0
+
+    for t in tick_trades:
+        qty = t.quantity
+        amt = t.price * qty
+        if t.is_buyer_taker:
+            buy_volume += qty
+            buy_amount += amt
+        else:
+            sell_volume += qty
+            sell_amount += amt
 
     total_volume = buy_volume + sell_volume
     total_amount = buy_amount + sell_amount
@@ -1442,6 +1506,9 @@ def _create_worker_arena_states(
             episode_low_price=initial_price,
         )
         arena.init_flat_arrays()
+        arena.init_ring_buffers()
+        # 写入初始值（与 deque 初始化一致）
+        arena.append_tick_history(initial_price, 0.0, 0.0)
         states.append(arena)
 
     return states
@@ -1658,6 +1725,10 @@ def _reset_arena(
 
     # 初始化扁平化数组
     arena.init_flat_arrays()
+
+    # 初始化 ring buffer（如果还没初始化）
+    if arena._tick_prices_ring is None:
+        arena.init_ring_buffers()
 
 
 # ============================================================================
@@ -2111,6 +2182,8 @@ def _run_episode_local(
     Returns:
         EpisodeResult 结果
     """
+    _logger = logging.getLogger(f"ArenaWorker-{worker_id}")
+
     # 1. 重置所有竞技场
     for arena in arena_states:
         _reset_arena(arena, config, type_groups, agent_infos)
@@ -2125,6 +2198,20 @@ def _run_episode_local(
     # 初始化每个竞技场的 OU 过程状态
     for arena_idx, arena in enumerate(arena_states):
         arena.ou_buy_prob = episode_buy_probabilities[arena_idx]
+
+    # 双缓冲：创建第二组 buffer（与 buffers_list 交替使用，消除 .copy()）
+    buffers_list_b = [_create_market_state_buffers() for _ in arena_states]
+
+    # Profiler 累加器
+    t_liquidation = 0.0
+    t_noise = 0.0
+    t_market_state = 0.0
+    t_agent_collect = 0.0
+    t_inference_retail = 0.0
+    t_inference_mm = 0.0
+    t_execute = 0.0
+    t_bookkeeping = 0.0
+    tick_count = 0
 
     # 2. MM 初始化
     _init_mm_all_arenas(
@@ -2146,9 +2233,7 @@ def _run_episode_local(
             if arena.tick == 1:
                 current_price = arena.smooth_mid_price
                 arena.price_history.append(current_price)
-                arena.tick_history_prices.append(current_price)
-                arena.tick_history_volumes.append(0.0)
-                arena.tick_history_amounts.append(0.0)
+                arena.append_tick_history(current_price, 0.0, 0.0)
                 continue
 
             # 获取当前价格
@@ -2156,32 +2241,41 @@ def _run_episode_local(
             if current_price <= 0:
                 current_price = arena.matching_engine._orderbook.last_price
 
-            # 强平检查（三阶段，本地执行）
+            # === Profiler: 强平 ===
+            _t0 = time.perf_counter()
             handle_liquidations(arena, current_price)
+            _t1 = time.perf_counter()
+            t_liquidation += _t1 - _t0
 
             # OU 过程更新 buy_prob
             if noise_trader_config.ou_theta > 0:
                 arena.ou_buy_prob += noise_trader_config.ou_theta * (episode_buy_probabilities[arena_idx] - arena.ou_buy_prob) + noise_trader_config.ou_sigma * random.gauss(0, 1)
                 arena.ou_buy_prob = max(0.1, min(0.9, arena.ou_buy_prob))
 
-            # 噪声交易者决策
-            noise_decisions = compute_noise_trader_decisions(
-                arena, noise_trader_config, arena.ou_buy_prob,
-            )
+            # === Profiler: 噪声交易者决策 ===
+            if HAS_FAST_TICK_EXECUTION:
+                noise_ids, noise_dirs, noise_qtys = compute_noise_trader_decisions_vectorized(
+                    arena, noise_trader_config, arena.ou_buy_prob,
+                )
+            else:
+                noise_decisions = compute_noise_trader_decisions(
+                    arena, noise_trader_config, arena.ou_buy_prob,
+                )
+            _t2 = time.perf_counter()
+            t_noise += _t2 - _t1
 
-            # 计算市场状态
+            # === Profiler: 市场状态 ===
+            # 双缓冲交替
+            current_buffers = buffers_list if (tick_num % 2 == 0) else buffers_list_b
             market_state = compute_market_state(
-                arena, buffers_list[arena_idx], ema_alpha,
+                arena, current_buffers[arena_idx], ema_alpha,
                 episode_length=episode_length,
                 as_config=config.as_model,
             )
+            _t3 = time.perf_counter()
+            t_market_state += _t3 - _t2
 
-            # 收集活跃 agent（按类型分组）
-            arena_retail_states: list[AgentAccountState] = []
-            arena_retail_indices: list[int] = []
-            arena_mm_states: list[AgentAccountState] = []
-            arena_mm_indices: list[int] = []
-
+            # === Profiler: 活跃 Agent 收集 + shuffle ===
             # 选择该竞技场的 type_groups（per-arena 或全局）
             effective_type_groups: dict[AgentType, tuple[list[int], NDArray[np.int32]]] = (
                 per_arena_type_groups[arena.arena_id]
@@ -2189,17 +2283,9 @@ def _run_episode_local(
                 else type_groups
             )
 
-            for agent_type, (all_ids, all_net_indices) in effective_type_groups.items():
-                for j, agent_id in enumerate(all_ids):
-                    state = arena.agent_states.get(agent_id)
-                    if state is None or state.is_liquidated:
-                        continue
-                    if agent_type == AgentType.MARKET_MAKER:
-                        arena_mm_states.append(state)
-                        arena_mm_indices.append(int(all_net_indices[j]))
-                    else:
-                        arena_retail_states.append(state)
-                        arena_retail_indices.append(int(all_net_indices[j]))
+            # 使用活跃 Agent 缓存
+            arena_retail_states, arena_retail_indices, arena_mm_states, arena_mm_indices = \
+                arena.build_active_cache(effective_type_groups)
 
             # 打乱非 MM 的顺序
             combined = list(zip(arena_retail_states, arena_retail_indices))
@@ -2211,13 +2297,15 @@ def _run_episode_local(
                 arena_retail_states = list(arena_retail_states_shuffled)
                 arena_retail_indices = list(arena_retail_indices_shuffled)
 
-            # 批量推理
+            _t4 = time.perf_counter()
+            t_agent_collect += _t4 - _t3
+
+            # === Profiler: 散户推理 ===
             retail_decisions_arr: NDArray[np.float64] | None = None
             retail_agent_ids_arr: NDArray[np.int64] | None = None
             mm_decisions_arr: NDArray[np.float64] | None = None
             mm_agent_ids_arr: NDArray[np.int64] | None = None
 
-            # 推理非 MM
             retail_cache = caches.get(AgentType.RETAIL_PRO)
             if (
                 retail_cache is not None
@@ -2247,7 +2335,10 @@ def _run_episode_local(
                 except Exception:
                     pass
 
-            # 推理 MM
+            _t5 = time.perf_counter()
+            t_inference_retail += _t5 - _t4
+
+            # === Profiler: 做市商推理 ===
             mm_cache = caches.get(AgentType.MARKET_MAKER)
             if (
                 mm_cache is not None
@@ -2274,17 +2365,39 @@ def _run_episode_local(
                 except Exception:
                     pass
 
-            # 本地执行（原子动作模式）
-            tick_trades = execute_tick_local(
-                arena=arena,
-                retail_decisions=retail_decisions_arr,
-                retail_agent_ids=retail_agent_ids_arr,
-                mm_decisions=mm_decisions_arr,
-                mm_agent_ids=mm_agent_ids_arr,
-                noise_decisions=noise_decisions,
-                liquidated_agents=[],  # 强平已在上面处理
-            )
+            _t6 = time.perf_counter()
+            t_inference_mm += _t6 - _t5
 
+            # === Profiler: tick 执行 ===
+            if HAS_FAST_TICK_EXECUTION:
+                # Cython 加速路径
+                tick_trades, volume, amount = execute_tick_cython(
+                    arena=arena,
+                    retail_decisions=retail_decisions_arr,
+                    retail_agent_ids=retail_agent_ids_arr,
+                    mm_decisions=mm_decisions_arr,
+                    mm_agent_ids=mm_agent_ids_arr,
+                    noise_trader_ids=noise_ids,
+                    noise_directions=noise_dirs,
+                    noise_quantities=noise_qtys,
+                )
+            else:
+                # 原有 Python 路径
+                tick_trades = execute_tick_local(
+                    arena=arena,
+                    retail_decisions=retail_decisions_arr,
+                    retail_agent_ids=retail_agent_ids_arr,
+                    mm_decisions=mm_decisions_arr,
+                    mm_agent_ids=mm_agent_ids_arr,
+                    noise_decisions=noise_decisions,
+                    liquidated_agents=[],  # 强平已在上面处理
+                )
+                volume, amount = aggregate_tick_trades(tick_trades)
+
+            _t7 = time.perf_counter()
+            t_execute += _t7 - _t6
+
+            # === Profiler: 簿记 ===
             # 记录价格历史
             orderbook = arena.matching_engine._orderbook
             actual_price = (
@@ -2298,11 +2411,8 @@ def _run_episode_local(
                 arena, tick_trades, actual_price
             )
 
-            # 记录 tick 历史
-            arena.tick_history_prices.append(current_price)
-            volume, amount = aggregate_tick_trades(tick_trades)
-            arena.tick_history_volumes.append(volume)
-            arena.tick_history_amounts.append(amount)
+            # 记录 tick 历史（ring buffer）
+            arena.append_tick_history(current_price, volume, amount)
 
             # 检查提前结束（使用 per-arena 或全局 pop_total_counts）
             effective_pop_counts: dict[AgentType, int] = (
@@ -2319,8 +2429,28 @@ def _run_episode_local(
                     arena.end_reason = reason
                 arena.end_tick = arena.tick
 
+            _t8 = time.perf_counter()
+            t_bookkeeping += _t8 - _t7
+
+            tick_count += 1
+
         if all_ended:
             break
+
+    # Profiler 输出
+    if tick_count > 0:
+        _logger.info(
+            f"Worker-{worker_id} tick profile (avg ms, {tick_count} ticks): "
+            f"liquidation={t_liquidation/tick_count*1000:.2f}, "
+            f"noise={t_noise/tick_count*1000:.2f}, "
+            f"market_state={t_market_state/tick_count*1000:.2f}, "
+            f"agent_collect={t_agent_collect/tick_count*1000:.2f}, "
+            f"inference_retail={t_inference_retail/tick_count*1000:.2f}, "
+            f"inference_mm={t_inference_mm/tick_count*1000:.2f}, "
+            f"execute={t_execute/tick_count*1000:.2f}, "
+            f"bookkeeping={t_bookkeeping/tick_count*1000:.2f}, "
+            f"total={((t_liquidation+t_noise+t_market_state+t_agent_collect+t_inference_retail+t_inference_mm+t_execute+t_bookkeeping)/tick_count)*1000:.2f}"
+        )
 
     # 4. 收集适应度
     return _collect_fitness_all_arenas(

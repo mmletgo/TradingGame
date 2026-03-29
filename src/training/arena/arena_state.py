@@ -459,6 +459,23 @@ class ArenaState:
     consecutive_one_sided_ticks: int = 0  # 连续单边订单簿 tick 计数
     ou_buy_prob: float = 0.5  # OU 过程当前 buy_prob 值
 
+    # Ring buffer for tick history (替代 tick_history_prices/volumes/amounts deque)
+    _tick_prices_ring: np.ndarray | None = None  # shape (100,), dtype=float64
+    _tick_volumes_ring: np.ndarray | None = None  # shape (100,), dtype=float64
+    _tick_amounts_ring: np.ndarray | None = None  # shape (100,), dtype=float64
+    _ring_ptr: int = 0     # 下一个写入位置
+    _ring_count: int = 0   # 有效数据数量
+
+    # 活跃 Agent 缓存
+    _active_retail_ids: list[int] = field(default_factory=list)
+    _active_retail_net_indices: list[int] = field(default_factory=list)
+    _active_mm_ids: list[int] = field(default_factory=list)
+    _active_mm_net_indices: list[int] = field(default_factory=list)
+    _active_cache_dirty: bool = True  # 标记缓存是否需要重建
+
+    # 噪声交易者 ID 缓存（用于向量化决策）
+    _noise_trader_ids_array: np.ndarray | None = None
+
     # 扁平化数组（进化后初始化，用于向量化强平检查）
     _num_agents: int = 0
     _balances: np.ndarray | None = None  # shape (num_agents,)
@@ -548,6 +565,15 @@ class ArenaState:
         self.end_reason = None
         self.end_tick = 0
         self.consecutive_one_sided_ticks = 0
+        # 重置 ring buffer
+        if self._tick_prices_ring is not None:
+            self._tick_prices_ring.fill(0)
+            self._tick_volumes_ring.fill(0)  # type: ignore[union-attr]
+            self._tick_amounts_ring.fill(0)  # type: ignore[union-attr]
+            self._ring_ptr = 0
+            self._ring_count = 0
+        # 重置活跃 Agent 缓存
+        self._active_cache_dirty = True
 
     def get_agent_state(self, agent_id: int) -> AgentAccountState | None:
         """获取 Agent 状态
@@ -583,6 +609,98 @@ class ArenaState:
             self.episode_low_price = price
         self.price_history.append(price)
 
+    # ========== Ring Buffer 方法 ==========
+
+    def init_ring_buffers(self) -> None:
+        """初始化 ring buffer"""
+        self._tick_prices_ring = np.zeros(100, dtype=np.float64)
+        self._tick_volumes_ring = np.zeros(100, dtype=np.float64)
+        self._tick_amounts_ring = np.zeros(100, dtype=np.float64)
+        self._ring_ptr = 0
+        self._ring_count = 0
+
+    def append_tick_history(self, price: float, volume: float, amount: float) -> None:
+        """追加 tick 历史数据到 ring buffer"""
+        if self._tick_prices_ring is None:
+            self.init_ring_buffers()
+        assert self._tick_prices_ring is not None
+        assert self._tick_volumes_ring is not None
+        assert self._tick_amounts_ring is not None
+        idx = self._ring_ptr % 100
+        self._tick_prices_ring[idx] = price
+        self._tick_volumes_ring[idx] = volume
+        self._tick_amounts_ring[idx] = amount
+        self._ring_ptr += 1
+        if self._ring_count < 100:
+            self._ring_count += 1
+
+    def get_tick_history_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """获取有序的 tick 历史数组，返回 (prices, volumes, amounts) 的 float64 数组"""
+        if self._ring_count == 0 or self._tick_prices_ring is None:
+            return None
+        assert self._tick_volumes_ring is not None
+        assert self._tick_amounts_ring is not None
+        n = self._ring_count
+        if n < 100:
+            # 不需要 roll，直接切片
+            return (
+                self._tick_prices_ring[:n].copy(),
+                self._tick_volumes_ring[:n].copy(),
+                self._tick_amounts_ring[:n].copy(),
+            )
+        # 满了，需要从 ptr 位置开始读取
+        ptr = self._ring_ptr % 100
+        return (
+            np.concatenate([self._tick_prices_ring[ptr:], self._tick_prices_ring[:ptr]]),
+            np.concatenate([self._tick_volumes_ring[ptr:], self._tick_volumes_ring[:ptr]]),
+            np.concatenate([self._tick_amounts_ring[ptr:], self._tick_amounts_ring[:ptr]]),
+        )
+
+    # ========== 活跃 Agent 缓存方法 ==========
+
+    def invalidate_active_cache(self) -> None:
+        """标记活跃缓存需要重建"""
+        self._active_cache_dirty = True
+
+    def build_active_cache(
+        self, type_groups: dict[AgentType, tuple[list[int], "np.ndarray"]]
+    ) -> tuple[list[AgentAccountState], list[int], list[AgentAccountState], list[int]]:
+        """构建活跃 Agent 缓存
+
+        Returns:
+            (retail_states, retail_indices, mm_states, mm_indices)
+        """
+        if not self._active_cache_dirty:
+            # 从缓存的 id/index 列表构建 states 列表
+            retail_states = [self.agent_states[aid] for aid in self._active_retail_ids]
+            retail_indices = list(self._active_retail_net_indices)
+            mm_states = [self.agent_states[aid] for aid in self._active_mm_ids]
+            mm_indices = list(self._active_mm_net_indices)
+            return retail_states, retail_indices, mm_states, mm_indices
+
+        # 重建缓存
+        self._active_retail_ids.clear()
+        self._active_retail_net_indices.clear()
+        self._active_mm_ids.clear()
+        self._active_mm_net_indices.clear()
+
+        for agent_type, (all_ids, all_net_indices) in type_groups.items():
+            for j, agent_id in enumerate(all_ids):
+                state = self.agent_states.get(agent_id)
+                if state is None or state.is_liquidated:
+                    continue
+                if agent_type == AgentType.MARKET_MAKER:
+                    self._active_mm_ids.append(agent_id)
+                    self._active_mm_net_indices.append(int(all_net_indices[j]))
+                else:
+                    self._active_retail_ids.append(agent_id)
+                    self._active_retail_net_indices.append(int(all_net_indices[j]))
+
+        self._active_cache_dirty = False
+        retail_states = [self.agent_states[aid] for aid in self._active_retail_ids]
+        mm_states = [self.agent_states[aid] for aid in self._active_mm_ids]
+        return retail_states, list(self._active_retail_net_indices), mm_states, list(self._active_mm_net_indices)
+
     def mark_agent_liquidated(self, agent_id: int, agent_type: AgentType) -> None:
         """标记 Agent 已被强平
 
@@ -596,6 +714,7 @@ class ArenaState:
         self.pop_liquidated_counts[agent_type] = (
             self.pop_liquidated_counts.get(agent_type, 0) + 1
         )
+        self.invalidate_active_cache()
 
 
 # ============================================================================
