@@ -313,6 +313,7 @@ _run_episode_local()
 | `execute_adl()` | ADL 自动减仓 |
 | `update_trade_accounts()` | 更新成交账户状态 |
 | `compute_noise_trader_decisions()` | 噪声交易者决策（支持 buy_probability 参数） |
+| `compute_noise_trader_decisions_vectorized()` | 向量化噪声交易者决策（返回 numpy 数组） |
 | `compute_market_state()` | 归一化市场状态计算 |
 | `_build_per_arena_data()` | 根据 WorkerArenaAssignment 为每个竞技场独立构建 type_groups、pop_total_counts 和 agent_infos |
 | `check_early_end()` | 检查 Episode 提前结束 |
@@ -387,6 +388,13 @@ class SharedNetworkMetadata:
 - **做市商初始化批量推理复用**：Worker 内部 Episode 开始时所有竞技场状态相同，只对一个竞技场进行一次 BatchNetworkCache 批量推理，将结果复用到所有竞技场。复用时每个竞技场的每个 MM 独立添加 ±5 ticks 的随机价格扰动，确保各竞技场初始订单簿结构不同
 - **Worker 内部 OpenMP 推理**：每个 Worker 使用独立的 BatchNetworkCache 进行 per-arena 批量推理
 - **共享内存零拷贝**：网络参数通过共享内存同步，Worker 直接访问共享内存中的网络数据
+- **Cython tick 执行**：`fast_tick_execution.pyx` 替代 Python 的 `execute_tick_local()` 全链路，使用 C 数组收集原子动作、Fisher-Yates shuffle、内联 on_trade/sync_state_to_array，单 tick 执行从 ~60ms 降至 ~9ms
+- **双缓冲市场状态**：`compute_market_state` 消除 7 个 `.copy()` 调用，使用双组 buffer 交替
+- **Ring Buffer tick 历史**：`ArenaState` 使用预分配循环 numpy 数组替代 deque，消除 deque→numpy 转换
+- **向量化噪声交易者决策**：`compute_noise_trader_decisions_vectorized` 使用 numpy 批量随机数生成
+- **活跃 Agent 缓存**：`ArenaState.build_active_cache()` 缓存活跃 Agent 列表，强平时失效重建
+- **Tick 级 Profiler**：`_run_episode_local` 内置 8 阶段计时，每 episode 输出平均耗时日志
+- **单次遍历成交聚合**：`aggregate_tick_trades` 改为单次循环
 
 ---
 

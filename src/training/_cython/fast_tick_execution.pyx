@@ -18,7 +18,7 @@
 import numpy as np
 cimport numpy as np
 
-from libc.stdlib cimport rand, srand
+from libc.stdlib cimport rand, srand, malloc, free
 from libc.time cimport time as c_time
 
 from src.market.orderbook.order import Order, OrderSide, OrderType
@@ -35,7 +35,9 @@ DEF FLAG_IS_MARKET_MAKER = 1   # bit 0
 DEF FLAG_IS_NOISE_TRADER = 2   # bit 1
 
 # 最大原子动作数量
-DEF MAX_ACTIONS = 2048
+# 需要足够大以容纳所有 agent 的动作：
+# 噪声(~100) + 做市商(600×40=24000) + 散户(2400×2=4800) ≈ 29000
+DEF MAX_ACTIONS = 32768
 
 
 # ============================================================================
@@ -257,14 +259,25 @@ cpdef tuple execute_tick_cython(
     Returns:
         tuple: (all_trades: list[Trade], volume: float, amount: float)
     """
-    # ====== C 数组：栈上分配 ======
-    cdef int action_types[MAX_ACTIONS]
-    cdef long long agent_ids_arr[MAX_ACTIONS]
-    cdef long long order_ids_arr[MAX_ACTIONS]
-    cdef double prices_arr[MAX_ACTIONS]
-    cdef int quantities_arr[MAX_ACTIONS]
-    cdef char flags_arr[MAX_ACTIONS]
+    # ====== C 数组：堆上动态分配 ======
+    cdef int* action_types = <int*>malloc(MAX_ACTIONS * sizeof(int))
+    cdef long long* agent_ids_arr = <long long*>malloc(MAX_ACTIONS * sizeof(long long))
+    cdef long long* order_ids_arr = <long long*>malloc(MAX_ACTIONS * sizeof(long long))
+    cdef double* prices_arr = <double*>malloc(MAX_ACTIONS * sizeof(double))
+    cdef int* quantities_arr = <int*>malloc(MAX_ACTIONS * sizeof(int))
+    cdef char* flags_arr = <char*>malloc(MAX_ACTIONS * sizeof(char))
     cdef int n_actions = 0
+
+    if (action_types is NULL or agent_ids_arr is NULL or order_ids_arr is NULL or
+            prices_arr is NULL or quantities_arr is NULL or flags_arr is NULL):
+        # 内存分配失败，释放已分配的内存
+        if action_types is not NULL: free(action_types)
+        if agent_ids_arr is not NULL: free(agent_ids_arr)
+        if order_ids_arr is not NULL: free(order_ids_arr)
+        if prices_arr is not NULL: free(prices_arr)
+        if quantities_arr is not NULL: free(quantities_arr)
+        if flags_arr is not NULL: free(flags_arr)
+        return ([], 0.0, 0.0)
 
     # ====== 缓存引用 ======
     cdef object matching_engine = arena.matching_engine
@@ -451,8 +464,17 @@ cpdef tuple execute_tick_cython(
             n_actions += 1
 
     # ====== 第四部分：Fisher-Yates shuffle ======
-    cdef int shuffle_indices[MAX_ACTIONS]
+    cdef int* shuffle_indices = <int*>malloc(MAX_ACTIONS * sizeof(int))
     cdef int tmp_idx
+
+    if shuffle_indices is NULL:
+        free(action_types)
+        free(agent_ids_arr)
+        free(order_ids_arr)
+        free(prices_arr)
+        free(quantities_arr)
+        free(flags_arr)
+        return ([], 0.0, 0.0)
 
     srand(<unsigned int>c_time(NULL))
 
@@ -861,8 +883,21 @@ cpdef tuple execute_tick_cython(
                     if nt_maker is not None:
                         _update_noise_trader_position(nt_maker, trade.price, trade.quantity, not taker_is_buyer)
 
-    # ====== 返回结果 ======
+    # ====== 释放内存 ======
+    free(action_types)
+    free(agent_ids_arr)
+    free(order_ids_arr)
+    free(prices_arr)
+    free(quantities_arr)
+    free(flags_arr)
+    free(shuffle_indices)
+
+    # ====== 返回结果（与原始 aggregate_tick_trades 保持一致的符号语义）======
     cdef double total_volume = buy_volume + sell_volume
     cdef double total_amount = buy_amount + sell_amount
 
-    return (all_trades, total_volume, total_amount)
+    if buy_amount > sell_amount:
+        return (all_trades, total_volume, total_amount)
+    elif sell_amount > buy_amount:
+        return (all_trades, -total_volume, -total_amount)
+    return (all_trades, 0.0, 0.0)
