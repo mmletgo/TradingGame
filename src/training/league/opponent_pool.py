@@ -224,6 +224,7 @@ class OpponentPool:
                 # （如 ensure_cached 中的 entry）指向同一对象
                 entry.genome_data = loaded.genome_data
                 entry.network_data = loaded.network_data
+                entry.pre_evolution_fitness = loaded.pre_evolution_fitness
             return entry
 
         # 从磁盘加载
