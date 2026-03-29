@@ -1,13 +1,18 @@
 """混合竞技场历史对手采样器"""
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
 from src.config.config import AgentType
 from src.training.league.config import LeagueTrainingConfig
+
+if TYPE_CHECKING:
+    from src.training.arena.arena_worker import AgentInfo
+
 from src.training.league.opponent_pool import OpponentPool
 from src.training.league.opponent_pool_manager import OpponentPoolManager, LEAGUE_AGENT_TYPES
 
@@ -38,6 +43,25 @@ class HybridSamplingResult:
         return self.total_elite_counts.get(agent_type, 0)
 
 
+@dataclass
+class PerArenaAllocation:
+    """Per-arena 历史对手分配结果
+
+    三类竞技场：
+    - 纯竞技场：当代散户 + 当代做市商
+    - 散户挑战赛：当代散户 + 历史做市商（1个entry全量600）
+    - MM挑战赛：历史散户（1个entry全量2400）+ 当代做市商
+    """
+
+    pure_arena_ids: list[int]
+    retail_challenge_arena_ids: list[int]
+    mm_challenge_arena_ids: list[int]
+    # arena_id → 该竞技场使用的 entry_id（仅挑战赛有）
+    arena_entry_ids: dict[int, str]
+    # arena_id → 该竞技场参与的历史 agent_id 集合
+    arena_historical_agent_ids: dict[int, set[int]]
+
+
 class HybridArenaAllocator:
     """混合竞技场分配器
 
@@ -52,6 +76,94 @@ class HybridArenaAllocator:
             config: 联盟训练配置
         """
         self.config = config
+
+    def allocate_to_arenas(
+        self,
+        num_arenas: int,
+        num_pure: int,
+        num_retail_challenge: int,
+        sampling_result: HybridSamplingResult,
+        historical_agent_infos: list[AgentInfo],
+    ) -> PerArenaAllocation:
+        """将历史对手按 per-arena 策略分配到各竞技场
+
+        三类竞技场：
+        - 纯竞技场 (0 ~ num_pure-1): 无历史对手
+        - 散户挑战赛 (num_pure ~ num_pure+num_retail_challenge-1):
+          当代散户 vs 历史做市商（round-robin 分配 entry，每 entry 全量 agent）
+        - MM挑战赛 (其余):
+          历史散户（round-robin 分配 entry，每 entry 全量 agent）+ 当代做市商
+
+        Args:
+            num_arenas: 总竞技场数量
+            num_pure: 纯竞技场数量
+            num_retail_challenge: 散户挑战赛数量
+            sampling_result: 历史对手采样结果
+            historical_agent_infos: 全部历史 Agent 信息列表
+
+        Returns:
+            PerArenaAllocation 分配结果
+        """
+        # 1. 构建 (agent_type, entry_id) → set[agent_id] 映射表
+        entry_agent_map: dict[tuple[AgentType, str], set[int]] = defaultdict(set)
+        for info in historical_agent_infos:
+            key: tuple[AgentType, str] = (info.agent_type, info.historical_entry_id)
+            entry_agent_map[key].add(info.agent_id)
+
+        # 2. 划分竞技场 ID
+        pure_arena_ids: list[int] = list(range(num_pure))
+        retail_challenge_arena_ids: list[int] = list(
+            range(num_pure, num_pure + num_retail_challenge)
+        )
+        mm_challenge_arena_ids: list[int] = list(
+            range(num_pure + num_retail_challenge, num_arenas)
+        )
+
+        arena_entry_ids: dict[int, str] = {}
+        arena_historical_agent_ids: dict[int, set[int]] = {}
+
+        # 3. 散户挑战赛：从 MARKET_MAKER 的 entry_ids 中 round-robin 分配
+        mm_entry_ids: list[str] = sampling_result.sampled_entries.get(
+            AgentType.MARKET_MAKER, []
+        )
+        for i, arena_id in enumerate(retail_challenge_arena_ids):
+            if mm_entry_ids:
+                entry_id: str = mm_entry_ids[i % len(mm_entry_ids)]
+                arena_entry_ids[arena_id] = entry_id
+                agent_ids: set[int] = entry_agent_map.get(
+                    (AgentType.MARKET_MAKER, entry_id), set()
+                )
+                arena_historical_agent_ids[arena_id] = agent_ids.copy()
+            else:
+                arena_historical_agent_ids[arena_id] = set()
+
+        # 4. MM挑战赛：从 RETAIL_PRO 的 entry_ids 中 round-robin 分配
+        retail_entry_ids: list[str] = sampling_result.sampled_entries.get(
+            AgentType.RETAIL_PRO, []
+        )
+        for i, arena_id in enumerate(mm_challenge_arena_ids):
+            if retail_entry_ids:
+                entry_id = retail_entry_ids[i % len(retail_entry_ids)]
+                arena_entry_ids[arena_id] = entry_id
+                agent_ids = entry_agent_map.get(
+                    (AgentType.RETAIL_PRO, entry_id), set()
+                )
+                arena_historical_agent_ids[arena_id] = agent_ids.copy()
+            else:
+                arena_historical_agent_ids[arena_id] = set()
+
+        # 5. 纯竞技场无历史对手
+        for arena_id in pure_arena_ids:
+            arena_historical_agent_ids[arena_id] = set()
+
+        # 6. 返回分配结果
+        return PerArenaAllocation(
+            pure_arena_ids=pure_arena_ids,
+            retail_challenge_arena_ids=retail_challenge_arena_ids,
+            mm_challenge_arena_ids=mm_challenge_arena_ids,
+            arena_entry_ids=arena_entry_ids,
+            arena_historical_agent_ids=arena_historical_agent_ids,
+        )
 
     def sample_historical(
         self,

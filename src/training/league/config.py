@@ -23,6 +23,11 @@ class LeagueTrainingConfig:
     num_arenas: int = 16  # 竞技场数量（对应物理核心数）
     episodes_per_arena: int = 4  # 每竞技场episode数
 
+    # Per-arena 历史对手分配
+    num_pure_arenas: int = 4  # 纯竞技场数量（无历史对手）
+    num_retail_challenge_arenas: int = 6  # 散户挑战赛数量（当代散户 vs 历史MM全量）
+    # num_mm_challenge_arenas 自动计算 = num_arenas - num_pure_arenas - num_retail_challenge_arenas
+
     # 历史对手配置
     num_historical_generations: int = 6  # 每轮采样历史代数
     historical_elite_ratio: float = 0.05  # 每代取Top 5%精英
@@ -68,6 +73,14 @@ class LeagueTrainingConfig:
             raise ValueError("milestone_interval must be at least 1")
         if self.num_arenas < 1:
             raise ValueError("num_arenas must be at least 1")
+        if self.num_pure_arenas < 0:
+            raise ValueError("num_pure_arenas must be >= 0")
+        if self.num_retail_challenge_arenas < 0:
+            raise ValueError("num_retail_challenge_arenas must be >= 0")
+        if self.num_pure_arenas + self.num_retail_challenge_arenas > self.num_arenas:
+            raise ValueError(
+                "num_pure_arenas + num_retail_challenge_arenas must be <= num_arenas"
+            )
         if self.episodes_per_arena < 1:
             raise ValueError("episodes_per_arena must be at least 1")
         if not 0.0 < self.freeze_thaw_threshold < 1.0:

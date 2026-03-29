@@ -18,7 +18,7 @@ from src.core.log_engine.logger import get_logger
 from src.training.arena import MultiArenaConfig, ParallelArenaTrainer
 from src.training.arena.arena_worker import AgentInfo
 from src.training.arena.shared_network_memory import SharedNetworkMemory, SharedNetworkMetadata
-from src.training.league.arena_allocator import HybridArenaAllocator, HybridSamplingResult
+from src.training.league.arena_allocator import HybridArenaAllocator, HybridSamplingResult, PerArenaAllocation
 from src.training.league.config import LeagueTrainingConfig
 from src.training.league.league_fitness import (
     HybridFitnessAggregator,
@@ -92,6 +92,7 @@ class LeagueTrainer(ParallelArenaTrainer):
 
         # 当前竞技场分配
         self._current_sampling_result: HybridSamplingResult | None = None
+        self._per_arena_allocation: PerArenaAllocation | None = None
 
         # 统计
         self._last_injection_generation: int = 0
@@ -438,7 +439,7 @@ class LeagueTrainer(ParallelArenaTrainer):
                 n_elite, packed = extract_elite_networks(
                     pre_evolution_fitness=entry.pre_evolution_fitness,
                     network_data=entry.network_data,
-                    elite_ratio=self.league_config.historical_elite_ratio,
+                    elite_ratio=1.0,  # 全量提取，用于挑战赛竞技场
                     genome_data=entry.genome_data,
                 )
 
@@ -541,6 +542,7 @@ class LeagueTrainer(ParallelArenaTrainer):
         self._current_sampling_result = None
         self._current_historical_agent_infos = []
         self._current_historical_params = {}
+        self._per_arena_allocation = None
 
         # 2. 采样历史对手
         has_historical: bool = self.pool_manager.has_any_historical_opponents()
@@ -561,10 +563,29 @@ class LeagueTrainer(ParallelArenaTrainer):
         # 3. 提取精英网络并构建历史 Agent
         self._prepare_historical_agents()
 
-        # 4. 如果有历史 Agent，更新 Workers 的 agent_infos 和网络
+        # 4. 如果有历史 Agent，分配到各竞技场并更新 Workers
         if self._current_historical_agent_infos:
+            # per-arena 分配（散户挑战赛 vs MM挑战赛）
+            self._per_arena_allocation = self.arena_allocator.allocate_to_arenas(
+                num_arenas=self.league_config.num_arenas,
+                num_pure=self.league_config.num_pure_arenas,
+                num_retail_challenge=self.league_config.num_retail_challenge_arenas,
+                sampling_result=self._current_sampling_result,
+                historical_agent_infos=self._current_historical_agent_infos,
+            )
+
+            alloc = self._per_arena_allocation
+            self.logger.info(
+                f"竞技场分配: 纯={len(alloc.pure_arena_ids)}, "
+                f"散户挑战赛={len(alloc.retail_challenge_arena_ids)}, "
+                f"MM挑战赛={len(alloc.mm_challenge_arena_ids)}"
+            )
+
             combined_infos: list[AgentInfo] = self._build_agent_infos()
-            self._arena_worker_pool.update_agent_infos(combined_infos)
+            self._arena_worker_pool.update_agent_infos(
+                combined_infos,
+                per_arena_allocation=self._per_arena_allocation,
+            )
             del combined_infos
 
             # 手动同步合并后的网络参数

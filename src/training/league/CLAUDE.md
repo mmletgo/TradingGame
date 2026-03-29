@@ -8,14 +8,23 @@
 
 传统训练中，Agent 只学会克制同一代对手，可能出现"循环克制"（A克B，B克C，C克A），缺乏泛化能力。
 
-### 解决方案：混合竞技场
+### 解决方案：混合竞技场（Per-Arena 分配）
 
-**所有竞技场中当前代和历史代精英 Agent 同场交易。** 历史对手从对手池中 PFSP 采样多代（默认6代），每代仅取 Top 5% 精英 Agent。NEAT 进化仅使用当前代适应度，代际适应度对比作为监控指标。
+竞技场分为三类，历史对手从对手池中 PFSP 采样多代（默认6代），每代全量提取（`elite_ratio=1.0`）。每个挑战赛竞技场分配 1 个完整 entry（全量 agent），6 entry × 6 arena = 1:1 映射。挑战赛中不允许双方都有历史对手（即散户挑战赛只有历史 MM，MM 挑战赛只有历史散户）。NEAT 进化仅使用当前代适应度，代际适应度对比作为监控指标。
+
+**三类竞技场**：
+
+| 竞技场类型 | 散户来源 | 做市商来源 | 数量（默认） | 说明 |
+|-----------|---------|-----------|-------------|------|
+| 纯竞技场 | 当代散户 | 当代 MM | 4 | 无历史对手，纯同代对弈 |
+| 散户挑战赛 | 当代散户 | 历史 MM（1 entry 全量 600） | 6 | 测试当代散户对历史 MM 的适应力 |
+| MM 挑战赛 | 历史散户（1 entry 全量 2400） | 当代 MM | 6 | 测试当代 MM 对历史散户的适应力 |
 
 **关键设计**：
-1. **历史对手池**：存储不同代的优秀策略
-2. **混合竞技场**：当前代 + 历史代精英在同一市场中交易
-3. **代际对比**：监控当前代相对于历史代的适应度提升
+1. **历史对手池**：存储不同代的完整策略（全量 agent，不再仅取精英）
+2. **Per-Arena 分配**：每个挑战赛竞技场独立分配 1 个历史 entry，避免所有竞技场混合相同历史对手
+3. **单向挑战**：挑战赛中仅一侧为历史对手，防止历史散户与历史 MM 同场交易
+4. **代际对比**：监控当前代相对于历史代的适应度提升
 
 ### 按类型分离架构
 
@@ -23,13 +32,23 @@
 
 ### 竞技场 Agent 组成
 
-| 类型 | 当前代 | 历史代（6代×Top 5%精英）| 总计 | 历史占比 |
-|------|--------|-------------------------|------|---------|
-| 高级散户 | 2,400 | 720（6×5%×2400） | 3,120 | 23% |
-| 做市商 | 600 | 180（6×5%×600） | 780 | 23% |
-| 噪声交易者 | 300（增强） | - | 300 | - |
+**全局 Agent 总量（全量提取 elite_ratio=1.0）：**
 
-历史占比控制在约 23%，保持当前代对市场价格的主导影响力。`historical_elite_ratio` 可按需调整。
+| 类型 | 当前代 | 历史代（6代×全量） | 总计 |
+|------|--------|-------------------|------|
+| 高级散户 | 2,400 | 14,400（6×2400） | 16,800 |
+| 做市商 | 600 | 3,600（6×600） | 4,200 |
+| 噪声交易者 | 300（增强） | - | 300 |
+
+**单个竞技场内 Agent 组成：**
+
+| 竞技场类型 | 散户 | 做市商 | 噪声交易者 |
+|-----------|------|--------|-----------|
+| 纯竞技场 | 当代 2,400 | 当代 600 | 300 |
+| 散户挑战赛 | 当代 2,400 | 当代 600 + 历史 1 entry（600） | 300 |
+| MM 挑战赛 | 当代 2,400 + 历史 1 entry（2,400） | 当代 600 | 300 |
+
+每个挑战赛竞技场仅包含 1 个历史 entry 的全量 agent，6 个 entry 通过 round-robin 分配到 6 个竞技场（1:1 映射）。
 
 ## 模块结构
 
@@ -52,7 +71,7 @@ src/training/league/
 
 ### LeagueTrainingConfig (config.py)
 
-联盟训练配置类，`__post_init__` 自动调用 `validate()` 校验所有参数合法性（包括 `pool_dir`/`checkpoint_dir` 非空、`sampling_strategy` 通过 `Literal` 类型约束、`convergence_fitness_std_threshold > 0`、`recency_decay_lambda > 0`、`pfsp_exponent > 0`、`pfsp_win_rate_ema_alpha ∈ (0, 1]`、`elite_ratio ∈ (0, 1]`、`min_freeze_generation >= 0`、`convergence_generations >= 1`、`generational_comparison_window >= 1`、`hybrid_noise_trader_count >= 0`、`convergence_generations <= generational_comparison_window`）。关键参数：
+联盟训练配置类，`__post_init__` 自动调用 `validate()` 校验所有参数合法性（包括 `pool_dir`/`checkpoint_dir` 非空、`sampling_strategy` 通过 `Literal` 类型约束、`convergence_fitness_std_threshold > 0`、`recency_decay_lambda > 0`、`pfsp_exponent > 0`、`pfsp_win_rate_ema_alpha ∈ (0, 1]`、`elite_ratio ∈ (0, 1]`、`min_freeze_generation >= 0`、`convergence_generations >= 1`、`generational_comparison_window >= 1`、`hybrid_noise_trader_count >= 0`、`convergence_generations <= generational_comparison_window`、`num_pure_arenas >= 0`、`num_retail_challenge_arenas >= 0`、`num_pure_arenas + num_retail_challenge_arenas <= num_arenas`）。关键参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -61,9 +80,11 @@ src/training/league/
 | `max_pool_size_per_type` | 100 | 每种类型最多保存的历史版本数 |
 | `milestone_interval` | 1 | 里程碑保存间隔（代数） |
 | `num_arenas` | 16 | 竞技场数量（对应物理核心数） |
+| `num_pure_arenas` | 4 | 纯竞技场数量（无历史对手，仅当代对弈） |
+| `num_retail_challenge_arenas` | 6 | 散户挑战赛数量（当代散户 vs 历史 MM 全量），MM 挑战赛数量自动计算 = `num_arenas - num_pure_arenas - num_retail_challenge_arenas` |
 | `episodes_per_arena` | 4 | 每竞技场 episode 数 |
 | `num_historical_generations` | 6 | 每轮采样历史代数 |
-| `historical_elite_ratio` | 0.05 | 每代取 Top 5% 精英 |
+| `historical_elite_ratio` | 0.05 | 每代取 Top 5% 精英（`extract_elite_networks` 的默认值，挑战赛场景使用 `elite_ratio=1.0` 全量提取） |
 | `historical_freshness_ratio` | 0.5 | 采样中最近历史的最低占比 |
 | `hybrid_noise_trader_count` | 300 | 混合竞技场噪声交易者数 |
 | `hybrid_noise_trader_quantity_mu` | 10.0 | 噪声交易者下单量 mu |
@@ -162,7 +183,7 @@ p(opponent) ∝ f(win_rate) × recency_factor × exploration_bonus
 
 ### HybridArenaAllocator (arena_allocator.py)
 
-混合竞技场历史对手采样器。负责从对手池中采样历史对手 entries（带新鲜度约束的 PFSP 采样）。
+混合竞技场分配器。负责两项职责：(1) 从对手池中采样历史对手 entries（带新鲜度约束的 PFSP 采样）；(2) 将采样到的历史 entry 按 per-arena 策略分配到三类竞技场。
 
 **数据结构：**
 
@@ -172,7 +193,21 @@ class HybridSamplingResult:
     sampled_entries: dict[AgentType, list[str]]  # {AgentType: [entry_id, ...]}
     elite_networks: dict[AgentType, dict[str, tuple[int, tuple[np.ndarray, ...]]]]
     total_elite_counts: dict[AgentType, int]
+
+@dataclass
+class PerArenaAllocation:
+    """Per-arena 历史对手分配结果"""
+    pure_arena_ids: list[int]                        # 纯竞技场 ID 列表
+    retail_challenge_arena_ids: list[int]             # 散户挑战赛 ID 列表
+    mm_challenge_arena_ids: list[int]                 # MM 挑战赛 ID 列表
+    arena_entry_ids: dict[int, str]                   # arena_id → entry_id（仅挑战赛有）
+    arena_historical_agent_ids: dict[int, set[int]]   # arena_id → 历史 agent_id 集合
 ```
+
+**竞技场 ID 划分规则**（连续区间）：
+- 纯竞技场：`[0, num_pure)`
+- 散户挑战赛：`[num_pure, num_pure + num_retail_challenge)`
+- MM 挑战赛：`[num_pure + num_retail_challenge, num_arenas)`
 
 **采样策略（带新鲜度约束的 PFSP 加权采样）：**
 1. 仅遍历 `LEAGUE_AGENT_TYPES`，对每种类型独立采样 `num_historical_generations` 个历史 entries
@@ -184,9 +219,10 @@ class HybridSamplingResult:
 
 **主要方法：**
 - `sample_historical(pool_manager, current_generation)` -> `HybridSamplingResult | None`：带新鲜度约束的历史对手采样，所有类型对手池为空时返回 None
+- `allocate_to_arenas(num_arenas, num_pure, num_retail_challenge, sampling_result, historical_agent_infos)` -> `PerArenaAllocation`：将历史对手按 per-arena 策略分配到各竞技场。散户挑战赛从 MARKET_MAKER entries 中 round-robin 分配，MM 挑战赛从 RETAIL_PRO entries 中 round-robin 分配，纯竞技场无历史对手
 - `_sample_with_freshness(pool, n_total, freshness_ratio, current_generation)` -> `list[str]`：单个对手池的新鲜度约束采样，统一使用 `pool.list_entries()` 索引作为数据源
 
-**精英网络提取**由 LeagueTrainer 负责（因为需要加载 entry 数据），allocator 仅返回采样的 entry IDs，`elite_networks` 和 `total_elite_counts` 由调用方填充。
+**精英网络提取**由 LeagueTrainer 负责（因为需要加载 entry 数据），allocator 仅返回采样的 entry IDs，`elite_networks` 和 `total_elite_counts` 由调用方填充。LeagueTrainer 调用 `extract_elite_networks(elite_ratio=1.0)` 全量提取每个 entry 的网络参数。
 
 ---
 
@@ -226,21 +262,25 @@ class GenerationalComparisonStats:
 
 ```
 0. 等待上一轮 checkpoint 线程完成（防竞态）
-1. 清理旧采样结果和历史数据
+1. 清理旧采样结果、历史数据和 per-arena 分配
 2. PFSP 采样历史对手（带新鲜度约束）
-3. 提取精英网络，构建历史 AgentInfo 列表
-4. 更新 Workers 的 agent_infos 和合并网络
-   ├─ 有历史 Agent → 发送 combined agent_infos + 合并网络
+3. 提取全量网络（elite_ratio=1.0），构建历史 AgentInfo 列表
+4. Per-arena 分配：调用 allocate_to_arenas() 将历史 entry 分配到三类竞技场
+   ├─ 纯竞技场（arena 0~3）：无历史对手
+   ├─ 散户挑战赛（arena 4~9）：当代散户 + 历史 MM（round-robin 1 entry/arena）
+   └─ MM 挑战赛（arena 10~15）：历史散户（round-robin 1 entry/arena）+ 当代 MM
+5. 更新 Workers 的 agent_infos 和合并网络（传递 per_arena_allocation）
+   ├─ 有历史 Agent → 发送 combined agent_infos + 合并网络 + PerArenaAllocation
    └─ 上轮有本轮无 → 发送仅当前代 agent_infos + 重新同步网络（update_agent_infos 会重建空缓存）
-5. 缓存进化前代数 → super().run_round()（运行 episodes + NEAT 进化）
+6. 缓存进化前代数 → super().run_round()（运行 episodes + NEAT 进化）
    ├─ 历史 Agent（sub_pop_id >= 1000）自动不参与进化
    └─ _sync_networks_to_workers() override 合并历史参数
-6. 计算代际适应度对比（使用进化前代数）
-7. 检查冻结/解冻（使用进化前代数）
-8. 同步基因组 + 按 milestone_interval 间隔保存里程碑
-8.5. 等待里程碑后台线程完成（防止与步骤9/10竞态）
-9. 更新历史对手胜率（含 avg_fitnesses 回退逻辑）
-10. 清理对手池
+7. 计算代际适应度对比（使用进化前代数）
+8. 检查冻结/解冻（使用进化前代数）
+9. 同步基因组 + 按 milestone_interval 间隔保存里程碑
+9.5. 等待里程碑后台线程完成（防止与步骤10/11竞态）
+10. 更新历史对手胜率（含 avg_fitnesses 回退逻辑）
+11. 清理对手池
 ```
 
 **Override 方法：**
@@ -269,13 +309,14 @@ class GenerationalComparisonStats:
 - 做市商: `20,000,000 + entry_index × 1,000,000 + local_index`
 - sub_pop_id: `1000 + entry_index`（自动不参与 NEAT 进化）
 
-**合并后的 BatchNetworkCache 布局（以散户为例）：**
+**合并后的 BatchNetworkCache 布局（以散户为例，全量提取）：**
 ```
 ┌───────────────────────────┬──────────┬──────────┬───┬──────────┐
 │ 当前代 (index 0..2399)    │ Entry_A  │ Entry_B  │...│ Entry_F  │
-│   10子种群 × 240          │ 120精英  │ 120精英  │   │ 120精英  │
+│   10子种群 × 240          │ 全量2400 │ 全量2400 │   │ 全量2400 │
 └───────────────────────────┴──────────┴──────────┴───┴──────────┘
-总共 2400 + 6×120 = 3120 个网络
+总共 2400 + 6×2400 = 16800 个网络
+（每个挑战赛竞技场仅使用其中 1 个 entry 的 agent，通过 PerArenaAllocation 控制）
 ```
 
 **预进化适应度机制：**
@@ -285,10 +326,11 @@ class GenerationalComparisonStats:
 - 解决问题：里程碑保存的是进化后基因组，新生成 offspring fitness 为 None，仅幸存精英有有效 fitness，导致精英选择样本池被严重缩小
 
 **精英网络提取（模块级函数）：**
-- `extract_elite_networks(pre_evolution_fitness, network_data, elite_ratio, genome_data)` - 从历史 entry 中提取 Top 精英的网络参数
-  - 按 `pre_evolution_fitness` 排序取 Top `elite_ratio`（默认 5%）
+- `extract_elite_networks(pre_evolution_fitness, network_data, elite_ratio, genome_data)` - 从历史 entry 中提取网络参数
+  - 按 `pre_evolution_fitness` 排序取 Top `elite_ratio`
+  - 挑战赛场景使用 `elite_ratio=1.0` 全量提取（每个 entry 的全部 agent），不再仅取精英子集
   - 回退机制：`pre_evolution_fitness` 不可用时从 `genome_data` 的 fitnesses 提取（过滤 NaN），精英数量基于有效样本数计算（而非含 NaN 的总数）
-  - 返回 `(精英总数, packed_network_params_tuple)`
+  - 返回 `(agent总数, packed_network_params_tuple)`
 
 **网络参数重建（模块级函数，回退路径）：**
 - `_reconstruct_network_data(genome_data, agent_type, config)` - 从基因组数据重建网络参数

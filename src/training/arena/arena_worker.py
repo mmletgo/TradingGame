@@ -125,6 +125,24 @@ class ArenaEpisodeStats:
 
 
 @dataclass
+class WorkerArenaAssignment:
+    """Worker 进程的竞技场分配信息
+
+    描述每个竞技场应包含哪些历史 Agent 以及排除哪些当代 Agent 类型。
+
+    Attributes:
+        arena_historical_ids: arena_id → 参与该竞技场的历史 agent_id 集合（空集=纯竞技场）
+        arena_excluded_current_types: arena_id → 该竞技场中被排除的当代 AgentType 集合
+            散户挑战赛: {AgentType.MARKET_MAKER}  → 排除当代做市商
+            MM挑战赛: {AgentType.RETAIL_PRO}     → 排除当代散户
+            纯竞技场: set()                       → 不排除任何当代类型
+    """
+
+    arena_historical_ids: dict[int, set[int]]
+    arena_excluded_current_types: dict[int, set[AgentType]]
+
+
+@dataclass
 class EpisodeResult:
     """Worker 返回给主进程的结果
 
@@ -1328,14 +1346,19 @@ def _create_worker_caches(
 
 
 def _create_worker_arena_states(
-    arena_ids: list[int], config: Config, agent_infos: list[AgentInfo]
+    arena_ids: list[int],
+    config: Config,
+    agent_infos: list[AgentInfo],
+    per_arena_agent_infos: list[list[AgentInfo]] | None = None,
 ) -> list[ArenaState]:
     """创建 Worker 本地的 ArenaState
 
     Args:
         arena_ids: 竞技场 ID 列表
         config: 全局配置
-        agent_infos: Agent 信息列表
+        agent_infos: Agent 信息列表（全局，作为 per_arena_agent_infos=None 时的回退）
+        per_arena_agent_infos: 每个竞技场独立的 Agent 信息列表，
+            如果不为 None，第 i 个竞技场只为 per_arena_agent_infos[i] 中的 agent 创建状态
 
     Returns:
         ArenaState 列表
@@ -1344,13 +1367,20 @@ def _create_worker_arena_states(
     initial_price = config.market.initial_price
     noise_trader_config = config.noise_trader
 
-    for arena_id in arena_ids:
+    for arena_idx, arena_id in enumerate(arena_ids):
         matching_engine = MatchingEngine(config.market)
         adl_manager = ADLManager()
 
+        # 确定该竞技场使用的 agent_infos
+        arena_agent_infos: list[AgentInfo] = (
+            per_arena_agent_infos[arena_idx]
+            if per_arena_agent_infos is not None
+            else agent_infos
+        )
+
         # 从 agent_infos 创建 AgentAccountState
         agent_states: dict[int, AgentAccountState] = {}
-        for info in agent_infos:
+        for info in arena_agent_infos:
             state = AgentAccountState(
                 agent_id=info.agent_id,
                 agent_type=info.agent_type,
@@ -1485,6 +1515,73 @@ def _group_agent_infos_by_sub_pop(
             groups[key] = []
         groups[key].append(info)
     return groups
+
+
+def _build_per_arena_data(
+    arena_ids: list[int],
+    all_agent_infos: list[AgentInfo],
+    assignment: WorkerArenaAssignment | None,
+) -> tuple[
+    dict[int, dict[AgentType, tuple[list[int], NDArray[np.int32]]]] | None,  # per_arena_type_groups
+    dict[int, dict[AgentType, int]] | None,  # per_arena_pop_total_counts
+    list[list[AgentInfo]] | None,  # per_arena_agent_infos
+]:
+    """构建 per-arena 的分组数据结构
+
+    根据 WorkerArenaAssignment 为每个竞技场独立构建 type_groups、
+    pop_total_counts 和 agent_infos，使不同竞技场可包含不同的 Agent 组合。
+
+    Args:
+        arena_ids: 竞技场 ID 列表
+        all_agent_infos: 全部 Agent 信息列表（含当代和历史）
+        assignment: 竞技场分配信息，为 None 则返回 (None, None, None)
+
+    Returns:
+        (per_arena_type_groups, per_arena_pop_total_counts, per_arena_agent_infos)
+        如果 assignment 为 None，三个值均为 None（向后兼容）
+    """
+    if assignment is None:
+        return None, None, None
+
+    # 分离当代和历史 agent infos
+    current_infos_by_type: dict[AgentType, list[AgentInfo]] = {}
+    historical_infos_by_id: dict[int, AgentInfo] = {}
+
+    for info in all_agent_infos:
+        if info.is_historical:
+            historical_infos_by_id[info.agent_id] = info
+        else:
+            if info.agent_type not in current_infos_by_type:
+                current_infos_by_type[info.agent_type] = []
+            current_infos_by_type[info.agent_type].append(info)
+
+    per_arena_type_groups: dict[int, dict[AgentType, tuple[list[int], NDArray[np.int32]]]] = {}
+    per_arena_pop_total_counts: dict[int, dict[AgentType, int]] = {}
+    per_arena_agent_infos_list: list[list[AgentInfo]] = []
+
+    for arena_id in arena_ids:
+        excluded_types: set[AgentType] = assignment.arena_excluded_current_types.get(
+            arena_id, set()
+        )
+        historical_ids: set[int] = assignment.arena_historical_ids.get(
+            arena_id, set()
+        )
+
+        # 组装该 arena 的 agent_infos：当代非排除类型 + 历史 agent
+        arena_infos: list[AgentInfo] = []
+        for agent_type, infos in current_infos_by_type.items():
+            if agent_type not in excluded_types:
+                arena_infos.extend(infos)
+        for hist_id in historical_ids:
+            hist_info = historical_infos_by_id.get(hist_id)
+            if hist_info is not None:
+                arena_infos.append(hist_info)
+
+        per_arena_agent_infos_list.append(arena_infos)
+        per_arena_type_groups[arena_id] = _build_worker_type_groups(arena_infos)
+        per_arena_pop_total_counts[arena_id] = _compute_pop_total_counts(arena_infos)
+
+    return per_arena_type_groups, per_arena_pop_total_counts, per_arena_agent_infos_list
 
 
 # ============================================================================
@@ -1956,6 +2053,8 @@ def _run_episode_local(
     agent_infos: list[AgentInfo],
     ema_alpha: float,
     noise_trader_config: NoiseTraderConfig,
+    per_arena_type_groups: dict[int, dict[AgentType, tuple[list[int], NDArray[np.int32]]]] | None = None,
+    per_arena_pop_total_counts: dict[int, dict[AgentType, int]] | None = None,
 ) -> EpisodeResult:
     """Worker 独立运行一个 episode 的完整逻辑
 
@@ -1973,6 +2072,8 @@ def _run_episode_local(
         agent_infos: Agent 信息列表
         ema_alpha: EMA 平滑系数
         noise_trader_config: 噪声交易者配置
+        per_arena_type_groups: 每个竞技场独立的 type_groups，为 None 时使用全局 type_groups
+        per_arena_pop_total_counts: 每个竞技场独立的 pop_total_counts，为 None 时使用全局 pop_total_counts
 
     Returns:
         EpisodeResult 结果
@@ -2048,7 +2149,14 @@ def _run_episode_local(
             arena_mm_states: list[AgentAccountState] = []
             arena_mm_indices: list[int] = []
 
-            for agent_type, (all_ids, all_net_indices) in type_groups.items():
+            # 选择该竞技场的 type_groups（per-arena 或全局）
+            effective_type_groups: dict[AgentType, tuple[list[int], NDArray[np.int32]]] = (
+                per_arena_type_groups[arena.arena_id]
+                if per_arena_type_groups is not None
+                else type_groups
+            )
+
+            for agent_type, (all_ids, all_net_indices) in effective_type_groups.items():
                 for j, agent_id in enumerate(all_ids):
                     state = arena.agent_states.get(agent_id)
                     if state is None or state.is_liquidated:
@@ -2163,8 +2271,13 @@ def _run_episode_local(
             arena.tick_history_volumes.append(volume)
             arena.tick_history_amounts.append(amount)
 
-            # 检查提前结束
-            early_end = check_early_end(arena, pop_total_counts)
+            # 检查提前结束（使用 per-arena 或全局 pop_total_counts）
+            effective_pop_counts: dict[AgentType, int] = (
+                per_arena_pop_total_counts[arena.arena_id]
+                if per_arena_pop_total_counts is not None
+                else pop_total_counts
+            )
+            early_end = check_early_end(arena, effective_pop_counts)
             if early_end is not None:
                 reason, agent_type = early_end
                 if agent_type is not None:
@@ -2259,6 +2372,10 @@ def arena_worker_main(
     # 共享内存附着追踪
     shm_attachments: dict[AgentType, SharedNetworkMemory] = {}
 
+    # Per-arena 数据结构（初始为 None，update_agent_infos 时可能设置）
+    per_arena_type_groups: dict[int, dict[AgentType, tuple[list[int], NDArray[np.int32]]]] | None = None
+    per_arena_pop_total_counts: dict[int, dict[AgentType, int]] | None = None
+
     worker_logger.info(f"Worker {worker_id} 初始化完成")
 
     try:
@@ -2308,12 +2425,25 @@ def arena_worker_main(
 
             elif cmd_type == "update_agent_infos":
                 # 动态更新 agent_infos（历史Agent注入时使用）
-                new_agent_infos: list[AgentInfo] = cmd_data
+                new_agent_infos: list[AgentInfo]
+                worker_assignment: WorkerArenaAssignment | None
+                new_agent_infos, worker_assignment = cmd_data
                 agent_infos = new_agent_infos
 
                 # 重建所有依赖 agent_infos 的数据结构
                 caches = _create_worker_caches(config, agent_infos)
-                arena_states = _create_worker_arena_states(arena_ids, config, agent_infos)
+
+                # 构建 per-arena 数据
+                per_arena_type_groups, per_arena_pop_total_counts, per_arena_infos = \
+                    _build_per_arena_data(arena_ids, agent_infos, worker_assignment)
+
+                # agent_states 按 per-arena 创建
+                arena_states = _create_worker_arena_states(
+                    arena_ids, config, agent_infos,
+                    per_arena_agent_infos=per_arena_infos,
+                )
+
+                # 全局 type_groups 保留（用于 MM 初始化推理等场景）
                 type_groups = _build_worker_type_groups(agent_infos)
                 buffers_list = [_create_market_state_buffers() for _ in arena_ids]
                 pop_total_counts = _compute_pop_total_counts(agent_infos)
@@ -2349,6 +2479,8 @@ def arena_worker_main(
                         agent_infos=agent_infos,
                         ema_alpha=ema_alpha,
                         noise_trader_config=noise_trader_config,
+                        per_arena_type_groups=per_arena_type_groups,
+                        per_arena_pop_total_counts=per_arena_pop_total_counts,
                     )
                     all_results.append(result)
 
@@ -2594,20 +2726,41 @@ class ArenaWorkerPool:
     def update_agent_infos(
         self,
         new_agent_infos: list[AgentInfo],
+        per_arena_allocation: Any = None,
     ) -> None:
         """动态更新 Agent 信息（历史Agent注入时使用）
 
-        重建 Worker 内部的所有依赖数据结构。
+        重建 Worker 内部的所有依赖数据结构。支持 per-arena 分配：
+        不同竞技场可包含不同的 Agent 组合（纯竞技场、散户挑战赛、MM挑战赛）。
 
         Args:
             new_agent_infos: 新的 Agent 信息列表
+            per_arena_allocation: PerArenaAllocation | None，per-arena 分配信息，
+                为 None 时所有竞技场使用相同的 agent 集合（向后兼容）
         """
         if not self._is_started:
             self.start()
 
         self._agent_infos = new_agent_infos
+
+        # 构建 WorkerArenaAssignment
+        worker_assignment: WorkerArenaAssignment | None = None
+        if per_arena_allocation is not None:
+            excluded: dict[int, set[AgentType]] = {}
+            for arena_id in per_arena_allocation.pure_arena_ids:
+                excluded[arena_id] = set()
+            for arena_id in per_arena_allocation.retail_challenge_arena_ids:
+                excluded[arena_id] = {AgentType.MARKET_MAKER}
+            for arena_id in per_arena_allocation.mm_challenge_arena_ids:
+                excluded[arena_id] = {AgentType.RETAIL_PRO}
+
+            worker_assignment = WorkerArenaAssignment(
+                arena_historical_ids=per_arena_allocation.arena_historical_agent_ids,
+                arena_excluded_current_types=excluded,
+            )
+
         for cmd_queue in self._cmd_queues:
-            cmd_queue.put(("update_agent_infos", new_agent_infos))
+            cmd_queue.put(("update_agent_infos", (new_agent_infos, worker_assignment)))
         # 等待所有 Worker 确认
         for _ in range(self._num_workers):
             self._result_queue.get()

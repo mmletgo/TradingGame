@@ -226,6 +226,22 @@ class AgentInfo:
 - 历史 Agent 的 `sub_pop_id >= 1000`，自动不参与 NEAT 进化
 - 历史 Agent 的 `network_index` 在当前代之后偏移，对应合并后的 BatchNetworkCache 中的位置
 
+### WorkerArenaAssignment (arena_worker.py)
+
+Worker 进程的竞技场分配信息，描述每个竞技场应包含哪些历史 Agent 以及排除哪些当代 Agent 类型。
+
+```python
+@dataclass
+class WorkerArenaAssignment:
+    arena_historical_ids: dict[int, set[int]]         # arena_id → 历史 agent_id 集合
+    arena_excluded_current_types: dict[int, set[AgentType]]  # arena_id → 排除的当代类型集合
+```
+
+**竞技场类型映射：**
+- 纯竞技场：`excluded = set()` — 不排除任何当代类型
+- 散户挑战赛：`excluded = {AgentType.MARKET_MAKER}` — 排除当代做市商，使用历史做市商
+- MM挑战赛：`excluded = {AgentType.RETAIL_PRO}` — 排除当代散户，使用历史散户
+
 ### EpisodeResult (arena_worker.py)
 
 Worker 返回给主进程的结果。
@@ -260,7 +276,7 @@ class EpisodeResult:
 | `start()` | 启动所有 Worker 进程，支持 CPU 亲和性绑定（`enable_cpu_affinity`） |
 | `update_networks(network_params)` | 发送新网络参数给所有 Worker |
 | `attach_shared_networks(metadata_map)` | 发送共享内存元数据给所有 Worker |
-| `update_agent_infos(agent_infos)` | 更新所有 Worker 的 agent_infos（重建内部缓存） |
+| `update_agent_infos(agent_infos, per_arena_allocation=None)` | 更新所有 Worker 的 agent_infos（重建内部缓存），支持 per-arena 分配（不同竞技场包含不同 Agent 组合） |
 | `run_episodes(num_episodes, episode_length)` | 所有 Worker 独立运行 episodes |
 | `shutdown()` | 关闭所有 Worker |
 
@@ -295,6 +311,7 @@ _run_episode_local()
 | `update_trade_accounts()` | 更新成交账户状态 |
 | `compute_noise_trader_decisions()` | 噪声交易者决策（支持 buy_probability 参数） |
 | `compute_market_state()` | 归一化市场状态计算 |
+| `_build_per_arena_data()` | 根据 WorkerArenaAssignment 为每个竞技场独立构建 type_groups、pop_total_counts 和 agent_infos |
 | `check_early_end()` | 检查 Episode 提前结束 |
 | `aggregate_tick_trades()` | 聚合 tick 成交量/额 |
 | `update_episode_price_stats_from_trades()` | 更新价格统计 |
