@@ -2,8 +2,9 @@
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: cdivision=True
+# distutils: language = c++
 """
-快速 tick 执行模块（Cython 加速）
+快速 tick 执行模块（Cython + C++ 加速）
 
 本模块实现整个 tick 的执行逻辑，包括：
 - 收集所有原子动作（噪声交易者、做市商、散户）到 C 数组
@@ -21,7 +22,8 @@ cimport numpy as np
 from libc.stdlib cimport rand, srand, malloc, free
 from libc.time cimport time as c_time
 
-from src.market.orderbook.order import Order, OrderSide, OrderType
+from src.market.matching.fast_matching cimport FastMatchingEngine
+from src.market.orderbook.orderbook cimport OrderBook
 
 # 原子动作类型常量
 DEF AT_CANCEL = 1
@@ -280,13 +282,10 @@ cpdef tuple execute_tick_cython(
         return ([], 0.0, 0.0)
 
     # ====== 缓存引用 ======
-    cdef object matching_engine = arena.matching_engine
-    cdef object orderbook = matching_engine._orderbook
+    cdef FastMatchingEngine me = <FastMatchingEngine>arena.matching_engine
+    cdef OrderBook orderbook = <OrderBook>me._orderbook
     cdef dict agent_states = arena.agent_states
     cdef dict noise_trader_states = arena.noise_trader_states
-    cdef object order_map = orderbook.order_map
-    cdef object process_order = matching_engine.process_order
-    cdef object cancel_order_fn = matching_engine.cancel_order
     cdef object recent_trades_deque = arena.recent_trades
     cdef object recent_trades_append = recent_trades_deque.append
     cdef dict agent_id_to_idx = arena._agent_id_to_idx if arena._agent_id_to_idx is not None else {}
@@ -295,7 +294,6 @@ cpdef tuple execute_tick_cython(
     cdef object pos_avg_prices_arr_ref = arena._position_avg_prices
     cdef int arena_id = arena.arena_id
 
-    cdef object order_map_get = order_map.get
     cdef object agent_states_get = agent_states.get
     cdef object noise_states_get = noise_trader_states.get
     cdef object agent_idx_get = agent_id_to_idx.get
@@ -501,7 +499,6 @@ cpdef tuple execute_tick_cython(
     cdef bint is_mm, is_nt
 
     cdef long long order_id
-    cdef object order
     cdef list trades
     cdef object trade
 
@@ -529,7 +526,7 @@ cpdef tuple execute_tick_cython(
         # ---- CANCEL ----
         if act_type == AT_CANCEL:
             if act_order_id != 0:
-                cancel_order_fn(act_order_id)
+                orderbook.cancel_order_fast(act_order_id)
                 # 更新状态：做市商的 bid/ask_order_ids 已在收集阶段清空
                 # 散户的 pending_order_id 已在收集阶段设为 None
                 # 做市商取消时可能需要从列表中移除（如果还在列表中）
@@ -563,15 +560,7 @@ cpdef tuple execute_tick_cython(
                     continue
                 order_id = _generate_order_id_agent(agent_state, arena_id)
 
-            order = Order(
-                order_id=order_id,
-                agent_id=act_agent_id,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                price=act_price,
-                quantity=act_qty,
-            )
-            trades = process_order(order)
+            trades = me.process_order_raw(order_id, act_agent_id, 1, 1, act_price, act_qty)
 
             for trade in trades:
                 all_trades.append(trade)
@@ -599,8 +588,6 @@ cpdef tuple execute_tick_cython(
                 taker_state = agent_states_get(taker_id)
                 if taker_state is not None:
                     side_int = 1 if taker_is_buyer else -1
-                    if False:  # is_maker for taker is always False
-                        taker_state.maker_volume += trade.quantity
                     realized_pnl = _update_position_cython(taker_state, side_int, trade.quantity, trade.price)
                     taker_state.balance += realized_pnl - taker_fee
                     # sync to array
@@ -629,7 +616,7 @@ cpdef tuple execute_tick_cython(
                         _update_noise_trader_position(nt_maker, trade.price, trade.quantity, not taker_is_buyer)
 
             # 更新挂单状态
-            if order_map_get(order_id):
+            if orderbook.has_order(order_id):
                 if is_mm:
                     mm_state = agent_states_get(act_agent_id)
                     if mm_state is not None:
@@ -657,15 +644,7 @@ cpdef tuple execute_tick_cython(
                     continue
                 order_id = _generate_order_id_agent(agent_state, arena_id)
 
-            order = Order(
-                order_id=order_id,
-                agent_id=act_agent_id,
-                side=OrderSide.SELL,
-                order_type=OrderType.LIMIT,
-                price=act_price,
-                quantity=act_qty,
-            )
-            trades = process_order(order)
+            trades = me.process_order_raw(order_id, act_agent_id, -1, 1, act_price, act_qty)
 
             for trade in trades:
                 all_trades.append(trade)
@@ -719,7 +698,7 @@ cpdef tuple execute_tick_cython(
                         _update_noise_trader_position(nt_maker, trade.price, trade.quantity, not taker_is_buyer)
 
             # 更新挂单状态
-            if order_map_get(order_id):
+            if orderbook.has_order(order_id):
                 if is_mm:
                     mm_state = agent_states_get(act_agent_id)
                     if mm_state is not None:
@@ -747,15 +726,7 @@ cpdef tuple execute_tick_cython(
                     continue
                 order_id = _generate_order_id_agent(agent_state, arena_id)
 
-            order = Order(
-                order_id=order_id,
-                agent_id=act_agent_id,
-                side=OrderSide.BUY,
-                order_type=OrderType.MARKET,
-                price=0.0,
-                quantity=act_qty,
-            )
-            trades = process_order(order)
+            trades = me.process_order_raw(order_id, act_agent_id, 1, 2, 0.0, act_qty)
 
             for trade in trades:
                 all_trades.append(trade)
@@ -822,15 +793,7 @@ cpdef tuple execute_tick_cython(
                     continue
                 order_id = _generate_order_id_agent(agent_state, arena_id)
 
-            order = Order(
-                order_id=order_id,
-                agent_id=act_agent_id,
-                side=OrderSide.SELL,
-                order_type=OrderType.MARKET,
-                price=0.0,
-                quantity=act_qty,
-            )
-            trades = process_order(order)
+            trades = me.process_order_raw(order_id, act_agent_id, -1, 2, 0.0, act_qty)
 
             for trade in trades:
                 all_trades.append(trade)

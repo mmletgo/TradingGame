@@ -11,6 +11,7 @@ build/
 .benchmarks/
 false
 *.c
+*.cpp
 *.so
 logs
 *.prof

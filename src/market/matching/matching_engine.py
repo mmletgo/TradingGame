@@ -1,28 +1,24 @@
 """
-撮合引擎模块
+撮合引擎模块（纯 Python 兼容层）
 
-负责订单撮合的核心逻辑，管理订单簿，处理订单提交、撤销和撮合。
+保留 MatchingEngine 接口，内部委托给 FastMatchingEngine (Cython + C++)。
+非热路径代码（强平、ADL、演示等）可直接导入本模块。
 """
 
-from typing import Callable
-
 from src.config.config import MarketConfig
-from src.market.orderbook.order import Order, OrderSide, OrderType
+from src.market.orderbook.order import Order, OrderType
 from src.market.matching.trade import Trade
-from src.market.matching.fast_matching import fast_match_orders, FastTrade
+from src.market.matching.fast_matching import FastMatchingEngine, FastTrade
 
 from src.core.log_engine.logger import get_logger
-from src.market.orderbook.orderbook import OrderBook
 
 
 class MatchingEngine:
     """
-    撮合引擎
+    撮合引擎（纯 Python 兼容层）
 
-    交易市场的核心组件，负责：
-    - 管理订单簿
-    - 处理订单提交和撤销
-    - 执行撮合逻辑，生成成交记录
+    内部委托给 FastMatchingEngine (Cython + C++)，
+    保留与旧代码相同的属性和方法签名。
 
     Attributes:
         _config: 市场配置
@@ -39,12 +35,37 @@ class MatchingEngine:
             config: 市场配置
         """
         self._config = config
-        self._orderbook = OrderBook(tick_size=config.tick_size)
+        self._fast = FastMatchingEngine(config)
         self._logger = get_logger(__name__)
-        self._next_trade_id: int = 1
-        self._fee_rates: dict[int, tuple[float, float]] = {}
-
         self._logger.info("撮合引擎初始化完成")
+
+    @property
+    def _orderbook(self):
+        """获取订单簿"""
+        return self._fast._orderbook
+
+    @property
+    def _next_trade_id(self) -> int:
+        """获取下一个成交ID"""
+        return self._fast._next_trade_id
+
+    @_next_trade_id.setter
+    def _next_trade_id(self, value: int) -> None:
+        self._fast._next_trade_id = value
+
+    @property
+    def _fee_rates(self) -> dict:
+        """获取费率配置"""
+        return self._fast._fee_rates
+
+    @property
+    def orderbook(self):
+        """获取订单簿"""
+        return self._fast._orderbook
+
+    @property
+    def _tick_size(self) -> float:
+        return self._fast._tick_size
 
     def register_agent(
         self, agent_id: int, maker_rate: float, taker_rate: float
@@ -54,21 +75,14 @@ class MatchingEngine:
 
         Args:
             agent_id: Agent ID
-            maker_rate: 挂单费率（如 0.0002 表示万2）
-            taker_rate: 吃单费率（如 0.0005 表示万5）
+            maker_rate: 挂单费率
+            taker_rate: 吃单费率
         """
-        self._fee_rates[agent_id] = (maker_rate, taker_rate)
+        self._fast.register_agent(agent_id, maker_rate, taker_rate)
 
     def calculate_fee(self, agent_id: int, amount: float, is_maker: bool) -> float:
         """
         计算手续费
-
-        根据 Agent 类型和订单类型（挂单/吃单）计算手续费。
-
-        费率配置（默认）：
-        - 散户: 挂单万2 (0.0002)，吃单万5 (0.0005)
-        - 庄家: 挂单0，吃单万1 (0.0001)
-        - 做市商: 挂单0，吃单万1 (0.0001)
 
         Args:
             agent_id: Agent ID
@@ -77,135 +91,27 @@ class MatchingEngine:
 
         Returns:
             手续费金额
-
-        Raises:
-            ValueError: 如果 agent_id 未注册且金额为正
         """
-        rates = self._fee_rates.get(agent_id)
-        if rates is None:
-            # 未注册的 Agent 使用默认散户费率
-            rates = (0.0002, 0.0005)
+        return self._fast.calculate_fee(agent_id, amount, is_maker)
 
-        maker_rate, taker_rate = rates
-        rate = maker_rate if is_maker else taker_rate
-        return amount * rate
+    def match_limit_order(self, order: Order) -> list[FastTrade]:
+        """限价单撮合"""
+        return self._fast.process_order(order)
 
-    def _match_orders(
-        self,
-        order: Order,
-        price_check: Callable[[float, float, OrderSide], bool] | None = None,
-    ) -> tuple[list[FastTrade], int]:
-        """
-        通用撮合逻辑（委托给 Cython 实现）
+    def match_market_order(self, order: Order) -> list[FastTrade]:
+        """市价单撮合"""
+        return self._fast.process_order(order)
 
-        根据价格优先、时间优先的原则，将订单与对手盘进行撮合。
+    def process_order(self, order: Order) -> list[FastTrade]:
+        """处理订单，执行撮合"""
+        return self._fast.process_order(order)
 
-        Args:
-            order: 订单对象
-            price_check: 价格检查函数，接收 (order_price, best_price, order_side)，返回是否可以继续撮合
-                        如果为 None，则不进行价格检查（市价单行为）
-
-        Returns:
-            (trades, remaining): 成交列表和剩余数量
-        """
-        is_limit_order = price_check is not None
-
-        trades, remaining, self._next_trade_id = fast_match_orders(
-            self._orderbook,
-            order,
-            self._fee_rates,
-            self._next_trade_id,
-            is_limit_order
-        )
-
-        return trades, remaining
-
-    def match_limit_order(self, order: Order) -> list[Trade]:
-        """
-        限价单撮合
-
-        根据价格优先、时间优先的原则，将限价单与对手盘进行撮合。
-        无法完全成交的剩余部分挂在订单簿上。
-
-        Args:
-            order: 限价订单对象
-
-        Returns:
-            本次撮合产生的所有成交记录列表
-        """
-
-        def limit_price_check(
-            order_price: float, best_price: float, side: OrderSide
-        ) -> bool:
-            """限价单价格检查：买单价格 >= 卖一价，卖单价格 <= 买一价"""
-            if side == OrderSide.BUY:
-                return order_price >= best_price
-            else:
-                return order_price <= best_price
-
-        trades, remaining = self._match_orders(
-            order=order, price_check=limit_price_check
-        )
-
-        # 如果有剩余数量，挂在订单簿上
-        if remaining > 0:
-            # 更新订单数量为剩余数量，重置已成交数量（新挂单状态）
-            order.quantity = remaining
-            order.filled_quantity = 0
-            self._orderbook.add_order(order)
-
-        return trades
-
-    def match_market_order(self, order: Order) -> list[Trade]:
-        """
-        市价单撮合
-
-        根据价格优先、时间优先的原则，将市价单与对手盘进行撮合。
-        吃掉对手盘直到完全成交或对手盘为空。
-        市价单不会挂在订单簿上，未成交部分直接丢弃。
-
-        Args:
-            order: 市价订单对象
-
-        Returns:
-            本次撮合产生的所有成交记录列表
-        """
-        # 市价单不检查价格，price_check 为 None
-        trades, _ = self._match_orders(order, None)
-        return trades
-
-    def process_order(self, order: Order) -> list[Trade]:
-        """
-        处理订单，执行撮合
-
-        根据订单类型调用对应的撮合函数。
-
-        Args:
-            order: 订单对象（限价单或市价单）
-
-        Returns:
-            本次撮合产生的所有成交记录列表（可能为空）
-        """
-        if order.order_type == OrderType.LIMIT:
-            trades = self.match_limit_order(order)
-        else:  # OrderType.MARKET
-            trades = self.match_market_order(order)
-        return trades
+    def process_order_raw(self, order_id: int, agent_id: int,
+                          side: int, order_type: int,
+                          price: float, quantity: int) -> list[FastTrade]:
+        """不创建 Order 对象的快速撮合"""
+        return self._fast.process_order_raw(order_id, agent_id, side, order_type, price, quantity)
 
     def cancel_order(self, order_id: int) -> bool:
-        """撤单
-
-        从订单簿中撤销订单。
-
-        Args:
-            order_id: 订单ID
-
-        Returns:
-            是否成功撤单
-        """
-        return self._orderbook.cancel_order(order_id)
-
-    @property
-    def orderbook(self) -> OrderBook:
-        """获取订单簿"""
-        return self._orderbook
+        """撤单"""
+        return self._fast.cancel_order(order_id)

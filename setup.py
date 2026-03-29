@@ -12,6 +12,8 @@ extensions = [
         ["src/market/orderbook/orderbook.pyx"],
         include_dirs=[numpy.get_include()],
         define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+        language="c++",
+        extra_compile_args=["-O3", "-std=c++17"],
     ),
     Extension(
         "src.market.account.position",
@@ -27,7 +29,10 @@ extensions = [
     Extension(
         "src.market.matching.fast_matching",
         ["src/market/matching/fast_matching.pyx"],
-        extra_compile_args=["-O3"],
+        include_dirs=[numpy.get_include()],
+        define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+        language="c++",
+        extra_compile_args=["-O3", "-std=c++17"],
     ),
     Extension(
         "src.bio.agents._cython.fast_decide",
@@ -59,7 +64,8 @@ extensions = [
         ["src/training/_cython/fast_tick_execution.pyx"],
         include_dirs=[numpy.get_include()],
         define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-        extra_compile_args=["-O3"],
+        language="c++",
+        extra_compile_args=["-O3", "-std=c++17"],
     ),
 ]
 
