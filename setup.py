@@ -54,6 +54,13 @@ extensions = [
         ["src/training/_cython/fast_execution.pyx"],
         extra_compile_args=["-O3"],
     ),
+    Extension(
+        "src.training._cython.fast_tick_execution",
+        ["src/training/_cython/fast_tick_execution.pyx"],
+        include_dirs=[numpy.get_include()],
+        define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+        extra_compile_args=["-O3"],
+    ),
 ]
 
 setup(
