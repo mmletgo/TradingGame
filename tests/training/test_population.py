@@ -353,6 +353,7 @@ class TestPopulationEvaluate:
         agent.account.position.quantity = quantity
         agent.account.position.avg_price = avg_price
         agent.account.initial_balance = initial_balance
+        agent.account.trade_count = 0
         return agent
 
     def test_evaluate_empty_population(self):
@@ -383,12 +384,14 @@ class TestPopulationEvaluate:
     def test_evaluate_sorted_by_fitness_descending(self):
         """测试按适应度从高到低排序
 
-        适应度使用对称公式:
-        fitness = (balance - initial) / initial - position_cost_weight × |qty × price| / initial
-        position_cost_weight = 0.02（散户默认值）
+        适应度使用对称公式 + 活跃度激励:
+        pnl = (balance - initial) / initial - position_cost_weight × |qty × price| / initial
+        fitness = (1 - β) × pnl + β × activity_score
+        position_cost_weight = 0.02, β = 0.05（散户默认值），trade_count=0 时 activity=0
         """
         # Agent 1: balance=10000, qty=10, initial=10000, price=100
-        # fitness = (10000-10000)/10000 - 0.02×|10×100|/10000 = 0 - 0.002 = -0.002
+        # pnl = (10000-10000)/10000 - 0.02×|10×100|/10000 = -0.002
+        # fitness = 0.95 × (-0.002) = -0.0019
         agent1 = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -398,7 +401,7 @@ class TestPopulationEvaluate:
         )
 
         # Agent 2: balance=15000, qty=0, initial=10000, price=100
-        # fitness = (15000-10000)/10000 - 0.02×|0×100|/10000 = 0.5 - 0 = 0.5
+        # pnl = 0.5, fitness = 0.95 × 0.5 = 0.475
         agent2 = self._create_mock_agent(
             agent_id=2,
             balance=15000.0,
@@ -408,7 +411,7 @@ class TestPopulationEvaluate:
         )
 
         # Agent 3: balance=5000, qty=-10, initial=10000, price=100
-        # fitness = (5000-10000)/10000 - 0.02×|-10×100|/10000 = -0.5 - 0.002 = -0.502
+        # pnl = -0.502, fitness = 0.95 × (-0.502) = -0.4769
         agent3 = self._create_mock_agent(
             agent_id=3,
             balance=5000.0,
@@ -421,25 +424,26 @@ class TestPopulationEvaluate:
 
         result = self.population.evaluate(100.0)
 
-        # 验证排序: agent2 (0.5) > agent1 (-0.002) > agent3 (-0.502)
+        # 验证排序: agent2 (0.475) > agent1 (-0.0019) > agent3 (-0.4769)
         assert len(result) == 3
         assert result[0][0] is agent2
-        assert result[0][1] == pytest.approx(0.5)
+        assert result[0][1] == pytest.approx(0.475)
         assert result[1][0] is agent1
-        assert result[1][1] == pytest.approx(-0.002)
+        assert result[1][1] == pytest.approx(-0.0019)
         assert result[2][0] is agent3
-        assert result[2][1] == pytest.approx(-0.502)
+        assert result[2][1] == pytest.approx(-0.4769)
 
     def test_evaluate_with_symmetric_position_cost(self):
         """测试对称持仓成本：多空对称的适应度计算
 
-        适应度使用对称公式:
-        fitness = (balance - initial) / initial - position_cost_weight × |qty × price| / initial
-        position_cost_weight = 0.02（散户默认值）
+        适应度使用对称公式 + 活跃度激励:
+        pnl = (balance - initial) / initial - position_cost_weight × |qty × price| / initial
+        fitness = (1 - β) × pnl + β × activity_score
+        position_cost_weight = 0.02, β = 0.05，trade_count=0 时 activity=0
         同等数量的多头和空头持仓产生完全相同的适应度惩罚。
         """
         # 多头盈利: balance=10000, qty=100, price=100, initial=10000
-        # fitness = (10000-10000)/10000 - 0.02×|100×100|/10000 = 0 - 0.02 = -0.02
+        # pnl = -0.02, fitness = 0.95 × (-0.02) = -0.019
         agent_long_profit = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -449,7 +453,7 @@ class TestPopulationEvaluate:
         )
 
         # 多头亏损: balance=10000, qty=100, price=100, initial=10000
-        # fitness = (10000-10000)/10000 - 0.02×|100×100|/10000 = 0 - 0.02 = -0.02
+        # pnl = -0.02, fitness = 0.95 × (-0.02) = -0.019
         agent_long_loss = self._create_mock_agent(
             agent_id=2,
             balance=10000.0,
@@ -459,7 +463,7 @@ class TestPopulationEvaluate:
         )
 
         # 空头盈利: balance=10000, qty=-100, price=100, initial=10000
-        # fitness = (10000-10000)/10000 - 0.02×|-100×100|/10000 = 0 - 0.02 = -0.02
+        # pnl = -0.02, fitness = 0.95 × (-0.02) = -0.019
         agent_short_profit = self._create_mock_agent(
             agent_id=3,
             balance=10000.0,
@@ -469,7 +473,7 @@ class TestPopulationEvaluate:
         )
 
         # 空头亏损: balance=10000, qty=-100, price=100, initial=10000
-        # fitness = (10000-10000)/10000 - 0.02×|-100×100|/10000 = 0 - 0.02 = -0.02
+        # pnl = -0.02, fitness = 0.95 × (-0.02) = -0.019
         agent_short_loss = self._create_mock_agent(
             agent_id=4,
             balance=10000.0,
@@ -489,11 +493,11 @@ class TestPopulationEvaluate:
 
         # 验证适应度计算正确：新公式完全多空对称
         assert len(result) == 4
-        # 所有 Agent fitness 相同：-0.02（对称持仓成本）
-        assert result[0][1] == pytest.approx(-0.02)
-        assert result[1][1] == pytest.approx(-0.02)
-        assert result[2][1] == pytest.approx(-0.02)
-        assert result[3][1] == pytest.approx(-0.02)
+        # 所有 Agent fitness 相同：0.95 × (-0.02) = -0.019（对称持仓成本 + 活跃度缩放）
+        assert result[0][1] == pytest.approx(-0.019)
+        assert result[1][1] == pytest.approx(-0.019)
+        assert result[2][1] == pytest.approx(-0.019)
+        assert result[3][1] == pytest.approx(-0.019)
 
     def test_evaluate_returns_float_fitness(self):
         """测试返回的适应度是 Python float 而非 numpy 类型"""
