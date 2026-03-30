@@ -101,17 +101,23 @@ Numba JIT 加速的高频数学函数模块。
 - 执行 NEAT 进化算法
 - 重置 Agent 账户状态
 
-**适应度计算公式（纯已实现 PnL + 对称持仓成本）：**
+**适应度计算公式（纯已实现 PnL + 对称持仓成本 + 散户活跃度激励）：**
 
 使用多空对称公式，防止进化产生方向性偏好导致价格单边漂移：
-- `fitness = (balance - initial) / initial - λ × |position_qty × current_price| / initial`
-- 纯 balance：仅基于已实现 PnL，多空完全对称
-- 持仓成本：对多头和空头施加相同惩罚，激励关闭持仓
 
-| 种群类型 | 适应度公式 | 持仓成本权重 λ |
-|---------|-----------|---------------|
-| 高级散户 | (balance - initial) / initial - λ × \|qty × price\| / initial | 0.02 |
-| 做市商 | α × pnl + γ × volume（α=0.7, γ=0.3），pnl 使用同样公式 | 0.005 |
+**散户适应度：**
+- `fitness = (1 - β) × pnl_component + β × activity_score`
+- `pnl_component = (balance - initial) / initial - λ × |position_qty × current_price| / initial`
+- `activity_score = trade_count / (max_trade_count_in_population + 1.0)`
+- β（`retail_fitness_activity_weight`）默认 0.05，打破"不交易"局部最优
+
+**做市商适应度：**
+- `mm_fitness = α × pnl + γ × volume`（α=0.7, γ=0.3），pnl 使用同样的 PnL + 持仓成本公式
+
+| 种群类型 | 适应度公式 | 持仓成本权重 λ | 活跃度权重 β |
+|---------|-----------|---------------|-------------|
+| 高级散户 | (1-β) × pnl + β × activity_score | 0.02 | 0.05 |
+| 做市商 | α × pnl + γ × volume（α=0.7, γ=0.3） | 0.005 | - |
 
 **关键方法：**
 - `create_agents(genomes)` - 从基因组列表创建 Agent（小批量串行，大批量并行）；创建做市商时额外传递 `as_config` 参数，用于初始化 AS 模型配置

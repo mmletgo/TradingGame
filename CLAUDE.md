@@ -97,7 +97,7 @@ NEAT进化阶段
 
 | 类型 | 数量 | 初始资金 | 杠杆 | 订单簿深度 | 动作 |
 |------|------|----------|------|-----------|------|
-| 高级散户 | 2,400 (10子种群×240) | 2万 | 10.0x | 5档 | 挂单/撤单/吃单/不动 |
+| 高级散户 | 2,400 (10子种群×240) | 2万 | 10.0x | 5档 | 挂单/撤单/吃单/不动（活跃度激励 β=0.05） |
 | 做市商 | 600 (6子种群×100) | 10M | 10.0x | 5档 | 双边挂单（每边1-10单），报价中心使用 AS 模型的 reservation price 而非 mid_price |
 | 噪声交易者 | 200 | 1e18（无限资金） | - | - | 50%概率行动，市价单随机买卖 |
 
@@ -107,15 +107,26 @@ NEAT进化阶段
 - 所有操作在最新价 ±100 个最小变动单位内
 - 噪声交易者：不触发强平，零手续费，下单量服从对数正态分布
 
-### 适应度计算（纯已实现 PnL + 对称持仓成本）
+### 适应度计算（纯已实现 PnL + 对称持仓成本 + 散户活跃度激励）
 
-所有 Agent 的适应度使用多空对称公式，防止进化产生方向性偏好导致价格单边漂移：
+所有 Agent 的适应度基于多空对称公式，防止进化产生方向性偏好导致价格单边漂移。
+
+**散户适应度公式：**
 
 ```
-fitness = (balance - initial) / initial - λ × |position_qty × current_price| / initial
+fitness = (1 - β) × pnl_component + β × activity_score
+其中 pnl_component = (balance - initial) / initial - λ × |position_qty × current_price| / initial
+activity_score = trade_count / (max_trade_count_in_population + 1.0)
 ```
 
-- **纯 balance**：仅基于已实现 PnL（已完成的交易），多空完全对称
+- **pnl_component**：纯已实现 PnL + 对称持仓成本，多空完全对称
+- **activity_score**：散户活跃度得分，基于成交次数在种群内的相对排名，范围 [0, 1)
+- **`retail_fitness_activity_weight`（β）**：散户活跃度激励权重，默认 0.05
+- **目的**：打破"不交易"局部最优，激励散户参与市场交易
+
+**做市商适应度公式**仍使用独立的复合适应度（见下文"做市商复合适应度"）。
+
+**通用参数：**
 - **持仓成本**：`λ × |position_qty × price| / initial`，对多头和空头施加相同惩罚，激励关闭持仓
 - **散户** `position_cost_weight`（λ）默认 0.02
 - **做市商** `mm_position_cost_weight`（λ）默认 0.005（做市商需持仓做市，惩罚更小）

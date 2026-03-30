@@ -122,6 +122,7 @@ account/
 | `taker_fee_rate` | float | 吃单手续费率 |
 | `pending_order_id` | int \| None | 当前挂单 ID |
 | `maker_volume` | int | 作为 maker 的累计成交量（用于做市商适应度计算） |
+| `trade_count` | int | 累计成交次数（每次 on_trade 调用无条件 +1） |
 | `volatility_contribution` | float | 作为 taker 的价格冲击累计 |
 
 **核心方法：**
@@ -161,9 +162,10 @@ account/
 **执行步骤：**
 1. 根据成交方向确定手续费
 2. 判断是否为 maker 并累加 `maker_volume`
-3. 更新持仓，获取已实现盈亏
-4. 将已实现盈亏加到余额
-5. 扣除手续费
+3. 无条件累加 `trade_count`（+1）
+4. 更新持仓，获取已实现盈亏
+5. 将已实现盈亏加到余额
+6. 扣除手续费
 
 **maker 判断逻辑：**
 - `is_buyer_taker=True`：买方是 taker，卖方是 maker
@@ -208,6 +210,7 @@ account/
 | `taker_fee_rate` | double | 吃单手续费率 |
 | `pending_order_id` | int | 当前挂单 ID（-1 表示无挂单） |
 | `maker_volume` | int | 作为 maker 的累计成交量 |
+| `trade_count` | int | 累计成交次数（每次 on_trade 调用无条件 +1） |
 | `volatility_contribution` | double | 作为 taker 的价格冲击累计 |
 
 **核心方法（cpdef）：**
@@ -249,6 +252,7 @@ account/
 - 创建新的空 Position 对象
 - 重置 pending_order_id 为 -1
 - 重置 maker_volume 为 0
+- 重置 trade_count 为 0
 - 重置 volatility_contribution 为 0.0
 
 **与 Account 类的区别：**

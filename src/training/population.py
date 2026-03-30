@@ -2085,7 +2085,7 @@ class Population:
         if self.agent_type == AgentType.MARKET_MAKER:
             return self._evaluate_market_maker(current_price, n)
 
-        # 非做市商：纯已实现 PnL + 对称持仓成本
+        # 非做市商：已实现 PnL + 对称持仓成本 + 活跃度激励
         # 1. 收集所有 Agent 的账户数据到 numpy 数组
         balances = np.array([a.account.balance for a in self.agents])
         quantities = np.array([a.account.position.quantity for a in self.agents])
@@ -2098,6 +2098,16 @@ class Population:
         if self._training_config.position_cost_weight > 0:
             position_values = np.abs(quantities * current_price)
             fitnesses -= self._training_config.position_cost_weight * position_values / initial_balances
+
+        # 4. 活跃度激励: β × activity_score
+        beta = self._training_config.retail_fitness_activity_weight
+        if beta > 0:
+            trade_counts = np.array(
+                [a.account.trade_count for a in self.agents], dtype=np.float64
+            )
+            max_tc = np.max(trade_counts) if n > 0 else 0.0
+            activity_scores = trade_counts / (max_tc + 1.0)
+            fitnesses = (1.0 - beta) * fitnesses + beta * activity_scores
 
         # 5. 获取从高到低的排序索引
         sorted_indices = np.argsort(fitnesses)[::-1]

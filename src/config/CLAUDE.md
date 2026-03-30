@@ -173,6 +173,7 @@ retail_pro_config = AgentConfig(
 | mm_fitness_volume_weight | float | 0.3 | 做市商复合适应度中 Maker 成交量权重 gamma |
 | position_cost_weight | float | 0.02 | 散户持仓成本权重（对称持仓惩罚） |
 | mm_position_cost_weight | float | 0.005 | 做市商持仓成本权重（做市商需持仓做市，权重更小） |
+| retail_fitness_activity_weight | float | 0.05 | 散户活跃度激励权重 β |
 | enable_cpu_affinity | bool | True | 是否将 Arena Worker 进程绑定到独立的物理 CPU 核心 |
 
 **详细说明：**
@@ -231,6 +232,13 @@ retail_pro_config = AgentConfig(
   - `position_cost_weight`（λ=0.02）：散户持仓成本，惩罚持仓不平仓
   - `mm_position_cost_weight`（λ=0.005）：做市商持仓成本，权重更小（做市商需持仓做市）
   - 完全多空对称：多头和空头施加相同惩罚，防止进化产生方向性偏好
+
+- **散户活跃度激励权重**（retail_fitness_activity_weight）：
+  - 散户适应度公式：`fitness = (1 - β) × pnl_component + β × activity_score`
+  - `activity_score = trade_count / (max_trade_count_in_population + 1.0)`
+  - β=0.05：活跃度组件占比 5%，PnL 组件占比 95%
+  - 目的：打破"不交易"局部最优，激励散户参与市场交易
+  - `trade_count` 由 Account 的 `on_trade()` 方法每次调用时无条件累加
 
 - **CPU 亲和性**（enable_cpu_affinity）：
   - 启用后，ArenaWorkerPool 启动时将每个 Worker 进程绑定到独立的物理 CPU 核心

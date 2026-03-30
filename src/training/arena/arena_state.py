@@ -60,6 +60,7 @@ class AgentAccountState:
     initial_balance: float
     pending_order_id: int | None
     maker_volume: int
+    trade_count: int
     volatility_contribution: float
     is_liquidated: bool
     order_counter: int
@@ -104,6 +105,7 @@ class AgentAccountState:
             initial_balance=account.initial_balance,
             pending_order_id=account.pending_order_id,
             maker_volume=account.maker_volume,
+            trade_count=account.trade_count,
             volatility_contribution=account.volatility_contribution,
             is_liquidated=agent.is_liquidated,
             order_counter=agent._order_counter,
@@ -130,6 +132,7 @@ class AgentAccountState:
         self.maintenance_margin_rate = config.maintenance_margin_rate
         self.pending_order_id = None
         self.maker_volume = 0
+        self.trade_count = 0
         self.volatility_contribution = 0.0
         self.is_liquidated = False
         self.order_counter = 0
@@ -212,6 +215,9 @@ class AgentAccountState:
         Returns:
             本次成交产生的已实现盈亏
         """
+        # 累加成交次数（无条件，每次成交都累加）
+        self.trade_count += 1
+
         # 累加 maker 成交量
         if is_maker:
             self.maker_volume += trade_quantity

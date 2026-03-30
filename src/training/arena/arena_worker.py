@@ -2056,8 +2056,9 @@ def _calculate_fitness_for_sub_pop(
         alpha, gamma = mm_fitness_weights
         return (alpha * pnl_arr + gamma * norm_volume).astype(np.float32)
     else:
-        # 非 MM：纯收益率
-        fitnesses = np.zeros(n, dtype=np.float32)
+        # 非 MM：PnL + 活跃度激励
+        pnl_arr = np.zeros(n, dtype=np.float32)
+        trade_count_arr = np.zeros(n, dtype=np.float32)
         for idx, info in enumerate(infos):
             state = arena.agent_states.get(info.agent_id)
             if state is None:
@@ -2065,11 +2066,22 @@ def _calculate_fitness_for_sub_pop(
             # 纯已实现 PnL + 对称持仓成本
             initial = state.initial_balance
             if initial > 0:
-                fitnesses[idx] = (state.balance - initial) / initial
+                pnl_arr[idx] = (state.balance - initial) / initial
                 pcw = config.training.position_cost_weight
                 if pcw > 0:
                     pos_value = abs(state.position_quantity * current_price)
-                    fitnesses[idx] -= pcw * pos_value / initial
+                    pnl_arr[idx] -= pcw * pos_value / initial
+            trade_count_arr[idx] = float(state.trade_count)
+
+        beta = config.training.retail_fitness_activity_weight
+        if beta > 0:
+            max_tc = float(np.max(trade_count_arr)) if n > 0 else 0.0
+            activity_scores = trade_count_arr / (max_tc + 1.0)
+            fitnesses = ((1.0 - beta) * pnl_arr + beta * activity_scores).astype(
+                np.float32
+            )
+        else:
+            fitnesses = pnl_arr
         return fitnesses
 
 
