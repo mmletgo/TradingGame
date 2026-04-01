@@ -47,7 +47,7 @@ def create_default_config(
         ema_alpha=0.9,
     )
     maker_initial_balance = 10_000_000.0  # 做市商初始资金 10M
-    maker_leverage = 10.0
+    maker_leverage = 8.0
 
     agents = {
         AgentType.RETAIL_PRO: AgentConfig(
@@ -55,8 +55,8 @@ def create_default_config(
             initial_balance=20000.0,  # 2万
             leverage=10.0,
             maintenance_margin_rate=0.05,  # 5%
-            maker_fee_rate=0.0002,  # 万2
-            taker_fee_rate=0.0005,  # 万5
+            maker_fee_rate=0.0,  # 零手续费（训练阶段，消除"不交易"局部最优）
+            taker_fee_rate=0.0,  # 零手续费
         ),
         AgentType.MARKET_MAKER: AgentConfig(
             count=600,

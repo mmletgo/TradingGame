@@ -48,13 +48,13 @@ class LeagueTrainingConfig:
 
     # 代际对比配置
     generational_comparison_window: int = 20  # 代际对比历史窗口
-    convergence_fitness_std_threshold: float = 0.005  # 适应度标准差收敛阈值
+    convergence_fitness_std_threshold: float = 0.01  # 适应度标准差收敛阈值
     elite_ratio: float = 0.1  # 精英比例
 
     # 冻结与复评配置
     freeze_on_convergence: bool = True
     freeze_thaw_threshold: float = 0.05
-    min_freeze_generation: int = 30
+    min_freeze_generation: int = 80
     convergence_generations: int = 10  # 连续满足收敛条件的代数
 
     def __post_init__(self) -> None:

@@ -50,6 +50,7 @@ class Account:
         self.taker_fee_rate: float = config.taker_fee_rate
         self.pending_order_id: int | None = None
         self.maker_volume: int = 0  # 作为 maker 的累计成交量
+        self.total_volume: int = 0  # 累计总成交量（maker + taker）
         self.trade_count: int = 0  # 累计成交次数
         self.volatility_contribution: float = 0.0  # 作为 taker 的价格冲击累计（庄家用）
 
@@ -107,7 +108,8 @@ class Account:
             trade: 成交记录对象
             is_buyer: 是否为买方（True=买方，False=卖方）
         """
-        # 累加成交次数（无条件，每次成交都累加）
+        # 累加成交量和成交次数（无条件）
+        self.total_volume += trade.quantity
         self.trade_count += 1
 
         # 确定成交方向和手续费

@@ -2099,15 +2099,15 @@ class Population:
             position_values = np.abs(quantities * current_price)
             fitnesses -= self._training_config.position_cost_weight * position_values / initial_balances
 
-        # 4. 活跃度激励: β × activity_score
+        # 4. 活跃度激励: β × volume_score（与做市商统一使用成交量归一化）
         beta = self._training_config.retail_fitness_activity_weight
         if beta > 0:
-            trade_counts = np.array(
-                [a.account.trade_count for a in self.agents], dtype=np.float64
+            volumes = np.array(
+                [a.account.total_volume for a in self.agents], dtype=np.float64
             )
-            max_tc = np.max(trade_counts) if n > 0 else 0.0
-            activity_scores = trade_counts / (max_tc + 1.0)
-            fitnesses = (1.0 - beta) * fitnesses + beta * activity_scores
+            max_vol = np.max(volumes) if n > 0 else 0.0
+            volume_scores = volumes / (max_vol + 1.0)
+            fitnesses = (1.0 - beta) * fitnesses + beta * volume_scores
 
         # 5. 获取从高到低的排序索引
         sorted_indices = np.argsort(fitnesses)[::-1]

@@ -1465,6 +1465,8 @@ def _create_worker_arena_states(
                 initial_balance=info.initial_balance,
                 pending_order_id=None,
                 maker_volume=0,
+                total_volume=0,
+                trade_count=0,
                 volatility_contribution=0.0,
                 is_liquidated=False,
                 order_counter=0,
@@ -2056,9 +2058,9 @@ def _calculate_fitness_for_sub_pop(
         alpha, gamma = mm_fitness_weights
         return (alpha * pnl_arr + gamma * norm_volume).astype(np.float32)
     else:
-        # 非 MM：PnL + 活跃度激励
+        # 非 MM：PnL + 成交量激励（与做市商统一使用 volume 归一化）
         pnl_arr = np.zeros(n, dtype=np.float32)
-        trade_count_arr = np.zeros(n, dtype=np.float32)
+        volume_arr = np.zeros(n, dtype=np.float32)
         for idx, info in enumerate(infos):
             state = arena.agent_states.get(info.agent_id)
             if state is None:
@@ -2071,13 +2073,13 @@ def _calculate_fitness_for_sub_pop(
                 if pcw > 0:
                     pos_value = abs(state.position_quantity * current_price)
                     pnl_arr[idx] -= pcw * pos_value / initial
-            trade_count_arr[idx] = float(state.trade_count)
+            volume_arr[idx] = float(state.total_volume)
 
         beta = config.training.retail_fitness_activity_weight
         if beta > 0:
-            max_tc = float(np.max(trade_count_arr)) if n > 0 else 0.0
-            activity_scores = trade_count_arr / (max_tc + 1.0)
-            fitnesses = ((1.0 - beta) * pnl_arr + beta * activity_scores).astype(
+            max_vol = float(np.max(volume_arr)) if n > 0 else 0.0
+            volume_scores = volume_arr / (max_vol + 1.0)
+            fitnesses = ((1.0 - beta) * pnl_arr + beta * volume_scores).astype(
                 np.float32
             )
         else:

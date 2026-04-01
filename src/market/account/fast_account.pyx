@@ -47,6 +47,7 @@ cdef class FastAccount:
     cdef public double taker_fee_rate
     cdef public int pending_order_id
     cdef public int maker_volume
+    cdef public int total_volume
     cdef public int trade_count
     cdef public double volatility_contribution
 
@@ -82,6 +83,7 @@ cdef class FastAccount:
         self.taker_fee_rate = taker_fee_rate
         self.pending_order_id = -1  # -1 表示 None
         self.maker_volume = 0
+        self.total_volume = 0
         self.trade_count = 0
         self.volatility_contribution = 0.0
 
@@ -154,7 +156,8 @@ cdef class FastAccount:
             side = -1  # SELL
             fee = trade.seller_fee
 
-        # 累加成交次数（无条件，每次成交都累加）
+        # 累加成交量和成交次数（无条件）
+        self.total_volume += trade.quantity
         self.trade_count += 1
 
         # 判断是否为 maker 并累加成交量
@@ -221,5 +224,6 @@ cdef class FastAccount:
         self.position = Position()
         self.pending_order_id = -1
         self.maker_volume = 0
+        self.total_volume = 0
         self.trade_count = 0
         self.volatility_contribution = 0.0

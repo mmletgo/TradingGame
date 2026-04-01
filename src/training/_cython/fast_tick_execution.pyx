@@ -594,6 +594,7 @@ cpdef tuple execute_tick_cython(
                 # 更新 taker
                 taker_state = agent_states_get(taker_id)
                 if taker_state is not None:
+                    taker_state.total_volume += trade.quantity
                     taker_state.trade_count += 1
                     side_int = 1 if taker_is_buyer else -1
                     realized_pnl = _update_position_cython(taker_state, side_int, trade.quantity, trade.price)
@@ -612,6 +613,7 @@ cpdef tuple execute_tick_cython(
                 if maker_state_obj is not None:
                     side_int = -1 if taker_is_buyer else 1  # maker 方向与 taker 相反
                     maker_state_obj.maker_volume += trade.quantity
+                    maker_state_obj.total_volume += trade.quantity
                     maker_state_obj.trade_count += 1
                     realized_pnl = _update_position_cython(maker_state_obj, side_int, trade.quantity, trade.price)
                     maker_state_obj.balance += realized_pnl - maker_fee
@@ -680,6 +682,7 @@ cpdef tuple execute_tick_cython(
                 # 更新 taker
                 taker_state = agent_states_get(taker_id)
                 if taker_state is not None:
+                    taker_state.total_volume += trade.quantity
                     taker_state.trade_count += 1
                     side_int = 1 if taker_is_buyer else -1
                     realized_pnl = _update_position_cython(taker_state, side_int, trade.quantity, trade.price)
@@ -697,6 +700,7 @@ cpdef tuple execute_tick_cython(
                 if maker_state_obj is not None:
                     side_int = -1 if taker_is_buyer else 1
                     maker_state_obj.maker_volume += trade.quantity
+                    maker_state_obj.total_volume += trade.quantity
                     maker_state_obj.trade_count += 1
                     realized_pnl = _update_position_cython(maker_state_obj, side_int, trade.quantity, trade.price)
                     maker_state_obj.balance += realized_pnl - maker_fee
@@ -764,6 +768,7 @@ cpdef tuple execute_tick_cython(
                 # 更新 taker
                 taker_state = agent_states_get(taker_id)
                 if taker_state is not None:
+                    taker_state.total_volume += trade.quantity
                     taker_state.trade_count += 1
                     side_int = 1 if taker_is_buyer else -1
                     realized_pnl = _update_position_cython(taker_state, side_int, trade.quantity, trade.price)
@@ -781,6 +786,7 @@ cpdef tuple execute_tick_cython(
                 if maker_state_obj is not None:
                     side_int = -1 if taker_is_buyer else 1
                     maker_state_obj.maker_volume += trade.quantity
+                    maker_state_obj.total_volume += trade.quantity
                     maker_state_obj.trade_count += 1
                     realized_pnl = _update_position_cython(maker_state_obj, side_int, trade.quantity, trade.price)
                     maker_state_obj.balance += realized_pnl - maker_fee
@@ -833,6 +839,7 @@ cpdef tuple execute_tick_cython(
                 # 更新 taker
                 taker_state = agent_states_get(taker_id)
                 if taker_state is not None:
+                    taker_state.total_volume += trade.quantity
                     taker_state.trade_count += 1
                     side_int = 1 if taker_is_buyer else -1
                     realized_pnl = _update_position_cython(taker_state, side_int, trade.quantity, trade.price)
@@ -850,6 +857,7 @@ cpdef tuple execute_tick_cython(
                 if maker_state_obj is not None:
                     side_int = -1 if taker_is_buyer else 1
                     maker_state_obj.maker_volume += trade.quantity
+                    maker_state_obj.total_volume += trade.quantity
                     maker_state_obj.trade_count += 1
                     realized_pnl = _update_position_cython(maker_state_obj, side_int, trade.quantity, trade.price)
                     maker_state_obj.balance += realized_pnl - maker_fee

@@ -23,6 +23,7 @@ class FastAccount:
     taker_fee_rate: float
     pending_order_id: int
     maker_volume: int
+    total_volume: int
     trade_count: int
     volatility_contribution: float
 
