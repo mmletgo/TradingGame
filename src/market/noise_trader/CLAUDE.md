@@ -2,11 +2,11 @@
 
 ## 模块概述
 
-噪声交易者是替代鲶鱼(catfish)的新机制，用于为市场提供随机性流动性和布朗运动价格特征。200个独立噪声交易者通过随机买卖行为，由中心极限定理保证净买卖量趋向正态分布，从而产生价格随机游走。
+噪声交易者是替代鲶鱼(catfish)的新机制，用于为市场提供随机性流动性和布朗运动价格特征。400个独立噪声交易者通过随机买卖行为，由中心极限定理保证净买卖量趋向正态分布，从而产生价格随机游走。
 
 ## 设计理念
 
-1. **布朗运动模拟**：200个独立噪声交易者的净买卖量趋向正态分布，价格呈现随机游走特征
+1. **布朗运动模拟**：400个独立噪声交易者的净买卖量趋向正态分布，价格呈现随机游走特征
 2. **无限资金**：初始余额 1e18，不受资金限制，持续提供流动性
 3. **零手续费**：maker 和 taker 费率均为 0，降低交易成本
 4. **无强平风险**：不触发强平检查，保证市场稳定性
@@ -194,11 +194,11 @@ def create_noise_traders(config: "NoiseTraderConfig") -> list[NoiseTrader]:
 
 ### 中心极限定理
 
-200个独立噪声交易者，各自以 50% 概率行动，行动时 50% 买/50% 卖：
+400个独立噪声交易者，各自以 50% 概率行动，行动时 50% 买/50% 卖：
 
 - 单个噪声交易者的期望净买卖量 = 0
 - 净买卖量的方差有限
-- 由中心极限定理，100个噪声交易者的总净买卖量趋向正态分布
+- 由中心极限定理，200个噪声交易者的总净买卖量趋向正态分布
 
 ### 价格随机游走
 
@@ -210,7 +210,7 @@ def create_noise_traders(config: "NoiseTraderConfig") -> list[NoiseTrader]:
 
 | 特性 | 鲶鱼（旧） | 噪声交易者（新） |
 |------|-----------|----------------|
-| 数量 | 3个，三种策略 | 200个，统一随机 |
+| 数量 | 3个，三种策略 | 400个，统一随机 |
 | 资金 | 有限资金，会被强平 | 无限资金，不强平 |
 | 影响 | 强平后 episode 结束 | 不影响 episode |
 | 吃单方式 | 吃盘口前1档 | 按分布采样数量 |
@@ -252,7 +252,7 @@ from src.market.noise_trader import create_noise_traders, NoiseTrader
 from src.config.config import NoiseTraderConfig
 
 # 使用工厂函数创建
-config = NoiseTraderConfig(count=200)
+config = NoiseTraderConfig(count=400)
 noise_traders = create_noise_traders(config)
 
 # 或手动创建单个噪声交易者
@@ -308,12 +308,12 @@ for trader in noise_traders:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `count` | int | 200 | 噪声交易者数量 |
+| `count` | int | 400 | 噪声交易者数量 |
 | `action_probability` | float | 0.5 | 每个 tick 行动概率 |
 | `quantity_mu` | float | 12.0 | 对数正态分布 mu 参数 |
 | `quantity_sigma` | float | 1.0 | 对数正态分布 sigma 参数 |
 | `episode_bias_range` | float | 0.15 | Episode 级买入概率偏置范围 |
-| `ou_theta` | float | 0.035 | OU 过程均值回归速度（每 tick 回归 3.5% 的偏差） |
+| `ou_theta` | float | 0.01 | OU 过程均值回归速度（每 tick 回归 1% 的偏差） |
 | `ou_sigma` | float | 0.04 | OU 过程噪声强度 |
 
 **Ornstein-Uhlenbeck 随机过程：**
@@ -328,7 +328,7 @@ for trader in noise_traders:
 - 使用对数正态分布 `lognormvariate(mu, sigma)`
 - `mu=12.0, sigma=1.0` 产生的下单量中位数约 162,755，均值约 268,337
 - `max(1, int(...))` 确保下单量至少为 1
-- 200 个噪声交易者每 tick 总成交量约 2,680 万单位，净力量标准差约 4,400,000 单位，约为散户现实定向力量的 3.4 倍，既主导价格走势又不会击穿做市商双边挂单
+- 400 个噪声交易者每 tick 总成交量约 5,360 万单位，净力量标准差约 6,200,000 单位，约为散户现实定向力量的 3.4 倍，既主导价格走势又不会击穿做市商双边挂单
 
 ## 注意事项
 

@@ -5,8 +5,8 @@
 引擎模拟成交并返回 reward。
 
 Observation: NormalizedMarketState 展平为 float32 数组
-- RETAIL_PRO: shape (527,)
-- MARKET_MAKER: shape (592,)
+- RETAIL_PRO: shape (67,)
+- MARKET_MAKER: shape (132,)
 
 Action: 连续动作空间 [-1, 1]
 - RETAIL_PRO: shape (3,) -- 动作选择 + 价格偏移 + 数量比例
@@ -32,10 +32,8 @@ class ReplayEnv(gymnasium.Env):
         __init__() 加载数据 -> reset() 随机起始点 -> step() 逐步回放
 
     Observation 向量结构与原始 Agent.observe() 完全一致:
-    - 散户 527 维: bid(10) + ask(10) + trade_prices(100) + trade_quantities(100)
-                   + position(4) + pending(3) + tick_history(300)
-    - 做市商 592 维: bid(10) + ask(10) + trade_prices(100) + trade_quantities(100)
-                     + position(4) + pending(60) + tick_history(300) + as_features(8)
+    - 散户 67 维: 降维后的观测向量
+    - 做市商 132 维: 降维后的观测向量
     """
 
     metadata: dict[str, Any] = {"render_modes": []}
@@ -62,10 +60,10 @@ class ReplayEnv(gymnasium.Env):
         obs_dim: int
         act_dim: int
         if config.agent_type == "RETAIL_PRO":
-            obs_dim = 527
+            obs_dim = 67
             act_dim = 3
         else:
-            obs_dim = 592
+            obs_dim = 132
             act_dim = 43
 
         self.observation_space: spaces.Box = spaces.Box(

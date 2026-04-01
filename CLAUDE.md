@@ -52,7 +52,7 @@ python scripts/demo_ui.py --checkpoint checkpoints/ep_100.pkl           # 加载
 ```
 初始化阶段
 ├─ 创建2个NEAT种群（高级散户、做市商）
-├─ 创建噪声交易者（200个）
+├─ 创建噪声交易者（400个）
 ├─ 从基因组创建Agent对象
 ├─ 创建撮合引擎
 └─ 做市商建立初始流动性（Tick 1）
@@ -97,9 +97,9 @@ NEAT进化阶段
 
 | 类型 | 数量 | 初始资金 | 杠杆 | 订单簿深度 | 动作 |
 |------|------|----------|------|-----------|------|
-| 高级散户 | 2,400 (10子种群×240) | 2万 | 10.0x | 5档 | 挂单/撤单/吃单/不动（活跃度激励 β=0.05） |
-| 做市商 | 600 (6子种群×100) | 10M | 10.0x | 5档 | 双边挂单（每边1-10单），报价中心使用 AS 模型的 reservation price 而非 mid_price |
-| 噪声交易者 | 200 | 1e18（无限资金） | - | - | 50%概率行动，市价单随机买卖 |
+| 高级散户 | 4,800 (10子种群×480) | 2万 | 10.0x | 5档 | 挂单/撤单/吃单/不动（活跃度激励 β=0.05） |
+| 做市商 | 1,200 (6子种群×200) | 10M | 10.0x | 5档 | 双边挂单（每边1-10单），报价中心使用 AS 模型的 reservation price 而非 mid_price |
+| 噪声交易者 | 400 | 1e18（无限资金） | - | - | 50%概率行动，市价单随机买卖 |
 
 **约束规则：**
 - 高级散户：同时只能挂一单
@@ -150,13 +150,13 @@ mm_fitness = α × pnl + γ × volume_score
 
 市场随机性提供者（不参与NEAT进化）：
 
-- 200个独立噪声交易者，各自每 tick 以 50% 概率行动
+- 400个独立噪声交易者，各自每 tick 以 50% 概率行动
 - 行动时按 `tick_buy_prob` 概率买入，通过市价单撮合
 - 每个 Episode 开始时，每个竞技场独立生成随机偏置：`episode_buy_prob = 0.5 + uniform(-episode_bias_range, episode_bias_range)`
 - `episode_bias_range` 默认 0.15，即 episode_buy_prob ∈ [0.35, 0.65]
 - **Ornstein-Uhlenbeck 随机过程**：buy_prob 本身作为随机过程演化，防止价格漂移同时避免产生可预测的确定性模式
   - 每 tick 更新：`buy_prob[t+1] = buy_prob[t] + θ × (μ - buy_prob[t]) + σ × ε`，其中 μ = episode_buy_prob，ε ~ N(0,1)
-  - `ou_theta` 默认 0.035（每 tick 回归 3.5% 的偏差），`ou_sigma` 默认 0.04（噪声强度）
+  - `ou_theta` 默认 0.01（每 tick 回归 1% 的偏差），`ou_sigma` 默认 0.04（噪声强度）
   - buy_prob 被 clamp 到 [0.1, 0.9] 范围
   - 相比确定性均值回归，OU 过程允许临时趋势存在，且回归路径不可预测
 - 下单量：`max(1, int(lognormvariate(mu=12.0, sigma=1.0)))`
@@ -206,8 +206,8 @@ src/
 
 | 配置 | Agent类型 | 输入节点 | 输出节点 |
 |------|----------|----------|----------|
-| neat_retail_pro.cfg | 高级散户 | 527 | 3 |
-| neat_market_maker.cfg | 做市商 | 592 | 43 |
+| neat_retail_pro.cfg | 高级散户 | 67 | 3 |
+| neat_market_maker.cfg | 做市商 | 132 | 43 |
 
 ---
 

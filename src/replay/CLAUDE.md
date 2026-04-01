@@ -150,8 +150,8 @@ load_data(ob_snapshots, trades)
 
 | Agent 类型 | 观测维度 | 动作维度 | 动作含义 |
 |-----------|---------|---------|---------|
-| RETAIL_PRO | 527 | 3 | 动作选择 + 价格偏移 + 数量比例 |
-| MARKET_MAKER | 592 | 43 | 双边挂单参数 |
+| RETAIL_PRO | 67 | 3 | 动作选择 + 价格偏移 + 数量比例 |
+| MARKET_MAKER | 132 | 43 | 双边挂单参数 |
 
 **Observation 向量结构:**
 - 与 Agent.observe() 完全一致的布局（见 src/bio/agents/CLAUDE.md）

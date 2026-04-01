@@ -156,8 +156,8 @@ Numba JIT 加速的高频数学函数模块。
 通用子种群管理器，将种群拆分为多个独立子种群进行进化。
 
 **支持的种群类型：**
-- `AgentType.RETAIL_PRO` - 高级散户（10子种群×240）
-- `AgentType.MARKET_MAKER` - 做市商（6子种群×100）
+- `AgentType.RETAIL_PRO` - 高级散户（10子种群×480）
+- `AgentType.MARKET_MAKER` - 做市商（6子种群×200）
 
 **设计目标：**
 - 减少单个 NEAT 种群的规模，优化进化性能
@@ -329,7 +329,7 @@ class AtomicAction:
 ### 1. 初始化阶段 (`setup`)
 - 预计算 Worker 配置并在后台线程启动 Worker 池创建（与后续步骤并行）
 - 创建两个种群（高级散户/做市商）
-- 创建噪声交易者（200个）
+- 创建噪声交易者（400个）
 - 创建撮合引擎和 ADL 管理器
 - 注册所有 Agent 的费率到撮合引擎
 - 构建 Agent 映射表和执行顺序
@@ -413,7 +413,7 @@ class AtomicAction:
 将网络数据提取从每次决策移到进化后一次性完成。
 
 **维度常量（做市商）：**
-- `INPUT_DIM_MARKET_MAKER = 592`（订单簿 5 档 + AS 模型 8 个特征字段）
+- `INPUT_DIM_MARKET_MAKER = 132`（订单簿 5 档 + AS 模型 8 个特征字段）
 - `OUTPUT_DIM_MARKET_MAKER = 43`（原 41，新增 2 个 AS 模型输出字段：gamma、spread_scale）
 
 **MarketStateData 结构体新增 AS 字段（共 9 个）：**
@@ -428,8 +428,8 @@ class AtomicAction:
 - `as_urgency` - 紧迫度（随剩余时间减少而增大，`1 - tau`）
 
 **关键内部函数：**
-- `_extract_market_state(market_state_data, normalized_state)` - 从 `NormalizedMarketState` 提取市场状态，包含 AS 参数字段的提取（索引 584-591 对应 8 个 AS 特征）
-- `_observe_market_maker_single(state_data, market_data, buf, offset)` - 在输入向量索引 584-591 处填充 AS 模型特征（sigma、tau、kappa、q、inventory_skew、urgency、as_reservation_price_norm、as_spread_half_norm）
+- `_extract_market_state(market_state_data, normalized_state)` - 从 `NormalizedMarketState` 提取市场状态，包含 AS 参数字段的提取（索引 124-131 对应 8 个 AS 特征）
+- `_observe_market_maker_single(state_data, market_data, buf, offset)` - 在输入向量索引 124-131 处填充 AS 模型特征（sigma、tau、kappa、q、inventory_skew、urgency、as_reservation_price_norm、as_spread_half_norm）
 - `_parse_market_maker_full_single(output, market_data, state_data)` - 从神经网络 43 维输出解析做市商决策；其中输出索引 41-42 对应 AS 模型参数（gamma_override、spread_scale），结合预计算的 sigma、tau、kappa 使用 AS 公式计算 reservation_price，再生成双边报价
 
 **缓存类方法：**
@@ -516,8 +516,8 @@ class AtomicAction:
 ## NEAT 配置
 
 不同 Agent 类型使用不同的 NEAT 配置文件：
-- `config/neat_retail_pro.cfg` - 高级散户（527 个输入节点，3 个输出节点）
-- `config/neat_market_maker.cfg` - 做市商（592 个输入节点，43 个输出节点）
+- `config/neat_retail_pro.cfg` - 高级散户（67 个输入节点，3 个输出节点）
+- `config/neat_market_maker.cfg` - 做市商（132 个输入节点，43 个输出节点）
 
 **关键配置参数（防止种群灭绝）：**
 - `reset_on_extinction = True`

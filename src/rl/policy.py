@@ -42,7 +42,7 @@ class ActorCriticPolicy(nn.Module):
         """
         Args:
             actor: 转换后的 NEAT 网络
-            obs_dim: 观测空间维度（527 散户，592 做市商）
+            obs_dim: 观测空间维度（67 散户，132 做市商）
             act_dim: 动作空间维度（3 散户，43 做市商）
             initial_log_std: 初始动作标准差（对数，-1.0 ≈ std=0.37，保守探索）
             critic_hidden_sizes: critic MLP 隐藏层尺寸

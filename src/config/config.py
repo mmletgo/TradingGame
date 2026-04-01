@@ -138,12 +138,12 @@ class DemoConfig:
 @dataclass
 class NoiseTraderConfig:
     """噪声交易者配置"""
-    count: int = 200
+    count: int = 400
     action_probability: float = 0.5
     quantity_mu: float = 12.0
     quantity_sigma: float = 1.0
     episode_bias_range: float = 0.35  # Episode 级买入概率偏置范围，buy_prob ∈ [0.5-range, 0.5+range]
-    ou_theta: float = 0.035  # OU 过程均值回归速度（每 tick 回归 3.5% 的偏差）
+    ou_theta: float = 0.01  # OU 过程均值回归速度（每 tick 回归 1% 的偏差）
     ou_sigma: float = 0.08   # OU 过程噪声强度
 
 

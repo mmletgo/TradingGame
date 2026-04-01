@@ -164,20 +164,9 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        # 10 买盘 + 10 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
-        expected_length = 10 + 10 + 200 + 4 + 3 + 300
+        # 10 买盘 + 10 卖盘 + 4 持仓 + 3 挂单 + 20 tick历史价格 + 20 tick历史成交量
+        expected_length = 10 + 10 + 4 + 3 + 20 + 20
         assert len(inputs) == expected_length
-
-        # 验证成交数据（价格在前100个，数量在后100个）
-        trade_start_idx = 10 + 10  # 跳过订单簿深度数据
-        # 前100个是价格（使用容差比较，因为是 float32）
-        assert abs(inputs[trade_start_idx + 0] - (-0.001)) < 1e-6  # 第一笔成交价格
-        assert abs(inputs[trade_start_idx + 1] - 0.001) < 1e-6     # 第二笔成交价格
-        # 后100个是数量（带方向）
-        quantity_start_idx = trade_start_idx + 100
-        assert inputs[quantity_start_idx + 0] == 10.0   # 第一笔成交，taker 是买方
-        assert inputs[quantity_start_idx + 1] == -5.0   # 第二笔成交，taker 是卖方
-        assert inputs[quantity_start_idx + 2] == 8.0    # 第三笔成交，taker 是买方
 
     def test_observe_empty_market_state(self):
         """测试空市场状态观察"""
@@ -214,12 +203,12 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度（固定长度）
-        # 10 买盘 + 10 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
-        expected_length = 10 + 10 + 200 + 4 + 3 + 300
+        # 10 买盘 + 10 卖盘 + 4 持仓 + 3 挂单 + 20 tick历史价格 + 20 tick历史成交量
+        expected_length = 10 + 10 + 4 + 3 + 20 + 20
         assert len(inputs) == expected_length
 
-        # 验证持仓状态（在末尾附近）
-        position_start_idx = 10 + 10 + 200
+        # 验证持仓状态
+        position_start_idx = 10 + 10  # 20
         assert inputs[position_start_idx + 0] == 0.0  # 持仓归一化
         assert inputs[position_start_idx + 1] == 0.0  # 持仓均价归一化
         assert inputs[position_start_idx + 2] == 1.0  # 余额归一化（10000/10000 = 1.0）
@@ -264,12 +253,12 @@ class TestAgentObserve:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入向量长度
-        # 10 买盘 + 10 卖盘 + 200 成交 + 4 持仓 + 3 挂单 + 300 tick历史
-        expected_length = 10 + 10 + 200 + 4 + 3 + 300
+        # 10 买盘 + 10 卖盘 + 4 持仓 + 3 挂单 + 20 tick历史价格 + 20 tick历史成交量
+        expected_length = 10 + 10 + 4 + 3 + 20 + 20
         assert len(inputs) == expected_length
 
         # 验证持仓数据（在持仓部分）
-        position_start_idx = 10 + 10 + 200
+        position_start_idx = 10 + 10  # 20
         # 持仓归一化 = position_value / (equity * leverage)
         # position_value = 100 * 100 = 10000
         # equity = 10000 (balance)

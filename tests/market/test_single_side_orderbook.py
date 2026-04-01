@@ -119,7 +119,7 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度（高级散户使用完整的607维输入）
-        assert inputs.shape == (527,), f"期望输入维度527，实际{inputs.shape}"
+        assert inputs.shape == (67,), f"期望输入维度67，实际{inputs.shape}"
 
         # 验证买盘数据被正确填充
         assert inputs[0] != 0.0, "买盘价格应该被填充"
@@ -142,7 +142,7 @@ class TestSingleSideOrderbook:
         inputs = agent.observe(market_state, orderbook)
 
         # 验证输入维度
-        assert inputs.shape == (527,), f"期望输入维度527，实际{inputs.shape}"
+        assert inputs.shape == (67,), f"期望输入维度67，实际{inputs.shape}"
 
         # 验证买盘数据为空
         assert np.all(inputs[0:10] == 0.0), "买盘数据应该全为0"
