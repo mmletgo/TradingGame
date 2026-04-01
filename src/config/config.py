@@ -116,7 +116,7 @@ class TrainingConfig:
     )
     # 散户活跃度激励权重 β（fitness = (1-β) × pnl + β × activity_score）
     # activity_score = trade_count / (max_trade_count + 1.0)，β=0 则退化为纯 PnL
-    retail_fitness_activity_weight: float = 0.05
+    retail_fitness_activity_weight: float = 0.15
     # CPU 亲和性
     enable_cpu_affinity: bool = (
         True  # 是否将 Arena Worker 进程绑定到独立的物理 CPU 核心
