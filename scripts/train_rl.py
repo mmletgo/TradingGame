@@ -144,9 +144,9 @@ def main() -> None:
     obs_dim: int
     act_dim: int
     if args.agent_type == "RETAIL_PRO":
-        obs_dim, act_dim = 527, 3
+        obs_dim, act_dim = 67, 3
     else:
-        obs_dim, act_dim = 592, 43
+        obs_dim, act_dim = 132, 43
 
     # 3. 创建回放环境
     replay_config: ReplayConfig = ReplayConfig(

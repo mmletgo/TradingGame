@@ -126,9 +126,9 @@ class Agent:
         self.config = config
         self.account = Account(agent_id, agent_type, config)
 
-        # 预分配神经网络输入缓冲区（527 = 10 + 10 + 100 + 100 + 4 + 3 + 300）
-        # 其中 300 = 100 tick历史价格 + 100 tick历史成交量 + 100 tick历史成交额
-        self._input_buffer: np.ndarray = np.zeros(527, dtype=np.float64)
+        # 预分配神经网络输入缓冲区（67 = 10 + 10 + 4 + 3 + 20 + 20）
+        # 其中 40 = 20 tick历史价格 + 20 tick历史成交量
+        self._input_buffer: np.ndarray = np.zeros(67, dtype=np.float64)
 
         # 预分配持仓信息缓冲区（4 个值）
         self._position_buffer: np.ndarray = np.zeros(4, dtype=np.float64)
@@ -156,7 +156,7 @@ class Agent:
             orderbook: 订单簿（用于查询挂单信息）
 
         Returns:
-            神经网络输入向量（527维 ndarray）
+            神经网络输入向量（67维 ndarray）
         """
         if _HAS_CYTHON_OBSERVE:
             # 使用 Cython 加速版本
@@ -194,11 +194,8 @@ class Agent:
                 self._input_buffer,
                 market_state.bid_data,
                 market_state.ask_data,
-                market_state.trade_prices,
-                market_state.trade_quantities,
-                market_state.tick_history_prices,
-                market_state.tick_history_volumes,
-                market_state.tick_history_amounts,
+                market_state.tick_history_prices[-20:],
+                market_state.tick_history_volumes[-20:],
                 position_inputs[0],
                 position_inputs[1],
                 position_inputs[2],
@@ -212,18 +209,15 @@ class Agent:
             # 纯 Python 实现：直接复制到预分配数组
             self._input_buffer[:10] = market_state.bid_data
             self._input_buffer[10:20] = market_state.ask_data
-            self._input_buffer[20:120] = market_state.trade_prices
-            self._input_buffer[120:220] = market_state.trade_quantities
-            self._input_buffer[220:224] = self._get_position_inputs(
+            self._input_buffer[20:24] = self._get_position_inputs(
                 market_state.mid_price
             )
-            self._input_buffer[224:227] = self._get_pending_order_inputs(
+            self._input_buffer[24:27] = self._get_pending_order_inputs(
                 market_state.mid_price, orderbook
             )
-            # tick 历史数据（100 个价格 + 100 个成交量 + 100 个成交额）
-            self._input_buffer[227:327] = market_state.tick_history_prices
-            self._input_buffer[327:427] = market_state.tick_history_volumes
-            self._input_buffer[427:527] = market_state.tick_history_amounts
+            # tick 历史数据（最近20 tick价格 + 最近20 tick成交量）
+            self._input_buffer[27:47] = market_state.tick_history_prices[-20:]
+            self._input_buffer[47:67] = market_state.tick_history_volumes[-20:]
             return self._input_buffer  # 不调用 .tolist()
 
     def _get_position_inputs(self, mid_price: float) -> np.ndarray:

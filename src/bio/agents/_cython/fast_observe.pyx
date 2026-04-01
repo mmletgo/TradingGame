@@ -8,8 +8,8 @@
 提供 Agent observe() 方法的加速实现，用于构建神经网络输入向量。
 
 两种 Agent 类型的输入维度：
-- 高级散户（RetailPro）: 527 维
-- 做市商（MarketMaker）: 592 维
+- 高级散户（RetailPro）: 67 维
+- 做市商（MarketMaker）: 132 维
 """
 
 import numpy as np
@@ -25,11 +25,8 @@ cpdef void fast_observe_full(
     double[:] output_buffer,
     float[:] bid_data,
     float[:] ask_data,
-    float[:] trade_prices,
-    float[:] trade_quantities,
     float[:] tick_history_prices,
     float[:] tick_history_volumes,
-    float[:] tick_history_amounts,
     double position_value_normalized,
     double position_avg_price_normalized,
     double balance_normalized,
@@ -38,28 +35,22 @@ cpdef void fast_observe_full(
     double pending_qty_normalized,
     double pending_side,
 ) noexcept nogil:
-    """构建高级散户/庄家的神经网络输入向量（527 维）
+    """构建高级散户/庄家的神经网络输入向量（67 维）
 
     输入布局：
     - 0-9: 买盘5档（每档2个值：价格归一化 + 数量）
     - 10-19: 卖盘5档（每档2个值：价格归一化 + 数量）
-    - 20-119: 最近100笔成交价格
-    - 120-219: 最近100笔成交数量
-    - 220-223: 持仓信息（4个值）
-    - 224-226: 挂单信息（3个值）
-    - 227-326: tick历史价格（100个）
-    - 327-426: tick历史成交量（100个）
-    - 427-526: tick历史成交额（100个）
+    - 20-23: 持仓信息（4个值）
+    - 24-26: 挂单信息（3个值）
+    - 27-46: tick历史价格（最近20个）
+    - 47-66: tick历史成交量（最近20个）
 
     Args:
-        output_buffer: 预分配的输出缓冲区（527维）
+        output_buffer: 预分配的输出缓冲区（67维）
         bid_data: 买盘数据（10维）
         ask_data: 卖盘数据（10维）
-        trade_prices: 成交价格（100维）
-        trade_quantities: 成交数量（100维）
-        tick_history_prices: tick历史价格（100维）
-        tick_history_volumes: tick历史成交量（100维）
-        tick_history_amounts: tick历史成交额（100维）
+        tick_history_prices: tick历史价格（最近20个）
+        tick_history_volumes: tick历史成交量（最近20个）
         position_value_normalized: 持仓价值归一化
         position_avg_price_normalized: 持仓均价归一化
         balance_normalized: 余额归一化
@@ -78,76 +69,55 @@ cpdef void fast_observe_full(
     for i in range(10):
         output_buffer[10 + i] = ask_data[i]
 
-    # 最近100笔成交价格
-    for i in range(100):
-        output_buffer[20 + i] = trade_prices[i]
-
-    # 最近100笔成交数量
-    for i in range(100):
-        output_buffer[120 + i] = trade_quantities[i]
-
     # 持仓信息（4个值）
-    output_buffer[220] = position_value_normalized
-    output_buffer[221] = position_avg_price_normalized
-    output_buffer[222] = balance_normalized
-    output_buffer[223] = equity_normalized
+    output_buffer[20] = position_value_normalized
+    output_buffer[21] = position_avg_price_normalized
+    output_buffer[22] = balance_normalized
+    output_buffer[23] = equity_normalized
 
     # 挂单信息（3个值）
-    output_buffer[224] = pending_price_normalized
-    output_buffer[225] = pending_qty_normalized
-    output_buffer[226] = pending_side
+    output_buffer[24] = pending_price_normalized
+    output_buffer[25] = pending_qty_normalized
+    output_buffer[26] = pending_side
 
-    # tick历史价格（100个）
-    for i in range(100):
-        output_buffer[227 + i] = tick_history_prices[i]
+    # tick历史价格（最近20个）
+    for i in range(20):
+        output_buffer[27 + i] = tick_history_prices[i]
 
-    # tick历史成交量（100个）
-    for i in range(100):
-        output_buffer[327 + i] = tick_history_volumes[i]
-
-    # tick历史成交额（100个）
-    for i in range(100):
-        output_buffer[427 + i] = tick_history_amounts[i]
+    # tick历史成交量（最近20个）
+    for i in range(20):
+        output_buffer[47 + i] = tick_history_volumes[i]
 
 
 cpdef void fast_observe_market_maker(
     double[:] output_buffer,
     float[:] bid_data,
     float[:] ask_data,
-    float[:] trade_prices,
-    float[:] trade_quantities,
     float[:] tick_history_prices,
     float[:] tick_history_volumes,
-    float[:] tick_history_amounts,
     double position_value_normalized,
     double position_avg_price_normalized,
     double balance_normalized,
     double equity_normalized,
     double[:] pending_order_inputs,
 ) noexcept nogil:
-    """构建做市商的神经网络输入向量（592 维）
+    """构建做市商的神经网络输入向量（132 维）
 
     输入布局：
     - 0-9: 买盘5档（每档2个值：价格归一化 + 数量）
     - 10-19: 卖盘5档（每档2个值：价格归一化 + 数量）
-    - 20-119: 最近100笔成交价格
-    - 120-219: 最近100笔成交数量
-    - 220-223: 持仓信息（4个值）
-    - 224-283: 挂单信息（60个值：10买单+10卖单，每单3个值）
-    - 284-383: tick历史价格（100个）
-    - 384-483: tick历史成交量（100个）
-    - 484-583: tick历史成交额（100个）
-    - 584-591: AS模型特征（8个值，由Python调用方填充）
+    - 20-23: 持仓信息（4个值）
+    - 24-83: 挂单信息（60个值：10买单+10卖单，每单3个值）
+    - 84-103: tick历史价格（最近20个）
+    - 104-123: tick历史成交量（最近20个）
+    - 124-131: AS模型特征（8个值，由Python调用方填充）
 
     Args:
-        output_buffer: 预分配的输出缓冲区（592维）
+        output_buffer: 预分配的输出缓冲区（132维）
         bid_data: 买盘数据（10维）
         ask_data: 卖盘数据（10维）
-        trade_prices: 成交价格（100维）
-        trade_quantities: 成交数量（100维）
-        tick_history_prices: tick历史价格（100维）
-        tick_history_volumes: tick历史成交量（100维）
-        tick_history_amounts: tick历史成交额（100维）
+        tick_history_prices: tick历史价格（最近20个）
+        tick_history_volumes: tick历史成交量（最近20个）
         position_value_normalized: 持仓价值归一化
         position_avg_price_normalized: 持仓均价归一化
         balance_normalized: 余额归一化
@@ -164,35 +134,23 @@ cpdef void fast_observe_market_maker(
     for i in range(10):
         output_buffer[10 + i] = ask_data[i]
 
-    # 最近100笔成交价格
-    for i in range(100):
-        output_buffer[20 + i] = trade_prices[i]
-
-    # 最近100笔成交数量
-    for i in range(100):
-        output_buffer[120 + i] = trade_quantities[i]
-
     # 持仓信息（4个值）
-    output_buffer[220] = position_value_normalized
-    output_buffer[221] = position_avg_price_normalized
-    output_buffer[222] = balance_normalized
-    output_buffer[223] = equity_normalized
+    output_buffer[20] = position_value_normalized
+    output_buffer[21] = position_avg_price_normalized
+    output_buffer[22] = balance_normalized
+    output_buffer[23] = equity_normalized
 
     # 挂单信息（60个值）
     for i in range(60):
-        output_buffer[224 + i] = pending_order_inputs[i]
+        output_buffer[24 + i] = pending_order_inputs[i]
 
-    # tick历史价格（100个）
-    for i in range(100):
-        output_buffer[284 + i] = tick_history_prices[i]
+    # tick历史价格（最近20个）
+    for i in range(20):
+        output_buffer[84 + i] = tick_history_prices[i]
 
-    # tick历史成交量（100个）
-    for i in range(100):
-        output_buffer[384 + i] = tick_history_volumes[i]
-
-    # tick历史成交额（100个）
-    for i in range(100):
-        output_buffer[484 + i] = tick_history_amounts[i]
+    # tick历史成交量（最近20个）
+    for i in range(20):
+        output_buffer[104 + i] = tick_history_volumes[i]
 
 
 cpdef tuple get_position_inputs(

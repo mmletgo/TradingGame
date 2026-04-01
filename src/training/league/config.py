@@ -34,7 +34,7 @@ class LeagueTrainingConfig:
     historical_freshness_ratio: float = 0.5  # 采样中最近历史的最低占比
 
     # 噪声交易者增强
-    hybrid_noise_trader_count: int = 300  # 混合竞技场噪声交易者数
+    hybrid_noise_trader_count: int = 600  # 混合竞技场噪声交易者数
     hybrid_noise_trader_quantity_mu: float = 10.0  # 噪声交易者下单量mu
 
     # 采样策略
