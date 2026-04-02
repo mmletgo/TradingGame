@@ -117,6 +117,16 @@ class TrainingConfig:
     # 散户活跃度激励权重 β（fitness = (1-β) × pnl + β × activity_score）
     # activity_score = trade_count / (max_trade_count + 1.0)，β=0 则退化为纯 PnL
     retail_fitness_activity_weight: float = 0.00
+    # 散户最小交易次数门槛（Minimal Criterion）
+    # 每 episode 成交次数 < 此值的散户 fitness 设为 -1.0（硬淘汰）
+    # 设为 0 则不启用门槛
+    retail_min_trade_count: int = 5
+    # 散户新颖性搜索权重 ν（Novelty Search）
+    # fitness = (1 - ν) × pnl_fitness + ν × novelty_score
+    # 行为特征: [交易频率, 持仓方向与大小]，使用 k-NN 距离衡量新颖性
+    # 设为 0 则不启用新颖性搜索
+    retail_novelty_weight: float = 0.1
+    retail_novelty_k: int = 15  # k-NN 中的 k 值
     # CPU 亲和性
     enable_cpu_affinity: bool = (
         True  # 是否将 Arena Worker 进程绑定到独立的物理 CPU 核心

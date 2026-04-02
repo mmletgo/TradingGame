@@ -1815,6 +1815,68 @@ def _get_memory_mb() -> float:
     return 0.0
 
 
+def _compute_novelty_scores(
+    trade_counts: np.ndarray,
+    quantities: np.ndarray,
+    current_price: float,
+    initial_balances: np.ndarray,
+    leverages: np.ndarray,
+    k: int,
+) -> np.ndarray:
+    """计算新颖性得分（Novelty Search）
+
+    行为特征向量 = [交易频率, 持仓方向与大小]
+    新颖性 = 与 k 个最近邻的平均欧氏距离，归一化到 [0, 1]
+
+    Args:
+        trade_counts: 交易次数数组
+        quantities: 持仓数量数组
+        current_price: 当前价格
+        initial_balances: 初始资金数组
+        leverages: 杠杆数组
+        k: k-NN 中的 k 值
+
+    Returns:
+        归一化新颖性得分数组，范围 [0, 1]
+    """
+    n = len(trade_counts)
+    if n <= 1:
+        return np.zeros(n, dtype=np.float64)
+
+    # 行为特征 1: 交易频率（归一化到 [0, 1]）
+    max_tc = np.max(trade_counts)
+    feat_trade_freq = trade_counts / (max_tc + 1.0)
+
+    # 行为特征 2: 持仓方向与大小（归一化到 [-1, 1]）
+    max_position_value = initial_balances * leverages
+    feat_position = np.clip(
+        quantities * current_price / np.maximum(max_position_value, 1.0),
+        -1.0, 1.0,
+    )
+
+    # 构建 n × 2 行为矩阵
+    behavior = np.column_stack([feat_trade_freq, feat_position])
+
+    # 计算两两欧氏距离: dist[i,j] = ||behavior[i] - behavior[j]||
+    diff = behavior[:, np.newaxis, :] - behavior[np.newaxis, :, :]  # (n, n, 2)
+    dist_matrix = np.sqrt(np.sum(diff ** 2, axis=2))  # (n, n)
+
+    # 对每个个体，找 k 个最近邻（排除自身，自身距离=0）
+    effective_k = min(k, n - 1)
+    # 沿行排序，取 [1:k+1]（跳过自身的0距离）
+    sorted_dists = np.sort(dist_matrix, axis=1)
+    knn_dists = sorted_dists[:, 1:effective_k + 1]  # (n, k)
+
+    # 新颖性 = k 近邻平均距离
+    novelty_raw = np.mean(knn_dists, axis=1)
+
+    # 归一化到 [0, 1]
+    max_novelty = np.max(novelty_raw)
+    if max_novelty > 0:
+        return novelty_raw / max_novelty
+    return np.zeros(n, dtype=np.float64)
+
+
 class Population:
     """种群管理类
 
@@ -2091,7 +2153,7 @@ class Population:
         if self.agent_type == AgentType.MARKET_MAKER:
             return self._evaluate_market_maker(current_price, n)
 
-        # 非做市商：equity PnL + 对称持仓成本 + 活跃度激励
+        # 非做市商：equity PnL + 对称持仓成本 + 活跃度激励 + 新颖性搜索
         # 1. 收集所有 Agent 的账户数据到 numpy 数组
         balances = np.array([a.account.balance for a in self.agents])
         quantities = np.array([a.account.position.quantity for a in self.agents])
@@ -2118,10 +2180,33 @@ class Population:
             volume_scores = volumes / (max_vol + 1.0)
             fitnesses = (1.0 - beta) * fitnesses + beta * volume_scores
 
-        # 5. 获取从高到低的排序索引
+        # 5. 新颖性搜索: ν × novelty_score
+        nu = self._training_config.retail_novelty_weight
+        if nu > 0 and n > 1:
+            trade_counts = np.array(
+                [a.account.trade_count for a in self.agents], dtype=np.float64
+            )
+            leverages = np.array([a.account.leverage for a in self.agents])
+            novelty_scores = _compute_novelty_scores(
+                trade_counts, quantities, current_price,
+                initial_balances, leverages,
+                self._training_config.retail_novelty_k,
+            )
+            fitnesses = (1.0 - nu) * fitnesses + nu * novelty_scores
+
+        # 6. 最小交易次数门槛（Minimal Criterion）：不达标直接判负
+        min_trades = self._training_config.retail_min_trade_count
+        if min_trades > 0:
+            trade_counts_int = np.array(
+                [a.account.trade_count for a in self.agents], dtype=np.int32
+            )
+            inactive_mask = trade_counts_int < min_trades
+            fitnesses[inactive_mask] = -1.0
+
+        # 7. 获取从高到低的排序索引
         sorted_indices = np.argsort(fitnesses)[::-1]
 
-        # 6. 按排序索引构建结果
+        # 8. 按排序索引构建结果
         return [(self.agents[i], float(fitnesses[i])) for i in sorted_indices]
 
     def _evaluate_market_maker(

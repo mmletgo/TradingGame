@@ -202,6 +202,7 @@ class TestPopulationInit:
                 episode_length=1000,
                 checkpoint_interval=1000,
                 neat_config_path="config",  # 配置目录
+                retail_min_trade_count=0,  # 禁用最小交易门槛以隔离测试
             ),
             demo=DemoConfig(
                 host="localhost",
@@ -329,12 +330,15 @@ class TestPopulationEvaluate:
         self.population.agents = []
         # 设置 agent_type 为 RETAIL_PRO（使用 equity 收益率适应度）
         self.population.agent_type = AgentType.RETAIL_PRO
-        # 设置训练配置（显式指定 β=0.15，不依赖默认值）
+        # 设置训练配置（显式指定参数，隔离测试不依赖默认值）
         self.population._training_config = TrainingConfig(
             episode_length=1000,
             checkpoint_interval=10,
             neat_config_path="config",
             retail_fitness_activity_weight=0.15,
+            retail_min_trade_count=0,
+            retail_novelty_weight=0.0,
+            position_cost_weight=0.0,
         )
 
     def _create_mock_agent(
@@ -533,7 +537,7 @@ class TestPopulationEvolve:
     """测试 Population.evolve 方法"""
 
     def _create_config(self) -> Config:
-        """创建测试用配置"""
+        """创建测试用配置（禁用最小交易门槛以隔离测试）"""
         retail_pro_config = AgentConfig(
             count=10,
             initial_balance=10000.0,
@@ -566,6 +570,7 @@ class TestPopulationEvolve:
                 episode_length=1000,
                 checkpoint_interval=1000,
                 neat_config_path="config",  # 配置目录
+                retail_min_trade_count=0,  # 禁用最小交易门槛以隔离测试
             ),
             demo=DemoConfig(
                 host="localhost",
@@ -777,6 +782,7 @@ class TestPopulationResetAgents:
                 episode_length=1000,
                 checkpoint_interval=1000,
                 neat_config_path="config",  # 配置目录
+                retail_min_trade_count=0,  # 禁用最小交易门槛以隔离测试
             ),
             demo=DemoConfig(
                 host="localhost",

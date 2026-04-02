@@ -2008,6 +2008,47 @@ def _collect_fitness_all_arenas(
     )
 
 
+def _compute_novelty_scores_arena(
+    trade_counts: np.ndarray,
+    quantities: np.ndarray,
+    current_price: float,
+    initial_balances: np.ndarray,
+    leverages: np.ndarray,
+    k: int,
+) -> np.ndarray:
+    """计算新颖性得分（arena worker 版本）
+
+    行为特征向量 = [交易频率, 持仓方向与大小]
+    新颖性 = 与 k 个最近邻的平均欧氏距离，归一化到 [0, 1]
+    """
+    n = len(trade_counts)
+    if n <= 1:
+        return np.zeros(n, dtype=np.float64)
+
+    max_tc = np.max(trade_counts)
+    feat_trade_freq = trade_counts / (max_tc + 1.0)
+
+    max_pos_val = initial_balances * leverages
+    feat_position = np.clip(
+        quantities * current_price / np.maximum(max_pos_val, 1.0),
+        -1.0, 1.0,
+    )
+
+    behavior = np.column_stack([feat_trade_freq, feat_position])
+    diff = behavior[:, np.newaxis, :] - behavior[np.newaxis, :, :]
+    dist_matrix = np.sqrt(np.sum(diff ** 2, axis=2))
+
+    effective_k = min(k, n - 1)
+    sorted_dists = np.sort(dist_matrix, axis=1)
+    knn_dists = sorted_dists[:, 1:effective_k + 1]
+    novelty_raw = np.mean(knn_dists, axis=1)
+
+    max_novelty = np.max(novelty_raw)
+    if max_novelty > 0:
+        return novelty_raw / max_novelty
+    return np.zeros(n, dtype=np.float64)
+
+
 def _calculate_fitness_for_sub_pop(
     arena: ArenaState,
     infos: list[AgentInfo],
@@ -2085,6 +2126,38 @@ def _calculate_fitness_for_sub_pop(
             )
         else:
             fitnesses = pnl_arr
+
+        # 新颖性搜索: ν × novelty_score
+        nu = config.training.retail_novelty_weight
+        if nu > 0 and n > 1:
+            trade_counts_arr = np.zeros(n, dtype=np.float64)
+            quantities_arr = np.zeros(n, dtype=np.float64)
+            initial_arr = np.zeros(n, dtype=np.float64)
+            leverage_arr = np.zeros(n, dtype=np.float64)
+            for idx, info in enumerate(infos):
+                state = arena.agent_states.get(info.agent_id)
+                if state is not None:
+                    trade_counts_arr[idx] = state.trade_count
+                    quantities_arr[idx] = state.position_quantity
+                    initial_arr[idx] = state.initial_balance
+                    leverage_arr[idx] = info.leverage
+            novelty_scores = _compute_novelty_scores_arena(
+                trade_counts_arr, quantities_arr, current_price,
+                initial_arr, leverage_arr,
+                config.training.retail_novelty_k,
+            )
+            fitnesses = ((1.0 - nu) * fitnesses + nu * novelty_scores).astype(
+                np.float32
+            )
+
+        # 最小交易次数门槛（Minimal Criterion）：不达标直接判负
+        min_trades = config.training.retail_min_trade_count
+        if min_trades > 0:
+            for idx, info in enumerate(infos):
+                state = arena.agent_states.get(info.agent_id)
+                if state is not None and state.trade_count < min_trades:
+                    fitnesses[idx] = -1.0
+
         return fitnesses
 
 

@@ -123,7 +123,9 @@ activity_score = trade_count / (max_trade_count_in_population + 1.0)
 - **pnl_component**：equity PnL（含未实现盈亏）+ 对称持仓成本，多空完全对称
 - **activity_score**：散户活跃度得分，基于成交次数在种群内的相对排名，范围 [0, 1)
 - **`retail_fitness_activity_weight`（β）**：散户活跃度激励权重，默认 0.05
-- **目的**：打破"不交易"局部最优，激励散户参与市场交易
+- **最小交易次数门槛（Minimal Criterion）**：`retail_min_trade_count` 默认 5，每 episode 成交次数低于此值的散户 fitness 强制设为 -1.0（硬淘汰），迫使进化必须学会交易
+- **新颖性搜索（Novelty Search）**：`retail_novelty_weight`（ν）默认 0.1，行为特征 = [交易频率, 持仓方向与大小]，使用 k-NN（k=15）距离衡量行为新颖性，驱动策略多样化
+- **目的**：打破"不交易"局部最优，激励散户参与市场交易并探索多样化策略
 
 **做市商适应度公式**仍使用独立的复合适应度（见下文"做市商复合适应度"）。
 

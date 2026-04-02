@@ -111,6 +111,8 @@ Numba JIT 加速的高频数学函数模块。
 - `equity = balance + unrealized_pnl`（含浮动盈亏，让"开仓获利但未平仓"的策略也能获得正适应度）
 - `activity_score = trade_count / (max_trade_count_in_population + 1.0)`
 - β（`retail_fitness_activity_weight`）默认 0.05，打破"不交易"局部最优
+- **最小交易次数门槛**：`retail_min_trade_count` 默认 5，成交次数不达标的散户 fitness = -1.0（硬淘汰）
+- **新颖性搜索**：`retail_novelty_weight`（ν）默认 0.1，`fitness = (1-ν) × pnl_fitness + ν × novelty_score`，行为特征=[交易频率, 持仓方向], k-NN(k=15)距离衡量新颖性
 
 **做市商适应度：**
 - `mm_fitness = α × pnl + γ × volume`（α=0.7, γ=0.3），pnl 使用同样的 PnL + 持仓成本公式
