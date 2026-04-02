@@ -107,7 +107,7 @@ NEAT进化阶段
 - 所有操作在最新价 ±100 个最小变动单位内
 - 噪声交易者：不触发强平，零手续费，下单量服从对数正态分布
 
-### 适应度计算（纯已实现 PnL + 对称持仓成本 + 散户活跃度激励）
+### 适应度计算（equity PnL + 对称持仓成本 + 散户活跃度激励）
 
 所有 Agent 的适应度基于多空对称公式，防止进化产生方向性偏好导致价格单边漂移。
 
@@ -115,11 +115,12 @@ NEAT进化阶段
 
 ```
 fitness = (1 - β) × pnl_component + β × activity_score
-其中 pnl_component = (balance - initial) / initial - λ × |position_qty × current_price| / initial
+其中 pnl_component = (equity - initial) / initial - λ × |position_qty × current_price| / initial
+equity = balance + unrealized_pnl（含浮动盈亏）
 activity_score = trade_count / (max_trade_count_in_population + 1.0)
 ```
 
-- **pnl_component**：纯已实现 PnL + 对称持仓成本，多空完全对称
+- **pnl_component**：equity PnL（含未实现盈亏）+ 对称持仓成本，多空完全对称
 - **activity_score**：散户活跃度得分，基于成交次数在种群内的相对排名，范围 [0, 1)
 - **`retail_fitness_activity_weight`（β）**：散户活跃度激励权重，默认 0.05
 - **目的**：打破"不交易"局部最优，激励散户参与市场交易

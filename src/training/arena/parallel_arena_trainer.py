@@ -464,12 +464,15 @@ class ParallelArenaTrainer:
             if isinstance(population, SubPopulationManager):
                 for sub_pop_id, sub_pop in enumerate(population.sub_populations):
                     agent_config = sub_pop.agent_config
-                    # 计算 network_index 偏移：前面子种群的 agent 总数
-                    offset = sum(
-                        len(population.sub_populations[j].agents)
+                    actual_count: int = getattr(sub_pop, '_actual_network_count', len(sub_pop.agents))
+                    # 计算 network_index 偏移：前面子种群的实际网络数量
+                    offset: int = sum(
+                        getattr(population.sub_populations[j], '_actual_network_count', len(population.sub_populations[j].agents))
                         for j in range(sub_pop_id)
                     )
-                    for idx, agent in enumerate(sub_pop.agents):
+                    # 使用实际网络数量（lite 模式下可能小于 len(agents)）
+                    for idx in range(actual_count):
+                        agent = sub_pop.agents[idx]
                         agent_infos.append(AgentInfo(
                             agent_id=agent.agent_id,
                             agent_type=agent_type,
@@ -482,8 +485,10 @@ class ParallelArenaTrainer:
                             taker_fee_rate=agent_config.taker_fee_rate,
                         ))
             else:
+                actual_count = getattr(population, '_actual_network_count', len(population.agents))
                 agent_config = population.agent_config
-                for idx, agent in enumerate(population.agents):
+                for idx in range(actual_count):
+                    agent = population.agents[idx]
                     agent_infos.append(AgentInfo(
                         agent_id=agent.agent_id,
                         agent_type=agent_type,
@@ -980,6 +985,15 @@ class ParallelArenaTrainer:
             if agent_type not in network_params_by_type:
                 network_params_by_type[agent_type] = []
             network_params_by_type[agent_type].append((sub_pop_id, network_params_data))
+
+            # 记录实际网络数量（lite 模式下可能小于 pop_size）
+            actual_net_count: int = len(network_params_data[0])
+            if isinstance(population, SubPopulationManager):
+                if sub_pop_id < len(population.sub_populations):
+                    population.sub_populations[sub_pop_id]._actual_network_count = actual_net_count
+            else:
+                if sub_pop_id == 0:
+                    population._actual_network_count = actual_net_count
 
             if genome_data is None:
                 # Lite 模式：genome_data 为 None，跳过 _update_single_population

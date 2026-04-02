@@ -327,13 +327,14 @@ class TestPopulationEvaluate:
         # 创建 Population 实例（不调用 __init__，直接设置属性）
         self.population = object.__new__(Population)
         self.population.agents = []
-        # 设置 agent_type 为 RETAIL_PRO（使用纯收益率适应度）
+        # 设置 agent_type 为 RETAIL_PRO（使用 equity 收益率适应度）
         self.population.agent_type = AgentType.RETAIL_PRO
-        # 设置训练配置（适应度计算需要 position_cost_weight）
+        # 设置训练配置（显式指定 β=0.15，不依赖默认值）
         self.population._training_config = TrainingConfig(
             episode_length=1000,
             checkpoint_interval=10,
             neat_config_path="config",
+            retail_fitness_activity_weight=0.15,
         )
 
     def _create_mock_agent(
@@ -387,14 +388,15 @@ class TestPopulationEvaluate:
     def test_evaluate_sorted_by_fitness_descending(self):
         """测试按适应度从高到低排序
 
-        适应度使用对称公式 + 成交量激励:
-        pnl = (balance - initial) / initial（position_cost_weight=0，无持仓惩罚）
+        适应度使用 equity 对称公式 + 成交量激励:
+        equity = balance + (current_price - avg_price) × quantity
+        pnl = (equity - initial) / initial（position_cost_weight=0，无持仓惩罚）
         fitness = (1 - β) × pnl + β × volume_score
         β = 0.15（散户默认值），total_volume=0 时 volume_score=0
         """
-        # Agent 1: balance=10000, qty=10, initial=10000, price=100
-        # pnl = (10000-10000)/10000 = 0
-        # fitness = 0.85 × 0 = 0
+        # Agent 1: balance=10000, qty=10, avg_price=90, price=100, initial=10000
+        # unrealized = (100-90)*10 = 100, equity = 10100
+        # pnl = 0.01, fitness = 0.85 × 0.01 = 0.0085
         agent1 = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -404,6 +406,7 @@ class TestPopulationEvaluate:
         )
 
         # Agent 2: balance=15000, qty=0, initial=10000, price=100
+        # unrealized = 0, equity = 15000
         # pnl = 0.5, fitness = 0.85 × 0.5 = 0.425 (最高)
         agent2 = self._create_mock_agent(
             agent_id=2,
@@ -413,8 +416,9 @@ class TestPopulationEvaluate:
             initial_balance=10000.0,
         )
 
-        # Agent 3: balance=5000, qty=-10, initial=10000, price=100
-        # pnl = -0.5, fitness = 0.85 × (-0.5) = -0.425
+        # Agent 3: balance=5000, qty=-10, avg_price=110, price=100, initial=10000
+        # unrealized = (100-110)*(-10) = 100, equity = 5100
+        # pnl = -0.49, fitness = 0.85 × (-0.49) = -0.4165
         agent3 = self._create_mock_agent(
             agent_id=3,
             balance=5000.0,
@@ -429,24 +433,25 @@ class TestPopulationEvaluate:
 
         # 验证排序（β=0.15, total_volume=0 → volume_score=0）:
         # agent2: 0.85 × 0.5 = 0.425
-        # agent1: 0.85 × 0 = 0
-        # agent3: 0.85 × (-0.5) = -0.425
+        # agent1: 0.85 × 0.01 = 0.0085
+        # agent3: 0.85 × (-0.49) = -0.4165
         assert len(result) == 3
         assert result[0][0] is agent2
         assert result[0][1] == pytest.approx(0.425)
         assert result[1][0] is agent1
-        assert result[1][1] == pytest.approx(0.0)
+        assert result[1][1] == pytest.approx(0.0085)
         assert result[2][0] is agent3
-        assert result[2][1] == pytest.approx(-0.425)
+        assert result[2][1] == pytest.approx(-0.4165)
 
     def test_evaluate_with_symmetric_position_cost(self):
-        """测试对称持仓成本：多空对称的适应度计算
+        """测试对称持仓成本：多空对称的适应度计算（基于 equity）
 
         position_cost_weight=0（训练初期无持仓惩罚），β=0.15
-        所有 Agent balance 相同，pnl=0，fitness=0
+        equity 包含未实现盈亏，多头盈利与空头盈利对称，多头亏损与空头亏损对称。
         """
-        # 多头盈利: balance=10000, qty=100, price=100, initial=10000
-        # pnl = 0 (λ=0), fitness = 0.85 × 0 = 0
+        # 多头盈利: balance=10000, qty=100, avg=90, price=100, initial=10000
+        # unrealized = (100-90)*100 = 1000, equity = 11000
+        # pnl = 0.1, fitness = 0.85 × 0.1 = 0.085
         agent_long_profit = self._create_mock_agent(
             agent_id=1,
             balance=10000.0,
@@ -455,8 +460,9 @@ class TestPopulationEvaluate:
             initial_balance=10000.0,
         )
 
-        # 多头亏损: balance=10000, qty=100, price=100, initial=10000
-        # pnl = 0 (λ=0), fitness = 0
+        # 多头亏损: balance=10000, qty=100, avg=110, price=100, initial=10000
+        # unrealized = (100-110)*100 = -1000, equity = 9000
+        # pnl = -0.1, fitness = 0.85 × (-0.1) = -0.085
         agent_long_loss = self._create_mock_agent(
             agent_id=2,
             balance=10000.0,
@@ -465,8 +471,9 @@ class TestPopulationEvaluate:
             initial_balance=10000.0,
         )
 
-        # 空头盈利: balance=10000, qty=-100, price=100, initial=10000
-        # pnl = 0 (λ=0), fitness = 0
+        # 空头盈利: balance=10000, qty=-100, avg=110, price=100, initial=10000
+        # unrealized = (100-110)*(-100) = 1000, equity = 11000
+        # pnl = 0.1, fitness = 0.85 × 0.1 = 0.085
         agent_short_profit = self._create_mock_agent(
             agent_id=3,
             balance=10000.0,
@@ -475,8 +482,9 @@ class TestPopulationEvaluate:
             initial_balance=10000.0,
         )
 
-        # 空头亏损: balance=10000, qty=-100, price=100, initial=10000
-        # pnl = 0 (λ=0), fitness = 0
+        # 空头亏损: balance=10000, qty=-100, avg=90, price=100, initial=10000
+        # unrealized = (100-90)*(-100) = -1000, equity = 9000
+        # pnl = -0.1, fitness = 0.85 × (-0.1) = -0.085
         agent_short_loss = self._create_mock_agent(
             agent_id=4,
             balance=10000.0,
@@ -494,13 +502,14 @@ class TestPopulationEvaluate:
 
         result = self.population.evaluate(100.0)
 
-        # 验证适应度计算正确：新公式完全多空对称
+        # 验证适应度计算正确：equity 公式完全多空对称
         assert len(result) == 4
-        # 所有 Agent fitness 相同：0.85 × 0 = 0（λ=0 无持仓惩罚）
-        assert result[0][1] == pytest.approx(0.0)
-        assert result[1][1] == pytest.approx(0.0)
-        assert result[2][1] == pytest.approx(0.0)
-        assert result[3][1] == pytest.approx(0.0)
+        # 多头盈利 = 空头盈利 = 0.085，多头亏损 = 空头亏损 = -0.085
+        fitnesses = {r[0].agent_id: r[1] for r in result}
+        assert fitnesses[1] == pytest.approx(0.085)  # long profit
+        assert fitnesses[3] == pytest.approx(0.085)  # short profit
+        assert fitnesses[2] == pytest.approx(-0.085)  # long loss
+        assert fitnesses[4] == pytest.approx(-0.085)  # short loss
 
     def test_evaluate_returns_float_fitness(self):
         """测试返回的适应度是 Python float 而非 numpy 类型"""

@@ -101,13 +101,14 @@ Numba JIT 加速的高频数学函数模块。
 - 执行 NEAT 进化算法
 - 重置 Agent 账户状态
 
-**适应度计算公式（纯已实现 PnL + 对称持仓成本 + 散户活跃度激励）：**
+**适应度计算公式（equity PnL + 对称持仓成本 + 散户活跃度激励）：**
 
 使用多空对称公式，防止进化产生方向性偏好导致价格单边漂移：
 
 **散户适应度：**
 - `fitness = (1 - β) × pnl_component + β × activity_score`
-- `pnl_component = (balance - initial) / initial - λ × |position_qty × current_price| / initial`
+- `pnl_component = (equity - initial) / initial - λ × |position_qty × current_price| / initial`
+- `equity = balance + unrealized_pnl`（含浮动盈亏，让"开仓获利但未平仓"的策略也能获得正适应度）
 - `activity_score = trade_count / (max_trade_count_in_population + 1.0)`
 - β（`retail_fitness_activity_weight`）默认 0.05，打破"不交易"局部最优
 
@@ -140,6 +141,7 @@ Numba JIT 加速的高频数学函数模块。
 
 **缓存与延迟反序列化属性：**
 - `_cached_network_params_data: tuple[np.ndarray, ...] | None` - 缓存的 packed numpy 网络参数数据，供 `BatchNetworkCache.update_networks_from_numpy` 直接填充 C 结构使用
+- `_actual_network_count: int` - 实际网络数量，lite 模式下 NEAT 进化可能产生少于 `pop_size` 的基因组，此值跟踪真实数量，用于 `_build_agent_infos()` 计算正确的 `network_index`，防止越界访问 `BatchNetworkCache`
 - `_pending_species_data: tuple[np.ndarray, np.ndarray] | None` - 待恢复的 species 数据，与 `_pending_genome_data` 配合实现延迟反序列化
 
 **多核并行化：**

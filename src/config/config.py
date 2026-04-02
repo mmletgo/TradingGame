@@ -109,14 +109,14 @@ class TrainingConfig:
     mm_fitness_volume_weight: float = 0.3  # γ: Maker 成交量
     # 持仓成本权重（对称的 position size penalty）
     position_cost_weight: float = (
-        0.0  # 散户持仓成本权重（训练初期设0，消除持仓惩罚壁垒）
+        0.02  # 散户持仓成本权重（训练初期设0，消除持仓惩罚壁垒）
     )
     mm_position_cost_weight: float = (
         0.005  # 做市商持仓成本权重（做市商需持仓做市，权重更小）
     )
     # 散户活跃度激励权重 β（fitness = (1-β) × pnl + β × activity_score）
     # activity_score = trade_count / (max_trade_count + 1.0)，β=0 则退化为纯 PnL
-    retail_fitness_activity_weight: float = 0.15
+    retail_fitness_activity_weight: float = 0.00
     # CPU 亲和性
     enable_cpu_affinity: bool = (
         True  # 是否将 Arena Worker 进程绑定到独立的物理 CPU 核心
@@ -144,13 +144,16 @@ class DemoConfig:
 @dataclass
 class NoiseTraderConfig:
     """噪声交易者配置"""
+
     count: int = 400
     action_probability: float = 0.5
     quantity_mu: float = 12.0
     quantity_sigma: float = 1.0
-    episode_bias_range: float = 0.35  # Episode 级买入概率偏置范围，buy_prob ∈ [0.5-range, 0.5+range]
+    episode_bias_range: float = (
+        0.35  # Episode 级买入概率偏置范围，buy_prob ∈ [0.5-range, 0.5+range]
+    )
     ou_theta: float = 0.01  # OU 过程均值回归速度（每 tick 回归 1% 的偏差）
-    ou_sigma: float = 0.08   # OU 过程噪声强度
+    ou_sigma: float = 0.08  # OU 过程噪声强度
 
 
 @dataclass

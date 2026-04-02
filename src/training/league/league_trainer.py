@@ -335,10 +335,19 @@ class LeagueTrainer(ParallelArenaTrainer):
         }
 
         # 缓存预进化适应度（在 NEAT 进化前调用，此时 avg_fitness 是当前代的真实适应度）
-        self._pre_evolution_fitness = {
-            key: arr.copy() for key, arr in avg_fitness.items()
-            if key[1] < 1000  # 只保留当前代（排除历史Agent的sub_pop_id >= 1000）
-        }
+        # 截断到实际网络数量，确保与 network_params 对齐
+        self._pre_evolution_fitness = {}
+        for key, arr in avg_fitness.items():
+            agent_type_k, sub_pop_id_k = key
+            if sub_pop_id_k >= 1000:
+                continue  # 排除历史Agent
+            pop = self.populations.get(agent_type_k)
+            if isinstance(pop, SubPopulationManager) and sub_pop_id_k < len(pop.sub_populations):
+                actual: int = getattr(pop.sub_populations[sub_pop_id_k], '_actual_network_count', len(arr))
+                self._pre_evolution_fitness[key] = arr[:actual].copy()
+            else:
+                actual = getattr(pop, '_actual_network_count', len(arr)) if pop else len(arr)
+                self._pre_evolution_fitness[key] = arr[:actual].copy()
 
         fitness_map = super()._build_fitness_map(avg_fitness)
 
@@ -432,15 +441,16 @@ class LeagueTrainer(ParallelArenaTrainer):
             elite_params_list: list[tuple[np.ndarray, ...]] = []
             historical_infos: list[AgentInfo] = []
 
-            # 当前代 agent 数量（用于 network_index 偏移）
+            # 当前代实际网络数量（用于 network_index 偏移，lite 模式下可能小于 len(agents)）
             population = self.populations[agent_type]
             if isinstance(population, SubPopulationManager):
                 current_gen_count: int = sum(
-                    len(sub_pop.agents) for sub_pop in population.sub_populations
+                    getattr(sub_pop, '_actual_network_count', len(sub_pop.agents))
+                    for sub_pop in population.sub_populations
                 )
                 agent_config = population.sub_populations[0].agent_config
             else:
-                current_gen_count = len(population.agents)
+                current_gen_count = getattr(population, '_actual_network_count', len(population.agents))
                 agent_config = population.agent_config
 
             network_index_offset: int = current_gen_count

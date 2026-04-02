@@ -1847,6 +1847,7 @@ class Population:
     _genomes_dirty: bool  # 标记基因组是否需要同步
     _pending_species_data: tuple[np.ndarray, np.ndarray] | None  # 待恢复的species数据
     _cached_network_params_data: tuple[np.ndarray, ...] | None  # 缓存的网络参数（供 update_networks_from_numpy 使用）
+    _actual_network_count: int  # 实际网络数量（lite 模式下可能小于 len(agents)）
 
     def _get_executor(self) -> ThreadPoolExecutor:
         """获取实例级别线程池"""
@@ -1888,6 +1889,7 @@ class Population:
         self._genomes_dirty: bool = False
         self._pending_species_data: tuple[np.ndarray, np.ndarray] | None = None
         self._cached_network_params_data: tuple[np.ndarray, ...] | None = None
+        self._actual_network_count: int = self.agent_config.count
 
         # 根据 Agent 类型选择 NEAT 配置文件
         from pathlib import Path
@@ -1924,6 +1926,7 @@ class Population:
         else:
             genomes = list(self.neat_pop.population.items())
             self.agents = self.create_agents(genomes)
+            self._actual_network_count = len(self.agents)
             self.logger.info(
                 f"创建 {agent_type.value} 种群，初始 Agent 数量: {len(self.agents)}"
             )
@@ -2018,6 +2021,7 @@ class Population:
                 else:
                     agent = agent_class(unique_agent_id, brain, self.agent_config)
                 agents.append(agent)
+            self._actual_network_count = len(agents)
             return agents
 
         # 大批量并行创建
@@ -2060,7 +2064,9 @@ class Population:
             raise RuntimeError(f"创建 Agent 超时，可能存在死锁")
 
         results.sort(key=lambda x: x[0])
-        return [agent for _, agent in results]
+        agents = [agent for _, agent in results]
+        self._actual_network_count = len(agents)
+        return agents
 
     def evaluate(
         self,
@@ -2069,7 +2075,7 @@ class Population:
         """评估种群适应度
 
         使用向量化运算计算所有 Agent 的适应度，并按适应度从高到低排序。
-        非做市商：统一使用实际收益率 (equity - initial) / initial
+        非做市商：统一使用 equity 收益率 (equity - initial) / initial（含未实现盈亏）
         做市商：使用四组件复合适应度（PnL + 盘口价差 + 成交量 + 存活）
 
         Args:
@@ -2085,14 +2091,17 @@ class Population:
         if self.agent_type == AgentType.MARKET_MAKER:
             return self._evaluate_market_maker(current_price, n)
 
-        # 非做市商：已实现 PnL + 对称持仓成本 + 活跃度激励
+        # 非做市商：equity PnL + 对称持仓成本 + 活跃度激励
         # 1. 收集所有 Agent 的账户数据到 numpy 数组
         balances = np.array([a.account.balance for a in self.agents])
         quantities = np.array([a.account.position.quantity for a in self.agents])
+        avg_prices = np.array([a.account.position.avg_price for a in self.agents])
         initial_balances = np.array([a.account.initial_balance for a in self.agents])
 
-        # 2. 纯已实现 PnL 收益率: (balance - initial) / initial
-        fitnesses = (balances - initial_balances) / initial_balances
+        # 2. equity 收益率: (equity - initial) / initial（含未实现盈亏）
+        unrealized_pnl = (current_price - avg_prices) * quantities
+        equities = balances + unrealized_pnl
+        fitnesses = (equities - initial_balances) / initial_balances
 
         # 3. 对称持仓成本: λ × |position_qty × current_price| / initial
         if self._training_config.position_cost_weight > 0:
