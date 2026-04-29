@@ -1,5 +1,7 @@
 # TradingGame - AI 交易模拟竞技场
 
+https://github.com/user-attachments/assets/e3e38d81-af15-4d2a-b71f-f1115ee0d514
+
 基于 NEAT (NeuroEvolution of Augmenting Topologies) 算法的 AI 交易模拟竞技场。两种类型的 AI Agent（高级散户、做市商）通过神经网络进化算法学习交易策略，在模拟订单簿市场中竞争。噪声交易者提供随机性流动性和布朗运动价格特征。
 
 ## 项目简介
