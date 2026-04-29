@@ -16,3 +16,4 @@ false
 logs
 *.prof
 checkpoints/
+docs/
